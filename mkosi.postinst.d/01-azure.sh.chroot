@@ -1,0 +1,4 @@
+#!/bin/sh
+
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -s /etc/systemd/system/azure-provisioning.service /etc/systemd/system/multi-user.target.wants/azure-provisioning.service

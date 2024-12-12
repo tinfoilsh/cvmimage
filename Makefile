@@ -1,29 +1,26 @@
+clean:
+	rm -f tinfoilcvm*
+
+build: clean
+	mkosi
+
 deps:
 	sudo apt install -y ovmf qemu-system-x86 qemu-utils
 
-run:
-	sudo qemu-system-x86_64 \
-		-m 512 \
-		-smp 2 \
-		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
-		-drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
-		-drive format=raw,file=image.raw \
-		-device virtio-net-pci,netdev=net0 \
-		-netdev user,id=net0,hostfwd=tcp::2222-:22 \
-		-nographic
+gallery:
+	az sig create \
+		--resource-group TEST-CC \
+		--gallery-name tinfoil_cvm_gallery \
+		--location eastus2 \
+		--publisher-uri https://tinfoil.sh \
+		--publisher-email contact@tinfoil.sh \
+		--public-name-prefix tinfoilcvm \
+		--eula https://tinfoil.sh/terms-of-service \
+		--permissions Community
 
-all:
-	sudo mkosi -f --autologin --qemu-mem=1G qemu
-
-run-uki:
+console:
 	sudo qemu-system-x86_64 \
-		-machine type=q35,accel=tcg,smm=off \
-		-smp 2 \
-		-m 1G \
-		-object rng-random,filename=/dev/urandom,id=rng0 \
-		-device virtio-rng-pci,rng=rng0,id=rng-device0 \
-		-vga virtio \
-		-drive if=none,id=hd,file=image.raw,format=raw \
-		-device virtio-scsi-pci,id=scsi \
-		-device scsi-hd,drive=hd,bootindex=1 \
+		-m 2G \
+		-drive file=tinfoilcvm,format=raw \
+		-bios /usr/share/ovmf/OVMF.fd \
 		-nographic

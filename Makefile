@@ -36,4 +36,4 @@ measure:
 		--ovmf OVMF.fd \
 		--kernel tinfoilcvm.vmlinuz \
 		--initrd tinfoilcvm.initrd) && \
-	echo "{ \"amd-sev-snp-measurement\": \"$$MEASUREMENT\" }"
+	echo "{ \"measurement\": \"$$MEASUREMENT\" }"

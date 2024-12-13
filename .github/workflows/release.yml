@@ -61,10 +61,10 @@ jobs:
         id: generate-release-notes
         run: |
           RELEASE_NOTES=$(cat << EOF
-          AMD SEV-SNP Measurement: `$(jq -r '.measurement' upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json)`
+          AMD SEV-SNP Measurement: \`$(jq -r '.measurement' upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json)\`
           Transparency Log Entry: https://search.sigstore.dev?logIndex=$(jq -r ".verificationMaterial.tlogEntries[0].logIndex" ${{ steps.attest.outputs.bundle-path }})
           CVM image: https://images.tinfoil.sh/tinfoil-cvm-base-${{ github.ref_name }}.img
-          CVM hash: `$(cat upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256)`
+          CVM image hash: \`$(cat upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256)\`
           EOF
           )
           echo "release-notes<<EOF" >> "$GITHUB_OUTPUT"

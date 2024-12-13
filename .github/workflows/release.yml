@@ -20,7 +20,7 @@ jobs:
 
       - name: Install mkosi
         run: |
-          apt install -y pipx
+          sudo apt install -y pipx
           pipx install git+https://github.com/systemd/mkosi.git
 
       - name: Build image

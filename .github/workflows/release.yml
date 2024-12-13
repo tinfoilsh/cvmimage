@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-#    tags:
-#      - 'v*'
+    tags:
+      - 'v*'
 
 jobs:
   release:
@@ -20,9 +20,37 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring
+          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring gcc build-essential uuid-dev iasl nasm mtools
           pipx install git+https://github.com/systemd/mkosi.git
+          pipx install sev-snp-measure
+
+#      - name: Build OVMF
+#        run: |
+#          git clone https://github.com/amdese/amdsev -b snp-latest
+#
+#          # Link python3
+#          sudo ln -s /usr/bin/python3 /usr/bin/python
+#
+#          # TODO
+#          sed -i 's/OvmfPkgX64.dsc/AmdSev\/AmdSevX64.dsc/' common.sh
+#
+#          # https://github.com/kata-containers/kata-containers/blob/CCv0/tools/packaging/static-build/ovmf/build-ovmf.sh#L54
+#          touch ovmf/OvmfPkg/AmdSev/Grub/grub.efi
+#
+#          cd amdsev && ./build.sh ovmf
 
       - name: Build image
         run: |
-            mkosi --image-version ${{ github.ref }}
+          mkosi --image-version ${{ github.ref }}
+          mkdir upload
+          mv tinfoilcvm.raw upload/tinfoil-cvm-base-${{ github.ref_name }}.eif
+
+      - name: Upload artifact
+        uses: ryand56/r2-upload-action@latest
+        with:
+          r2-account-id: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
+          r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
+          source-dir: upload
+          destination-dir: ./

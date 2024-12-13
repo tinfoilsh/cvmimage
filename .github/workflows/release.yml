@@ -20,13 +20,9 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring gcc build-essential uuid-dev iasl nasm mtools make jq
+          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring make jq
           pipx install git+https://github.com/systemd/mkosi.git
           pipx install sev-snp-measure
-
-      - name: Build OVMF
-        run: |
-          make ovmf
 
       - name: Build image
         run: |
@@ -34,6 +30,11 @@ jobs:
           mkdir upload
           mv tinfoilcvm.raw upload/tinfoil-cvm-base-${{ github.ref_name }}.img
           sha256sum upload/tinfoil-cvm-base-${{ github.ref_name }}.img > upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256
+
+      - name: Fetch OVMF
+        run: |
+          LATEST_OVMF_TAG=$(curl -s "https://api.github.com/repos/tinfoilanalytics/AMDSEV/releases/latest" | jq -r .tag_name)
+          wget https://github.com/tinfoilanalytics/AMDSEV/releases/download/$LATEST_OVMF_TAG/OVMF.fd
 
       - name: Measure image
         run: |
@@ -77,5 +78,4 @@ jobs:
           files: |
             upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
             upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256
-            OVFM.fd
           body: ${{ steps.generate-release-notes.outputs.release-notes }}

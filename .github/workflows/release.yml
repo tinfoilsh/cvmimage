@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+#    tags:
+#      - 'v*'
 
 jobs:
   release:
@@ -18,9 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install mkosi
+      - name: Install build dependencies
         run: |
-          sudo apt install -y pipx
+          sudo apt install -y pipx ubuntu-keyring
           pipx install git+https://github.com/systemd/mkosi.git
 
       - name: Build image

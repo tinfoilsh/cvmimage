@@ -20,7 +20,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring gcc build-essential uuid-dev iasl nasm mtools make
+          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring gcc build-essential uuid-dev iasl nasm mtools make jq
           pipx install git+https://github.com/systemd/mkosi.git
           pipx install sev-snp-measure
 
@@ -77,4 +77,5 @@ jobs:
           files: |
             upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
             upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256
+            OVFM.fd
           body: ${{ steps.generate-release-notes.outputs.release-notes }}

@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Release
+    runs-on: large
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring make jq
+          pipx install git+https://github.com/systemd/mkosi.git
+          pipx install sev-snp-measure
+
+      - name: Build image
+        run: |
+          mkosi --image-version ${{ github.ref }}
+          mkdir upload
+          mv tinfoilcvm.raw upload/tinfoil-cvm-base-${{ github.ref_name }}.img
+          sha256sum upload/tinfoil-cvm-base-${{ github.ref_name }}.img > upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256
+
+      - name: Fetch OVMF
+        run: |
+          LATEST_OVMF_TAG=$(curl -s "https://api.github.com/repos/tinfoilanalytics/AMDSEV/releases/latest" | jq -r .tag_name)
+          wget https://github.com/tinfoilanalytics/AMDSEV/releases/download/$LATEST_OVMF_TAG/OVMF.fd
+
+      - name: Measure image
+        run: |
+          make measure > upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
+
+      - name: Attest
+        uses: actions/attest@v1
+        id: attest
+        with:
+          subject-path: upload/tinfoil-cvm-base-${{ github.ref_name }}.img
+          predicate-type: https://tinfoil.sh/predicate/amd-sev-snp-measurements/v1
+          predicate-path: upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
+
+      - name: Upload artifact
+        uses: ryand56/r2-upload-action@latest
+        with:
+          r2-account-id: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
+          r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
+          source-dir: upload
+          destination-dir: ./
+
+      - name: Generate release notes
+        id: generate-release-notes
+        run: |
+          RELEASE_NOTES=$(cat << EOF
+          AMD SEV-SNP Measurement: \`$(jq -r '.measurement' upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json)\`
+          Transparency Log Entry: https://search.sigstore.dev?logIndex=$(jq -r ".verificationMaterial.tlogEntries[0].logIndex" ${{ steps.attest.outputs.bundle-path }})
+          CVM image: https://images.tinfoil.sh/tinfoil-cvm-base-${{ github.ref_name }}.img
+          CVM image hash: \`$(cat upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256 | cut -d " " -f 1)\`
+          EOF
+          )
+          echo "release-notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "${RELEASE_NOTES}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
+            upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256
+          body: ${{ steps.generate-release-notes.outputs.release-notes }}

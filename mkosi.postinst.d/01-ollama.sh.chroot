@@ -1,0 +1,8 @@
+#!/bin/sh
+
+wget https://github.com/ollama/ollama/releases/download/v0.5.4/ollama-linux-amd64.tgz
+tar -C /usr -xzf ollama-linux-amd64.tgz
+rm -f ollama-linux-amd64.tgz
+
+useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
+# chown ollama:ollama /usr/share/ollama/

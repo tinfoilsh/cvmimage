@@ -15,6 +15,12 @@ useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
 echo Starting ollama service...
 systemctl start ollama
 
+echo Waiting for ollama service to start...
+while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
+    echo "Waiting"
+    sleep 1
+done
+
 TARGET_IMAGE=$(get_cmdline_param "tinfoil-image")
 
 echo Pulling image...

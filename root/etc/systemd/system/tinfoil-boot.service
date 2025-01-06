@@ -6,7 +6,6 @@ After=network-online.target
 ExecStart=/usr/local/bin/tinfoil-boot
 User=root
 Group=root
-Restart=always
 
 [Install]
 WantedBy=default.target

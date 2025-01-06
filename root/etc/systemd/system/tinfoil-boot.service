@@ -1,0 +1,12 @@
+[Unit]
+Description=Tinfoil Boot Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/tinfoil-boot
+User=root
+Group=root
+Restart=always
+
+[Install]
+WantedBy=default.target

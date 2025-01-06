@@ -1,0 +1,21 @@
+#!/bin/bash
+# This script is executed as root by systemd on boot
+
+function get_cmdline_param() {
+    local param=$1
+    local value=$(cat /proc/cmdline | grep -oP "(?<=${param}=)[^ ]*")
+    echo $value
+}
+
+set -ex
+
+echo Creating ollama user...
+useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
+
+echo Starting ollama service...
+systemctl start ollama
+
+TARGET_IMAGE=$(get_cmdline_param "tinfoil-image")
+
+echo Pulling image...
+ollama pull $TARGET_IMAGE

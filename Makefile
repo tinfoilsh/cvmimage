@@ -8,6 +8,7 @@ build:
 	rm -f tinfoilcvm
 
 run:
+	stty intr ^]
 	sudo ~/AMDSEV-fork/usr/local/bin/qemu-system-x86_64 \
 		-enable-kvm \
 		-cpu EPYC-v4 \
@@ -25,12 +26,14 @@ run:
 		-initrd ./tinfoilcvm.initrd \
 		-netdev tap,id=net0,ifname=tap0,script=no,downscript=no -device virtio-net-pci,netdev=net0 \
 		-nographic -monitor pty -monitor unix:monitor,server,nowait
+	stty intr ^c
 
 measure:
 	@MEASUREMENT=$$(sev-snp-measure \
 		--mode snp \
-		--vcpus=12 \
+		--vcpus=32 \
 		--vcpu-type=EPYC-v4 \
+		--append="console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-image=llama3.2:1b" \
 		--ovmf ~/edk2/Build/AmdSev/DEBUG_GCC5/FV/OVMF.fd \
 		--kernel tinfoilcvm.vmlinuz \
 		--initrd tinfoilcvm.initrd) && \

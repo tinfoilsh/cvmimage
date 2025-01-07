@@ -15,7 +15,7 @@ run:
 		-machine q35 -smp 32,maxcpus=32 \
 		-m 4096M,slots=5,maxmem=12288M \
 		-no-reboot \
-		-bios ~/edk2/Build/AmdSev/DEBUG_GCC5/FV/OVMF.fd \
+		-bios ~/OVMF.fd \
 		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw \
 		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
 		-device scsi-hd,drive=disk0 -machine memory-encryption=sev0,vmport=off \
@@ -34,24 +34,7 @@ measure:
 		--vcpus=32 \
 		--vcpu-type=EPYC-v4 \
 		--append="console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-image=llama3.2:1b" \
-		--ovmf ~/edk2/Build/AmdSev/DEBUG_GCC5/FV/OVMF.fd \
+		--ovmf ~/OVMF.fd \
 		--kernel tinfoilcvm.vmlinuz \
 		--initrd tinfoilcvm.initrd) && \
 	echo "{ \"measurement\": \"$$MEASUREMENT\" }"
-
-build-ovmf:
-	git clone https://github.com/tianocore/edk2 && cd edk2
-
-	git checkout edk2-stable202411
-
-	git apply edk2sev.patch
-
-	git rm -rf UnitTestFrameworkPkg
-	touch OvmfPkg/AmdSev/Grub/grub.efi
-
-	git submodule update --init --recursive
-	make -C BaseTools
-	. ./edksetup.sh --reconfig
-	nice build -q --cmd-len=64436 -DDEBUG_ON_SERIAL_PORT=TRUE -n 32 -t GCC5 -a X64 -p OvmfPkg/AmdSev/AmdSevX64.dsc
-
-	ls -lah Build/AmdSev/DEBUG_GCC5/FV/OVMF.fd

@@ -7,39 +7,30 @@ build:
 	mkosi
 	rm -f tinfoilcvm
 
-run-plain:
-	sudo ./launch-qemu.sh \
-		-sev-snp \
-		-kernel ../cvmimage/tinfoilcvm.vmlinuz \
-		-initrd ../cvmimage/tinfoilcvm.initrd \
-		-hda ../cvmimage/tinfoilcvm.raw \
-		-mem 2048 \
-		-append "console=ttyS0 root=/dev/sda2"
-
-run-local:
+run:
 	sudo ~/AMDSEV-fork/usr/local/bin/qemu-system-x86_64 \
 		-enable-kvm \
-		-smp 4 \
-		-m 8G,slots=5,maxmem=10G \
 		-cpu EPYC-v4 \
-		-machine q35,confidential-guest-support=sev0,memory-backend=ram1 \
+		-machine q35 -smp 32,maxcpus=32 \
+		-m 4096M,slots=5,maxmem=12288M \
 		-no-reboot \
-		-bios ~/ovmf/Build/AmdSev/DEBUG_GCC5/FV/OVMF.fd \
+		-bios ~/edk2/Build/AmdSev/DEBUG_GCC5/FV/OVMF.fd \
 		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw \
 		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
-		-device scsi-hd,drive=disk0 \
-		-object memory-backend-memfd,id=ram1,size=8G,share=true,prealloc=false \
-		-object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1 \
-		-nographic \
-		-monitor pty \
-		-monitor unix:monitor,server,nowait
+		-device scsi-hd,drive=disk0 -machine memory-encryption=sev0,vmport=off \
+		-object memory-backend-memfd,id=ram1,size=4096M,share=true,prealloc=false \
+		-machine memory-backend=ram1 -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=5,kernel-hashes=on \
+		-kernel ./tinfoilcvm.vmlinuz \
+		-append "console=ttyS0 earlyprintk=serial root=/dev/sda2" \
+		-initrd ./tinfoilcvm.initrd \
+		-nographic -monitor pty -monitor unix:monitor,server,nowait
 
 measure:
 	@MEASUREMENT=$$(sev-snp-measure \
 		--mode snp \
 		--vcpus=12 \
 		--vcpu-type=EPYC-v4 \
-		--ovmf OVMF.fd \
+		--ovmf ~/edk2/Build/AmdSev/DEBUG_GCC5/FV/OVMF.fd \
 		--kernel tinfoilcvm.vmlinuz \
 		--initrd tinfoilcvm.initrd) && \
 	echo "{ \"measurement\": \"$$MEASUREMENT\" }"
@@ -48,6 +39,8 @@ build-ovmf:
 	git clone https://github.com/tianocore/edk2 && cd edk2
 
 	git checkout edk2-stable202411
+
+	git apply edk2sev.patch
 
 	git rm -rf UnitTestFrameworkPkg
 	touch OvmfPkg/AmdSev/Grub/grub.efi

@@ -3,6 +3,7 @@ Description=Tinfoil Boot Service
 After=network-online.target
 
 [Service]
+Type=oneshot
 ExecStart=/usr/local/bin/tinfoil-boot
 User=root
 Group=root

@@ -4,5 +4,3 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmo
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
 apt update -y
 apt install -y caddy
-chmod -R 700 /var/lib/caddy/
-chown -R caddy:caddy /var/lib/caddy/

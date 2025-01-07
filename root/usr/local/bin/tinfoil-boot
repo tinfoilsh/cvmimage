@@ -9,6 +9,12 @@ function get_cmdline_param() {
 
 set -ex
 
+echo "Setting up caddy..."
+chmod -R 700 /var/lib/caddy/
+chown -R caddy:caddy /var/lib/caddy/
+systemctl restart caddy
+systemctl restart caddy-api
+
 echo Creating ollama user...
 useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
 

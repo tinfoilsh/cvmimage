@@ -1,0 +1,49 @@
+(cors) {
+	@cors_preflight{args.0} method OPTIONS
+	@cors{args.0} header Origin {args.0}
+
+	handle @cors_preflight{args.0} {
+		header {
+			Access-Control-Allow-Origin "{args.0}"
+			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+			Access-Control-Allow-Headers *
+			Access-Control-Max-Age "3600"
+			defer
+		}
+		respond "" 204
+	}
+
+	handle @cors{args.0} {
+		header {
+			Access-Control-Allow-Origin "{args.0}"
+			Access-Control-Expose-Headers *
+			defer
+		}
+	}
+}
+
+:443 {
+	tls internal
+
+	@allowed_paths {
+		path /api/chat
+		path /.well-known/tinfoil-attestation
+		path /v1/chat/completions
+	}
+
+	handle @allowed_paths {
+		import cors *
+		reverse_proxy localhost:6000 {
+			header_up Host "localhost:6000"
+			header_up Origin "http://localhost:6000"
+		}
+	}
+
+	handle * {
+		respond "Not Found" 404
+	}
+
+	handle / {
+		redir https://tinfoil.sh/chat
+	}
+}

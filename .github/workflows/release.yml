@@ -23,6 +23,7 @@ jobs:
           sudo apt install -y pipx ubuntu-keyring debian-archive-keyring make jq
           pipx install git+https://github.com/systemd/mkosi.git
           pipx install sev-snp-measure
+          pipx ensurepath && source ~/.bashrc
 
       - name: Build image
         run: |

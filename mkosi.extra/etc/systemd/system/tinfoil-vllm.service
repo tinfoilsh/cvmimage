@@ -1,0 +1,10 @@
+[Unit]
+Description=vLLM
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tinfoil-vllm
+
+[Install]
+WantedBy=multi-user.target

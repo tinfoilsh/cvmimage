@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+python3 -m venv /opt/venv
+source /opt/venv/bin/activate
+pip install --no-cache-dir vllm

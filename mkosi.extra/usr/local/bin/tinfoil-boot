@@ -13,6 +13,21 @@ echo "Loading nvidia driver..."
 /sbin/modprobe ecdsa_generic ecdh
 /sbin/modprobe --ignore-install nvidia
 
+# TODO: Verify attestation
+echo "Enabling GPU..."
+nvidia-smi conf-compute -srs 1
+
+echo "Creating ramdisk..."
+RAM_GB=$(($(free -g | awk '/^Mem:/{print $2}')))
+SIZE=$((RAM_GB - 16))
+rm -rf /mnt/ramdisk || true
+mkdir -p /mnt/ramdisk
+mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
+chmod 777 /mnt/ramdisk
+
+echo "Starting vLLM..."
+systemctl start tinfoil-vllm
+
 # echo Creating ollama user...
 # useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
 

@@ -1,0 +1,6 @@
+#!/bin/bash
+set -ex
+
+source /opt/venv/bin/activate
+MODEL=$(grep -o "tinfoil-model=\S*" /proc/cmdline | cut -d = -f 2)
+vllm serve --download-dir /mnt/ramdisk/vllm --host 127.0.0.1 --port 8080 "$MODEL"

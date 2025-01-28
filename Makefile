@@ -22,8 +22,8 @@ run:
 		-object memory-backend-memfd,id=ram1,size=32768M,share=true,prealloc=false \
 		-machine memory-backend=ram1 -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=5,kernel-hashes=on \
 		-kernel ./tinfoilcvm.vmlinuz \
-		-append "console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-image=llama3.2:1b" \
 		-initrd ./tinfoilcvm.initrd \
+		-append "console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-image=llama3.2:1b" \
 		-net nic,model=e1000 -net user,hostfwd=tcp::2223-:22,hostfwd=tcp::8444-:443 \
 		-nographic -monitor pty -monitor unix:monitor,server,nowait \
 		-device pcie-root-port,id=pci.1,bus=pcie.0 \

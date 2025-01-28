@@ -22,16 +22,27 @@
 	}
 }
 
-:443 {
+example.tinfoil.sh:443 {
 	tls internal
 
-	@allowed_paths {
+	@llm_paths {
 		path /api/chat
-		path /.well-known/tinfoil-attestation
 		path /v1/chat/completions
 	}
 
-	handle @allowed_paths {
+	@shim_paths {
+		path /.well-known/tinfoil-attestation
+	}
+
+	handle @llm_paths {
+		import cors *
+		reverse_proxy localhost:11434 {
+			header_up Host "localhost:11434"
+			header_up Origin "http://localhost:11434"
+		}
+	}
+
+	handle @shim_paths {
 		import cors *
 		reverse_proxy localhost:6000 {
 			header_up Host "localhost:6000"
@@ -44,6 +55,6 @@
 	}
 
 	handle / {
-		redir https://tinfoil.sh/chat
+		respond "Tinfoil Inference" 200
 	}
 }

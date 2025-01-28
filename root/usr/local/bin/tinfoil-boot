@@ -15,4 +15,23 @@ chown -R caddy:caddy /var/lib/caddy/
 systemctl restart caddy
 systemctl restart caddy-api
 
-#TARGET_IMAGE=$(get_cmdline_param "tinfoil-image")
+echo "Loading nvidia driver..."
+/sbin/modprobe ecdsa_generic ecdh
+/sbin/modprobe --ignore-install nvidia
+
+# echo Creating ollama user...
+# useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
+
+# echo Starting ollama service...
+# systemctl start ollama
+
+# echo Waiting for ollama service to start...
+# while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
+#     echo "Waiting"
+#     sleep 1
+# done
+
+# TARGET_IMAGE=$(get_cmdline_param "tinfoil-image")
+
+# echo Pulling image...
+# ollama pull $TARGET_IMAGE

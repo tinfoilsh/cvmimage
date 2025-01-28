@@ -1,3 +1,6 @@
+cmdline = "console=ttyS0 root=/dev/sda2 tinfoil-image=llama3.2:1b tinfoil-domain=five.delta.tinfoil.sh"
+gpu = "01:00.0"
+
 all: clean build
 
 clean:
@@ -8,6 +11,8 @@ build:
 	rm -f tinfoilcvm
 
 run:
+	sudo python3 /shared/nvtrust/host_tools/python/gpu-admin-tools/nvidia_gpu_tools.py --gpu-bdf $(gpu) --set-cc-mode=on --reset-after-cc-mode-switch
+	sudo python3 /shared/nvtrust/host_tools/python/gpu-admin-tools/nvidia_gpu_tools.py --gpu-bdf $(gpu) --query-cc-mode
 	stty intr ^]
 	sudo ~/qemu/build/qemu-system-x86_64 \
 		-enable-kvm \
@@ -23,11 +28,11 @@ run:
 		-machine memory-backend=ram1 -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=5,kernel-hashes=on \
 		-kernel ./tinfoilcvm.vmlinuz \
 		-initrd ./tinfoilcvm.initrd \
-		-append "console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-image=llama3.2:1b" \
-		-net nic,model=e1000 -net user,hostfwd=tcp::2223-:22,hostfwd=tcp::8444-:443 \
+		-append $(cmdline) \
+		-net nic,model=e1000 -net user,hostfwd=tcp::2222-:22,hostfwd=tcp::8443-:443 \
 		-nographic -monitor pty -monitor unix:monitor,server,nowait \
 		-device pcie-root-port,id=pci.1,bus=pcie.0 \
-		-device vfio-pci,host=21:00.0,bus=pci.1 \
+		-device vfio-pci,host=$(gpu),bus=pci.1 \
 		-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=262144
 	stty intr ^c
 
@@ -36,7 +41,7 @@ measure:
 		--mode snp \
 		--vcpus=32 \
 		--vcpu-type=EPYC-v4 \
-		--append="console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-image=llama3.2:1b" \
+		--append=$(cmdline) \
 		--ovmf ./OVMF.fd \
 		--kernel tinfoilcvm.vmlinuz \
 		--initrd tinfoilcvm.initrd) && \

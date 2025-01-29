@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   release:
@@ -27,10 +27,17 @@ jobs:
 
       - name: Build image
         run: |
-          mkosi --image-version ${{ github.ref }}
-          mkdir upload
-          mv tinfoilcvm.raw upload/tinfoil-cvm-base-${{ github.ref_name }}.img
-          sha256sum upload/tinfoil-cvm-base-${{ github.ref_name }}.img > upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256
+          	mkosi --image-version ${{ github.ref_name }}
+            rm -f tinfoilcvm{,.efi}
+
+      - name: Generate hashes
+        run: |
+            mkdir out/
+            for part in raw initrd vmlinuz; do
+              mv tinfoilcvm.$part out/tinfoil-cvm-${{ github.ref_name }}.$part
+              echo Hashing $part
+              sha256sum out/tinfoil-cvm-${{ github.ref_name }}.$part >> out/tinfoil-cvm-${{ github.ref_name }}.hashes
+            done
 
       - name: Fetch OVMF
         run: |
@@ -39,15 +46,15 @@ jobs:
 
       - name: Measure image
         run: |
-          make measure > upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
+          make measure > upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json
 
       - name: Attest
         uses: actions/attest@v1
         id: attest
         with:
-          subject-path: upload/tinfoil-cvm-base-${{ github.ref_name }}.img
-          predicate-type: https://tinfoil.sh/predicate/amd-sev-snp-measurements/v1
-          predicate-path: upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
+          subject-path: upload/tinfoil-cvm-${{ github.ref_name }}.img
+          predicate-type: https://tinfoil.sh/predicate/snp-sev-guest/v1
+          predicate-path: upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json
 
       - name: Upload artifact
         uses: ryand56/r2-upload-action@latest
@@ -63,10 +70,10 @@ jobs:
         id: generate-release-notes
         run: |
           RELEASE_NOTES=$(cat << EOF
-          AMD SEV-SNP Measurement: \`$(jq -r '.measurement' upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json)\`
+          AMD SEV-SNP Measurement: \`$(jq -r '.measurement' upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json)\`
           Transparency Log Entry: https://search.sigstore.dev?logIndex=$(jq -r ".verificationMaterial.tlogEntries[0].logIndex" ${{ steps.attest.outputs.bundle-path }})
-          CVM image: https://images.tinfoil.sh/tinfoil-cvm-base-${{ github.ref_name }}.img
-          CVM image hash: \`$(cat upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256 | cut -d " " -f 1)\`
+          CVM image: https://images.tinfoil.sh/tinfoil-cvm-${{ github.ref_name }}.img
+          CVM image hash: \`$(cat upload/tinfoil-cvm-${{ github.ref_name }}.img.sha256 | cut -d " " -f 1)\`
           EOF
           )
           echo "release-notes<<EOF" >> "$GITHUB_OUTPUT"
@@ -77,6 +84,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            upload/tinfoil-cvm-base-${{ github.ref_name }}.measurement.json
-            upload/tinfoil-cvm-base-${{ github.ref_name }}.img.sha256
+            upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json
+            upload/tinfoil-cvm-${{ github.ref_name }}.img.sha256
           body: ${{ steps.generate-release-notes.outputs.release-notes }}

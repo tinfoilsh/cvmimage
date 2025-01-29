@@ -32,8 +32,6 @@ echo Starting ollama service...
 systemctl daemon-reload
 systemctl start ollama
 
-export OLLAMA_HOST=127.0.0.1:8080
-
 echo Waiting for ollama service to start...
 while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
     echo "Waiting"

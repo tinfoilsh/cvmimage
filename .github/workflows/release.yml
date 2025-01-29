@@ -27,8 +27,8 @@ jobs:
 
       - name: Build image
         run: |
-          	mkosi --image-version ${{ github.ref_name }}
-            rm -f tinfoilcvm{,.efi}
+          mkosi --image-version ${{ github.ref_name }}
+          rm -f tinfoilcvm{,.efi}
 
       - name: Generate hashes
         run: |

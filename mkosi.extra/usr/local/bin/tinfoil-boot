@@ -25,22 +25,22 @@ mkdir -p /mnt/ramdisk
 mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
 chmod 777 /mnt/ramdisk
 
-echo "Starting vLLM..."
-systemctl start tinfoil-vllm
+echo Creating ollama user...
+useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
 
-# echo Creating ollama user...
-# useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
+echo Starting ollama service...
+systemctl daemon-reload
+systemctl start ollama
 
-# echo Starting ollama service...
-# systemctl start ollama
+export OLLAMA_HOST=127.0.0.1:8080
 
-# echo Waiting for ollama service to start...
-# while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
-#     echo "Waiting"
-#     sleep 1
-# done
+echo Waiting for ollama service to start...
+while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
+    echo "Waiting"
+    sleep 1
+done
 
-# TARGET_IMAGE=$(get_cmdline_param "tinfoil-image")
+TARGET_IMAGE=$(get_cmdline_param "tinfoil-model")
 
-# echo Pulling image...
-# ollama pull $TARGET_IMAGE
+echo Pulling image...
+ollama pull $TARGET_IMAGE

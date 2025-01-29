@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-python3 -m venv /opt/venv
-source /opt/venv/bin/activate
-pip install --no-cache-dir vllm
+wget https://github.com/ollama/ollama/releases/download/v0.5.7/ollama-linux-amd64.tgz
+tar -xvzf ollama-linux-amd64.tgz
+tar -C /usr -xzf ollama-linux-amd64.tgz
+rm -f ollama-linux-amd64.tgz

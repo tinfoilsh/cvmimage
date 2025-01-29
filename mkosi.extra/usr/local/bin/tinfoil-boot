@@ -9,6 +9,9 @@ function get_cmdline_param() {
     echo $value
 }
 
+echo "SEV_SHIM_OPTS=-u 11434 -p /api/chat,/v1/chat/completions,/api/generate -H Host:localhost" > /etc/default/tinfoil-sev-shim
+systemctl restart tinfoil-sev-shim
+
 echo "Loading nvidia driver..."
 /sbin/modprobe ecdsa_generic ecdh
 /sbin/modprobe --ignore-install nvidia

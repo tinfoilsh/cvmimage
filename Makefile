@@ -1,6 +1,6 @@
-cmdline = "console=ttyS0 root=/dev/sda2 tinfoil-model=deepseek-ai/DeepSeek-R1-Distill-Llama-70B tinfoil-domain=six.delta.tinfoil.sh"
+cmdline = "console=ttyS0 root=/dev/sda2 earlyprintk=serial tinfoil-model=deepseek-r1:70b tinfoil-domain=six.delta.tinfoil.sh"
 gpu = "01:00.0"
-memory = 131072M
+memory = 66000M
 
 all: clean build
 

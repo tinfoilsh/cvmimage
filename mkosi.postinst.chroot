@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+systemctl mask systemd-logind.service
+
 wget https://github.com/ollama/ollama/releases/download/v0.5.7/ollama-linux-amd64.tgz
 tar -xvzf ollama-linux-amd64.tgz
 tar -C /usr -xzf ollama-linux-amd64.tgz
 rm -f ollama-linux-amd64.tgz
+
+echo "SEV_SHIM_OPTS=-u 11434 -p /api/chat,/v1/chat/completions,/api/generate" > /etc/default/tinfoil-sev-shim
+
+mkdir -p /mnt/ramdisk/ollama
+
+# Install GPU verifier
+python3 -m venv /opt/venv
+source /opt/venv/bin/activate
+pip install --no-cache-dir nv-local-gpu-verifier

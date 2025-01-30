@@ -1,4 +1,5 @@
-cmdline = "console=ttyS0 root=/dev/sda2 earlyprintk=serial tinfoil-model=deepseek-r1:70b tinfoil-domain=six.delta.tinfoil.sh"
+cmdline = "readonly=on console=ttyS0 earlyprintk=serial root=/dev/mapper/root $(shell objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout) tinfoil-model=deepseek-r1:70b tinfoil-domain=six.delta.tinfoil.sh"
+
 gpu = "01:00.0"
 memory = 66000M
 

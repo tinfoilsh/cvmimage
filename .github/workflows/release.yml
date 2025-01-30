@@ -15,42 +15,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: |
-          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring make jq
-          sudo pipx install git+https://github.com/systemd/mkosi.git
-          sudo pipx ensurepath
-
-      - name: Fetch latest sev-shim
-        run: |
-          mkdir packages
-          LATEST_TAG=$(curl -s "https://api.github.com/repos/tinfoilanalytics/sev-shim/releases/latest" | jq -r .tag_name)
-          wget -P packages https://github.com/tinfoilanalytics/sev-shim/releases/download/$LATEST_TAG/tinfoil-sev-shim.deb
-
-      - name: Fetch kernel
-        run: |
-          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-image-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
-          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-headers-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
-
-      - name: Build image
-        run: |
-          sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
+#      - name: Install build dependencies
+#        run: |
+#          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring make jq
+#          sudo pipx install git+https://github.com/systemd/mkosi.git
+#          sudo pipx ensurepath
+#
+#      - name: Fetch latest sev-shim
+#        run: |
+#          mkdir packages
+#          LATEST_TAG=$(curl -s "https://api.github.com/repos/tinfoilanalytics/sev-shim/releases/latest" | jq -r .tag_name)
+#          wget -P packages https://github.com/tinfoilanalytics/sev-shim/releases/download/$LATEST_TAG/tinfoil-sev-shim.deb
+#
+#      - name: Fetch kernel
+#        run: |
+#          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-image-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
+#          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-headers-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
+#
+#      - name: Build image
+#        run: |
+#          sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
 
       - name: Generate manifest
         run: |
-          rm -rf out || true
-          mkdir out
-          chmod 777 out
-          cat <<EOF > out/tinfoil-inference-${{ github.ref_name }}-manifest.json
-          {
-              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
-              "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
-              "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')"
-          }
-          EOF
-          for part in raw initrd vmlinuz; do
-            mv tinfoilcvm.$part out/tinfoil-inference-${{ github.ref_name }}.$part
-          done
+          mkdir ~/out
+          cat foobar > ~/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+#          cat <<EOF > ~/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+#          {
+#              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
+#              "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
+#              "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')"
+#          }
+#          EOF
+#          for part in raw initrd vmlinuz; do
+#            mv tinfoilcvm.$part ~/out/tinfoil-inference-${{ github.ref_name }}.$part
+#          done
 
       - name: Upload artifact
         uses: ryand56/r2-upload-action@latest
@@ -59,7 +58,7 @@ jobs:
           r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
           r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
           r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
-          source-dir: out
+          source-dir: ~/out
           destination-dir: ./cvm
 
       - name: Generate release notes

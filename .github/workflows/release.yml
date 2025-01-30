@@ -35,7 +35,12 @@ jobs:
       - name: Build image
         run: |
           sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
-          sudo chmod 777 tinfoilcvm*
+
+      - name: Fix permissions
+        run: |
+          sudo chown $USER:$USER tinfoilcvm.*
+          sudo chmod 644 tinfoilcvm.*
+          ls -lh
 
       - name: Generate manifest
         run: |

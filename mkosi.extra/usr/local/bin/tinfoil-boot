@@ -9,31 +9,23 @@ function get_cmdline_param() {
     echo $value
 }
 
-echo "SEV_SHIM_OPTS=-u 11434 -p /api/chat,/v1/chat/completions,/api/generate -H Host:localhost" > /etc/default/tinfoil-sev-shim
-systemctl restart tinfoil-sev-shim
-
 echo "Loading nvidia driver..."
 /sbin/modprobe ecdsa_generic ecdh
 /sbin/modprobe --ignore-install nvidia
 
-# TODO: Verify attestation
-echo "Enabling GPU..."
-nvidia-smi conf-compute -srs 1
-
 echo "Creating ramdisk..."
 RAM_GB=$(($(free -g | awk '/^Mem:/{print $2}')))
 SIZE=$((RAM_GB - 16))
-rm -rf /mnt/ramdisk || true
-mkdir -p /mnt/ramdisk
 mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
 chmod 777 /mnt/ramdisk
 
-echo Creating ollama user...
-useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
+cd /mnt/ramdisk
 
-echo Starting ollama service...
-systemctl daemon-reload
-systemctl start ollama
+# Verify GPU attestation
+echo "Verifying GPU attestation..."
+source /opt/venv/bin/activate
+python3 -m verifier.cc_admin
+#nvidia-smi conf-compute -srs 1
 
 echo Waiting for ollama service to start...
 while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do

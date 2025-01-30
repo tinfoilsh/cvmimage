@@ -46,45 +46,48 @@ jobs:
           ls -lah
           ls -lah /tmp/out
 
-      - name: Generate manifest
-        run: |
-          cat <<EOF > /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
-          {
-              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
-              "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
-              "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')"
-          }
-          EOF
-          for part in raw initrd vmlinuz; do
-            mv tinfoilcvm.$part /tmp/out/tinfoil-inference-${{ github.ref_name }}.$part
-          done
+      - name: Setup upterm session
+        uses: lhotari/action-upterm@v1
 
-      - name: Upload artifact
-        uses: ryand56/r2-upload-action@latest
-        with:
-          r2-account-id: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
-          r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
-          r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
-          r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
-          source-dir: /tmp/out
-          destination-dir: ./cvm
-
-      - name: Generate release notes
-        id: generate-release-notes
-        run: |
-          RELEASE_NOTES=$(cat << EOF
-          Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.vmlinuz
-          Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.initrd
-          Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.raw
-          EOF
-          )
-          echo "release-notes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "${RELEASE_NOTES}" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
-          body: ${{ steps.generate-release-notes.outputs.release-notes }}
+#      - name: Generate manifest
+#        run: |
+#          cat <<EOF > /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+#          {
+#              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
+#              "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
+#              "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')"
+#          }
+#          EOF
+#          for part in raw initrd vmlinuz; do
+#            mv tinfoilcvm.$part /tmp/out/tinfoil-inference-${{ github.ref_name }}.$part
+#          done
+#
+#      - name: Upload artifact
+#        uses: ryand56/r2-upload-action@latest
+#        with:
+#          r2-account-id: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
+#          r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
+#          r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
+#          r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
+#          source-dir: /tmp/out
+#          destination-dir: ./cvm
+#
+#      - name: Generate release notes
+#        id: generate-release-notes
+#        run: |
+#          RELEASE_NOTES=$(cat << EOF
+#          Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.vmlinuz
+#          Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.initrd
+#          Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.raw
+#          EOF
+#          )
+#          echo "release-notes<<EOF" >> "$GITHUB_OUTPUT"
+#          echo "${RELEASE_NOTES}" >> "$GITHUB_OUTPUT"
+#          echo "EOF" >> "$GITHUB_OUTPUT"
+#
+#      - name: Create release
+#        uses: softprops/action-gh-release@v2
+#        with:
+#          files: |
+#            /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+#          body: ${{ steps.generate-release-notes.outputs.release-notes }}

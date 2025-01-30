@@ -38,8 +38,8 @@ jobs:
 
       - name: Generate manifest
         run: |
-          mkdir ~/out
-          echo foobar > ~/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+          mkdir /tmp/out
+          echo foobar > /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
 #          cat <<EOF > ~/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
 #          {
 #              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
@@ -58,7 +58,7 @@ jobs:
           r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
           r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
           r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
-          source-dir: ~/out
+          source-dir: /tmp/out
           destination-dir: ./cvm
 
       - name: Generate release notes

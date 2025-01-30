@@ -34,15 +34,21 @@ jobs:
 
       - name: Build image
         run: |
-          /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
+          sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
 
-      - name: Create output directory
+      - name: Fix permissions
         run: |
-          mkdir -p out
+          mkdir /tmp/out
+          sudo chown $USER:$USER tinfoilcvm.*
+          sudo chmod 777 tinfoilcvm.*
+          sudo chown $USER:$USER /tmp/out
+          sudo chmod 777 /tmp/out
+          ls -lah
+          ls -lah /tmp/out
 
       - name: Generate manifest
         run: |
-          cat <<EOF > out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+          cat <<EOF > /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
           {
               "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
               "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
@@ -50,7 +56,7 @@ jobs:
           }
           EOF
           for part in raw initrd vmlinuz; do
-            mv tinfoilcvm.$part out/tinfoil-inference-${{ github.ref_name }}.$part
+            mv tinfoilcvm.$part /tmp/out/tinfoil-inference-${{ github.ref_name }}.$part
           done
 
       - name: Upload artifact
@@ -60,7 +66,7 @@ jobs:
           r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
           r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
           r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
-          source-dir: out
+          source-dir: /tmp/out
           destination-dir: ./cvm
 
       - name: Generate release notes
@@ -80,5 +86,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
           body: ${{ steps.generate-release-notes.outputs.release-notes }}

@@ -38,7 +38,9 @@ jobs:
 
       - name: Generate manifest
         run: |
+          rm -rf out || true
           mkdir out
+          chmod 777 out
           cat <<EOF > out/tinfoil-inference-${{ github.ref_name }}-manifest.json
           {
               "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",

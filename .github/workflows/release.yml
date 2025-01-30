@@ -11,9 +11,6 @@ jobs:
     runs-on: large
     permissions:
       contents: write
-      packages: write
-      id-token: write
-      attestations: write
 
     steps:
       - uses: actions/checkout@v4
@@ -21,40 +18,37 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt install -y pipx ubuntu-keyring debian-archive-keyring make jq
-          pipx install git+https://github.com/systemd/mkosi.git
-          pipx install sev-snp-measure
-          pipx ensurepath && source ~/.bashrc
+          sudo pipx install git+https://github.com/systemd/mkosi.git
+          sudo pipx ensurepath
+
+      - name: Fetch latest sev-shim
+        run: |
+          mkdir packages
+          LATEST_TAG=$(curl -s "https://api.github.com/repos/tinfoilanalytics/sev-shim/releases/latest" | jq -r .tag_name)
+          wget -P packages https://github.com/tinfoilanalytics/sev-shim/releases/download/$LATEST_TAG/tinfoil-sev-shim.deb
+
+      - name: Fetch kernel
+        run: |
+          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-image-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
+          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-headers-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
 
       - name: Build image
         run: |
-          mkosi --image-version ${{ github.ref_name }}
-          rm -f tinfoilcvm{,.efi}
+          sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
 
-      - name: Generate hashes
+      - name: Generate manifest
         run: |
-            mkdir out/
-            for part in raw initrd vmlinuz; do
-              mv tinfoilcvm.$part out/tinfoil-cvm-${{ github.ref_name }}.$part
-              echo Hashing $part
-              sha256sum out/tinfoil-cvm-${{ github.ref_name }}.$part >> out/tinfoil-cvm-${{ github.ref_name }}.hashes
-            done
-
-      - name: Fetch OVMF
-        run: |
-          LATEST_OVMF_TAG=$(curl -s "https://api.github.com/repos/tinfoilanalytics/edk2/releases/latest" | jq -r .tag_name)
-          wget https://github.com/tinfoilanalytics/edk2/releases/download/$LATEST_OVMF_TAG/OVMF.fd
-
-      - name: Measure image
-        run: |
-          make measure > upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json
-
-      - name: Attest
-        uses: actions/attest@v1
-        id: attest
-        with:
-          subject-path: upload/tinfoil-cvm-${{ github.ref_name }}.img
-          predicate-type: https://tinfoil.sh/predicate/snp-sev-guest/v1
-          predicate-path: upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json
+          mkdir out
+          cat <<EOF > out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+          {
+              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
+              "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
+              "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')"
+          }
+          EOF
+          for part in raw initrd vmlinuz; do
+            mv tinfoilcvm.$part out/tinfoil-inference-${{ github.ref_name }}.$part
+          done
 
       - name: Upload artifact
         uses: ryand56/r2-upload-action@latest
@@ -63,17 +57,16 @@ jobs:
           r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
           r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
           r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
-          source-dir: upload
-          destination-dir: ./
+          source-dir: out
+          destination-dir: ./cvm
 
       - name: Generate release notes
         id: generate-release-notes
         run: |
           RELEASE_NOTES=$(cat << EOF
-          AMD SEV-SNP Measurement: \`$(jq -r '.measurement' upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json)\`
-          Transparency Log Entry: https://search.sigstore.dev?logIndex=$(jq -r ".verificationMaterial.tlogEntries[0].logIndex" ${{ steps.attest.outputs.bundle-path }})
-          CVM image: https://images.tinfoil.sh/tinfoil-cvm-${{ github.ref_name }}.img
-          CVM image hash: \`$(cat upload/tinfoil-cvm-${{ github.ref_name }}.img.sha256 | cut -d " " -f 1)\`
+          Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.vmlinuz
+          Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.initrd
+          Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.raw
           EOF
           )
           echo "release-notes<<EOF" >> "$GITHUB_OUTPUT"
@@ -84,6 +77,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            upload/tinfoil-cvm-${{ github.ref_name }}.measurement.json
-            upload/tinfoil-cvm-${{ github.ref_name }}.img.sha256
+            out/tinfoil-inference-${{ github.ref_name }}-manifest.json
           body: ${{ steps.generate-release-notes.outputs.release-notes }}

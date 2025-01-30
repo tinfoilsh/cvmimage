@@ -39,7 +39,7 @@ jobs:
       - name: Generate manifest
         run: |
           mkdir ~/out
-          cat foobar > ~/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+          echo foobar > ~/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
 #          cat <<EOF > ~/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
 #          {
 #              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",

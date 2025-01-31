@@ -27,6 +27,10 @@ source /opt/venv/bin/activate
 python3 -m verifier.cc_admin
 #nvidia-smi conf-compute -srs 1
 
+# Restart ollama with GPU ready state enabled
+sleep 2
+systemctl restart ollama
+
 echo Waiting for ollama service to start...
 while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
     echo "Waiting"

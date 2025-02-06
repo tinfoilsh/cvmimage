@@ -3,12 +3,6 @@ set -Eeuo pipefail
 
 systemctl mask systemd-logind.service
 
-# Disable login tty
-for i in {1..6}; do
-    systemctl disable "getty@tty$i.service" || true
-done
-systemctl mask getty.target
-
 wget https://github.com/ollama/ollama/releases/download/v0.5.7/ollama-linux-amd64.tgz
 tar -xvzf ollama-linux-amd64.tgz
 tar -C /usr -xzf ollama-linux-amd64.tgz

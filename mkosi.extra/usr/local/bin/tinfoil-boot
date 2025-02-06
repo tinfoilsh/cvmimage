@@ -4,22 +4,33 @@
 set -ex
 
 function get_cmdline_param() {
-    local param=$1
-    local value=$(cat /proc/cmdline | grep -oP "(?<=${param}=)[^ ]*")
-    echo $value
+    cat /proc/cmdline | grep -oP "(?<=$1=)[^ ]*"
 }
 
-echo "Loading nvidia driver..."
-/sbin/modprobe ecdsa_generic ecdh
-/sbin/modprobe --ignore-install nvidia
+if [ "$(get_cmdline_param "tinfoil-debug")" != "on" ]; then
+    echo "Disabling serial tty"
+    systemctl stop serial-getty@ttyS0
+else
+    echo "WARNING: Debug mode is enabled"
+fi
 
 echo "Creating ramdisk..."
 RAM_GB=$(($(free -g | awk '/^Mem:/{print $2}')))
 SIZE=$((RAM_GB - 16))
+
+# Fallback for dev machines
+if [ $SIZE -lt 16 ]; then
+    SIZE=1
+fi
+
 mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
 chmod 777 /mnt/ramdisk
 
 cd /mnt/ramdisk
+
+echo "Loading nvidia driver..."
+/sbin/modprobe ecdsa_generic ecdh
+/sbin/modprobe --ignore-install nvidia
 
 # Verify GPU attestation
 echo "Verifying GPU attestation..."

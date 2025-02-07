@@ -1,0 +1,4 @@
+disabled_plugins = ["cri"]
+
+root = "/mnt/ramdisk/containerd/root"
+state = "/mnt/ramdisk/containerd/run"

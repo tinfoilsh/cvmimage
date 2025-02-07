@@ -10,6 +10,8 @@ function get_cmdline_param() {
 if [ "$(get_cmdline_param "tinfoil-debug")" != "on" ]; then
     echo "Disabling serial tty"
     systemctl stop serial-getty@ttyS0
+    echo "Setting root password to random value"
+    echo "root:$(openssl rand -hex 20)" | chpasswd
 else
     echo "WARNING: Debug mode is enabled"
 fi
@@ -20,6 +22,7 @@ SIZE=$((RAM_GB - 16))
 
 # Fallback for dev machines
 if [ $SIZE -lt 16 ]; then
+    echo "WARNING: Not enough RAM ($SIZE GB)for ramdisk, falling back to 1G"
     SIZE=1
 fi
 

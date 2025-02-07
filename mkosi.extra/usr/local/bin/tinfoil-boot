@@ -84,3 +84,5 @@ for container_name in $(yq -r '.containers | keys | .[]' config.yml); do
 
     docker run --name $container_name --network host -d $image
 done
+
+echo "Tinfoil boot process complete"

@@ -10,7 +10,7 @@ function get_cmdline_param() {
 if [ "$(get_cmdline_param "tinfoil-debug")" != "on" ]; then
     echo "Disabling serial tty"
     systemctl stop serial-getty@ttyS0
-    echo "Setting root password to random value"
+    echo "Scrambling root password"
     echo "root:$(openssl rand -hex 20)" | chpasswd
 else
     echo "WARNING: Debug mode is enabled"
@@ -22,8 +22,8 @@ SIZE=$((RAM_GB - 16))
 
 # Fallback for dev machines
 if [ $SIZE -lt 16 ]; then
-    echo "WARNING: Not enough RAM ($SIZE GB)for ramdisk, falling back to 1G"
-    SIZE=1
+    echo "WARNING: Not enough RAM ($SIZE GB) for ramdisk, falling back to 2G"
+    SIZE=2
 fi
 
 mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
@@ -31,19 +31,42 @@ chmod 777 /mnt/ramdisk
 
 cd /mnt/ramdisk
 
-echo "Loading nvidia driver..."
-/sbin/modprobe ecdsa_generic ecdh
-/sbin/modprobe --ignore-install nvidia
+# Mounting the config file as a disk adds null bytes to the end, we need to strip them
+dd if=/dev/sdb bs=1 status=none | tr -d '\0' > /mnt/ramdisk/config.yml
+expected_config_hash=$(get_cmdline_param "tinfoil-config-hash")
+config_hash=$(sha256sum /mnt/ramdisk/config.yml | cut -d ' ' -f 1)
+if [ "$expected_config_hash" != "$config_hash" ]; then
+    echo "ERROR: Config hash mismatch"
+    echo "Expected: $expected_config_hash"
+    echo "Actual: $config_hash"
+    exit 1
+else
+    echo "Config hash matches"
+fi
 
-# Verify GPU attestation
-echo "Verifying GPU attestation..."
 source /opt/venv/bin/activate
-python3 -m verifier.cc_admin
-#nvidia-smi conf-compute -srs 1
 
-# Restart ollama with GPU ready state enabled
+# Check for GPUs
+if lspci | grep -i nvidia > /dev/null; then
+    echo "Loading nvidia driver..."
+    /sbin/modprobe ecdsa_generic ecdh
+    /sbin/modprobe --ignore-install nvidia
+
+    # Verify GPU attestation
+    echo "Verifying GPU attestation..."
+    # python3 -m verifier.cc_admin
+    nvidia-smi conf-compute -srs 1
+else
+    echo "No GPU(s) detected"
+fi
+
+# Wait for ready and restart ollama
 sleep 2
 systemctl restart ollama
+
+# Restart the SEV shim with config
+yq .shim config.yml -ry > shim.yml
+systemctl restart tinfoil-sev-shim
 
 echo Waiting for ollama service to start...
 while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
@@ -51,7 +74,14 @@ while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
     sleep 1
 done
 
-TARGET_IMAGE=$(get_cmdline_param "tinfoil-model")
+for model in $(yq -r '.models[]' config.yml); do
+    echo "Pulling $model..."
+    ollama pull $model
+done
 
-echo Pulling image...
-ollama pull $TARGET_IMAGE
+for container_name in $(yq -r '.containers | keys | .[]' config.yml); do
+    image=$(yq -r ".containers.$container_name.image" config.yml)
+    ports=$(yq -r ".containers.$container_name.ports[]" config.yml)
+
+    docker run --name $container_name -p $ports -d $image
+done

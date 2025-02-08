@@ -74,15 +74,6 @@ while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
     sleep 1
 done
 
-for model in $(yq -r '.models[]' config.yml); do
-    echo "Pulling $model..."
-    ollama pull $model
-done
-
-for container_name in $(yq -r '.containers | keys | .[]' config.yml); do
-    image=$(yq -r ".containers.$container_name.image" config.yml)
-
-    docker run --name $container_name --network host -d $image
-done
+tinfoil-setup
 
 echo "Tinfoil boot process complete"

@@ -1,0 +1,26 @@
+#!/bin/bash
+# Usage: modelpack-mount <disk seq> <mpk info>
+
+ID=$1
+MPK_INFO=$2
+
+ROOT_HASH=$(echo "$MPK_INFO" | cut -d '-' -f 1)
+OFFSET=$(echo "$MPK_INFO" | cut -d '-' -f 2)
+DISK="/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_disk$ID"
+
+echo "Opening verity volume mpk_$ID"
+veritysetup open "$DISK" "mpk_$ID" "$DISK" "$ROOT_HASH" --hash-offset="$OFFSET" --salt="$(echo "$MODEL" | sha256sum | cut -d ' ' -f 1)"
+
+mkdir -p /mnt/ramdisk/mpk/models/$ID
+mount -o ro "/dev/mapper/mpk_$ID" "/mnt/ramdisk/mpk/models/$ID"
+
+echo "Linking blobs"
+for blob in /mnt/ramdisk/mpk/models/$ID/blobs/*; do
+    ln -sf "$(readlink -f $blob)" "/mnt/ramdisk/ollama/blobs/$(basename $blob)"
+done
+
+echo "Linking manifest"
+for manifest in $(find /mnt/ramdisk/mpk/models/$ID/manifests -type f); do
+    mkdir -p "/mnt/ramdisk/ollama/$(dirname ${manifest#/mnt/ramdisk/mpk/models/$ID/})"
+    ln -sf "$(readlink -f $manifest)" "/mnt/ramdisk/ollama/${manifest#/mnt/ramdisk/mpk/models/$ID/}"
+done

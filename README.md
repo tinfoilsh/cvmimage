@@ -18,5 +18,6 @@ shim:
     - /api/generate
 
 containers:
-  - image: [container_image]  # Docker image
+  - name: container_name
+    image: [container_image]  # Docker image
 ```

@@ -2,5 +2,6 @@
 tools/
 tinfoilcvm*
 lib/
-./bin/
+/bin/
 packages/
+tinfoil-inference-*

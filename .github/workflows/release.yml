@@ -24,13 +24,13 @@ jobs:
       - name: Fetch latest sev-shim
         run: |
           mkdir packages
-          LATEST_TAG=$(curl -s "https://api.github.com/repos/tinfoilanalytics/sev-shim/releases/latest" | jq -r .tag_name)
-          wget -P packages https://github.com/tinfoilanalytics/sev-shim/releases/download/$LATEST_TAG/tinfoil-sev-shim.deb
+          LATEST_TAG=$(curl -s "https://api.github.com/repos/tinfoilsh/sev-shim/releases/latest" | jq -r .tag_name)
+          wget -P packages https://github.com/tinfoilsh/sev-shim/releases/download/$LATEST_TAG/tinfoil-sev-shim.deb
 
       - name: Fetch kernel
         run: |
-          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-image-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
-          wget -P packages https://github.com/tinfoilanalytics/AMDSEV/releases/download/v0.0.4/linux-headers-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
+          wget -P packages https://github.com/tinfoilsh/AMDSEV/releases/download/v0.0.4/linux-image-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
+          wget -P packages https://github.com/tinfoilsh/AMDSEV/releases/download/v0.0.4/linux-headers-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
 
       - name: Build image
         run: |

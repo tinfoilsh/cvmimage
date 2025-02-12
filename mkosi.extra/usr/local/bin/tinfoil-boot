@@ -10,8 +10,6 @@ function get_cmdline_param() {
 if [ "$(get_cmdline_param "tinfoil-debug")" != "on" ]; then
     echo "Disabling serial tty"
     systemctl stop serial-getty@ttyS0
-    echo "Scrambling root password"
-    echo "root:$(openssl rand -hex 20)" | chpasswd
 else
     echo "WARNING: Debug mode is enabled"
 fi

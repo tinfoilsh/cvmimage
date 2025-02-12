@@ -6,8 +6,9 @@ import yaml
 with open("/mnt/ramdisk/config.yml", "r") as f:
     config = yaml.safe_load(f)
 
-for i, model in enumerate(config["models"]):
-    os.system(f"modelpack-mount {i+2} {model['mpk']}")
+if "models" in config:
+    for i, model in enumerate(config["models"]):
+        os.system(f"modelpack-mount {i+2} {model['mpk']}")
 
 if "containers" in config:
     for container in config["containers"]:

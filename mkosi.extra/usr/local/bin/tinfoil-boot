@@ -29,6 +29,11 @@ chmod 777 /mnt/ramdisk
 
 cd /mnt/ramdisk
 
+if [ ! -e /dev/sdb ]; then
+    echo "No config disk found"
+    exit 1
+fi
+
 # Mounting the config file as a disk adds null bytes to the end, we need to strip them
 dd if=/dev/sdb bs=1 status=none | tr -d '\0' > /mnt/ramdisk/config.yml
 expected_config_hash=$(get_cmdline_param "tinfoil-config-hash")

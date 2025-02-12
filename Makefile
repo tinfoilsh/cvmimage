@@ -1,9 +1,11 @@
-cmdline = "readonly=on console=ttyS0 earlyprintk=serial root=/dev/mapper/root $(shell objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout) tinfoil-model=deepseek-r1:70b tinfoil-domain=six.delta.tinfoil.sh"
+cmdline = "readonly=on console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-debug=on tinfoil-config-hash=$(shell sha256sum config.yml | cut -d ' ' -f 1)"
 
-gpu = "01:00.0"
-memory = 66000M
+memory = 2048M
 
 all: clean build
+
+hash:
+	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout
 
 clean:
 	sudo rm -rf tinfoilcvm.*
@@ -13,8 +15,6 @@ build:
 	rm -f tinfoilcvm
 
 run:
-	sudo python3 /shared/nvtrust/host_tools/python/gpu-admin-tools/nvidia_gpu_tools.py --gpu-bdf $(gpu) --set-cc-mode=on --reset-after-cc-mode-switch
-	sudo python3 /shared/nvtrust/host_tools/python/gpu-admin-tools/nvidia_gpu_tools.py --gpu-bdf $(gpu) --query-cc-mode
 	stty intr ^]
 	sudo ~/qemu/build/qemu-system-x86_64 \
 		-enable-kvm \
@@ -22,20 +22,18 @@ run:
 		-machine q35 -smp 32,maxcpus=32 \
 		-m $(memory) \
 		-no-reboot \
-		-bios ./OVMF.fd \
-		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw \
-		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
-		-device scsi-hd,drive=disk0 -machine memory-encryption=sev0,vmport=off \
-		-object memory-backend-memfd,id=ram1,size=$(memory),share=true,prealloc=false \
-		-machine memory-backend=ram1 -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=5,kernel-hashes=on \
+		-bios /home/ubuntu/cvmimage/OVMF.fd \
 		-kernel ./tinfoilcvm.vmlinuz \
 		-initrd ./tinfoilcvm.initrd \
 		-append $(cmdline) \
-		-net nic,model=e1000 -net user,hostfwd=tcp::2222-:22,hostfwd=tcp::8443-:443 \
-		-nographic -monitor pty -monitor unix:monitor,server,nowait \
-		-device pcie-root-port,id=pci.1,bus=pcie.0 \
-		-device vfio-pci,host=$(gpu),bus=pci.1 \
-		-fw_cfg name=opt/ovmf/X-PciMmio64Mb,string=262144
+		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw,readonly=on \
+		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
+		-device scsi-hd,drive=disk0 \
+		-machine memory-encryption=sev0,vmport=off \
+		-object memory-backend-memfd,id=ram1,size=$(memory),share=true,prealloc=false \
+		-machine memory-backend=ram1 -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=5,kernel-hashes=on \
+		-net nic,model=e1000 -net user,hostfwd=tcp::8444-:443 \
+		-nographic -monitor pty -monitor unix:monitor,server,nowait
 	stty intr ^c
 
 measure:

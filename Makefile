@@ -29,12 +29,20 @@ run:
 		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw,readonly=on \
 		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
 		-device scsi-hd,drive=disk0 \
+		-drive file=config.yml,if=none,id=disk1,format=raw,readonly=on \
+		-device virtio-scsi-pci,id=scsi1,disable-legacy=on,iommu_platform=true \
+		-device scsi-hd,drive=disk1 \
 		-machine memory-encryption=sev0,vmport=off \
 		-object memory-backend-memfd,id=ram1,size=$(memory),share=true,prealloc=false \
 		-machine memory-backend=ram1 -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=5,kernel-hashes=on \
 		-net nic,model=e1000 -net user,hostfwd=tcp::8444-:443 \
 		-nographic -monitor pty -monitor unix:monitor,server,nowait
 	stty intr ^c
+
+# -drive file=~/models/qwen-0.5b.mpk,if=none,id=disk2,format=raw,readonly=on \
+# -device virtio-scsi-pci,id=scsi2,disable-legacy=on,iommu_platform=true \
+# -device scsi-hd,drive=disk2 \
+# -machine memory-encryption=sev0,vmport=off \
 
 measure:
 	@MEASUREMENT=$$(sev-snp-measure \

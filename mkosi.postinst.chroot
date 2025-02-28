@@ -3,10 +3,16 @@ set -Eeuo pipefail
 
 systemctl mask systemd-logind.service
 
-wget https://github.com/ollama/ollama/releases/download/v0.5.7/ollama-linux-amd64.tgz
+OLLAMA_RELEASE="v0.5.12"
+
+wget "https://github.com/ollama/ollama/releases/download/$OLLAMA_RELEASE/ollama-linux-amd64.tgz"
 tar -xvzf ollama-linux-amd64.tgz
 tar -C /usr -xzf ollama-linux-amd64.tgz
 rm -f ollama-linux-amd64.tgz
+
+wget "https://github.com/tinfoilsh/ollama/releases/download/$OLLAMA_RELEASE-tfl/ollama-tinfoil"
+chmod +x ollama-tinfoil
+mv ollama-tinfoil /usr/bin/ollama-tinfoil
 
 mkdir -p /mnt/ramdisk/ollama
 

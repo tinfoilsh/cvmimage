@@ -65,6 +65,8 @@ else
     echo "No GPU(s) detected"
 fi
 
+echo "OLLAMA_METRICS=$(yq -r '.metrics' config.yml)" > /mnt/ramdisk/ollama-env
+
 # Wait for ready and restart ollama
 sleep 2
 systemctl restart ollama

@@ -13,6 +13,7 @@ Environment="OLLAMA_MODELS=/mnt/ramdisk/ollama"
 Environment="OLLAMA_ORIGINS=*"
 Environment="OLLAMA_KEEP_ALIVE=-1"
 Environment="HOME=/mnt/ramdisk/ollama"
+EnvironmentFile=/mnt/ramdisk/ollama-env
 
 [Install]
 WantedBy=default.target

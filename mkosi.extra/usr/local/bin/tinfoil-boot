@@ -65,6 +65,7 @@ else
     echo "No GPU(s) detected"
 fi
 
+touch /mnt/ramdisk/ollama-env
 metrics_host=$(yq -r '.metrics' config.yml)
 if [ "$metrics_host" != "null" ]; then
     echo "OLLAMA_METRICS=$metrics_host" > /mnt/ramdisk/ollama-env

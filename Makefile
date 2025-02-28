@@ -1,6 +1,7 @@
 cmdline = "readonly=on console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-debug=on tinfoil-config-hash=$(shell sha256sum config.yml | cut -d ' ' -f 1)"
 
-memory = 2048M
+memory = 4096M
+cpus = 32
 
 all: clean build
 
@@ -19,7 +20,7 @@ run:
 	sudo ~/qemu/build/qemu-system-x86_64 \
 		-enable-kvm \
 		-cpu EPYC-v4 \
-		-machine q35 -smp 32,maxcpus=32 \
+		-machine q35 -smp $(cpus),maxcpus=$(cpus) \
 		-m $(memory) \
 		-no-reboot \
 		-bios /home/ubuntu/cvmimage/OVMF.fd \
@@ -47,7 +48,7 @@ run:
 measure:
 	@MEASUREMENT=$$(sev-snp-measure \
 		--mode snp \
-		--vcpus=32 \
+		--vcpus=$(cpus) \
 		--vcpu-type=EPYC-v4 \
 		--append=$(cmdline) \
 		--ovmf ./OVMF.fd \

@@ -57,8 +57,10 @@ if lspci | grep -i nvidia > /dev/null; then
 
     # Verify GPU attestation
     echo "Verifying GPU attestation..."
-    # python3 -m verifier.cc_admin
-    nvidia-smi conf-compute -srs 1
+    python3 -m verifier.cc_admin
+
+    # Manual override
+    # nvidia-smi conf-compute -srs 1
 else
     echo "No GPU(s) detected"
 fi

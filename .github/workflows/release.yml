@@ -24,8 +24,9 @@ jobs:
       - name: Fetch latest sev-shim
         run: |
           mkdir packages
-          LATEST_TAG=$(curl -s "https://api.github.com/repos/tinfoilsh/sev-shim/releases/latest" | jq -r .tag_name)
-          wget -P packages https://github.com/tinfoilsh/sev-shim/releases/download/$LATEST_TAG/tinfoil-sev-shim.deb
+          SEV_SHIM_TAG=v0.0.18
+          wget -P packages https://github.com/tinfoilsh/sev-shim/releases/download/$SEV_SHIM_TAG/tinfoil-sev-shim.deb
+          # curl -s "https://api.github.com/repos/tinfoilsh/sev-shim/releases/latest" | jq -r .tag_name
 
       - name: Fetch kernel
         run: |

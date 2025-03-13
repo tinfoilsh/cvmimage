@@ -17,4 +17,5 @@ python3 -m venv /opt/venv
 source /opt/venv/bin/activate
 pip install --no-cache-dir nv-local-gpu-verifier yq
 
-echo "export DOCKER_CONFIG=/mnt/ramdisk/docker-config" >> ~/.bashrc
+mkdir -p /mnt/ramdisk/docker-config
+echo "export DOCKER_CONFIG=/mnt/ramdisk/docker-config" >> /root/.bashrc

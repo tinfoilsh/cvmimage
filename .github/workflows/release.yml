@@ -21,10 +21,10 @@ jobs:
           sudo pipx install git+https://github.com/systemd/mkosi.git
           sudo pipx ensurepath
 
-      - name: Fetch latest sev-shim
+      - name: Fetch sev-shim
         run: |
           mkdir packages
-          SEV_SHIM_TAG=v0.0.20
+          SEV_SHIM_TAG=v0.0.21
           wget -P packages https://github.com/tinfoilsh/sev-shim/releases/download/$SEV_SHIM_TAG/tinfoil-sev-shim.deb
           # curl -s "https://api.github.com/repos/tinfoilsh/sev-shim/releases/latest" | jq -r .tag_name
 

@@ -26,6 +26,7 @@ fi
 
 mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
 chmod 777 /mnt/ramdisk
+cd /mnt/ramdisk
 
 # Mount tmp as ramdisk
 mount -t tmpfs -o size=512M tmpfs /tmp

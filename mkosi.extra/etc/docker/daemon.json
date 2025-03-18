@@ -1,3 +1,9 @@
 {
-    "data-root": "/mnt/ramdisk/docker"
+    "data-root": "/mnt/ramdisk/docker",
+    "runtimes": {
+        "nvidia": {
+            "args": [],
+            "path": "nvidia-container-runtime"
+        }
+    }
 }

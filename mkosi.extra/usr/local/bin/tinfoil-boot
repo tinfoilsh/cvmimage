@@ -20,8 +20,8 @@ SIZE=$((RAM_GB - 16))
 
 # Fallback for dev machines
 if [ $SIZE -lt 16 ]; then
-    echo "WARNING: Not enough RAM ($SIZE GB) for ramdisk, falling back to 2G"
-    SIZE=2
+    echo "WARNING: Not enough RAM ($SIZE GB) for ramdisk, falling back to 4G"
+    SIZE=4
 fi
 
 mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
@@ -60,32 +60,29 @@ if lspci | grep -i nvidia > /dev/null; then
     # Verify GPU attestation
     echo "Verifying GPU attestation..."
     python3 -m verifier.cc_admin
-
-    # Manual override
-    # nvidia-smi conf-compute -srs 1
 else
     echo "No GPU(s) detected"
 fi
 
-touch /mnt/ramdisk/ollama-env
-metrics_host=$(yq -r '.metrics' config.yml)
-if [ "$metrics_host" != "null" ]; then
-    echo "OLLAMA_METRICS=$metrics_host" > /mnt/ramdisk/ollama-env
-fi
+# touch /mnt/ramdisk/ollama-env
+# metrics_host=$(yq -r '.metrics' config.yml)
+# if [ "$metrics_host" != "null" ]; then
+#     echo "OLLAMA_METRICS=$metrics_host" > /mnt/ramdisk/ollama-env
+# fi
 
-# Wait for ready and restart ollama
-sleep 2
-systemctl restart ollama
+# # Wait for ready and restart ollama
+# sleep 2
+# systemctl restart ollama
 
 # Restart the SEV shim with config
 yq .shim config.yml -ry > shim.yml
 systemctl restart tinfoil-sev-shim
 
-echo Waiting for ollama service to start...
-while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
-    echo "Waiting"
-    sleep 1
-done
+# echo Waiting for ollama service to start...
+# while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
+#     echo "Waiting"
+#     sleep 1
+# done
 
 tinfoil-setup
 

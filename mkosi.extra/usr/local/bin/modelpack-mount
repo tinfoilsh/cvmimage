@@ -1,26 +1,23 @@
 #!/bin/bash
-# Usage: modelpack-mount <disk seq> <mpk info>
 
-ID=$1
-MPK_INFO=$2
+mpk=$1
 
-ROOT_HASH=$(echo "$MPK_INFO" | cut -d '-' -f 1)
-OFFSET=$(echo "$MPK_INFO" | cut -d '-' -f 2)
-DISK="/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_disk$ID"
+root_hash=$(echo $mpk | cut -d '_' -f 1)
+offset=$(echo $mpk | cut -d '_' -f 2)
+uuid=$(echo $mpk | cut -d '_' -f 3)
 
-echo "Opening verity volume mpk_$ID"
-veritysetup open "$DISK" "mpk_$ID" "$DISK" "$ROOT_HASH" --hash-offset="$OFFSET" --salt="$(echo "$MODEL" | sha256sum | cut -d ' ' -f 1)"
+block_device="/dev/disk/by-uuid/$uuid"
+device_name="mpk-$root_hash"
 
-mkdir -p /mnt/ramdisk/mpk/models/$ID
-mount -o ro "/dev/mapper/mpk_$ID" "/mnt/ramdisk/mpk/models/$ID"
+echo "Opening $block_device as $device_name"
+veritysetup open \
+    $block_device \
+    $device_name \
+    $block_device \
+    $root_hash \
+    --hash-offset=$offset
 
-echo "Linking blobs"
-for blob in /mnt/ramdisk/mpk/models/$ID/blobs/*; do
-    ln -sf "$(readlink -f $blob)" "/mnt/ramdisk/ollama/blobs/$(basename $blob)"
-done
-
-echo "Linking manifest"
-for manifest in $(find /mnt/ramdisk/mpk/models/$ID/manifests -type f); do
-    mkdir -p "/mnt/ramdisk/ollama/$(dirname ${manifest#/mnt/ramdisk/mpk/models/$ID/})"
-    ln -sf "$(readlink -f $manifest)" "/mnt/ramdisk/ollama/${manifest#/mnt/ramdisk/mpk/models/$ID/}"
-done
+mountpoint="/mnt/ramdisk/mpk/$device_name"
+echo "Mounting $device_name at $mountpoint"
+mkdir -p $mountpoint
+mount -o ro /dev/mapper/$device_name $mountpoint

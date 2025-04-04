@@ -31,6 +31,8 @@ cd /mnt/ramdisk
 # Mount tmp as ramdisk
 mount -t tmpfs -o size=512M tmpfs /tmp
 
+mkdir -p /mnt/ramdisk/vllm/run
+
 if [ ! -e /dev/sdb ]; then
     echo "No config disk found"
     exit 1
@@ -60,30 +62,33 @@ if lspci | grep -i nvidia > /dev/null; then
     # Verify GPU attestation
     echo "Verifying GPU attestation..."
     python3 -m verifier.cc_admin
+
+    # Manual override
+    # nvidia-smi conf-compute -srs 1
 else
     echo "No GPU(s) detected"
 fi
-
-# touch /mnt/ramdisk/ollama-env
-# metrics_host=$(yq -r '.metrics' config.yml)
-# if [ "$metrics_host" != "null" ]; then
-#     echo "OLLAMA_METRICS=$metrics_host" > /mnt/ramdisk/ollama-env
-# fi
-
-# # Wait for ready and restart ollama
-# sleep 2
-# systemctl restart ollama
 
 # Restart the SEV shim with config
 yq .shim config.yml -ry > shim.yml
 systemctl restart tinfoil-sev-shim
 
-# echo Waiting for ollama service to start...
+# Mount MPK and set up containers
+tinfoil-setup
+
+touch /mnt/ramdisk/vllm-env
+echo "VLLM_MODEL=/mnt/ramdisk/mpk/$(ls -AU /mnt/ramdisk/mpk | head -1)" > /mnt/ramdisk/vllm-env
+echo "VLLM_MODE_NAME=$(yq -r '.models[0].name' /mnt/ramdisk/config.yml)" >> /mnt/ramdisk/vllm-env
+echo "VLLM_ARGS=$(yq -r '."vllm-args"' /mnt/ramdisk/config.yml)" >> /mnt/ramdisk/vllm-env
+
+# Wait for ready and restart vllm
+sleep 2
+systemctl restart vllm
+
+# echo Waiting for vllm service to start...
 # while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
 #     echo "Waiting"
 #     sleep 1
 # done
-
-tinfoil-setup
 
 echo "Tinfoil boot process complete"

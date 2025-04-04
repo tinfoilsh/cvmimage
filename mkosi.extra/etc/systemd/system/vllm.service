@@ -1,0 +1,19 @@
+[Unit]
+Description=vllm
+After=network-online.target
+
+[Service]
+ExecStart=/opt/venv/bin/vllm serve --host 0.0.0.0 --port 8080 --served-model-name $VLLM_MODE_NAME $VLLM_ARGS $VLLM_MODEL
+User=root
+Group=root
+Restart=always
+RestartSec=3
+RuntimeDirectory=/mnt/ramdisk/vllm/run
+Environment="HOME=/mnt/ramdisk/vllm"
+Environment="VLLM_CACHE_ROOT=/mnt/ramdisk/vllm/cache"
+Environment="VLLM_CONFIG_ROOT=/mnt/ramdisk/vllm/config"
+Environment="VLLM_ASSETS_CACHE=/mnt/ramdisk/vllm/assets"
+EnvironmentFile=/mnt/ramdisk/vllm-env
+
+[Install]
+WantedBy=default.target

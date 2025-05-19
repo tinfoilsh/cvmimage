@@ -16,4 +16,12 @@ if "models" in config:
 
 if "containers" in config:
     for container in config["containers"]:
-        os.system(f"docker run --name {container['name']} --network host -d {container['image']}")
+        cmd_parts = ["docker", "run", "-d", "--name", container["name"], "--network", "host"]
+
+        extra_args = []
+        if "args" in container:
+            extra_args = container["args"] if isinstance(container["args"], list) else [container["args"]]
+
+        cmd_parts.extend(extra_args)
+        cmd_parts.append(container["image"])
+        os.system(" ".join(cmd_parts))

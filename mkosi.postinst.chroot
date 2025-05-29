@@ -6,7 +6,7 @@ systemctl mask systemd-logind.service
 # Install pip packages
 python3 -m venv /opt/venv
 source /opt/venv/bin/activate
-pip install --no-cache-dir nv_attestation_sdk nv-local-gpu-verifier yq vllm[audio]==0.8.4 einops
+pip install --no-cache-dir nv_attestation_sdk nv-local-gpu-verifier yq vllm[audio]==0.8.5.post1 einops
 
 mkdir -p /mnt/ramdisk/docker-config
 echo "export DOCKER_CONFIG=/mnt/ramdisk/docker-config" >> /root/.bashrc

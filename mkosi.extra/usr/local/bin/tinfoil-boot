@@ -51,6 +51,8 @@ else
     echo "Config hash matches"
 fi
 
+dd if=/dev/sdc bs=1 status=none | tr -d '\0' > /mnt/ramdisk/external-config.yml
+
 source /opt/venv/bin/activate
 
 # Check for GPUs

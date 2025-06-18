@@ -51,6 +51,8 @@ else
     echo "Config hash matches"
 fi
 
+dd if=/dev/sdc bs=1 status=none | tr -d '\0' > /mnt/ramdisk/external-config.yml
+
 source /opt/venv/bin/activate
 
 # Check for GPUs
@@ -69,12 +71,18 @@ else
     echo "No GPU(s) detected"
 fi
 
-# Restart the SEV shim with config
-yq .shim config.yml -ry > shim.yml
-systemctl restart tinfoil-sev-shim
-
 # Mount MPK and set up containers
 tinfoil-setup
+
+# Fetch and install sev-shim based on config version
+SHIM_VERSION=$(yq '."cvm-version"' /mnt/ramdisk/config.yml)
+echo "Installing sev-shim version ${SHIM_VERSION}..."
+wget -O /mnt/ramdisk/shim.tar.gz "https://github.com/tinfoilsh/sev-shim/releases/download/v${SHIM_VERSION}/sev-shim_${SHIM_VERSION}_linux_amd64.tar.gz"
+tar -xzf /mnt/ramdisk/shim.tar.gz -C /mnt/ramdisk
+
+# Start the SEV shim with config
+yq .shim config.yml -ry > shim.yml
+systemctl start tinfoil-sev-shim
 
 touch /mnt/ramdisk/vllm-env
 echo "VLLM_MODEL=/mnt/ramdisk/mpk/$(ls -AU /mnt/ramdisk/mpk | head -1)" > /mnt/ramdisk/vllm-env

@@ -21,13 +21,6 @@ jobs:
           sudo pipx install git+https://github.com/systemd/mkosi.git
           sudo pipx ensurepath
 
-      - name: Fetch sev-shim
-        run: |
-          mkdir packages
-          SEV_SHIM_TAG=v0.0.36
-          wget -P packages https://github.com/tinfoilsh/sev-shim/releases/download/$SEV_SHIM_TAG/tinfoil-sev-shim.deb
-          # curl -s "https://api.github.com/repos/tinfoilsh/sev-shim/releases/latest" | jq -r .tag_name
-
       - name: Fetch kernel
         run: |
           wget -P packages https://github.com/tinfoilsh/AMDSEV/releases/download/v0.0.4/linux-image-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb

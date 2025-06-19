@@ -1,5 +1,27 @@
-models:
-  - name: "casperhansen/llama-3.3-70b-instruct-awq"
-    mpk: "a5682a25b389ffec1f815014f32db5e8408ede5f9858b4892e60f70e04072499_39785426944_105c64df-38c7-599e-8e98-71699d45be86"
+cvm-version: 0.0.36
+ovmf-version: 0.0.2
+shim-version: v0.1.1@sha256:fcd0ba0ea3f0ca26d92595ea90f28308cfba819e3243925892e6c8f21eb1397d
+cpus: 16
+memory: 65536
 
-vllm-args: --quantization awq --max-model-len 65536
+models:
+  - name: "whisper-large-v3-turbo"
+    repo: "openai/whisper-large-v3-turbo@41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
+    mpk: "dd81839982fa01a289f7b60613055e4e1f789503c25a3535b75d53841f7f5b78_1622474752_55d2c545-4d89-5658-9ffd-ce0b4d07ac36"
+vllm-args: --task transcription --max-model-len 448 --max-num-seqs 400 --limit-mm-per-prompt audio=1
+
+shim:
+  listen-port: 443
+  upstream-port: 8089
+  control-plane: https://api.tinfoil.sh
+  origins:
+    - https://tinfoil.sh
+    - https://chat.tinfoil.sh
+
+containers:
+  - name: "kokoro"
+    image: "ghcr.io/tinfoilsh/kokoro-fastapi-gpu:v0.3.0"
+    args:
+      - "--gpus all"
+  - name: "proxy"
+    image: "ghcr.io/tinfoilsh/confidential-audio-processing:latest"

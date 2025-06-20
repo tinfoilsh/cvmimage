@@ -7,6 +7,28 @@ function get_cmdline_param() {
     cat /proc/cmdline | grep -oP "(?<=$1=)[^ ]*"
 }
 
+function install_tfshim() {
+    SHIM_INFO=$(yq -r '.["shim-version"]' /mnt/ramdisk/config.yml)
+    SHIM_VERSION=$(echo "${SHIM_INFO}" | cut -d '@' -f1)
+    EXPECTED_HASH=$(echo "${SHIM_INFO}" | cut -d ':' -f2)
+    BINARY_PATH="/mnt/ramdisk/tfshim"
+
+    echo "Installing tfshim version ${SHIM_VERSION} hash ${EXPECTED_HASH}"
+
+    wget -O "${BINARY_PATH}" "https://github.com/tinfoilsh/tfshim/releases/download/${SHIM_VERSION}/tfshim"
+    chmod +x "${BINARY_PATH}"
+
+    ACTUAL_HASH=$(sha256sum "${BINARY_PATH}" | cut -d ' ' -f1)
+    if [ "${ACTUAL_HASH}" != "${EXPECTED_HASH}" ]; then
+        echo "Hash verification failed!"
+        echo "Expected: ${EXPECTED_HASH}"
+        echo "Got:      ${ACTUAL_HASH}"
+        exit 1
+    else
+        echo "Hash verification ok"
+    fi
+}
+
 if [ "$(get_cmdline_param "tinfoil-debug")" != "on" ]; then
     echo "Disabling serial tty"
     systemctl stop serial-getty@ttyS0
@@ -74,15 +96,12 @@ fi
 # Mount MPK and set up containers
 tinfoil-setup
 
-# Fetch and install sev-shim based on config version
-SHIM_VERSION=$(yq '."cvm-version"' /mnt/ramdisk/config.yml)
-echo "Installing sev-shim version ${SHIM_VERSION}..."
-wget -O /mnt/ramdisk/shim.tar.gz "https://github.com/tinfoilsh/sev-shim/releases/download/v${SHIM_VERSION}/sev-shim_${SHIM_VERSION}_linux_amd64.tar.gz"
-tar -xzf /mnt/ramdisk/shim.tar.gz -C /mnt/ramdisk
+# Fetch tfshim
+install_tfshim
 
 # Start the SEV shim with config
 yq .shim config.yml -ry > shim.yml
-systemctl start tinfoil-sev-shim
+systemctl start tfshim
 
 touch /mnt/ramdisk/vllm-env
 echo "VLLM_MODEL=/mnt/ramdisk/mpk/$(ls -AU /mnt/ramdisk/mpk | head -1)" > /mnt/ramdisk/vllm-env

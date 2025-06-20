@@ -97,6 +97,7 @@ fi
 tinfoil-setup
 
 # Fetch tfshim
+sleep 5 # hack to wait for networking
 install_tfshim
 
 # Start the SEV shim with config

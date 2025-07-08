@@ -16,7 +16,7 @@ if "models" in config:
 
 if "containers" in config:
     for container in config["containers"]:
-        cmd_parts = ["docker", "run", "-d", "--name", container["name"], "--network", "host"]
+        cmd_parts = ["docker", "run", "-d", "--name", container["name"], "--network", "host", "-v", "/mnt/ramdisk:/tinfoil"]
 
         extra_args = []
         if "args" in container:

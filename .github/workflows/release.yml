@@ -13,6 +13,16 @@ jobs:
       contents: write
 
     steps:
+      - name: Check if prerelease
+        id: check-prerelease
+        run: |
+          if [[ "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "WARN: This is a prerelease"
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Install build dependencies
@@ -21,13 +31,9 @@ jobs:
           sudo pipx install git+https://github.com/systemd/mkosi.git
           sudo pipx ensurepath
 
-      - name: Fetch kernel
-        run: |
-          wget -P packages https://github.com/tinfoilsh/AMDSEV/releases/download/v0.0.4/linux-image-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
-          wget -P packages https://github.com/tinfoilsh/AMDSEV/releases/download/v0.0.4/linux-headers-6.10.0-snp-guest-0c3836482481_6.10.0-g0c3836482481-2_amd64.deb
-
       - name: Build image
         run: |
+          mkdir -p packages
           sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
 
       - name: Fix permissions
@@ -79,3 +85,4 @@ jobs:
           files: |
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
           body: ${{ steps.generate-release-notes.outputs.release-notes }}
+          prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}

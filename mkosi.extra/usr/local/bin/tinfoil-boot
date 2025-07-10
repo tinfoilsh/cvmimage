@@ -92,17 +92,20 @@ if lspci | grep -i nvidia > /dev/null; then
         modprobe --ignore-install nvidia NVreg_RegistryDwords="RmEnableProtectedPcie=0x1"
         sleep 5
         systemctl start nvidia-fabricmanager
-        systemctl start nvidia-persistenced || true  # NATE: This isn't working right and might be causing perf issue
+        systemctl start nvidia-persistenced
+
+        echo "Verifying PPCIe attestation..."
+        python3 -m ppcie.verifier.verification --gpu-attestation-mode=LOCAL --switch-attestation-mode=LOCAL
     else
         echo "Less than 12 NVIDIA devices detected, not enabling PPCIe"
+
         echo "Loading nvidia driver..."
         modprobe ecdsa_generic ecdh
         modprobe --ignore-install nvidia
-    fi
 
-    # Verify GPU attestation
-    echo "Verifying GPU attestation..."
-    python3 -m verifier.cc_admin
+        echo "Verifying GPU attestation..."
+        python3 -m verifier.cc_admin
+    fi
 
     # Manual override
     # nvidia-smi conf-compute -srs 1

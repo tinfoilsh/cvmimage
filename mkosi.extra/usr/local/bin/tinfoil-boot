@@ -55,7 +55,7 @@ mount -t tmpfs -o size=512M tmpfs /tmp
 
 mkdir -p /mnt/ramdisk/vllm/run
 
-source /opt/venv/bin/activate
+source /opt/venv-attestation/bin/activate
 
 # Check for GPUs
 if lspci | grep -i nvidia > /dev/null; then

@@ -8,4 +8,4 @@ Before=systemd-backlight@backlight:nvidia_0.service
 Type=forking
 ExecStart=/usr/bin/nvidia-persistenced --user nvpd --uvm-persistence-mode --verbose
 ExecStopPost=/bin/rm -rf /var/run/nvidia-persistenced
-TimeoutSec=600
+TimeoutSec=1800

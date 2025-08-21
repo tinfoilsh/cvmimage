@@ -1,0 +1,15 @@
+Package: *
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 1001
+
+Package: nvidia-*
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 1001
+
+Package: libnvidia-*
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 1001
+
+Package: cuda-*
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 1001

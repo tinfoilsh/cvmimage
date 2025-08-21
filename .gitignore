@@ -5,3 +5,8 @@ lib/
 /bin/
 packages/
 tinfoil-inference-*
+mkosi.cache/*
+!mkosi.cache/.gitkeep
+venv/
+mkosi.tools/
+mkosi.tools.manifest

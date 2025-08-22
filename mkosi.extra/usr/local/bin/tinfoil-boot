@@ -88,7 +88,8 @@ if lspci | grep -i nvidia > /dev/null; then
         done
 
         sleep 5
-        modprobe ecdsa_generic ecdh
+        modprobe ecdsa_generic
+        modprobe ecdh
         modprobe --ignore-install nvidia NVreg_RegistryDwords="RmEnableProtectedPcie=0x1"
         sleep 5
         systemctl start nvidia-fabricmanager
@@ -100,7 +101,8 @@ if lspci | grep -i nvidia > /dev/null; then
         echo "Less than 12 NVIDIA devices detected, not enabling PPCIe"
 
         echo "Loading nvidia driver..."
-        modprobe ecdsa_generic ecdh
+        modprobe ecdsa_generic
+        modprobe ecdh
         modprobe --ignore-install nvidia
 
         echo "Verifying GPU attestation..."

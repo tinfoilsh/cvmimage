@@ -32,10 +32,6 @@ jobs:
           sudo pipx ensurepath
           mkdir -p packages
 
-      - name: Fetch LKCA compatible NVIDIA driver
-        run: |
-          wget -P packages/ https://github.com/tinfoilsh/open-gpu-kernel-modules/releases/download/575.57.8-lkca/nvidia-driver-open-575-tinfoil_575.57.8.lkca_amd64.deb
-
       - name: Build image
         run: |
           sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}

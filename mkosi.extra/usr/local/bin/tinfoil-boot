@@ -135,6 +135,25 @@ fi
 
 dd if=/dev/sdc bs=1 status=none | tr -d '\0' > /mnt/ramdisk/external-config.yml
 
+# Setup gcloud docker auth if available
+external_config_file="/mnt/ramdisk/external-config.yml"
+if [ -f "${external_config_file}" ]; then
+    echo "Found external config file"
+    gcloud_key=$(yq -r '."gcloud-key"' "${external_config_file}")
+    if [ -n "${gcloud_key}" ]; then
+        echo "Found gcloud key"
+
+        gcloud_key_file=/mnt/ramdisk/gcloud_key.json
+        echo "$gcloud_key" > $gcloud_key_file
+        gcloud auth activate-service-account --key-file $gcloud_key_file
+        gcloud auth configure-docker $(yq -r '."gcloud-registry"' "${external_config_file}")
+    else
+        echo "No gcloud key found"
+    fi
+else
+    echo "No external config file found"
+fi
+
 # Mount MPK and set up containers
 tinfoil-setup
 

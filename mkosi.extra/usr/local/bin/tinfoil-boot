@@ -140,11 +140,11 @@ external_config_file="/mnt/ramdisk/external-config.yml"
 if [ -f "${external_config_file}" ]; then
     echo "Found external config file"
     gcloud_key=$(yq -r '."gcloud-key"' "${external_config_file}")
-    if [ -n "${gcloud_key}" ]; then
+    if [ -n "$gcloud_key" ] && [ "$gcloud_key" != "null" ]; then
         echo "Found gcloud key"
-
         gcloud_key_file=/mnt/ramdisk/gcloud_key.json
         echo "$gcloud_key" > $gcloud_key_file
+        export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud
         gcloud auth activate-service-account --key-file $gcloud_key_file
         gcloud auth configure-docker $(yq -r '."gcloud-registry"' "${external_config_file}")
     else

@@ -15,4 +15,6 @@ pip install --no-cache-dir nv-ppcie-verifier nv-local-gpu-verifier yq
 deactivate
 
 mkdir -p /mnt/ramdisk/docker-config
+mkdir -p /mnt/ramdisk/gcloud
+echo "export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud" >> /root/.bashrc
 echo "export DOCKER_CONFIG=/mnt/ramdisk/docker-config" >> /root/.bashrc

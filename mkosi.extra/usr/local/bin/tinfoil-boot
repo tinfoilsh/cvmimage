@@ -145,6 +145,7 @@ if [ -f "${external_config_file}" ]; then
         gcloud_key_file=/mnt/ramdisk/gcloud_key.json
         echo "$gcloud_key" > $gcloud_key_file
         export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud
+        export DOCKER_CONFIG=/mnt/ramdisk/docker-config
         gcloud auth activate-service-account --quiet --key-file $gcloud_key_file
         gcloud auth configure-docker --quiet $(yq -r '."gcloud-registry"' "${external_config_file}")
     else

@@ -40,6 +40,9 @@ echo "Creating ramdisk..."
 RAM_GB=$(($(free -g | awk '/^Mem:/{print $2}')))
 SIZE=$((RAM_GB - 16))
 
+export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud
+export DOCKER_CONFIG=/mnt/ramdisk/docker-config
+
 # Fallback for dev machines
 if [ $SIZE -lt 16 ]; then
     echo "WARNING: Not enough RAM ($SIZE GB) for ramdisk, falling back to 4G"
@@ -144,8 +147,6 @@ if [ -f "${external_config_file}" ]; then
         echo "Found gcloud key"
         gcloud_key_file=/mnt/ramdisk/gcloud_key.json
         echo "$gcloud_key" > $gcloud_key_file
-        export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud
-        export DOCKER_CONFIG=/mnt/ramdisk/docker-config
         gcloud auth activate-service-account --quiet --key-file $gcloud_key_file
         gcloud auth configure-docker --quiet $(yq -r '."gcloud-registry"' "${external_config_file}")
     else

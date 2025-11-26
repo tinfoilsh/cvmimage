@@ -4,11 +4,6 @@ set -Eeuo pipefail
 systemctl mask systemd-logind.service
 
 # Install pip packages
-python3 -m venv /opt/venv
-source /opt/venv/bin/activate
-pip install --no-cache-dir vllm[audio]==0.8.5.post1 einops
-deactivate
-
 python3 -m venv /opt/venv-attestation
 source /opt/venv-attestation/bin/activate
 pip install --no-cache-dir nv-ppcie-verifier nv-local-gpu-verifier yq

@@ -56,8 +56,6 @@ cd /mnt/ramdisk
 # Mount tmp as ramdisk
 mount -t tmpfs -o size=512M tmpfs /tmp
 
-mkdir -p /mnt/ramdisk/vllm/run
-
 source /opt/venv-attestation/bin/activate
 
 # Check for GPUs

@@ -1,5 +1,3 @@
 models:
   - name: "casperhansen/llama-3.3-70b-instruct-awq"
     mpk: "a5682a25b389ffec1f815014f32db5e8408ede5f9858b4892e60f70e04072499_39785426944_105c64df-38c7-599e-8e98-71699d45be86"
-
-vllm-args: --quantization awq --max-model-len 65536

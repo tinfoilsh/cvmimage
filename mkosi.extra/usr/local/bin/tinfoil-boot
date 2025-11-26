@@ -167,25 +167,4 @@ install_tfshim
 yq .shim config.yml -ry > shim.yml
 systemctl start tfshim
 
-touch /mnt/ramdisk/vllm-env
-echo "VLLM_MODEL=/mnt/ramdisk/mpk/$(ls -AU /mnt/ramdisk/mpk | head -1)" > /mnt/ramdisk/vllm-env
-echo "VLLM_MODE_NAME=$(yq -r '.models[0].name' /mnt/ramdisk/config.yml)" >> /mnt/ramdisk/vllm-env
-echo "VLLM_ARGS=$(yq -r '."vllm-args"' /mnt/ramdisk/config.yml)" >> /mnt/ramdisk/vllm-env
-
-# Check if vllm: false is set in the config
-if yq -r '.vllm' /mnt/ramdisk/config.yml | grep -q 'false'; then
-    echo "VLLM is disabled"
-    systemctl stop vllm
-else
-    echo "VLLM is enabled"
-    sleep 2
-    systemctl restart vllm
-fi
-
-# echo Waiting for vllm service to start...
-# while ! $(curl -sL http://localhost:11434/api/version > /dev/null 2>&1); do
-#     echo "Waiting"
-#     sleep 1
-# done
-
 echo "Tinfoil boot process complete"

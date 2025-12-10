@@ -1,11 +1,19 @@
 [Unit]
 Description=NVIDIA Persistence Daemon
 Wants=syslog.target
+# For multi-GPU: wait for fabricmanager to configure NVLink fabric first
+After=nvidia-fabricmanager.service
+Requires=nvidia-fabricmanager.service
 StopWhenUnneeded=true
 Before=systemd-backlight@backlight:nvidia_0.service
 
 [Service]
 Type=forking
+# Add delay to ensure NVLink fabric is fully initialized
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/bin/nvidia-persistenced --user nvidia-persistenced --uvm-persistence-mode --verbose
 ExecStopPost=/bin/rm -rf /var/run/nvidia-persistenced
 TimeoutSec=1800
+
+[Install]
+WantedBy=multi-user.target

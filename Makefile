@@ -3,17 +3,27 @@ cmdline = "readonly=on console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-d
 memory = 4096M
 cpus = 32
 
+# Default profile (can be overridden: make build PROFILE=single-gpu)
+PROFILE ?= multi-gpu
+OUTPUT_NAME = tinfoilcvm-$(PROFILE)
+
 all: clean build
 
 hash:
-	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout
+	objcopy -O binary --only-section .cmdline $(OUTPUT_NAME).efi /dev/stdout
 
 clean:
-	sudo rm -rf tinfoilcvm.*
+	sudo rm -rf tinfoilcvm-*.* tinfoilcvm.*
 
 build:
-	mkosi
-	rm -f tinfoilcvm
+	mkosi --profile=$(PROFILE)
+	rm -f tinfoilcvm tinfoilcvm-*[!.]*[!a-z]
+
+build-single-gpu:
+	$(MAKE) build PROFILE=single-gpu
+
+build-multi-gpu:
+	$(MAKE) build PROFILE=multi-gpu
 
 run:
 	stty intr ^]
@@ -24,10 +34,10 @@ run:
 		-m $(memory) \
 		-no-reboot \
 		-bios /home/ubuntu/cvmimage/OVMF.fd \
-		-kernel ./tinfoilcvm.vmlinuz \
-		-initrd ./tinfoilcvm.initrd \
+		-kernel ./$(OUTPUT_NAME).vmlinuz \
+		-initrd ./$(OUTPUT_NAME).initrd \
 		-append $(cmdline) \
-		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw,readonly=on \
+		-drive file=./$(OUTPUT_NAME).raw,if=none,id=disk0,format=raw,readonly=on \
 		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
 		-device scsi-hd,drive=disk0 \
 		-drive file=config.yml,if=none,id=disk1,format=raw,readonly=on \
@@ -52,6 +62,6 @@ measure:
 		--vcpu-type=EPYC-v4 \
 		--append=$(cmdline) \
 		--ovmf ./OVMF.fd \
-		--kernel tinfoilcvm.vmlinuz \
-		--initrd tinfoilcvm.initrd) && \
+		--kernel $(OUTPUT_NAME).vmlinuz \
+		--initrd $(OUTPUT_NAME).initrd) && \
 	echo "{ \"measurement\": \"$$MEASUREMENT\" }"

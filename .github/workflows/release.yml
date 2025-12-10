@@ -34,7 +34,8 @@ jobs:
 
       - name: Build image
         run: |
-          sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
+          # Build multi-gpu profile
+          sudo /opt/pipx_bin/mkosi --profile=multi-gpu --image-version ${{ github.ref_name }}
 
       - name: Fix permissions
         run: |

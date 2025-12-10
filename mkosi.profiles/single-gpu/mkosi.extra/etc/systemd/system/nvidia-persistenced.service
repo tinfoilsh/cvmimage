@@ -1,0 +1,14 @@
+[Unit]
+Description=NVIDIA Persistence Daemon
+Wants=syslog.target
+StopWhenUnneeded=true
+Before=systemd-backlight@backlight:nvidia_0.service
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/nvidia-persistenced --user nvidia-persistenced --uvm-persistence-mode --verbose
+ExecStopPost=/bin/rm -rf /var/run/nvidia-persistenced
+TimeoutSec=1800
+
+[Install]
+WantedBy=multi-user.target

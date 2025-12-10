@@ -53,51 +53,33 @@ source /opt/venv-attestation/bin/activate
 
 # Check for GPUs
 if lspci | grep -i nvidia > /dev/null; then
+    # Load required crypto modules
+    modprobe ecdsa_generic
+    modprobe ecdh
+
     # Check if at least 12 nvidia devices are present (8 GPUs + 4 NVSwitches)
     if [ $(lspci | grep -i nvidia | wc -l) -ge 12 ]; then
         echo "Multi-GPU detected, enabling PPCIe"
-        # HACK: This is horrible, need to fix
-        systemctl stop nvidia-fabricmanager
-        systemctl stop nvidia-persistenced
-        for mod in nvidia_drm nvidia_modeset nvidia_uvm ecdsa_generic; do
-            rmmod $mod || true
-        done
 
-        max_attempts=10
-        attempt=1
-        while [ $attempt -le $max_attempts ]; do
-            if rmmod nvidia; then
-                break
-            else
-                echo "Failed to remove nvidia module (attempt $attempt of $max_attempts)"
-                if [ $attempt -lt $max_attempts ]; then
-                    echo "Waiting 5 seconds before retry..."
-                    sleep 5
-                else
-                    echo "Failed to remove nvidia module after $max_attempts attempts"
-                    exit 1
-                fi
-            fi
-            attempt=$((attempt + 1))
-        done
-
-        sleep 5
-        modprobe ecdsa_generic
-        modprobe ecdh
+        # Load nvidia driver with PPCIe enabled
         modprobe --ignore-install nvidia NVreg_RegistryDwords="RmEnableProtectedPcie=0x1"
         sleep 5
+
+        # Start GPU management services
         systemctl start nvidia-fabricmanager
         systemctl start nvidia-persistenced
 
         echo "Verifying PPCIe attestation..."
         python3 -m ppcie.verifier.verification --gpu-attestation-mode=LOCAL --switch-attestation-mode=LOCAL
     else
-        echo "Less than 12 NVIDIA devices detected, not enabling PPCIe"
+        echo "Single/few GPU(s) detected, standard initialization"
 
-        echo "Loading nvidia driver..."
-        modprobe ecdsa_generic
-        modprobe ecdh
+        # Load nvidia driver
         modprobe --ignore-install nvidia
+        sleep 5
+
+        # Start persistence daemon
+        systemctl start nvidia-persistenced
 
         echo "Verifying GPU attestation..."
         python3 -m verifier.cc_admin

@@ -3,6 +3,11 @@ set -Eeuo pipefail
 
 systemctl mask systemd-logind.service
 
+# Disable nvidia services from auto-starting at boot
+# They will be started by tinfoil-boot after loading the driver with correct parameters
+systemctl disable nvidia-persistenced.service || true
+systemctl disable nvidia-fabricmanager.service || true
+
 # Install pip packages
 python3 -m venv /opt/venv-attestation
 source /opt/venv-attestation/bin/activate

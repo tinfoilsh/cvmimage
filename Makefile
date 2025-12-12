@@ -19,6 +19,9 @@ build:
 	mkosi
 	rm -f tinfoilcvm
 
+python-lockfile:
+	pip-compile --generate-hashes --allow-unsafe --output-file=mkosi.extra/opt/venv-requirements.txt python-requirements.in
+
 run:
 	stty intr ^]
 	sudo ~/qemu/build/qemu-system-x86_64 \

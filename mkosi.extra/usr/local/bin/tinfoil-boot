@@ -29,13 +29,6 @@ function install_tfshim() {
     fi
 }
 
-if [ "$(get_cmdline_param "tinfoil-debug")" != "on" ]; then
-    echo "Disabling serial tty"
-    systemctl stop serial-getty@ttyS0
-else
-    echo "WARNING: Debug mode is enabled"
-fi
-
 echo "Creating ramdisk..."
 RAM_GB=$(($(free -g | awk '/^Mem:/{print $2}')))
 SIZE=$((RAM_GB - 16))

@@ -11,6 +11,10 @@ hash:
 clean:
 	sudo rm -rf tinfoilcvm.*
 
+deepclean:
+	mkosi clean
+	sudo rm -rf tinfoilcvm.*
+
 build:
 	mkosi
 	rm -f tinfoilcvm

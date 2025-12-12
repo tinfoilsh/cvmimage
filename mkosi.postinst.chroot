@@ -3,6 +3,11 @@ set -Eeuo pipefail
 
 systemctl mask systemd-logind.service
 
+# Disable all console access
+systemctl mask getty@.service
+systemctl mask serial-getty@.service
+systemctl mask console-getty.service
+
 # Install pip packages
 python3 -m venv /opt/venv-attestation
 source /opt/venv-attestation/bin/activate

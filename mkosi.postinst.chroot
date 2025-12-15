@@ -8,6 +8,12 @@ systemctl mask getty@.service
 systemctl mask serial-getty@.service
 systemctl mask console-getty.service
 
+# Mask emergency/rescue shells
+systemctl mask emergency.service
+systemctl mask emergency.target
+systemctl mask rescue.service
+systemctl mask rescue.target
+
 # Install pip packages with hash verification from lockfile
 python3 -m venv /opt/venv-attestation
 source /opt/venv-attestation/bin/activate

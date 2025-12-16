@@ -10,5 +10,5 @@ mkosi.cache/*
 venv/
 mkosi.tools/
 mkosi.tools.manifest
-initrd
-initrd.*
+/initrd
+initrd.cpio.zst

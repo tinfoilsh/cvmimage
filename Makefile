@@ -10,6 +10,8 @@ hash:
 
 clean:
 	sudo rm -rf tinfoilcvm.*
+	sudo rm -rf initrd
+	sudo rm -rf initrd.cpio.zst
 
 deepclean:
 	mkosi clean

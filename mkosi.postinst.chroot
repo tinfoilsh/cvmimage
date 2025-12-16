@@ -15,6 +15,10 @@ systemctl mask rescue.service
 systemctl mask rescue.target
 
 # Install pip packages with hash verification from lockfile
+# Regenerate module dependencies for NVIDIA modules
+depmod -a 6.14.8-tinfoil+
+
+# Install pip packages
 python3 -m venv /opt/venv-attestation
 source /opt/venv-attestation/bin/activate
 pip install --no-cache-dir --require-hashes -r /opt/venv-requirements.txt

@@ -25,12 +25,13 @@ jobs:
             echo "WARN: This is a prerelease"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
 
       - name: Install build dependencies
         run: |
-          sudo apt install -y pipx ubuntu-keyring debian-archive-keyring make jq
-          sudo pipx install git+https://github.com/systemd/mkosi.git
+          sudo apt-get update
+          sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils
+          sudo pipx install git+https://github.com/systemd/mkosi.git@v25.3
           sudo pipx ensurepath
           mkdir -p packages
 
@@ -40,33 +41,47 @@ jobs:
 
       - name: Fix permissions
         run: |
-          mkdir /tmp/out
-          sudo chmod 777 tinfoilcvm.*
-          sudo chown $USER:$USER /tmp/out
-          sudo chmod 777 /tmp/out
+          mkdir -p /tmp/out
+          sudo chmod 644 tinfoilcvm.*
+          sudo chown $USER:$USER tinfoilcvm.*
 
       - name: Generate manifest
         id: manifest
         run: |
-          cat <<EOF > /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+          # Generate manifest JSON
+          cat > /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json << EOF
           {
-              "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
-              "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
-              "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')"
+            "version": "${{ github.ref_name }}",
+            "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
+            "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
+            "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')",
+            "raw": "$(sha256sum tinfoilcvm.raw | awk '{print $1}')",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
-          for part in raw initrd vmlinuz; do
-            cp tinfoilcvm.$part /tmp/out/tinfoil-inference-${{ github.ref_name }}.$part
-          done
-          echo "digest=sha256:$(sha256sum /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          
+          # Copy artifacts with versioned names
+          cp tinfoilcvm.initrd /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
+          cp tinfoilcvm.vmlinuz /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
+          cp tinfoilcvm.raw /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
+          
+          # Generate checksums
+          cd /tmp/out
+          sha256sum * | tee tinfoil-inference-${{ github.ref_name }}-checksums.sha256
+          
+          echo "digest=sha256:$(sha256sum tinfoil-inference-${{ github.ref_name }}-manifest.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Attest manifest
-        uses: actions/attest-build-provenance@v2
+      - name: Attest artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
         with:
-          subject-path: /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+          subject-path: |
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
 
       - name: Upload artifact
-        uses: ryand56/r2-upload-action@latest
+        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c
         with:
           r2-account-id: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
           r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
@@ -75,23 +90,27 @@ jobs:
           source-dir: /tmp/out
           destination-dir: ./cvm
 
-      - name: Generate release notes
-        id: generate-release-notes
-        run: |
-          RELEASE_NOTES=$(cat << EOF
-          Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.vmlinuz
-          Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.initrd
-          Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.raw
-          EOF
-          )
-          echo "release-notes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "${RELEASE_NOTES}" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
       - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
-          body: ${{ steps.generate-release-notes.outputs.release-notes }}
-          prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${{ steps.check-prerelease.outputs.is_prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          
+          gh release create "${{ github.ref_name }}" \
+            -R ${{ github.repository }} \
+            $PRERELEASE_FLAG \
+            --title "${{ github.ref_name }}" \
+            --notes "### Downloads
+          - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.vmlinuz
+          - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.initrd
+          - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.raw
+
+          ### Manifest
+          \`\`\`json
+          $(cat /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json)
+          \`\`\`" \
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json \
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256

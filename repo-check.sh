@@ -1,25 +1,182 @@
 #!/bin/bash
+# Check available versions for packages from all repos
+# Reads packages from mkosi.conf and looks them up in Ubuntu + third-party repos
 
-nvidia_packages=$(curl -sL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/Packages.gz | gunzip -)
-nvidia_pkgs_in_conf=$(grep -E "^\s*(nvidia-|cuda-)" mkosi.conf | sed 's/^\s*//' | grep -v "^#" | grep "=" | grep -v "\-tinfoil=")
+set -euo pipefail
 
-for pkg_line in $nvidia_pkgs_in_conf; do
-    pkg_name=$(echo "$pkg_line" | cut -d'=' -f1)
-    expected_version=$(echo "$pkg_line" | cut -d'=' -f2)
-    echo "$pkg_name want $expected_version"
+UBUNTU_CODENAME="noble"        # Ubuntu release codename (noble, jammy, etc.)
+UBUNTU_VERSION="ubuntu2404"    # For NVIDIA repos (ubuntu2404, ubuntu2204, etc.)
+ARCH="amd64"                   # Target architecture
+
+MKOSI_CONF="${1:-mkosi.conf}"
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Create temp directory for package lists
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+echo "=== Fetching package lists for $UBUNTU_CODENAME ($UBUNTU_VERSION) ==="
+echo ""
+
+# Fetch Ubuntu repos to temp files (covered by snapshot)
+echo -n "Fetching Ubuntu repos..."
+curl -sL "https://archive.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}/main/binary-${ARCH}/Packages.gz" | gunzip - >> "$TMPDIR/ubuntu" 2>/dev/null || true
+curl -sL "https://archive.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}/restricted/binary-${ARCH}/Packages.gz" | gunzip - >> "$TMPDIR/ubuntu" 2>/dev/null || true
+curl -sL "https://archive.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}/universe/binary-${ARCH}/Packages.gz" | gunzip - >> "$TMPDIR/ubuntu" 2>/dev/null || true
+curl -sL "https://archive.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-updates/main/binary-${ARCH}/Packages.gz" | gunzip - >> "$TMPDIR/ubuntu" 2>/dev/null || true
+curl -sL "https://archive.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-updates/restricted/binary-${ARCH}/Packages.gz" | gunzip - >> "$TMPDIR/ubuntu" 2>/dev/null || true
+curl -sL "https://archive.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-updates/universe/binary-${ARCH}/Packages.gz" | gunzip - >> "$TMPDIR/ubuntu" 2>/dev/null || true
+echo " done"
+
+# Fetch third-party repos to temp files (NOT covered by snapshot)
+echo -n "Fetching NVIDIA CUDA repo..."
+curl -sL "https://developer.download.nvidia.com/compute/cuda/repos/${UBUNTU_VERSION}/x86_64/Packages.gz" | gunzip - > "$TMPDIR/nvidia_cuda"
+echo " done"
+
+echo -n "Fetching Docker repo..."
+curl -sL "https://download.docker.com/linux/ubuntu/dists/${UBUNTU_CODENAME}/pool/stable/${ARCH}/" | grep -oP 'href="\K[^"]+\.deb' | sort -u > "$TMPDIR/docker"
+echo " done"
+
+echo -n "Fetching NVIDIA Container Toolkit repo..."
+curl -sL "https://nvidia.github.io/libnvidia-container/stable/deb/${ARCH}/Packages" > "$TMPDIR/nvidia_container"
+echo " done"
+
+echo -n "Fetching Google Cloud repo..."
+curl -sL "https://packages.cloud.google.com/apt/dists/cloud-sdk/main/binary-${ARCH}/Packages" > "$TMPDIR/gcloud"
+echo " done"
+
+echo ""
+
+# Helper function to get versions from Packages file (reads from temp file)
+get_versions() {
+    local file="$1"
+    local pkg_name="$2"
+    awk -v pkg="$pkg_name" '
+        /^Package: / { current_pkg = $2 }
+        /^Version: / && current_pkg == pkg { print $2 }
+    ' "$file" | sort -V | uniq | tail -5
+}
+
+# Helper function to get version from deb filename
+get_deb_versions() {
+    local file="$1"
+    local pkg_name="$2"
+    grep "^${pkg_name}_" "$file" 2>/dev/null | sed "s/${pkg_name}_//" | sed 's/_amd64\.deb//' | sort -V | tail -3
+}
+
+# Check package in all repos and report
+lookup_package() {
+    local pkg_name="$1"
+    local current_version="$2"
     
-    available_versions=$(echo "$nvidia_packages" | grep -A 1 "^Package: $pkg_name$" | grep -v "^Package:" | grep -v "^--$" | sed 's/^Version: //')
-    for available_version in $available_versions; do
-        if [ "$available_version" = "$expected_version" ]; then
-            echo "    $available_version (+)"
-        else
-            echo "    $available_version"
-        fi
-    done
-
-    if ! echo "$available_versions" | grep -q "$expected_version"; then
-        echo "    [!] Version not found"
+    # If version contains "ubuntu", it's from Ubuntu repos (covered by snapshot)
+    if [[ "$current_version" =~ ubuntu ]]; then
+        echo -e "  ${GREEN}$pkg_name=$current_version${NC} (Ubuntu - covered by snapshot)"
+        return 0
     fi
+    
+    # Check Ubuntu repos (preferred - covered by snapshot)
+    ubuntu_versions=$(get_versions "$TMPDIR/ubuntu" "$pkg_name")
+    if [ -n "$ubuntu_versions" ]; then
+        latest=$(echo "$ubuntu_versions" | tail -1)
+        if [ -n "$current_version" ]; then
+            if echo "$ubuntu_versions" | grep -qx "$current_version"; then
+                echo -e "  ${GREEN}$pkg_name=$current_version${NC} (Ubuntu - covered by snapshot)"
+            else
+                echo -e "  ${RED}$pkg_name=$current_version${NC} (Ubuntu - version NOT FOUND)"
+                echo "    Available: $(echo "$ubuntu_versions" | tr '\n' ' ')"
+            fi
+        else
+            echo -e "  ${GREEN}$pkg_name${NC} (Ubuntu - covered by snapshot)"
+        fi
+        return 0
+    fi
+    
+    # Check third-party repos
+    local versions=""
+    local repo=""
+    
+    # NVIDIA CUDA repo
+    if [[ "$pkg_name" =~ ^(cuda-|nvidia-|libnvidia-) ]] && [[ ! "$pkg_name" =~ container ]]; then
+        versions=$(get_versions "$TMPDIR/nvidia_cuda" "$pkg_name")
+        repo="NVIDIA CUDA"
+    # NVIDIA Container Toolkit repo
+    elif [[ "$pkg_name" =~ nvidia-container ]]; then
+        versions=$(get_versions "$TMPDIR/nvidia_container" "$pkg_name")
+        repo="NVIDIA Container"
+    # Docker repo
+    elif [[ "$pkg_name" =~ ^(docker-|containerd) ]]; then
+        versions=$(get_deb_versions "$TMPDIR/docker" "$pkg_name")
+        repo="Docker"
+    # Google Cloud repo
+    elif [[ "$pkg_name" =~ ^google- ]]; then
+        versions=$(get_versions "$TMPDIR/gcloud" "$pkg_name")
+        repo="Google Cloud"
+    else
+        return 1  # Not a third-party package we track
+    fi
+    
+    if [ -z "$versions" ]; then
+        echo -e "  ${RED}$pkg_name${NC} ($repo - not found)"
+        return 0
+    fi
+    
+    latest=$(echo "$versions" | tail -1)
+    
+    if [ -n "$current_version" ]; then
+        if echo "$versions" | grep -qx "$current_version"; then
+            echo -e "  ${GREEN}$pkg_name=$current_version${NC} ($repo - pinned)"
+        else
+            echo -e "  ${RED}$pkg_name=$current_version${NC} ($repo - version NOT FOUND)"
+            echo "    Available: $(echo "$versions" | tr '\n' ' ')"
+        fi
+    else
+        echo -e "  ${RED}$pkg_name${NC} ($repo - UNPINNED)"
+        echo "    Available: $(echo "$versions" | tr '\n' ' ')"
+        echo "    → Pin to: $pkg_name=$latest"
+    fi
+}
 
-    echo ""
-done
+echo "=== Checking packages from $MKOSI_CONF ==="
+echo ""
+
+# Extract packages from mkosi.conf (in Packages= section)
+in_packages=false
+while IFS= read -r line; do
+    if [[ "$line" =~ ^Packages= ]]; then
+        in_packages=true
+        continue
+    fi
+    
+    if [[ "$line" =~ ^\[.*\] ]]; then
+        in_packages=false
+        continue
+    fi
+    
+    if [ "$in_packages" = false ]; then
+        continue
+    fi
+    
+    line=$(echo "$line" | sed 's/^\s*//' | sed 's/\s*$//')
+    if [ -z "$line" ] || [[ "$line" =~ ^# ]]; then
+        continue
+    fi
+    
+    if [[ "$line" =~ = ]]; then
+        pkg_name=$(echo "$line" | cut -d'=' -f1)
+        pkg_version=$(echo "$line" | cut -d'=' -f2)
+    else
+        pkg_name="$line"
+        pkg_version=""
+    fi
+    
+    lookup_package "$pkg_name" "$pkg_version" 2>/dev/null || true
+    
+done < "$MKOSI_CONF"
+
+echo ""
+echo "=== Done ==="

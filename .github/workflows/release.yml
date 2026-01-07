@@ -29,9 +29,15 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # Use Ubuntu snapshot to pin packages
+          SNAPSHOT_DATE="20250107T000000Z"
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+    
           sudo apt-get update
           sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils
-          sudo pipx install git+https://github.com/systemd/mkosi.git@v25.3
+          sudo pipx install git+https://github.com/systemd/mkosi.git@54c625c380ef5500f17460981a3c67b109b6a847 #v25.3
           sudo pipx ensurepath
           mkdir -p packages
 

@@ -38,7 +38,7 @@ curl -sL "https://developer.download.nvidia.com/compute/cuda/repos/${UBUNTU_VERS
 echo " done"
 
 echo -n "Fetching Docker repo..."
-curl -sL "https://download.docker.com/linux/ubuntu/dists/${UBUNTU_CODENAME}/pool/stable/${ARCH}/" | grep -oP 'href="\K[^"]+\.deb' | sort -u > "$TMPDIR/docker"
+curl -sL "https://download.docker.com/linux/ubuntu/dists/${UBUNTU_CODENAME}/stable/binary-${ARCH}/Packages" > "$TMPDIR/docker"
 echo " done"
 
 echo -n "Fetching NVIDIA Container Toolkit repo..."
@@ -59,13 +59,6 @@ get_versions() {
         /^Package: / { current_pkg = $2 }
         /^Version: / && current_pkg == pkg { print $2 }
     ' "$file" | sort -V | uniq | tail -5
-}
-
-# Helper function to get version from deb filename
-get_deb_versions() {
-    local file="$1"
-    local pkg_name="$2"
-    grep "^${pkg_name}_" "$file" 2>/dev/null | sed "s/${pkg_name}_//" | sed 's/_amd64\.deb//' | sort -V | tail -3
 }
 
 # Check package in all repos and report
@@ -110,7 +103,7 @@ lookup_package() {
         repo="NVIDIA Container"
     # Docker repo
     elif [[ "$pkg_name" =~ ^(docker-|containerd) ]]; then
-        versions=$(get_deb_versions "$TMPDIR/docker" "$pkg_name")
+        versions=$(get_versions "$TMPDIR/docker" "$pkg_name")
         repo="Docker"
     # Google Cloud repo
     elif [[ "$pkg_name" =~ ^google- ]]; then

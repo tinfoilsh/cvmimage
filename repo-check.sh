@@ -12,8 +12,14 @@ MKOSI_CONF="${1:-mkosi.conf}"
 
 # Colors
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
+
+# Compare versions: returns 0 if $1 < $2
+version_lt() {
+    [ "$(echo -e "$1\n$2" | sort -V | head -1)" = "$1" ] && [ "$1" != "$2" ]
+}
 
 # Create temp directory for package lists
 TMPDIR=$(mktemp -d)
@@ -58,7 +64,7 @@ get_versions() {
     awk -v pkg="$pkg_name" '
         /^Package: / { current_pkg = $2 }
         /^Version: / && current_pkg == pkg { print $2 }
-    ' "$file" | sort -V | uniq | tail -5
+    ' "$file" | sort -V | uniq
 }
 
 # Check package in all repos and report
@@ -66,27 +72,39 @@ lookup_package() {
     local pkg_name="$1"
     local current_version="$2"
     
-    # If version contains "ubuntu", it's from Ubuntu repos (covered by snapshot)
-    if [[ "$current_version" =~ ubuntu ]]; then
+    # Check if this is a third-party package (by name pattern)
+    local is_third_party=false
+    if [[ "$pkg_name" =~ ^(cuda-|nvidia-|libnvidia-) ]]; then
+        is_third_party=true
+    elif [[ "$pkg_name" =~ ^(docker-|containerd) ]]; then
+        is_third_party=true
+    elif [[ "$pkg_name" =~ ^google- ]]; then
+        is_third_party=true
+    fi
+    
+    # Only treat as Ubuntu snapshot if NOT a third-party package
+    if [ "$is_third_party" = false ] && [[ "$current_version" =~ ubuntu ]]; then
         echo -e "  ${GREEN}$pkg_name=$current_version${NC} (Ubuntu - covered by snapshot)"
         return 0
     fi
     
-    # Check Ubuntu repos (preferred - covered by snapshot)
-    ubuntu_versions=$(get_versions "$TMPDIR/ubuntu" "$pkg_name")
-    if [ -n "$ubuntu_versions" ]; then
-        latest=$(echo "$ubuntu_versions" | tail -1)
-        if [ -n "$current_version" ]; then
-            if echo "$ubuntu_versions" | grep -qx "$current_version"; then
-                echo -e "  ${GREEN}$pkg_name=$current_version${NC} (Ubuntu - covered by snapshot)"
+    # Check Ubuntu repos (only for non-third-party packages)
+    if [ "$is_third_party" = false ]; then
+        ubuntu_versions=$(get_versions "$TMPDIR/ubuntu" "$pkg_name")
+        if [ -n "$ubuntu_versions" ]; then
+            latest=$(echo "$ubuntu_versions" | tail -1)
+            if [ -n "$current_version" ]; then
+                if echo "$ubuntu_versions" | grep -qx "$current_version"; then
+                    echo -e "  ${GREEN}$pkg_name=$current_version${NC} (Ubuntu - covered by snapshot)"
+                else
+                    echo -e "  ${RED}$pkg_name=$current_version${NC} (Ubuntu - version NOT FOUND)"
+                    echo "    Available: $(echo "$ubuntu_versions" | tr '\n' ' ')"
+                fi
             else
-                echo -e "  ${RED}$pkg_name=$current_version${NC} (Ubuntu - version NOT FOUND)"
-                echo "    Available: $(echo "$ubuntu_versions" | tr '\n' ' ')"
+                echo -e "  ${GREEN}$pkg_name${NC} (Ubuntu - covered by snapshot)"
             fi
-        else
-            echo -e "  ${GREEN}$pkg_name${NC} (Ubuntu - covered by snapshot)"
+            return 0
         fi
-        return 0
     fi
     
     # Check third-party repos
@@ -122,15 +140,27 @@ lookup_package() {
     
     if [ -n "$current_version" ]; then
         if echo "$versions" | grep -qx "$current_version"; then
-            echo -e "  ${GREEN}$pkg_name=$current_version${NC} ($repo - pinned)"
+            # For NVIDIA, only compare within same driver series (e.g., 580.x.x)
+            local compare_latest="$latest"
+            if [[ "$repo" =~ ^NVIDIA ]] && [[ "$current_version" =~ ^([0-9]+)\. ]]; then
+                local series="${BASH_REMATCH[1]}"
+                local series_versions=$(echo "$versions" | grep "^${series}\." || true)
+                if [ -n "$series_versions" ]; then
+                    compare_latest=$(echo "$series_versions" | tail -1)
+                fi
+            fi
+            # Check if newer version available
+            if version_lt "$current_version" "$compare_latest"; then
+                echo -e "  ${YELLOW}$pkg_name=$current_version${NC} ($repo - newer available: $compare_latest)"
+            else
+                echo -e "  ${GREEN}$pkg_name=$current_version${NC} ($repo - pinned)"
+            fi
         else
             echo -e "  ${RED}$pkg_name=$current_version${NC} ($repo - version NOT FOUND)"
             echo "    Available: $(echo "$versions" | tr '\n' ' ')"
         fi
     else
-        echo -e "  ${RED}$pkg_name${NC} ($repo - UNPINNED)"
-        echo "    Available: $(echo "$versions" | tr '\n' ' ')"
-        echo "    → Pin to: $pkg_name=$latest"
+        echo -e "  ${RED}$pkg_name${NC} ($repo - UNPINNED, pin to: $latest)"
     fi
 }
 

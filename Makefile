@@ -6,7 +6,7 @@ cpus = 32
 all: clean build
 
 hash:
-	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout
+	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2
 
 clean:
 	sudo rm -rf tinfoilcvm.*

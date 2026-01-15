@@ -1,6 +1,7 @@
 [Unit]
 Description=Tinfoil Shim Service
-After=network.target
+After=network.target tinfoil-boot.service
+Requires=tinfoil-boot.service
 
 [Service]
 Type=simple

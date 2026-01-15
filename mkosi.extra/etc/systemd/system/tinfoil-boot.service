@@ -1,9 +1,11 @@
 [Unit]
 Description=Tinfoil Boot Service
-After=network-online.target
+After=network-online.target nvidia-persistenced.service nvidia-fabricmanager.service
+Wants=nvidia-persistenced.service nvidia-fabricmanager.service
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/local/bin/tinfoil-boot
 User=root
 Group=root

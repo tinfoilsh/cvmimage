@@ -8,6 +8,9 @@ systemctl mask getty@.service
 systemctl mask serial-getty@.service
 systemctl mask console-getty.service
 
+# Disable first boot wizard
+systemctl mask systemd-firstboot.service
+
 # Mask emergency/rescue shells
 systemctl mask emergency.service
 systemctl mask emergency.target

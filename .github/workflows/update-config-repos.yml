@@ -1,0 +1,89 @@
+name: Update CVM Version in Config Repos
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 0.5.17)'
+        required: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      repos: ${{ steps.repos.outputs.repos }}
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Remove 'v' prefix if present
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Find repos with tinfoil-functions topic
+        id: repos
+        run: |
+          RESPONSE=$(gh api 'search/repositories?q=topic:tinfoil-functions' 2>&1) || true
+
+          if echo "$RESPONSE" | jq -e '.items' > /dev/null 2>&1; then
+            REPOS=$(echo "$RESPONSE" | jq -c '[.items[] | "\(.owner.login)/\(.name)"]')
+          else
+            echo "Search response: $RESPONSE"
+            REPOS='[]'
+          fi
+
+          echo "repos=$REPOS" >> $GITHUB_OUTPUT
+          echo "Found repos: $REPOS"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update:
+    needs: prepare
+    if: needs.prepare.outputs.repos != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: ${{ fromJson(needs.prepare.outputs.repos) }}
+      fail-fast: false
+    steps:
+      - id: parse
+        run: |
+          echo "owner=$(echo '${{ matrix.repo }}' | cut -d'/' -f1)" >> $GITHUB_OUTPUT
+          echo "name=$(echo '${{ matrix.repo }}' | cut -d'/' -f2)" >> $GITHUB_OUTPUT
+
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.VERSION_UPDATER_APP_ID }}
+          private-key: ${{ secrets.VERSION_UPDATER_PRIVATE_KEY }}
+          owner: ${{ steps.parse.outputs.owner }}
+          repositories: ${{ steps.parse.outputs.name }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Update cvm-version
+        run: |
+          if [ -f tinfoil-config.yml ]; then
+            sed -i "s|^cvm-version:.*|cvm-version: ${{ needs.prepare.outputs.version }}|" tinfoil-config.yml
+          fi
+
+      - uses: peter-evans/create-pull-request@v6
+        if: hashFiles('tinfoil-config.yml') != ''
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          commit-message: "chore: update cvm-version to ${{ needs.prepare.outputs.version }}"
+          title: "Update cvm-version to ${{ needs.prepare.outputs.version }}"
+          body: "Automated PR to update cvmimage to `${{ needs.prepare.outputs.version }}`"
+          branch: update-cvm-${{ needs.prepare.outputs.version }}
+          base: main

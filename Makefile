@@ -18,7 +18,8 @@ deepclean:
 	sudo rm -rf tinfoilcvm.*
 
 build:
-	mkdir -p packages
+	mkdir -p packages mkosi.extra/usr/local/bin
+	cd tinfoil-boot && go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-init .
 	mkosi
 	rm -f tinfoilcvm
 

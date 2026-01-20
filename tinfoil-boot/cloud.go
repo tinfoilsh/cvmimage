@@ -39,6 +39,9 @@ func setupCloudAuth() error {
 
 		// Configure Docker registry auth
 		if extConfig.GcloudRegistry != "" {
+			if !registryPattern.MatchString(extConfig.GcloudRegistry) {
+				return fmt.Errorf("invalid registry format: %s", extConfig.GcloudRegistry)
+			}
 			slog.Info("configuring Docker registry", "registry", extConfig.GcloudRegistry)
 			cmd = exec.Command("gcloud", "auth", "configure-docker", "--quiet", extConfig.GcloudRegistry)
 			cmd.Env = append(os.Environ(), "CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud")

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,8 +17,8 @@ const (
 	shimDownloadURL = "https://github.com/tinfoilsh/tfshim/releases/download/%s/tfshim"
 )
 
-// installAndStartShim downloads, verifies, and starts the tfshim service
-func installAndStartShim(config *Config) error {
+// installShim downloads and verifies tfshim, then writes the config for systemd
+func installShim(config *Config) error {
 	// Parse shim-version: "v1.0.0@sha256:abc123..."
 	shimInfo := config.ShimVersion
 	if shimInfo == "" {
@@ -35,6 +33,16 @@ func installAndStartShim(config *Config) error {
 	version := parts[0]
 	expectedHash := parts[1]
 
+	// Validate version format
+	if !versionPattern.MatchString(version) {
+		return fmt.Errorf("invalid version format: %s", version)
+	}
+
+	// Validate hash format
+	if !hexHashPattern.MatchString(expectedHash) {
+		return fmt.Errorf("invalid hash format in shim-version: %s", expectedHash)
+	}
+
 	slog.Info("downloading tfshim", "version", version)
 
 	// Download tfshim binary
@@ -43,23 +51,24 @@ func installAndStartShim(config *Config) error {
 		return fmt.Errorf("downloading tfshim: %w", err)
 	}
 
+	// Verify hash
+	shimData, err := os.ReadFile(shimBinaryPath)
+	if err != nil {
+		return fmt.Errorf("reading tfshim: %w", err)
+	}
+	actualHash := sha256Hash(shimData)
+
+	if actualHash != expectedHash { // Public values: no constant time comparison
+		return fmt.Errorf("tfshim hash mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+	slog.Info("tfshim hash verified", "hash", actualHash)
+
 	// Make executable
 	if err := os.Chmod(shimBinaryPath, 0755); err != nil {
 		return fmt.Errorf("chmod tfshim: %w", err)
 	}
 
-	// Verify hash
-	actualHash, err := fileHash(shimBinaryPath)
-	if err != nil {
-		return fmt.Errorf("hashing tfshim: %w", err)
-	}
-
-	if actualHash != expectedHash {
-		return fmt.Errorf("tfshim hash mismatch: expected %s, got %s", expectedHash, actualHash)
-	}
-	slog.Info("tfshim hash verified", "hash", actualHash)
-
-	// Write shim config
+	// Write shim config - systemd will auto-start tfshim.service
 	shimConfigData, err := yaml.Marshal(config.Shim)
 	if err != nil {
 		return fmt.Errorf("marshaling shim config: %w", err)
@@ -69,17 +78,16 @@ func installAndStartShim(config *Config) error {
 		return fmt.Errorf("writing shim config: %w", err)
 	}
 
-	// Start tfshim service
-	slog.Info("starting tfshim service")
-	if err := startSystemdUnit("tfshim.service"); err != nil {
-		return fmt.Errorf("starting tfshim: %w", err)
-	}
-
+	slog.Info("shim config written, systemd will auto-start tfshim.service")
 	return nil
 }
 
 // downloadFile downloads a URL to a local file
 func downloadFile(filepath string, url string) error {
+	if !strings.HasPrefix(url, "https://") {
+		return fmt.Errorf("only HTTPS URLs are supported: %s", url)
+	}
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -98,20 +106,4 @@ func downloadFile(filepath string, url string) error {
 
 	_, err = io.Copy(out, resp.Body)
 	return err
-}
-
-// fileHash computes the SHA256 hash of a file
-func fileHash(filepath string) (string, error) {
-	f, err := os.Open(filepath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(h.Sum(nil)), nil
 }

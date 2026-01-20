@@ -57,7 +57,6 @@ func setupRamdisk() error {
 	return nil
 }
 
-// getTotalRAMGB returns the total system RAM in gigabytes
 func getTotalRAMGB() (int, error) {
 	var info unix.Sysinfo_t
 	if err := unix.Sysinfo(&info); err != nil {

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,10 +17,8 @@ type Config struct {
 	Containers  []Container `yaml:"containers"`
 }
 
-// ShimConfig represents the shim configuration section
-type ShimConfig struct {
-	// Add shim-specific fields as needed
-}
+// ShimConfig is stored as raw YAML to preserve all fields for tfshim
+type ShimConfig map[string]interface{}
 
 // ModelSpec represents a model pack specification
 type ModelSpec struct {
@@ -62,22 +58,25 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, fmt.Errorf("reading config disk: %w", err)
 	}
 
-	// Write to ramdisk
-	if err := os.WriteFile(configPath, configData, 0644); err != nil {
-		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
-	}
-
 	// Verify hash against kernel cmdline
 	expectedHash, err := getCmdlineParam("tinfoil-config-hash")
 	if err != nil {
 		return nil, fmt.Errorf("getting expected config hash: %w", err)
 	}
+	if !hexHashPattern.MatchString(expectedHash) {
+		return nil, fmt.Errorf("invalid config hash format in cmdline: %s", expectedHash)
+	}
 
 	actualHash := sha256Hash(configData)
-	if expectedHash != actualHash {
+	if expectedHash != actualHash { // Public values: no constant time comparison
 		return nil, fmt.Errorf("config hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
 	slog.Info("config hash verified", "hash", actualHash)
+
+	// Write verified config to ramdisk
+	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
+	}
 
 	// Parse config
 	var config Config
@@ -93,7 +92,6 @@ func loadAndVerifyConfig() (*Config, error) {
 	return &config, nil
 }
 
-// loadExternalConfig reads the external config from disk
 func loadExternalConfig() error {
 	if _, err := os.Stat(externalDiskPath); os.IsNotExist(err) {
 		return fmt.Errorf("external config disk not found")
@@ -104,14 +102,13 @@ func loadExternalConfig() error {
 		return fmt.Errorf("reading external config disk: %w", err)
 	}
 
-	if err := os.WriteFile(externalConfigPath, data, 0644); err != nil {
+	if err := os.WriteFile(externalConfigPath, data, 0600); err != nil {
 		return fmt.Errorf("writing external config: %w", err)
 	}
 
 	return nil
 }
 
-// getExternalConfig parses and returns the external config
 func getExternalConfig() (*ExternalConfig, error) {
 	data, err := os.ReadFile(externalConfigPath)
 	if err != nil {
@@ -138,12 +135,6 @@ func readDiskAndStripNulls(path string) ([]byte, error) {
 	return data, nil
 }
 
-// sha256Hash computes the SHA256 hash of data
-func sha256Hash(data []byte) string {
-	hash := sha256.Sum256(data)
-	return hex.EncodeToString(hash[:])
-}
-
 // getCmdlineParam extracts a parameter value from /proc/cmdline
 func getCmdlineParam(param string) (string, error) {
 	data, err := os.ReadFile("/proc/cmdline")
@@ -151,12 +142,11 @@ func getCmdlineParam(param string) (string, error) {
 		return "", err
 	}
 
-	cmdline := string(data)
 	prefix := param + "="
 
-	for _, part := range strings.Fields(cmdline) {
-		if strings.HasPrefix(part, prefix) {
-			return strings.TrimPrefix(part, prefix), nil
+	for part := range strings.FieldsSeq(string(data)) {
+		if value, found := strings.CutPrefix(part, prefix); found {
+			return value, nil
 		}
 	}
 

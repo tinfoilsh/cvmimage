@@ -37,6 +37,17 @@ func mountModelPack(mpk string) error {
 	offset := parts[1]
 	uuid := parts[2]
 
+	// Validate components to prevent injection/traversal attacks
+	if !hexHashPattern.MatchString(rootHash) {
+		return fmt.Errorf("invalid root hash format: %s", rootHash)
+	}
+	if !offsetPattern.MatchString(offset) {
+		return fmt.Errorf("invalid offset format: %s", offset)
+	}
+	if !uuidPattern.MatchString(uuid) {
+		return fmt.Errorf("invalid UUID format: %s", uuid)
+	}
+
 	blockDevice := fmt.Sprintf("/dev/disk/by-uuid/%s", uuid)
 	deviceName := fmt.Sprintf("mpk-%s", rootHash)
 	mountPoint := fmt.Sprintf("/mnt/ramdisk/mpk/%s", deviceName)

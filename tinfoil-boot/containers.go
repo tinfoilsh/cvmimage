@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -30,6 +31,10 @@ func launchContainers(config *Config) error {
 
 // startContainer starts a Docker container using the Docker SDK
 func startContainer(c Container) error {
+	if !containerNamePattern.MatchString(c.Name) {
+		return fmt.Errorf("invalid container name: %s", c.Name)
+	}
+
 	ctx := context.Background()
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -77,12 +82,16 @@ func startContainer(c Container) error {
 		case arg == "-v" && i+1 < len(extraArgs):
 			// Volume mount: -v source:target
 			i++
-			parts := strings.SplitN(extraArgs[i], ":", 2)
-			if len(parts) == 2 {
+			volParts := strings.SplitN(extraArgs[i], ":", 2)
+			if len(volParts) == 2 {
+				source := filepath.Clean(volParts[0])                                     // Clean to prevent path traversal
+				if source != ramdiskPath && !strings.HasPrefix(source, ramdiskPath+"/") { // Prevent host escape
+					return fmt.Errorf("volume mount source must be under %s: %s", ramdiskPath, source)
+				}
 				hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
 					Type:   mount.TypeBind,
-					Source: parts[0],
-					Target: parts[1],
+					Source: source,
+					Target: volParts[1],
 				})
 			}
 		case arg == "-e" && i+1 < len(extraArgs):

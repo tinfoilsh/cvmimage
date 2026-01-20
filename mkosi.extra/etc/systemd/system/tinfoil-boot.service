@@ -7,7 +7,7 @@ Wants=nvidia-persistenced.service nvidia-fabricmanager.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/tinfoil-boot
+ExecStart=/usr/local/bin/tinfoil-init
 User=root
 Group=root
 StandardOutput=journal+console

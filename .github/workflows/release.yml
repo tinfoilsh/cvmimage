@@ -13,6 +13,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+      actions: write
 
     steps:
       - name: Check if prerelease
@@ -120,3 +121,15 @@ jobs:
           \`\`\`" \
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json \
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
+
+      - name: Trigger config repo updates
+        if: steps.check-prerelease.outputs.is_prerelease == 'false'
+        run: |
+          # Strip 'v' prefix for version
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+
+          # Trigger the update workflow
+          gh workflow run update-config-repos.yml --field version="$VERSION"
+        env:
+          GH_TOKEN: ${{ github.token }}

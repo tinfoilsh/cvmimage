@@ -1,0 +1,6 @@
+# Default registry mirror configuration (wildcard for all registries)
+# All image pulls will try the mirror first, then fall back to upstream
+# The mirror receives ?ns=<registry> query parameter to identify the upstream
+
+[host."https://mirror.tinfoil.sh"]
+  capabilities = ["pull", "resolve"]

@@ -1,4 +1,8 @@
-disabled_plugins = ["cri"]
+version = 3
 
 root = "/mnt/ramdisk/containerd/root"
 state = "/mnt/ramdisk/containerd/run"
+
+# Registry mirror configuration - wildcard for all registries
+[plugins."io.containerd.cri.v1.images".registry]
+  config_path = "/etc/containerd/certs.d"

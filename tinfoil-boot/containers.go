@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-units"
 )
 
 // launchContainers starts all containers from the config
@@ -19,23 +22,26 @@ func launchContainers(config *Config) error {
 		return nil
 	}
 
+	// Load external config once for env/secrets expansion
+	extConfig, _ := getExternalConfig() // nil is fine, we'll warn per-key
+
 	slog.Info("launching containers", "count", len(config.Containers))
 	for _, c := range config.Containers {
-		if err := startContainer(c); err != nil {
+		if err := startContainer(c, extConfig); err != nil {
 			return fmt.Errorf("starting container %s: %w", c.Name, err)
 		}
 	}
-
 	return nil
 }
 
 // startContainer starts a Docker container using the Docker SDK
-func startContainer(c Container) error {
+func startContainer(c Container, extConfig *ExternalConfig) error {
 	if !containerNamePattern.MatchString(c.Name) {
 		return fmt.Errorf("invalid container name: %s", c.Name)
 	}
-
-	ctx := context.Background()
+	if c.Image == "" {
+		return fmt.Errorf("no image specified for container %s", c.Name)
+	}
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -43,86 +49,191 @@ func startContainer(c Container) error {
 	}
 	defer cli.Close()
 
-	// Parse extra args
-	var extraArgs []string
-	switch args := c.Args.(type) {
-	case string:
-		if args != "" {
-			extraArgs = strings.Fields(args)
-		}
-	case []interface{}:
-		for _, a := range args {
-			if s, ok := a.(string); ok {
-				extraArgs = append(extraArgs, s)
-			}
-		}
-	}
+	// Build environment variables
+	env := buildEnv(c.Env, c.Secrets, extConfig)
 
 	// Container configuration
 	containerConfig := &container.Config{
-		Image: c.Image,
+		Image:       c.Image,
+		Env:         env,
+		Cmd:         c.Command,
+		Entrypoint:  c.Entrypoint,
+		WorkingDir:  c.WorkingDir,
+		User:        c.User,
+		StopSignal:  c.StopSignal,
+		StopTimeout: c.StopTimeout,
+	}
+
+	// Healthcheck
+	if c.Healthcheck != nil {
+		containerConfig.Healthcheck = &container.HealthConfig{
+			Test:        c.Healthcheck.Test,
+			Interval:    parseDuration(c.Healthcheck.Interval),
+			Timeout:     parseDuration(c.Healthcheck.Timeout),
+			Retries:     c.Healthcheck.Retries,
+			StartPeriod: parseDuration(c.Healthcheck.StartPeriod),
+		}
 	}
 
 	// Host configuration
 	hostConfig := &container.HostConfig{
-		NetworkMode: "host",
-		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeBind,
-				Source: "/mnt/ramdisk",
-				Target: "/tinfoil",
-			},
-		},
+		NetworkMode:    "host",
+		Runtime:        c.Runtime,
+		IpcMode:        container.IpcMode(c.IPC),
+		CapAdd:         c.CapAdd,
+		CapDrop:        c.CapDrop,
+		SecurityOpt:    c.SecurityOpt,
+		ReadonlyRootfs: c.ReadOnly,
+		Tmpfs:          c.Tmpfs,
+		Binds:          []string{ramdiskPath + ":/tinfoil"},
 	}
 
-	// Parse extra args for additional mounts, env vars, etc.
-	for i := 0; i < len(extraArgs); i++ {
-		arg := extraArgs[i]
-		switch {
-		case arg == "-v" && i+1 < len(extraArgs):
-			// Volume mount: -v source:target
-			i++
-			volParts := strings.SplitN(extraArgs[i], ":", 2)
-			if len(volParts) == 2 {
-				source := filepath.Clean(volParts[0])                                     // Clean to prevent path traversal
-				if source != ramdiskPath && !strings.HasPrefix(source, ramdiskPath+"/") { // Prevent host escape
-					return fmt.Errorf("volume mount source must be under %s: %s", ramdiskPath, source)
-				}
-				hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
-					Type:   mount.TypeBind,
-					Source: source,
-					Target: volParts[1],
-				})
-			}
-		case arg == "-e" && i+1 < len(extraArgs):
-			// Environment variable: -e KEY=VALUE
-			i++
-			containerConfig.Env = append(containerConfig.Env, extraArgs[i])
-		case arg == "--gpus":
-			// GPU access
-			i++
-			hostConfig.DeviceRequests = []container.DeviceRequest{
-				{
-					Count:        -1, // all GPUs
-					Capabilities: [][]string{{"gpu"}},
-				},
-			}
+	// Restart policy
+	if c.Restart != "" {
+		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(c.Restart)}
+	}
+
+	// Resource limits
+	if c.ShmSize != "" {
+		if size, err := units.RAMInBytes(c.ShmSize); err == nil {
+			hostConfig.ShmSize = size
 		}
 	}
+	if c.Memory != "" {
+		if mem, err := units.RAMInBytes(c.Memory); err == nil {
+			hostConfig.Resources.Memory = mem
+		}
+	}
+	if c.CPUs > 0 {
+		hostConfig.Resources.NanoCPUs = int64(c.CPUs * 1e9)
+	}
+
+	// Devices
+	for _, dev := range c.Devices {
+		hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
+			PathOnHost: dev, PathInContainer: dev, CgroupPermissions: "rwm",
+		})
+	}
+
+	// Volume mounts (only allow sources under ramdisk)
+	for _, vol := range c.Volumes {
+		source := strings.SplitN(vol, ":", 2)[0]
+		if source != ramdiskPath && !strings.HasPrefix(filepath.Clean(source), ramdiskPath+"/") {
+			return fmt.Errorf("volume source must be under %s: %s", ramdiskPath, source)
+		}
+		hostConfig.Binds = append(hostConfig.Binds, vol)
+	}
+
+	// GPU configuration
+	if req := parseGPUs(c.GPUs); req != nil {
+		hostConfig.DeviceRequests = []container.DeviceRequest{*req}
+	}
+
+	// Pull the image
+	slog.Info("pulling image", "name", c.Name, "image", c.Image)
+	pullResp, err := cli.ImagePull(context.Background(), c.Image, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("pulling image: %w", err)
+	}
+	// Must read the response body to completion for pull to finish
+	io.Copy(io.Discard, pullResp)
+	pullResp.Close()
 
 	slog.Info("creating container", "name", c.Name, "image", c.Image)
 
-	// Create container
-	resp, err := cli.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, c.Name)
+	resp, err := cli.ContainerCreate(context.Background(), containerConfig, hostConfig, nil, nil, c.Name)
 	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
 	}
 
-	// Start container
-	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if err := cli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("starting container: %w", err)
 	}
 
 	slog.Info("started container", "name", c.Name, "id", resp.ID[:12])
 	return nil
+}
+
+// buildEnv parses env entries and secrets from external config
+func buildEnv(envItems []interface{}, secrets []string, extConfig *ExternalConfig) []string {
+	var env []string
+
+	// Process env items
+	for _, item := range envItems {
+		switch v := item.(type) {
+		case string:
+			// String entry: lookup from external-config env section
+			if extConfig != nil && extConfig.Env != nil {
+				if val, ok := extConfig.Env[v]; ok {
+					env = append(env, v+"="+val)
+				} else {
+					slog.Warn("env key not found in external config", "key", v)
+				}
+			} else {
+				slog.Warn("env key not found (no external config)", "key", v)
+			}
+		case map[string]interface{}:
+			// Map entry: hardcoded value
+			for k, val := range v {
+				env = append(env, k+"="+fmt.Sprint(val))
+			}
+		}
+	}
+
+	// Process secrets (lookup from external-config secrets section)
+	for _, key := range secrets {
+		if extConfig != nil && extConfig.Secrets != nil {
+			if val, ok := extConfig.Secrets[key]; ok {
+				env = append(env, key+"="+val)
+			} else {
+				slog.Warn("secret key not found in external config", "key", key)
+			}
+		} else {
+			slog.Warn("secret key not found (no external config)", "key", key)
+		}
+	}
+
+	return env
+}
+
+// parseGPUs parses gpus: "all", "0,1,2,3", true, or count
+func parseGPUs(gpus interface{}) *container.DeviceRequest {
+	if gpus == nil {
+		return nil
+	}
+
+	req := &container.DeviceRequest{
+		Driver:       "nvidia",
+		Capabilities: [][]string{{"gpu"}},
+	}
+
+	switch v := gpus.(type) {
+	case bool:
+		if !v {
+			return nil
+		}
+		req.Count = -1
+	case string:
+		if v == "all" {
+			req.Count = -1
+		} else {
+			req.DeviceIDs = strings.Split(v, ",")
+		}
+	case int:
+		req.Count = v
+	case float64:
+		req.Count = int(v)
+	default:
+		return nil
+	}
+	return req
+}
+
+// parseDuration parses a duration string, returns 0 on error
+func parseDuration(s string) time.Duration {
+	if s == "" {
+		return 0
+	}
+	d, _ := time.ParseDuration(s)
+	return d
 }

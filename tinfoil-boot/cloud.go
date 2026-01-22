@@ -18,43 +18,47 @@ func setupCloudAuth() error {
 		return fmt.Errorf("no external config: %w", err)
 	}
 
-	// Setup gcloud authentication if key is provided
-	if extConfig.GcloudKey != "" && extConfig.GcloudKey != "null" {
-		slog.Info("setting up GCloud authentication")
-
-		// Write service account key
-		if err := os.WriteFile(gcloudKeyPath, []byte(extConfig.GcloudKey), 0600); err != nil {
-			return fmt.Errorf("writing gcloud key: %w", err)
-		}
-
-		// Activate service account
-		cmd := exec.Command("gcloud", "auth", "activate-service-account", "--quiet", "--key-file", gcloudKeyPath)
-		cmd.Env = append(os.Environ(), "CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("activating service account: %w", err)
-		}
-
-		// Configure Docker registry auth
-		if extConfig.GcloudRegistry != "" {
-			if !registryPattern.MatchString(extConfig.GcloudRegistry) {
-				return fmt.Errorf("invalid registry format: %s", extConfig.GcloudRegistry)
-			}
-			slog.Info("configuring Docker registry", "registry", extConfig.GcloudRegistry)
-			cmd = exec.Command("gcloud", "auth", "configure-docker", "--quiet", extConfig.GcloudRegistry)
-			cmd.Env = append(os.Environ(), "CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("configuring docker registry: %w", err)
-			}
-		}
-
-		slog.Info("GCloud authentication configured")
+	// gcloud-key is a secret
+	gcloudKey := ""
+	if extConfig.Secrets != nil {
+		gcloudKey = extConfig.Secrets["gcloud-key"]
+	}
+	if gcloudKey == "" || gcloudKey == "null" {
+		return nil
 	}
 
+	slog.Info("setting up GCloud authentication")
+
+	if err := os.WriteFile(gcloudKeyPath, []byte(gcloudKey), 0600); err != nil {
+		return fmt.Errorf("writing gcloud key: %w", err)
+	}
+
+	// Activate service account
+	cmd := exec.Command("gcloud", "auth", "activate-service-account", "--quiet", "--key-file", gcloudKeyPath)
+	cmd.Env = append(os.Environ(), "CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("activating service account: %w", err)
+	}
+
+	// Configure Docker registry auth (gcloud-registry is also in secrets)
+	registry := ""
+	if extConfig.Secrets != nil {
+		registry = extConfig.Secrets["gcloud-registry"]
+	}
+	if registry != "" {
+		if !registryPattern.MatchString(registry) {
+			return fmt.Errorf("invalid registry format: %s", registry)
+		}
+		slog.Info("configuring Docker registry", "registry", registry)
+		cmd = exec.Command("gcloud", "auth", "configure-docker", "--quiet", registry)
+		cmd.Env = append(os.Environ(), "CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud")
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("configuring docker registry: %w", err)
+		}
+	}
+
+	slog.Info("GCloud authentication configured")
 	return nil
 }

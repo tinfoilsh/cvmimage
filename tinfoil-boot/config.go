@@ -25,17 +25,53 @@ type ModelSpec struct {
 	MPK string `yaml:"mpk"`
 }
 
-// Container represents a container to run
+// Container represents a container to run (Docker Compose-compatible subset)
 type Container struct {
-	Name  string      `yaml:"name"`
-	Image string      `yaml:"image"`
-	Args  interface{} `yaml:"args"` // Can be string or []string
+	Name       string   `yaml:"name"`
+	Image      string   `yaml:"image"`
+	Command    []string `yaml:"command,omitempty"`
+	Entrypoint []string `yaml:"entrypoint,omitempty"`
+	WorkingDir string   `yaml:"working_dir,omitempty"`
+	User       string   `yaml:"user,omitempty"`
+
+	// Environment variables:
+	// - "VAR" (string) = lookup VAR from external-config.yml
+	// - "VAR: value" (map) = hardcoded value (attested)
+	Env []interface{} `yaml:"env,omitempty"`
+
+	// Secrets: list of keys to lookup from external-config.yml (sensitive)
+	Secrets []string `yaml:"secrets,omitempty"`
+
+	Volumes     []string    `yaml:"volumes,omitempty"` // "source:target[:opts]"
+	Devices     []string    `yaml:"devices,omitempty"`
+	CapAdd      []string    `yaml:"cap_add,omitempty"`
+	CapDrop     []string    `yaml:"cap_drop,omitempty"`
+	SecurityOpt []string    `yaml:"security_opt,omitempty"`
+	Runtime     string      `yaml:"runtime,omitempty"` // e.g., "nvidia"
+	IPC         string      `yaml:"ipc,omitempty"`     // e.g., "host"
+	GPUs        interface{} `yaml:"gpus,omitempty"`    // "all", "0,1,2,3", or count (int)
+
+	// Resource limits
+	ShmSize  string            `yaml:"shm_size,omitempty"`  // "2g"
+	Memory   string            `yaml:"memory,omitempty"`    // "512m", "2g"
+	CPUs     float64           `yaml:"cpus,omitempty"`      // 0.5, 2.0
+	Tmpfs    map[string]string `yaml:"tmpfs,omitempty"`     // {"/tmp": "size=100m"}
+	ReadOnly bool              `yaml:"read_only,omitempty"` // read-only rootfs
+
+	// Lifecycle
+	Restart     string       `yaml:"restart,omitempty"`      // "no", "always", "on-failure", "unless-stopped"
+	StopSignal  string       `yaml:"stop_signal,omitempty"`  // "SIGTERM", "SIGQUIT"
+	StopTimeout *int         `yaml:"stop_timeout,omitempty"` // seconds
+	Healthcheck *Healthcheck `yaml:"healthcheck,omitempty"`
 }
 
-// ExternalConfig represents the external configuration file
-type ExternalConfig struct {
-	GcloudKey      string `yaml:"gcloud-key"`
-	GcloudRegistry string `yaml:"gcloud-registry"`
+// Healthcheck defines container health monitoring
+type Healthcheck struct {
+	Test        []string `yaml:"test"`                   // ["CMD", "curl", "-f", "http://localhost/health"]
+	Interval    string   `yaml:"interval,omitempty"`     // "30s"
+	Timeout     string   `yaml:"timeout,omitempty"`      // "10s"
+	Retries     int      `yaml:"retries,omitempty"`      // 3
+	StartPeriod string   `yaml:"start_period,omitempty"` // "60s"
 }
 
 const (
@@ -109,6 +145,12 @@ func loadExternalConfig() error {
 	return nil
 }
 
+// ExternalConfig represents the external configuration file structure
+type ExternalConfig struct {
+	Env     map[string]string `yaml:"env"`
+	Secrets map[string]string `yaml:"secrets"`
+}
+
 func getExternalConfig() (*ExternalConfig, error) {
 	data, err := os.ReadFile(externalConfigPath)
 	if err != nil {
@@ -119,7 +161,6 @@ func getExternalConfig() (*ExternalConfig, error) {
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
-
 	return &config, nil
 }
 

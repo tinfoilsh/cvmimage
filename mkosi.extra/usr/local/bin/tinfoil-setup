@@ -1,7 +1,28 @@
 #!/usr/bin/env python3
 
 import os
+import subprocess
 import yaml
+
+CONTAINERD_HOSTS_DIR = "/etc/containerd/certs.d"
+
+def pull_image_via_containerd(image: str) -> bool:
+    """Pull image via containerd to use registry mirror config.
+    
+    Docker with containerd-snapshotter shares storage with containerd,
+    so pulling via ctr makes the image available to docker.
+    """
+    print(f"Pulling {image} via containerd (using mirror)...")
+    result = subprocess.run(
+        ["ctr", "-n", "moby", "image", "pull", "--hosts-dir", CONTAINERD_HOSTS_DIR, image],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        print(f"containerd pull failed: {result.stderr}")
+        return False
+    print(f"Successfully pulled {image}")
+    return True
 
 with open("/mnt/ramdisk/config.yml", "r") as f:
     config = yaml.safe_load(f)
@@ -16,6 +37,11 @@ if "models" in config:
 
 if "containers" in config:
     for container in config["containers"]:
+        image = container["image"]
+        
+        # Pull via containerd first (uses registry mirror)
+        pull_image_via_containerd(image)
+        
         cmd_parts = ["docker", "run", "-d", "--name", container["name"], "--network", "host", "-v", "/mnt/ramdisk:/tinfoil"]
 
         extra_args = []
@@ -23,5 +49,5 @@ if "containers" in config:
             extra_args = container["args"] if isinstance(container["args"], list) else [container["args"]]
 
         cmd_parts.extend(extra_args)
-        cmd_parts.append(container["image"])
+        cmd_parts.append(image)
         os.system(" ".join(cmd_parts))

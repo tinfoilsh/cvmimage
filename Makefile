@@ -18,6 +18,7 @@ deepclean:
 	sudo rm -rf tinfoilcvm.*
 
 build:
+	mkdir -p packages
 	mkosi
 	rm -f tinfoilcvm
 

@@ -6,23 +6,32 @@ import yaml
 
 CONTAINERD_HOSTS_DIR = "/etc/containerd/certs.d"
 
-def pull_image_via_containerd(image: str) -> bool:
-    """Pull image via containerd to use registry mirror config.
-    
-    Docker with containerd-snapshotter shares storage with containerd,
-    so pulling via ctr makes the image available to docker.
-    """
-    print(f"Pulling {image} via containerd (using mirror)...")
+def extract_image_from_args(args):
+    """Extract image reference from args (last arg with '/' not starting with '-' or '/')."""
+    for arg in reversed(args or []):
+        if not arg.startswith("-") and "/" in arg and not arg.startswith("/"):
+            return arg
+    return ""
+
+def normalize_image(image):
+    """Add docker.io prefix for Docker Hub images (ctr requires full registry)."""
+    if not image:
+        return image
+    parts = image.split("@")[0].split("/")
+    if "." in parts[0] or ":" in parts[0] or parts[0] == "localhost":
+        return image  # Already has registry
+    return f"docker.io/{'library/' if len(parts) == 1 else ''}{image}"
+
+def pull_image(image):
+    """Pull image via containerd to use registry mirror."""
+    print(f"Pulling {image} via containerd...")
     result = subprocess.run(
         ["ctr", "-n", "moby", "image", "pull", "--hosts-dir", CONTAINERD_HOSTS_DIR, image],
-        capture_output=True,
-        text=True
+        capture_output=True, text=True
     )
     if result.returncode != 0:
-        print(f"containerd pull failed: {result.stderr}")
-        return False
-    print(f"Successfully pulled {image}")
-    return True
+        print(f"Pull failed: {result.stderr}")
+    return result.returncode == 0
 
 with open("/mnt/ramdisk/config.yml", "r") as f:
     config = yaml.safe_load(f)
@@ -31,23 +40,23 @@ if not config:
     print("Config empty")
     exit(1)
 
-if "models" in config:
-    for model in config["models"]:
-        os.system(f"modelpack-mount {model['mpk']}")
+for model in config.get("models", []):
+    os.system(f"modelpack-mount {model['mpk']}")
 
-if "containers" in config:
-    for container in config["containers"]:
-        image = container["image"]
-        
-        # Pull via containerd first (uses registry mirror)
-        pull_image_via_containerd(image)
-        
-        cmd_parts = ["docker", "run", "-d", "--name", container["name"], "--network", "host", "-v", "/mnt/ramdisk:/tinfoil"]
-
-        extra_args = []
-        if "args" in container:
-            extra_args = container["args"] if isinstance(container["args"], list) else [container["args"]]
-
-        cmd_parts.extend(extra_args)
-        cmd_parts.append(image)
-        os.system(" ".join(cmd_parts))
+for container in config.get("containers", []):
+    image = container.get("image", "")
+    args = container.get("args", [])
+    if isinstance(args, str):
+        args = [args]
+    
+    # Extract and pull image (normalized for ctr)
+    pull_img = image or extract_image_from_args(args)
+    if pull_img:
+        pull_image(normalize_image(pull_img))
+    
+    # Run container (original args unchanged)
+    cmd = ["docker", "run", "-d", "--name", container["name"], "--network", "host", "-v", "/mnt/ramdisk:/tinfoil"]
+    cmd.extend(args)
+    if image:
+        cmd.append(image)
+    os.system(" ".join(cmd))

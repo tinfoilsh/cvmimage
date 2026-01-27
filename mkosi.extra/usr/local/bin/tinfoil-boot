@@ -29,25 +29,11 @@ function install_tfshim() {
     fi
 }
 
-echo "Creating ramdisk..."
-RAM_GB=$(($(free -g | awk '/^Mem:/{print $2}')))
-SIZE=$((RAM_GB - 16))
-
 export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud
 export DOCKER_CONFIG=/mnt/ramdisk/docker-config
 
-# Fallback for dev machines
-if [ $SIZE -lt 16 ]; then
-    echo "WARNING: Not enough RAM ($SIZE GB) for ramdisk, falling back to 4G"
-    SIZE=4
-fi
-
-mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
-chmod 777 /mnt/ramdisk
+# Ramdisk already mounted by tinfoil-ramdisk.service
 cd /mnt/ramdisk
-
-# Mount tmp as ramdisk
-mount -t tmpfs -o size=512M tmpfs /tmp
 
 source /opt/venv-attestation/bin/activate
 

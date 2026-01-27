@@ -1,0 +1,13 @@
+[Unit]
+Description=Tinfoil Ramdisk Setup
+DefaultDependencies=no
+Before=containerd.service docker.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/tinfoil-ramdisk
+
+[Install]
+WantedBy=multi-user.target

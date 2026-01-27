@@ -1,6 +1,7 @@
 [Unit]
 Description=Tinfoil Boot Service
-After=network-online.target nvidia-persistenced.service nvidia-fabricmanager.service
+After=network-online.target docker.service containerd.service nvidia-persistenced.service nvidia-fabricmanager.service
+Requires=docker.service containerd.service
 Wants=nvidia-persistenced.service nvidia-fabricmanager.service
 
 [Service]

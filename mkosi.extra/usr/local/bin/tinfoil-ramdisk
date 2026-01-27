@@ -1,0 +1,22 @@
+#!/bin/bash
+# Create ramdisk early in boot (before containerd needs it)
+
+set -ex
+
+echo "Creating ramdisk..."
+RAM_GB=$(($(free -g | awk '/^Mem:/{print $2}')))
+SIZE=$((RAM_GB - 16))
+
+# Fallback for dev machines
+if [ $SIZE -lt 16 ]; then
+    echo "WARNING: Not enough RAM ($SIZE GB) for ramdisk, falling back to 4G"
+    SIZE=4
+fi
+
+mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
+chmod 777 /mnt/ramdisk
+
+# Mount tmp as ramdisk
+mount -t tmpfs -o size=512M tmpfs /tmp
+
+echo "Ramdisk ready"

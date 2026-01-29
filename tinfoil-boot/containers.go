@@ -2,17 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/remotes/docker"
-	"github.com/containerd/containerd/remotes/docker/config"
+	dockerconfig "github.com/docker/cli/cli/config"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-units"
 )
@@ -131,9 +132,9 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 		hostConfig.DeviceRequests = []container.DeviceRequest{*req}
 	}
 
-	// Pull the image via containerd (uses registry mirror from /etc/containerd/certs.d)
+	// Pull the image via Docker
 	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
-	if err := pullImageViaContainerd(c.Image); err != nil {
+	if err := pullImage(cli, c.Image); err != nil {
 		return fmt.Errorf("pulling image: %w", err)
 	}
 
@@ -150,6 +151,35 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 
 	log.Printf("Started container %s (%s)", c.Name, resp.ID[:12])
 	return nil
+}
+
+// pullImage pulls an image using the Docker SDK with auth from Docker config
+func pullImage(cli *client.Client, imageName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	opts := image.PullOptions{}
+
+	// Extract registry host and get auth
+	host := "docker.io"
+	if parts := strings.Split(imageName, "/"); len(parts) > 1 && strings.Contains(parts[0], ".") {
+		host = parts[0]
+	}
+	if cfg, err := dockerconfig.Load(dockerconfig.Dir()); err == nil {
+		if auth, err := cfg.GetAuthConfig(host); err == nil && auth.Username != "" {
+			encoded, _ := json.Marshal(auth)
+			opts.RegistryAuth = base64.URLEncoding.EncodeToString(encoded)
+		}
+	}
+
+	reader, err := cli.ImagePull(ctx, imageName, opts)
+	if err != nil {
+		return fmt.Errorf("docker pull: %w", err)
+	}
+	defer reader.Close()
+
+	_, err = io.Copy(io.Discard, reader)
+	return err
 }
 
 // buildEnv parses env entries and secrets from external config
@@ -234,50 +264,4 @@ func parseDuration(s string) time.Duration {
 	}
 	d, _ := time.ParseDuration(s)
 	return d
-}
-
-// This uses containerd's registry mirror configuration from /etc/containerd/certs.d
-func pullImageViaContainerd(imageName string) error {
-	ctrd, err := containerd.New("/run/containerd/containerd.sock")
-	if err != nil {
-		return fmt.Errorf("connecting to containerd: %w", err)
-	}
-	defer ctrd.Close()
-
-	// Use "moby" namespace - shared with Docker when containerd-snapshotter is enabled
-	ctx := namespaces.WithNamespace(context.Background(), "moby")
-
-	// Timeout
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-
-	// Normalize image name for Docker Hub (containerd requires full reference)
-	ref := normalizeImageRef(imageName)
-
-	// Configure resolver to use hosts.toml from /etc/containerd/certs.d
-	hostOptions := config.HostOptions{}
-	hostOptions.HostDir = config.HostDirFromRoot("/etc/containerd/certs.d")
-	resolver := docker.NewResolver(docker.ResolverOptions{
-		Hosts: config.ConfigureHosts(ctx, hostOptions),
-	})
-
-	_, err = ctrd.Pull(ctx, ref, containerd.WithResolver(resolver), containerd.WithPullUnpack)
-	if err != nil {
-		return fmt.Errorf("containerd pull: %w", err)
-	}
-
-	return nil
-}
-
-func normalizeImageRef(image string) string {
-	parts := strings.Split(image, "/")
-	if len(parts) > 0 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":")) {
-		return image
-	}
-
-	// Docker Hub: add docker.io/library/ for official images, docker.io/ for others
-	if len(parts) == 1 {
-		return "docker.io/library/" + image
-	}
-	return "docker.io/" + image
 }

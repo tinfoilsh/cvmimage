@@ -48,6 +48,10 @@ func runSubcommand(cmd string) error {
 
 	switch cmd {
 	case "containers":
+		log.Println("Setting up registry authentication")
+		if err := setupRegistryAuth(); err != nil {
+			log.Printf("Warning: registry auth setup failed: %v", err)
+		}
 		log.Println("Launching containers")
 		return launchContainers(config)
 	case "shim":
@@ -82,10 +86,9 @@ func run() error {
 		return err
 	}
 
-	log.Println("Setting up cloud authentication")
-	if err := setupCloudAuth(); err != nil {
-		// Non-fatal
-		log.Printf("Warning: cloud auth setup failed: %v", err)
+	log.Println("Setting up registry authentication")
+	if err := setupRegistryAuth(); err != nil {
+		log.Printf("Warning: registry auth setup failed: %v", err)
 	}
 
 	log.Println("Mounting models")

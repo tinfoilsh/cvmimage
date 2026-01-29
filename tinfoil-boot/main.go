@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 )
@@ -10,6 +11,16 @@ func init() {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		// Subcommand mode: run individual step for debugging
+		if err := runSubcommand(os.Args[1]); err != nil {
+			log.Printf("Failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Normal boot sequence
 	log.Println("Tinfoil boot starting")
 
 	if err := run(); err != nil {
@@ -18,6 +29,35 @@ func main() {
 	}
 
 	log.Println("Tinfoil boot complete")
+}
+
+// runSubcommand runs a single step using config from ramdisk (for debugging)
+func runSubcommand(cmd string) error {
+	// Validate command first
+	switch cmd {
+	case "containers", "shim", "models":
+		// Valid command
+	default:
+		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|shim|models]", cmd)
+	}
+
+	config, err := loadConfigFromRamdisk()
+	if err != nil {
+		return fmt.Errorf("loading config from ramdisk: %w", err)
+	}
+
+	switch cmd {
+	case "containers":
+		log.Println("Launching containers")
+		return launchContainers(config)
+	case "shim":
+		log.Println("Installing tfshim")
+		return installShim(config)
+	case "models":
+		log.Println("Mounting models")
+		return mountModels(config)
+	}
+	return nil
 }
 
 func run() error {

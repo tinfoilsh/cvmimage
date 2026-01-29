@@ -10,6 +10,8 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/remotes/docker"
+	"github.com/containerd/containerd/remotes/docker/config"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-units"
@@ -252,9 +254,14 @@ func pullImageViaContainerd(imageName string) error {
 	// Normalize image name for Docker Hub (containerd requires full reference)
 	ref := normalizeImageRef(imageName)
 
-	// Debug: log.Printf("pulling via containerd: %s", ref)
+	// Configure resolver to use hosts.toml from /etc/containerd/certs.d
+	hostOptions := config.HostOptions{}
+	hostOptions.HostDir = config.HostDirFromRoot("/etc/containerd/certs.d")
+	resolver := docker.NewResolver(docker.ResolverOptions{
+		Hosts: config.ConfigureHosts(ctx, hostOptions),
+	})
 
-	_, err = ctrd.Pull(ctx, ref, containerd.WithPullUnpack)
+	_, err = ctrd.Pull(ctx, ref, containerd.WithResolver(resolver), containerd.WithPullUnpack)
 	if err != nil {
 		return fmt.Errorf("containerd pull: %w", err)
 	}

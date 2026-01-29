@@ -23,11 +23,6 @@ func main() {
 }
 
 func run() error {
-	slog.Info("creating ramdisk")
-	if err := setupRamdisk(); err != nil {
-		return err
-	}
-
 	slog.Info("detecting GPUs")
 	gpuInfo, err := detectGPUs()
 	if err != nil {

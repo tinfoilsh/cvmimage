@@ -27,6 +27,3 @@ mkdir -p /mnt/ramdisk/docker-config
 mkdir -p /mnt/ramdisk/gcloud
 echo "export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud" >> /root/.bashrc
 echo "export DOCKER_CONFIG=/mnt/ramdisk/docker-config" >> /root/.bashrc
-
-# Registry mirror - routes mirror.tinfoil.sh to host via QEMU SLIRP gateway
-echo "10.0.2.2    mirror.tinfoil.sh" >> /etc/hosts

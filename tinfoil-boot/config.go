@@ -75,6 +75,7 @@ type Healthcheck struct {
 }
 
 const (
+	ramdiskPath        = "/mnt/ramdisk"
 	configPath         = "/mnt/ramdisk/config.yml"
 	externalConfigPath = "/mnt/ramdisk/external-config.yml"
 	configDiskPath     = "/dev/sdb"

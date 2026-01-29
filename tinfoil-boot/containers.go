@@ -3,14 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/namespaces"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-units"
 )
@@ -129,15 +129,11 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 		hostConfig.DeviceRequests = []container.DeviceRequest{*req}
 	}
 
-	// Pull the image
+	// Pull the image via containerd (uses registry mirror from /etc/containerd/certs.d)
 	slog.Info("pulling image", "name", c.Name, "image", c.Image)
-	pullResp, err := cli.ImagePull(context.Background(), c.Image, image.PullOptions{})
-	if err != nil {
+	if err := pullImageViaContainerd(c.Image); err != nil {
 		return fmt.Errorf("pulling image: %w", err)
 	}
-	// Must read the response body to completion for pull to finish
-	io.Copy(io.Discard, pullResp)
-	pullResp.Close()
 
 	slog.Info("creating container", "name", c.Name, "image", c.Image)
 
@@ -236,4 +232,45 @@ func parseDuration(s string) time.Duration {
 	}
 	d, _ := time.ParseDuration(s)
 	return d
+}
+
+// This uses containerd's registry mirror configuration from /etc/containerd/certs.d
+func pullImageViaContainerd(imageName string) error {
+	ctrd, err := containerd.New("/run/containerd/containerd.sock")
+	if err != nil {
+		return fmt.Errorf("connecting to containerd: %w", err)
+	}
+	defer ctrd.Close()
+
+	// Use "moby" namespace - shared with Docker when containerd-snapshotter is enabled
+	ctx := namespaces.WithNamespace(context.Background(), "moby")
+
+	// Timeout
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	// Normalize image name for Docker Hub (containerd requires full reference)
+	ref := normalizeImageRef(imageName)
+
+	slog.Debug("pulling via containerd", "ref", ref)
+
+	_, err = ctrd.Pull(ctx, ref, containerd.WithPullUnpack)
+	if err != nil {
+		return fmt.Errorf("containerd pull: %w", err)
+	}
+
+	return nil
+}
+
+func normalizeImageRef(image string) string {
+	parts := strings.Split(image, "/")
+	if len(parts) > 0 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":")) {
+		return image
+	}
+
+	// Docker Hub: add docker.io/library/ for official images, docker.io/ for others
+	if len(parts) == 1 {
+		return "docker.io/library/" + image
+	}
+	return "docker.io/" + image
 }

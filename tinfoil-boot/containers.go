@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,9 +38,6 @@ func launchContainers(config *Config) error {
 
 // startContainer starts a Docker container using the Docker SDK
 func startContainer(c Container, extConfig *ExternalConfig) error {
-	if !containerNamePattern.MatchString(c.Name) {
-		return fmt.Errorf("invalid container name: %s", c.Name)
-	}
 	if c.Image == "" {
 		return fmt.Errorf("no image specified for container %s", c.Name)
 	}
@@ -79,8 +75,12 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 	}
 
 	// Host configuration
+	networkMode := c.NetworkMode
+	if networkMode == "" {
+		networkMode = "host" // Default to host networking
+	}
 	hostConfig := &container.HostConfig{
-		NetworkMode:    "host",
+		NetworkMode:    container.NetworkMode(networkMode),
 		Runtime:        c.Runtime,
 		IpcMode:        container.IpcMode(c.IPC),
 		CapAdd:         c.CapAdd,
@@ -118,12 +118,8 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 		})
 	}
 
-	// Volume mounts (only allow sources under ramdisk)
+	// Volume mounts
 	for _, vol := range c.Volumes {
-		source := strings.SplitN(vol, ":", 2)[0]
-		if source != ramdiskPath && !strings.HasPrefix(filepath.Clean(source), ramdiskPath+"/") {
-			return fmt.Errorf("volume source must be under %s: %s", ramdiskPath, source)
-		}
 		hostConfig.Binds = append(hostConfig.Binds, vol)
 	}
 

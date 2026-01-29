@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
+	"log"
 	"os"
 	"strings"
 
@@ -108,7 +108,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	if expectedHash != actualHash { // Public values: no constant time comparison
 		return nil, fmt.Errorf("config hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
-	slog.Info("config hash verified", "hash", actualHash)
+	log.Printf("Config hash verified: %s", actualHash)
 
 	// Write verified config to ramdisk
 	if err := os.WriteFile(configPath, configData, 0644); err != nil {
@@ -123,7 +123,7 @@ func loadAndVerifyConfig() (*Config, error) {
 
 	// Also read external config if it exists
 	if err := loadExternalConfig(); err != nil {
-		slog.Warn("external config not loaded", "error", err)
+		log.Printf("Warning: external config not loaded: %v", err)
 	}
 
 	return &config, nil

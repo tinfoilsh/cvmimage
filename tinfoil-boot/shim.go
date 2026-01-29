@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
-	"log/slog"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -44,7 +44,7 @@ func installShim(config *Config) error {
 		return fmt.Errorf("invalid hash format in shim-version: %s", expectedHash)
 	}
 
-	slog.Info("downloading tfshim", "version", version)
+	log.Printf("Downloading tfshim %s", version)
 
 	// Download tfshim binary
 	downloadURL := fmt.Sprintf(shimDownloadURL, version)
@@ -62,7 +62,7 @@ func installShim(config *Config) error {
 	if actualHash != expectedHash { // Public values: no constant time comparison
 		return fmt.Errorf("tfshim hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
-	slog.Info("tfshim hash verified", "hash", actualHash)
+	log.Printf("Tfshim hash verified: %s", actualHash)
 
 	// Make executable
 	if err := os.Chmod(shimBinaryPath, 0755); err != nil {
@@ -79,7 +79,7 @@ func installShim(config *Config) error {
 		return fmt.Errorf("writing shim config: %w", err)
 	}
 
-	slog.Info("shim config written, systemd will auto-start tfshim.service")
+	log.Println("Shim config written, systemd will auto-start tfshim.service")
 	return nil
 }
 
@@ -89,9 +89,7 @@ func downloadFile(filepath string, url string) error {
 		return fmt.Errorf("only HTTPS URLs are supported: %s", url)
 	}
 
-	// HTTP client with timeout (tfshim binary is ~15MB)
 	client := &http.Client{Timeout: 5 * time.Minute}
-
 	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("HTTP GET %s: %w", url, err)

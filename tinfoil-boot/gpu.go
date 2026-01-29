@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,9 +48,7 @@ func detectGPUs() (*GPUInfo, error) {
 	info.IsMultiGPU = info.DeviceCount >= multiGPUThreshold
 
 	if info.HasNvidia {
-		slog.Info("NVIDIA devices detected",
-			"count", info.DeviceCount,
-			"multi_gpu", info.IsMultiGPU)
+		log.Printf("NVIDIA devices detected: %d (multi_gpu=%v)", info.DeviceCount, info.IsMultiGPU)
 	}
 
 	return info, nil
@@ -59,13 +57,13 @@ func detectGPUs() (*GPUInfo, error) {
 func verifyGPUAttestation(info *GPUInfo) error {
 	var cmd *exec.Cmd
 	if info.IsMultiGPU {
-		slog.Info("running PPCIe attestation verification")
+		log.Println("Running PPCIe attestation verification")
 		cmd = exec.Command(
 			"/bin/bash", "-c",
 			"source /opt/venv-attestation/bin/activate && python3 -m ppcie.verifier.verification --gpu-attestation-mode=LOCAL --switch-attestation-mode=LOCAL",
 		)
 	} else {
-		slog.Info("running GPU attestation verification")
+		log.Println("Running GPU attestation verification")
 		cmd = exec.Command(
 			"/bin/bash", "-c",
 			"source /opt/venv-attestation/bin/activate && python3 -m verifier.cc_admin",
@@ -80,6 +78,6 @@ func verifyGPUAttestation(info *GPUInfo) error {
 		return fmt.Errorf("attestation verification failed: %w", err)
 	}
 
-	slog.Info("GPU attestation verified")
+	log.Println("GPU attestation verified")
 	return nil
 }

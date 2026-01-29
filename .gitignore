@@ -13,4 +13,4 @@ mkosi.tools.manifest
 /initrd
 initrd.cpio.zst
 tinfoil-boot/tinfoil-boot
-mkosi.extra/usr/local/bin/tinfoil-init
+mkosi.extra/usr/local/bin/tinfoil-boot

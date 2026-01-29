@@ -155,12 +155,12 @@ type ExternalConfig struct {
 func getExternalConfig() (*ExternalConfig, error) {
 	data, err := os.ReadFile(externalConfigPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading external config: %w", err)
 	}
 
 	var config ExternalConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing external config: %w", err)
 	}
 	return &config, nil
 }
@@ -169,7 +169,7 @@ func getExternalConfig() (*ExternalConfig, error) {
 func readDiskAndStripNulls(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
 	// Strip null bytes (config mounted as disk may have padding)
@@ -181,7 +181,7 @@ func readDiskAndStripNulls(path string) ([]byte, error) {
 func getCmdlineParam(param string) (string, error) {
 	data, err := os.ReadFile("/proc/cmdline")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reading /proc/cmdline: %w", err)
 	}
 
 	prefix := param + "="

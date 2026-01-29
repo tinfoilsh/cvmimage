@@ -89,10 +89,12 @@ func downloadFile(filepath string, url string) error {
 		return fmt.Errorf("only HTTPS URLs are supported: %s", url)
 	}
 
+	// HTTP client with timeout (tfshim binary is ~15MB)
 	client := &http.Client{Timeout: 5 * time.Minute}
+
 	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return fmt.Errorf("HTTP GET %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
@@ -102,10 +104,12 @@ func downloadFile(filepath string, url string) error {
 
 	out, err := os.Create(filepath)
 	if err != nil {
-		return err
+		return fmt.Errorf("creating %s: %w", filepath, err)
 	}
 	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	return err
+	if _, err = io.Copy(out, resp.Body); err != nil {
+		return fmt.Errorf("writing %s: %w", filepath, err)
+	}
+	return nil
 }

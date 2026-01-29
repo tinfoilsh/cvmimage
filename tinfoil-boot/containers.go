@@ -28,10 +28,16 @@ func launchContainers(config *Config) error {
 	extConfig, _ := getExternalConfig() // nil is fine, we'll warn per-key
 
 	log.Printf("Launching %d containers", len(config.Containers))
+	var errors []string
 	for _, c := range config.Containers {
 		if err := startContainer(c, extConfig); err != nil {
-			return fmt.Errorf("starting container %s: %w", c.Name, err)
+			log.Printf("Error starting container %s: %v", c.Name, err)
+			errors = append(errors, fmt.Sprintf("%s: %v", c.Name, err))
 		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to start %d container(s): %s", len(errors), strings.Join(errors, "; "))
 	}
 	return nil
 }

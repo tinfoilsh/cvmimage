@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -11,11 +11,11 @@ import (
 // mountModels mounts all model packs from the config
 func mountModels(config *Config) error {
 	if len(config.Models) == 0 {
-		slog.Info("no models to mount")
+		log.Println("No models to mount")
 		return nil
 	}
 
-	slog.Info("mounting model packs", "count", len(config.Models))
+	log.Printf("Mounting %d model packs", len(config.Models))
 	for _, model := range config.Models {
 		if err := mountModelPack(model.MPK); err != nil {
 			return fmt.Errorf("mounting model pack %s: %w", model.MPK, err)
@@ -52,7 +52,7 @@ func mountModelPack(mpk string) error {
 	deviceName := fmt.Sprintf("mpk-%s", rootHash)
 	mountPoint := fmt.Sprintf("/mnt/ramdisk/mpk/%s", deviceName)
 
-	slog.Info("opening verity device", "device", deviceName, "uuid", uuid)
+	log.Printf("Opening verity device %s (uuid=%s)", deviceName, uuid)
 
 	// Open dm-verity device
 	// Using veritysetup as there's no good pure-Go dm-verity library
@@ -89,6 +89,6 @@ func mountModelPack(mpk string) error {
 		return fmt.Errorf("mounting verity device: %w", err)
 	}
 
-	slog.Info("mounted model pack", "device", deviceName, "path", mountPoint)
+	log.Printf("Mounted model pack %s at %s", deviceName, mountPoint)
 	return nil
 }

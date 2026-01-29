@@ -1,66 +1,64 @@
 package main
 
 import (
-	"log/slog"
+	"log"
 	"os"
 )
 
 func init() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+	log.SetFlags(0) // No timestamp prefix
 }
 
 func main() {
-	slog.Info("tinfoil boot starting")
+	log.Println("Tinfoil boot starting")
 
 	if err := run(); err != nil {
-		slog.Error("boot failed", "error", err)
+		log.Printf("Boot failed: %v", err)
 		os.Exit(1)
 	}
 
-	slog.Info("tinfoil boot complete")
+	log.Println("Tinfoil boot complete")
 }
 
 func run() error {
-	slog.Info("detecting GPUs")
+	log.Println("Detecting GPUs")
 	gpuInfo, err := detectGPUs()
 	if err != nil {
 		return err
 	}
 
 	if gpuInfo.HasNvidia {
-		slog.Info("verifying GPU attestation")
+		log.Println("Verifying GPU attestation")
 		if err := verifyGPUAttestation(gpuInfo); err != nil {
 			return err
 		}
 	} else {
-		slog.Info("no GPUs detected")
+		log.Println("No GPUs detected")
 	}
 
-	slog.Info("loading configuration")
+	log.Println("Loading configuration")
 	config, err := loadAndVerifyConfig()
 	if err != nil {
 		return err
 	}
 
-	slog.Info("setting up cloud authentication")
+	log.Println("Setting up cloud authentication")
 	if err := setupCloudAuth(); err != nil {
 		// Non-fatal
-		slog.Warn("cloud auth setup failed", "error", err)
+		log.Printf("Warning: cloud auth setup failed: %v", err)
 	}
 
-	slog.Info("mounting models")
+	log.Println("Mounting models")
 	if err := mountModels(config); err != nil {
 		return err
 	}
 
-	slog.Info("launching containers")
+	log.Println("Launching containers")
 	if err := launchContainers(config); err != nil {
 		return err
 	}
 
-	slog.Info("installing tfshim")
+	log.Println("Installing tfshim")
 	if err := installShim(config); err != nil {
 		return err
 	}

@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
+	"log"
 	"os"
 	"os/exec"
 )
@@ -31,7 +31,7 @@ func setupCloudAuth() error {
 		return nil
 	}
 
-	slog.Info("setting up GCloud authentication")
+	log.Println("Setting up GCloud authentication")
 
 	if err := os.WriteFile(gcloudKeyPath, []byte(gcloudKey), 0600); err != nil {
 		return fmt.Errorf("writing gcloud key: %w", err)
@@ -54,7 +54,7 @@ func setupCloudAuth() error {
 		if !registryPattern.MatchString(registry) {
 			return fmt.Errorf("invalid registry format: %s", registry)
 		}
-		slog.Info("configuring Docker registry", "registry", registry)
+		log.Printf("Configuring Docker registry: %s", registry)
 		cmd = exec.Command("gcloud", "auth", "configure-docker", "--quiet", registry)
 		cmd.Env = append(os.Environ(), "CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud")
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -63,6 +63,6 @@ func setupCloudAuth() error {
 		}
 	}
 
-	slog.Info("GCloud authentication configured")
+	log.Println("GCloud authentication configured")
 	return nil
 }

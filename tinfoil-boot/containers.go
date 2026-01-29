@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,14 +18,14 @@ import (
 // launchContainers starts all containers from the config
 func launchContainers(config *Config) error {
 	if len(config.Containers) == 0 {
-		slog.Info("no containers to launch")
+		log.Println("No containers to launch")
 		return nil
 	}
 
 	// Load external config once for env/secrets expansion
 	extConfig, _ := getExternalConfig() // nil is fine, we'll warn per-key
 
-	slog.Info("launching containers", "count", len(config.Containers))
+	log.Printf("Launching %d containers", len(config.Containers))
 	for _, c := range config.Containers {
 		if err := startContainer(c, extConfig); err != nil {
 			return fmt.Errorf("starting container %s: %w", c.Name, err)
@@ -130,12 +130,12 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 	}
 
 	// Pull the image via containerd (uses registry mirror from /etc/containerd/certs.d)
-	slog.Info("pulling image", "name", c.Name, "image", c.Image)
+	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
 	if err := pullImageViaContainerd(c.Image); err != nil {
 		return fmt.Errorf("pulling image: %w", err)
 	}
 
-	slog.Info("creating container", "name", c.Name, "image", c.Image)
+	log.Printf("Creating container %s", c.Name)
 
 	resp, err := cli.ContainerCreate(context.Background(), containerConfig, hostConfig, nil, nil, c.Name)
 	if err != nil {
@@ -146,7 +146,7 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 		return fmt.Errorf("starting container: %w", err)
 	}
 
-	slog.Info("started container", "name", c.Name, "id", resp.ID[:12])
+	log.Printf("Started container %s (%s)", c.Name, resp.ID[:12])
 	return nil
 }
 
@@ -163,10 +163,10 @@ func buildEnv(envItems []interface{}, secrets []string, extConfig *ExternalConfi
 				if val, ok := extConfig.Env[v]; ok {
 					env = append(env, v+"="+val)
 				} else {
-					slog.Warn("env key not found in external config", "key", v)
+					log.Printf("Warning: env key %s not found in external config", v)
 				}
 			} else {
-				slog.Warn("env key not found (no external config)", "key", v)
+				log.Printf("Warning: env key %s not found (no external config)", v)
 			}
 		case map[string]interface{}:
 			// Map entry: hardcoded value
@@ -182,10 +182,10 @@ func buildEnv(envItems []interface{}, secrets []string, extConfig *ExternalConfi
 			if val, ok := extConfig.Secrets[key]; ok {
 				env = append(env, key+"="+val)
 			} else {
-				slog.Warn("secret key not found in external config", "key", key)
+				log.Printf("Warning: secret key %s not found in external config", key)
 			}
 		} else {
-			slog.Warn("secret key not found (no external config)", "key", key)
+			log.Printf("Warning: secret key %s not found (no external config)", key)
 		}
 	}
 
@@ -252,7 +252,7 @@ func pullImageViaContainerd(imageName string) error {
 	// Normalize image name for Docker Hub (containerd requires full reference)
 	ref := normalizeImageRef(imageName)
 
-	slog.Debug("pulling via containerd", "ref", ref)
+	// Debug: log.Printf("pulling via containerd: %s", ref)
 
 	_, err = ctrd.Pull(ctx, ref, containerd.WithPullUnpack)
 	if err != nil {

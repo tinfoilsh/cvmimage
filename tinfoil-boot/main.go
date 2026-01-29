@@ -93,12 +93,12 @@ func run() error {
 
 	log.Println("Mounting models")
 	if err := mountModels(config); err != nil {
-		return err
+		log.Printf("Warning: model mount failed: %v", err)
 	}
 
 	log.Println("Launching containers")
 	if err := launchContainers(config); err != nil {
-		return err
+		log.Printf("Warning: container launch failed: %v", err)
 	}
 
 	log.Println("Installing tfshim")

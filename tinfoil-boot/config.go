@@ -129,6 +129,21 @@ func loadAndVerifyConfig() (*Config, error) {
 	return &config, nil
 }
 
+// loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)
+func loadConfigFromRamdisk() (*Config, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading config from ramdisk: %w", err)
+	}
+
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	return &config, nil
+}
+
 func loadExternalConfig() error {
 	if _, err := os.Stat(externalDiskPath); os.IsNotExist(err) {
 		return fmt.Errorf("external config disk not found")

@@ -9,6 +9,10 @@ import (
 
 const (
 	gcloudKeyPath = "/mnt/ramdisk/gcloud_key.json"
+
+	// Secret keys for GCloud authentication in external-config.yml
+	secretKeyGCloudKey      = "gcloud-key"
+	secretKeyGCloudRegistry = "gcloud-registry"
 )
 
 // setupCloudAuth configures cloud provider authentication from external config
@@ -21,7 +25,7 @@ func setupCloudAuth() error {
 	// gcloud-key is a secret
 	gcloudKey := ""
 	if extConfig.Secrets != nil {
-		gcloudKey = extConfig.Secrets["gcloud-key"]
+		gcloudKey = extConfig.Secrets[secretKeyGCloudKey]
 	}
 	if gcloudKey == "" || gcloudKey == "null" {
 		return nil
@@ -44,7 +48,7 @@ func setupCloudAuth() error {
 	// Configure Docker registry auth (gcloud-registry is also in secrets)
 	registry := ""
 	if extConfig.Secrets != nil {
-		registry = extConfig.Secrets["gcloud-registry"]
+		registry = extConfig.Secrets[secretKeyGCloudRegistry]
 	}
 	if registry != "" {
 		if !registryPattern.MatchString(registry) {

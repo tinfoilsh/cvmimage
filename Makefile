@@ -19,7 +19,7 @@ deepclean:
 
 build:
 	mkdir -p packages mkosi.extra/usr/local/bin
-	cd tinfoil-boot && go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-init .
+	cd tinfoil-boot && go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-boot .
 	mkosi
 	rm -f tinfoilcvm
 

@@ -8,10 +8,13 @@ Wants=nvidia-persistenced.service nvidia-fabricmanager.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/tinfoil-boot
+ExecStop=/usr/local/bin/tinfoil-boot shutdown
 User=root
 Group=root
 StandardOutput=journal+console
 StandardError=journal+console
+# Give plenty of time for cleanup during shutdown
+TimeoutStopSec=600
 
 [Install]
 WantedBy=default.target

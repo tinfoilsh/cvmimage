@@ -16,6 +16,7 @@ const (
 	dockerConfigDir    = "/mnt/ramdisk/docker-config"
 	dockerConfigPath   = "/mnt/ramdisk/docker-config/config.json"
 	gcloudKeyPath      = "/mnt/ramdisk/gcloud_key.json"
+	gcloudConfigPath   = "/mnt/ramdisk/gcloud"
 	authCommandTimeout = 60 * time.Second
 )
 
@@ -33,6 +34,7 @@ type DockerAuth struct {
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (or gcloud-key/gcloud-registry for backward compat)
 func setupRegistryAuth() error {
 	os.Setenv("DOCKER_CONFIG", dockerConfigDir)
+	os.Setenv("CLOUDSDK_CONFIG", gcloudConfigPath)
 
 	ext, err := getExternalConfig()
 	if err != nil || ext.Secrets == nil {
@@ -107,7 +109,7 @@ func setupGCloudAuth(key, registry string) error {
 		return err
 	}
 
-	env := append(os.Environ(), "CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud")
+	env := append(os.Environ(), "CLOUDSDK_CONFIG="+gcloudConfigPath)
 
 	if err := runCmd(env, "gcloud", "auth", "activate-service-account", "--quiet", "--key-file", gcloudKeyPath); err != nil {
 		return err

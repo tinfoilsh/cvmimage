@@ -35,10 +35,16 @@ func main() {
 func runSubcommand(cmd string) error {
 	// Validate command first
 	switch cmd {
-	case "containers", "shim", "models":
+	case "containers", "shim", "models", "shutdown":
 		// Valid command
 	default:
-		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|shim|models]", cmd)
+		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|shim|models|shutdown]", cmd)
+	}
+
+	// Shutdown doesn't need config
+	if cmd == "shutdown" {
+		log.Println("Running graceful shutdown")
+		return runShutdown()
 	}
 
 	config, err := loadConfigFromRamdisk()

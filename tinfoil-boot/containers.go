@@ -89,6 +89,7 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 		NetworkMode:    container.NetworkMode(networkMode),
 		Runtime:        c.Runtime,
 		IpcMode:        container.IpcMode(c.IPC),
+		PidMode:        container.PidMode(c.PidMode),
 		CapAdd:         c.CapAdd,
 		CapDrop:        c.CapDrop,
 		SecurityOpt:    c.SecurityOpt,

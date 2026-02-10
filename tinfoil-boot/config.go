@@ -50,6 +50,7 @@ type Container struct {
 	Runtime     string      `yaml:"runtime,omitempty"`      // e.g., "nvidia"
 	NetworkMode string      `yaml:"network_mode,omitempty"` // "host", "bridge", "none" (default: "host")
 	IPC         string      `yaml:"ipc,omitempty"`          // e.g., "host"
+	PidMode     string      `yaml:"pid,omitempty"`          // "host" for host PID namespace
 	GPUs        interface{} `yaml:"gpus,omitempty"`         // "all", "0,1,2,3", or count (int)
 
 	// Resource limits

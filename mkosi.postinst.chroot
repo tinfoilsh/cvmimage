@@ -3,6 +3,9 @@ set -Eeuo pipefail
 
 systemctl mask systemd-logind.service
 
+# Enable acpid to handle power button
+systemctl enable acpid.service
+
 # Disable all console access
 systemctl mask getty@.service
 systemctl mask serial-getty@.service

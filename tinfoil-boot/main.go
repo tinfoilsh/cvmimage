@@ -35,16 +35,20 @@ func main() {
 func runSubcommand(cmd string) error {
 	// Validate command first
 	switch cmd {
-	case "containers", "shim", "models", "shutdown":
+	case "containers", "shim", "models", "shutdown", "gpu-cleanup":
 		// Valid command
 	default:
-		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|shim|models|shutdown]", cmd)
+		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|shim|models|shutdown|gpu-cleanup]", cmd)
 	}
 
-	// Shutdown doesn't need config
+	// These doesn't need config
 	if cmd == "shutdown" {
 		log.Println("Running graceful shutdown")
 		return runShutdown()
+	}
+	if cmd == "gpu-cleanup" {
+		log.Println("Running GPU cleanup verification")
+		return runGPUCleanup()
 	}
 
 	config, err := loadConfigFromRamdisk()

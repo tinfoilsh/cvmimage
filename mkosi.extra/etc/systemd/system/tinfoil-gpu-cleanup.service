@@ -1,0 +1,19 @@
+[Unit]
+Description=Tinfoil GPU CC Cleanup
+DefaultDependencies=no
+# Runs during shutdown, AFTER docker/nvidia services have been stopped by systemd.
+# At this point containers are gone (tinfoil-boot stopped them even earlier),
+# nvidia services are gone, so the nvidia kernel module can be unloaded and
+# CC secret cleanup can proceed.
+After=docker.service containerd.service nvidia-persistenced.service nvidia-fabricmanager.service tinfoil-boot.service
+Before=umount.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tinfoil-boot gpu-cleanup
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=300
+
+[Install]
+WantedBy=shutdown.target

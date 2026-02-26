@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	containerStopTimeout = 120 * time.Second // vLLM distributed cleanup can be slow
-	ccCleanupTimeout     = 120 * time.Second // wait for all GPUs to confirm CC secret cleanup
-	nvlinkDrainTimeout   = 60 * time.Second
+	containerStopTimeout = 30 * time.Second
+	ccCleanupTimeout     = 10 * time.Second
+	nvlinkDrainTimeout   = 30 * time.Second
 )
 
 // runShutdown stops Docker containers to release GPU device files.

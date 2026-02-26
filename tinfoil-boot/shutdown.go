@@ -15,6 +15,9 @@ const (
 	containerStopTimeout = 30 * time.Second
 	ccCleanupTimeout     = 10 * time.Second
 	nvlinkDrainTimeout   = 30 * time.Second
+	auxTimeout           = 10 * time.Second
+	rmmodTimeout         = 30 * time.Second
+	dmesgTimeout         = 5 * time.Second
 )
 
 // runShutdown stops Docker containers to release GPU device files.
@@ -105,6 +108,14 @@ func stopAllContainers() {
 
 	log.Printf("Stopping %d container(s)...", len(containers))
 
+	forceKill := func(id string) {
+		killCtx, cancel := context.WithTimeout(ctx, auxTimeout)
+		defer cancel()
+		if err := cli.ContainerKill(killCtx, id, "KILL"); err != nil {
+			log.Printf("Warning: force kill %s failed: %v", id[:12], err)
+		}
+	}
+
 	for _, c := range containers {
 		name := c.ID[:12]
 		if len(c.Names) > 0 {
@@ -113,29 +124,25 @@ func stopAllContainers() {
 
 		log.Printf("Stopping %s...", name)
 		timeout := int(containerStopTimeout.Seconds())
-		stopCtx, cancel := context.WithTimeout(ctx, containerStopTimeout+10*time.Second)
+		stopCtx, cancel := context.WithTimeout(ctx, containerStopTimeout+auxTimeout)
 		err := cli.ContainerStop(stopCtx, c.ID, container.StopOptions{Timeout: &timeout})
 		cancel()
 
 		if err != nil {
 			log.Printf("Warning: graceful stop failed for %s, force killing: %v", name, err)
-			killCtx, killCancel := context.WithTimeout(ctx, 10*time.Second)
-			cli.ContainerKill(killCtx, c.ID, "KILL")
-			killCancel()
+			forceKill(c.ID)
 		} else {
 			log.Printf("Stopped %s", name)
 		}
 	}
 
-	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
+	listCtx, listCancel := context.WithTimeout(ctx, auxTimeout)
 	remaining, _ := cli.ContainerList(listCtx, container.ListOptions{})
 	listCancel()
 	if len(remaining) > 0 {
 		log.Printf("Warning: %d container(s) still running, force killing", len(remaining))
 		for _, c := range remaining {
-			killCtx, killCancel := context.WithTimeout(ctx, 10*time.Second)
-			cli.ContainerKill(killCtx, c.ID, "KILL")
-			killCancel()
+			forceKill(c.ID)
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -156,7 +163,7 @@ func unloadNvidiaModules() {
 	log.Println("Unloading NVIDIA kernel modules...")
 
 	for _, mod := range nvidiaModules {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), rmmodTimeout)
 		out, err := exec.CommandContext(ctx, "rmmod", mod).CombinedOutput()
 		cancel()
 
@@ -195,7 +202,7 @@ func waitForCCCleanup(expectedGPUs int) {
 
 // countDmesgMatches counts occurrences of a string in dmesg output.
 func countDmesgMatches(message string) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), dmesgTimeout)
 	defer cancel()
 
 	out, err := exec.CommandContext(ctx, "dmesg").Output()

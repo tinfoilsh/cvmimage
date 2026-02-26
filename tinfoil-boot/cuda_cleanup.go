@@ -146,12 +146,28 @@ func drainNVLinkState() {
 		}
 	}
 
+	syncAll := func(gpus []gpuCtx) {
+		for i := range gpus {
+			if !gpus[i].valid {
+				continue
+			}
+			if rc := C.cu_ctx_set_current(gpus[i].ctx); rc != C.CUDA_SUCCESS {
+				log.Printf("CUDA cleanup: cuCtxSetCurrent(%d) failed (rc=%d)", i, rc)
+				continue
+			}
+			C.cu_ctx_synchronize()
+		}
+	}
+
 	enabled := 0
 	for i := 0; i < count; i++ {
 		if !gpus[i].valid {
 			continue
 		}
-		C.cu_ctx_set_current(gpus[i].ctx)
+		if rc := C.cu_ctx_set_current(gpus[i].ctx); rc != C.CUDA_SUCCESS {
+			log.Printf("CUDA cleanup: cuCtxSetCurrent(%d) failed (rc=%d)", i, rc)
+			continue
+		}
 		for j := 0; j < count; j++ {
 			if i == j || !gpus[j].valid {
 				continue
@@ -164,21 +180,17 @@ func drainNVLinkState() {
 		}
 	}
 	log.Printf("CUDA cleanup: enabled %d peer access links", enabled)
-
-	for i := 0; i < count; i++ {
-		if !gpus[i].valid {
-			continue
-		}
-		C.cu_ctx_set_current(gpus[i].ctx)
-		C.cu_ctx_synchronize()
-	}
+	syncAll(gpus)
 
 	disabled := 0
 	for i := 0; i < count; i++ {
 		if !gpus[i].valid {
 			continue
 		}
-		C.cu_ctx_set_current(gpus[i].ctx)
+		if rc := C.cu_ctx_set_current(gpus[i].ctx); rc != C.CUDA_SUCCESS {
+			log.Printf("CUDA cleanup: cuCtxSetCurrent(%d) failed (rc=%d)", i, rc)
+			continue
+		}
 		for j := 0; j < count; j++ {
 			if i == j || !gpus[j].valid {
 				continue
@@ -189,14 +201,7 @@ func drainNVLinkState() {
 		}
 	}
 	log.Printf("CUDA cleanup: disabled %d peer access links", disabled)
-
-	for i := 0; i < count; i++ {
-		if !gpus[i].valid {
-			continue
-		}
-		C.cu_ctx_set_current(gpus[i].ctx)
-		C.cu_ctx_synchronize()
-	}
+	syncAll(gpus)
 
 	for i := 0; i < count; i++ {
 		if gpus[i].valid {

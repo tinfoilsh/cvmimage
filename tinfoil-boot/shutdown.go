@@ -17,6 +17,7 @@ import (
 const (
 	containerStopTimeout = 120 * time.Second // 2 minutes for vLLM to cleanup
 	ccCleanupWaitTimeout = 60 * time.Second  // Wait for CC secret cleanup
+	expectedGPUCount     = 8                 // Expected number of GPUs for CC cleanup verification
 )
 
 // nvidiaModules is the order in which modules should be unloaded
@@ -37,55 +38,26 @@ var nvidiaServices = []string{
 
 // runShutdown performs graceful shutdown of GPU resources
 func runShutdown() error {
-	log.Println("Starting graceful shutdown...")
+	log.Println("Starting graceful GPU shutdown...")
 
-	// Detect GPUs to determine if GPU-specific shutdown is needed
-	gpuInfo, err := detectGPUs()
-	if err != nil {
-		log.Printf("Warning: failed to detect GPUs: %v", err)
-		gpuInfo = &GPUInfo{} // Assume no GPUs on error
+	// Step 1: Stop all Docker containers gracefully
+	if err := stopAllContainers(); err != nil {
+		log.Printf("Warning: container shutdown had errors: %v", err)
+		// Continue with shutdown even if containers fail
 	}
 
-	if !gpuInfo.HasNvidia {
-		log.Println("No NVIDIA GPUs detected, skipping GPU shutdown steps")
-		log.Println("Syncing filesystems...")
-		exec.Command("sync").Run()
-		log.Println("Graceful shutdown completed")
-		return nil
+	// Step 2: Stop NVIDIA services
+	if err := stopNvidiaServices(); err != nil {
+		log.Printf("Warning: nvidia service shutdown had errors: %v", err)
 	}
 
-	log.Printf("NVIDIA GPUs detected: %d devices", gpuInfo.DeviceCount)
-
-	// DIAGNOSTIC MODE: Skip manual stops, let systemd handle it
-	// Set to false if systemd doesn't handle services/containers properly
-	diagnosticOnly := true
-
-	if !diagnosticOnly {
-		// Step 1: Stop all Docker containers gracefully
-		if err := stopAllContainers(); err != nil {
-			log.Printf("Warning: container shutdown had errors: %v", err)
-		}
-
-		// Step 2: Stop NVIDIA services
-		if err := stopNvidiaServices(); err != nil {
-			log.Printf("Warning: nvidia service shutdown had errors: %v", err)
-		}
-
-		// Step 3: Unload NVIDIA kernel modules
-		if err := unloadNvidiaModules(); err != nil {
-			log.Printf("Warning: nvidia module unload had errors: %v", err)
-		}
-	} else {
-		log.Println("DIAGNOSTIC MODE: Skipping manual service/container stops, letting systemd handle it")
+	// Step 3: Unload NVIDIA kernel modules
+	if err := unloadNvidiaModules(); err != nil {
+		log.Printf("Warning: nvidia module unload had errors: %v", err)
 	}
 
-	// Step 4: Wait for and verify CC cleanup (always do this - systemd won't)
-	// Use actual GPU count (excluding NVSwitches which are ~4 of the 12 devices)
-	expectedGPUs := gpuInfo.DeviceCount
-	if gpuInfo.IsMultiGPU {
-		expectedGPUs = 8 // 8 GPUs in multi-GPU setup (rest are NVSwitches)
-	}
-	if err := waitForCCCleanup(expectedGPUs); err != nil {
+	// Step 4: Wait for and verify CC cleanup
+	if err := waitForCCCleanup(); err != nil {
 		log.Printf("Warning: CC cleanup verification had errors: %v", err)
 	}
 
@@ -174,18 +146,15 @@ func stopNvidiaServices() error {
 	var lastErr error
 	for _, service := range nvidiaServices {
 		log.Printf("Stopping %s...", service)
-		// Use timeout to avoid hanging during system shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		cmd := exec.CommandContext(ctx, "systemctl", "stop", service)
+		cmd := exec.Command("systemctl", "stop", service)
 		if err := cmd.Run(); err != nil {
-			// Don't fail on service stop errors - service may not exist, already stopped, or systemd is shutting down
-			log.Printf("Note: stopping %s: %v (may already be stopping)", service, err)
+			// Don't fail on service stop errors - service may not exist or already be stopped
+			log.Printf("Note: stopping %s: %v", service, err)
 		}
-		cancel()
 	}
 
-	// Brief wait for services to fully stop
-	time.Sleep(1 * time.Second)
+	// Wait a moment for services to fully stop
+	time.Sleep(2 * time.Second)
 
 	return lastErr
 }
@@ -208,11 +177,8 @@ func unloadNvidiaModules() error {
 		}
 
 		log.Printf("Unloading %s...", module)
-		// Use timeout to avoid hanging during system shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cmd := exec.CommandContext(ctx, "rmmod", module)
+		cmd := exec.Command("rmmod", module)
 		output, err := cmd.CombinedOutput()
-		cancel()
 		if err != nil {
 			log.Printf("Warning: failed to unload %s: %v (output: %s)", module, err, string(output))
 			lastErr = err
@@ -245,8 +211,8 @@ func getLoadedModules() (map[string]bool, error) {
 }
 
 // waitForCCCleanup waits for CC secret cleanup confirmation in dmesg
-func waitForCCCleanup(expectedGPUCount int) error {
-	log.Printf("Waiting for CC secret cleanup (expecting %d GPUs)...", expectedGPUCount)
+func waitForCCCleanup() error {
+	log.Println("Waiting for CC secret cleanup...")
 
 	deadline := time.Now().Add(ccCleanupWaitTimeout)
 	cleanupMessage := "kgspCheckGspRmCcCleanup_GH100: CC secret cleanup successful"

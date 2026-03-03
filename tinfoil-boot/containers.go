@@ -181,8 +181,25 @@ func pullImage(cli *client.Client, imageName string) error {
 	}
 	defer reader.Close()
 
-	_, err = io.Copy(io.Discard, reader)
-	return err
+	// The pull response is a stream of JSON messages. Errors during the pull
+	// (network failures, disk full, etc.) are reported inside the JSON stream,
+	// NOT as Go errors. We must decode and check each message.
+	decoder := json.NewDecoder(reader)
+	for {
+		var msg struct {
+			Error string `json:"error"`
+		}
+		if err := decoder.Decode(&msg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to read pull response: %w", err)
+		}
+		if msg.Error != "" {
+			return fmt.Errorf("docker pull failed: %s", msg.Error)
+		}
+	}
+	return nil
 }
 
 // buildEnv parses env entries and secrets from external config

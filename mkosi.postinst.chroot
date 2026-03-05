@@ -17,6 +17,8 @@ systemctl mask emergency.target
 systemctl mask rescue.service
 systemctl mask rescue.target
 
+systemctl mask nvidia-powerd.service
+
 # Install pip packages with hash verification from lockfile
 python3 -m venv /opt/venv-attestation
 source /opt/venv-attestation/bin/activate

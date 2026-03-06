@@ -11,8 +11,9 @@ import (
 
 func TestVerifyOnline(t *testing.T) {
 	httpmock.Activate()
+	defer httpmock.DeactivateAndReset()
 
-	httpmock.RegisterResponder("POST", "http://localhost:8080/validate",
+	httpmock.RegisterResponder("POST", "https://localhost:8080/validate",
 		func(req *http.Request) (*http.Response, error) {
 			apiKey, err := io.ReadAll(req.Body)
 			if err != nil {
@@ -26,9 +27,14 @@ func TestVerifyOnline(t *testing.T) {
 			return httpmock.NewStringResponse(http.StatusUnauthorized, "Unauthorized"), nil
 		})
 
-	v, err := NewValidator("http://localhost:8080/validate")
+	v, err := NewValidator("https://localhost:8080/validate")
 	assert.Nil(t, err)
 
 	assert.Nil(t, v.Validate("good-key"))
 	assert.NotNil(t, v.Validate("bad-key"))
+}
+
+func TestRejectHTTP(t *testing.T) {
+	_, err := NewValidator("http://localhost:8080/validate")
+	assert.NotNil(t, err)
 }

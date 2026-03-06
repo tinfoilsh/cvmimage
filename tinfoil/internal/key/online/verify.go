@@ -5,15 +5,24 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 )
+
+const validationTimeout = 10 * time.Second
 
 type Validator struct {
 	server string
+	client *http.Client
 }
 
 func NewValidator(server string) (*Validator, error) {
+	if !strings.HasPrefix(server, "https://") {
+		return nil, fmt.Errorf("validation server must use HTTPS: %s", server)
+	}
 	return &Validator{
 		server: server,
+		client: &http.Client{Timeout: validationTimeout},
 	}, nil
 }
 
@@ -27,7 +36,7 @@ func (e *ValidationError) Error() string {
 }
 
 func (v *Validator) Validate(apiKey string) error {
-	resp, err := http.Post(v.server, "application/json", bytes.NewBufferString(apiKey))
+	resp, err := v.client.Post(v.server, "application/json", bytes.NewBufferString(apiKey))
 	if err != nil {
 		return fmt.Errorf("validation request failed: %w", err)
 	}

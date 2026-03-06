@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
+
+	"tinfoil/internal/boot"
 )
 
 func init() {
@@ -62,6 +65,9 @@ func runSubcommand(cmd string) error {
 }
 
 func run() error {
+	tracker := boot.NewTracker()
+
+	start := time.Now()
 	log.Println("Detecting GPUs")
 	gpuInfo, err := detectGPUs()
 	if err != nil {
@@ -71,18 +77,26 @@ func run() error {
 	if gpuInfo.HasNvidia {
 		log.Println("Verifying GPU attestation")
 		if err := verifyGPUAttestation(gpuInfo); err != nil {
+			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
+			tracker.Write()
 			return err
 		}
+		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d devices", gpuInfo.DeviceCount))
 	} else {
-		log.Println("No GPUs detected")
+		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs detected")
 	}
 
+	start = time.Now()
 	log.Println("Loading configuration")
 	config, err := loadAndVerifyConfig()
 	if err != nil {
+		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Write()
 		return err
 	}
+	tracker.Record("config", boot.StatusOK, time.Since(start), "")
 
+	start = time.Now()
 	log.Println("Initializing crypto and certificates")
 	externalConfig, err := getExternalConfig()
 	if err != nil {
@@ -90,27 +104,50 @@ func run() error {
 		externalConfig = &ExternalConfig{}
 	}
 	if _, err := initCrypto(config, externalConfig); err != nil {
+		tracker.Record("certificates", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Write()
 		return fmt.Errorf("crypto/certificates initialization failed: %w", err)
 	}
+	tracker.Record("certificates", boot.StatusOK, time.Since(start), "")
 
+	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(); err != nil {
 		log.Printf("Warning: registry auth setup failed: %v", err)
+		tracker.Record("registry-auth", boot.StatusWarning, time.Since(start), err.Error())
+	} else {
+		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 	}
 
+	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config); err != nil {
 		log.Printf("Warning: model mount failed: %v", err)
+		tracker.Record("models", boot.StatusWarning, time.Since(start), err.Error())
+	} else {
+		tracker.Record("models", boot.StatusOK, time.Since(start), "")
 	}
 
+	start = time.Now()
 	log.Println("Launching containers")
 	if err := launchContainers(config); err != nil {
 		log.Printf("Warning: container launch failed: %v", err)
+		tracker.Record("containers", boot.StatusWarning, time.Since(start), err.Error())
+	} else {
+		tracker.Record("containers", boot.StatusOK, time.Since(start), "")
 	}
 
+	start = time.Now()
 	log.Println("Writing shim config")
 	if err := writeShimConfig(config); err != nil {
+		tracker.Record("shim-config", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Write()
 		return err
+	}
+	tracker.Record("shim-config", boot.StatusOK, time.Since(start), "")
+
+	if err := tracker.Write(); err != nil {
+		log.Printf("Warning: failed to write boot state: %v", err)
 	}
 
 	return nil

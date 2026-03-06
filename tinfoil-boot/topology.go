@@ -46,8 +46,7 @@ func checkSPDMVersion(report []byte, deviceLabel string) {
 	}
 }
 
-// checkOpaqueDataVersion logs the opaque data format version (field 34) if
-// present, and warns if it's unexpected.
+// checkOpaqueDataVersion logs the opaque data format version (field 34) if present.
 func checkOpaqueDataVersion(fields map[uint16][]byte, deviceLabel string) {
 	raw, ok := fields[fieldOpaqueDataVersion]
 	if !ok {

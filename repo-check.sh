@@ -127,11 +127,6 @@ lookup_package() {
         return 0
     fi
     
-    if [ -z "$versions" ]; then
-        echo -e "  ${RED}$pkg_name${NC} ($repo - not found)"
-        return 0
-    fi
-    
     latest=$(echo "$versions" | tail -1)
     
     if [ -n "$current_version" ]; then

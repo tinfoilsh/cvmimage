@@ -19,7 +19,9 @@ func TestDcode(t *testing.T) {
 	}
 
 	domains, err := EncodeAtt(&att, "example.com")
-	assert.Nil(t, err)
+	if err != nil {
+		t.Fatalf("EncodeAtt failed: %v", err)
+	}
 
 	for _, domain := range domains {
 		assert.True(t, strings.HasSuffix(domain, ".example.com"))
@@ -37,6 +39,8 @@ func TestDcode(t *testing.T) {
 	}
 
 	decoded, err := Decode(domains)
-	assert.Nil(t, err)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
 	assert.Equal(t, att, *decoded)
 }

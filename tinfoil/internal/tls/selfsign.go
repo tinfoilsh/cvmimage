@@ -14,8 +14,12 @@ import (
 
 // Certificate creates a self-signed certificate for the given domain
 func Certificate(key *ecdsa.PrivateKey, domains ...string) (*tls.Certificate, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("generating serial number: %w", err)
+	}
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          serial,
 		Subject:               pkix.Name{},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(time.Hour),

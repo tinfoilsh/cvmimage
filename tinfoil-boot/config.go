@@ -81,7 +81,7 @@ const (
 	configPath         = "/mnt/ramdisk/config.yml"
 	externalConfigPath = "/mnt/ramdisk/external-config.yml"
 	configDiskPath     = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-config"
-	externalDiskPath   = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-external-config"
+	externalDiskPath   = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-ext-config"
 )
 
 // loadAndVerifyConfig reads the config from disk and verifies its hash

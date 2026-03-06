@@ -20,7 +20,7 @@ deepclean:
 build:
 	mkdir -p packages mkosi.extra/usr/local/bin
 	cd tinfoil-boot && go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-boot .
-	mkosi
+	mkosi --force
 	rm -f tinfoilcvm
 
 python-lockfile:

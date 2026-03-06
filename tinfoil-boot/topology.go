@@ -93,6 +93,9 @@ func parseSPDMOpaqueFields(report []byte) (map[uint16][]byte, error) {
 		if off+sz > len(data) {
 			return nil, fmt.Errorf("opaque TLV overflow: type=%d size=%d", typ, sz)
 		}
+		if _, dup := fields[typ]; dup {
+			log.Printf("WARNING: duplicate opaque TLV field type=%d, later value overwrites earlier", typ)
+		}
 		fields[typ] = data[off : off+sz]
 		off += sz
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
@@ -16,6 +18,8 @@ import (
 const (
 	nvidiaVendorID    = "0x10de"
 	multiGPUThreshold = 12 // 8 GPUs + 4 NVSwitches
+
+	nvattestTimeout = 5 * time.Minute
 )
 
 type GPUInfo struct {
@@ -24,7 +28,6 @@ type GPUInfo struct {
 	IsMultiGPU  bool
 }
 
-// detectGPUs scans PCI devices for NVIDIA GPUs
 func detectGPUs() (*GPUInfo, error) {
 	info := &GPUInfo{}
 
@@ -55,7 +58,8 @@ func detectGPUs() (*GPUInfo, error) {
 	return info, nil
 }
 
-type nvatTestEvidenceOutput struct {
+type nvatTestAttestOutput struct {
+	Claims []json.RawMessage `json:"claims"`
 	Evidences []struct {
 		Evidence string `json:"evidence"`
 	} `json:"evidences"`
@@ -63,25 +67,34 @@ type nvatTestEvidenceOutput struct {
 	ResultMessage string `json:"result_message"`
 }
 
-// collectEvidence runs nvattest collect-evidence and returns the raw binary
-// attestation reports (one per device).
-func collectEvidence(device string) ([][]byte, error) {
-	cmd := exec.Command("nvattest", "collect-evidence", "--device", device, "--format", "json")
+func runNvattest(device string) (*nvatTestAttestOutput, error) {
+	log.Printf("Running nvattest attest for %s", device)
+	ctx, cancel := context.WithTimeout(context.Background(), nvattestTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "nvattest", "attest", "--device", device, "--verifier", "local", "--format", "json")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("nvattest collect-evidence %s: %w", device, err)
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("nvattest %s attestation timed out after %s", device, nvattestTimeout)
+		}
+		return nil, fmt.Errorf("nvattest %s attestation failed: %w", device, err)
 	}
 
-	var parsed nvatTestEvidenceOutput
+	var parsed nvatTestAttestOutput
 	if err := json.Unmarshal(out, &parsed); err != nil {
-		return nil, fmt.Errorf("parsing collect-evidence JSON: %w", err)
+		return nil, fmt.Errorf("parsing nvattest %s JSON: %w", device, err)
 	}
 	if parsed.ResultCode != 0 {
-		return nil, fmt.Errorf("collect-evidence %s failed: %s (code %d)", device, parsed.ResultMessage, parsed.ResultCode)
+		return nil, fmt.Errorf("nvattest %s attestation failed: %s (code %d)", device, parsed.ResultMessage, parsed.ResultCode)
 	}
 
-	reports := make([][]byte, 0, len(parsed.Evidences))
-	for i, ev := range parsed.Evidences {
+	return &parsed, nil
+}
+
+func extractEvidence(output *nvatTestAttestOutput) ([][]byte, error) {
+	reports := make([][]byte, 0, len(output.Evidences))
+	for i, ev := range output.Evidences {
 		raw, err := base64.StdEncoding.DecodeString(ev.Evidence)
 		if err != nil {
 			return nil, fmt.Errorf("decoding evidence[%d]: %w", i, err)
@@ -89,17 +102,6 @@ func collectEvidence(device string) ([][]byte, error) {
 		reports = append(reports, raw)
 	}
 	return reports, nil
-}
-
-func runNvattest(device string) error {
-	log.Printf("Running nvattest attest for %s", device)
-	cmd := exec.Command("nvattest", "attest", "--device", device, "--verifier", "local")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("nvattest %s attestation failed: %w", device, err)
-	}
-	return nil
 }
 
 func setGPUReadyState(accepting bool) error {
@@ -123,23 +125,31 @@ func setGPUReadyState(accepting bool) error {
 }
 
 func verifyGPUAttestation(info *GPUInfo) error {
-	if err := runNvattest("gpu"); err != nil {
+	ok := false
+	defer func() {
+		if !ok {
+			setGPUReadyState(false)
+		}
+	}()
+
+	gpuResult, err := runNvattest("gpu")
+	if err != nil {
 		return err
 	}
 
 	if info.IsMultiGPU {
-		if err := runNvattest("nvswitch"); err != nil {
+		switchResult, err := runNvattest("nvswitch")
+		if err != nil {
 			return err
 		}
 
-		log.Println("Collecting evidence for topology validation")
-		gpuReports, err := collectEvidence("gpu")
+		gpuReports, err := extractEvidence(gpuResult)
 		if err != nil {
-			return fmt.Errorf("collecting GPU evidence: %w", err)
+			return fmt.Errorf("extracting GPU evidence: %w", err)
 		}
-		switchReports, err := collectEvidence("nvswitch")
+		switchReports, err := extractEvidence(switchResult)
 		if err != nil {
-			return fmt.Errorf("collecting switch evidence: %w", err)
+			return fmt.Errorf("extracting switch evidence: %w", err)
 		}
 
 		log.Println("Validating PPCIe topology")
@@ -152,6 +162,7 @@ func verifyGPUAttestation(info *GPUInfo) error {
 		return fmt.Errorf("enabling GPU ready state: %w", err)
 	}
 
+	ok = true
 	log.Println("GPU attestation verified")
 	return nil
 }

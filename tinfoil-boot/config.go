@@ -80,13 +80,12 @@ const (
 	ramdiskPath        = "/mnt/ramdisk"
 	configPath         = "/mnt/ramdisk/config.yml"
 	externalConfigPath = "/mnt/ramdisk/external-config.yml"
-	configDiskPath     = "/dev/sdb"
-	externalDiskPath   = "/dev/sdc"
+	configDiskPath   = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-disk1"
+	externalDiskPath = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-disk2"
 )
 
 // loadAndVerifyConfig reads the config from disk and verifies its hash
 func loadAndVerifyConfig() (*Config, error) {
-	// Check if config disk exists
 	if _, err := os.Stat(configDiskPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("config disk not found at %s", configDiskPath)
 	}
@@ -148,7 +147,7 @@ func loadConfigFromRamdisk() (*Config, error) {
 
 func loadExternalConfig() error {
 	if _, err := os.Stat(externalDiskPath); os.IsNotExist(err) {
-		return fmt.Errorf("external config disk not found")
+		return fmt.Errorf("external config disk not found at %s", externalDiskPath)
 	}
 
 	data, err := readDiskAndStripNulls(externalDiskPath)

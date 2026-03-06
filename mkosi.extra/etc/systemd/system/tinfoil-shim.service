@@ -5,7 +5,7 @@ Requires=tinfoil-boot.service
 
 [Service]
 Type=simple
-ExecStart=/mnt/ramdisk/tfshim
+ExecStart=/usr/local/bin/tinfoil-shim
 Restart=always
 RestartSec=5
 User=root

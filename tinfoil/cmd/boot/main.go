@@ -35,10 +35,10 @@ func main() {
 func runSubcommand(cmd string) error {
 	// Validate command first
 	switch cmd {
-	case "containers", "shim", "models":
+	case "containers", "models":
 		// Valid command
 	default:
-		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|shim|models]", cmd)
+		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|models]", cmd)
 	}
 
 	config, err := loadConfigFromRamdisk()
@@ -54,9 +54,6 @@ func runSubcommand(cmd string) error {
 		}
 		log.Println("Launching containers")
 		return launchContainers(config)
-	case "shim":
-		log.Println("Installing tfshim")
-		return installShim(config)
 	case "models":
 		log.Println("Mounting models")
 		return mountModels(config)
@@ -101,8 +98,8 @@ func run() error {
 		log.Printf("Warning: container launch failed: %v", err)
 	}
 
-	log.Println("Installing tfshim")
-	if err := installShim(config); err != nil {
+	log.Println("Writing shim config")
+	if err := writeShimConfig(config); err != nil {
 		return err
 	}
 

@@ -22,9 +22,13 @@ const (
 	spdmVersion12 = 0x12
 
 	// Opaque data field IDs (TLV type values from NVIDIA SPDM spec)
-	fieldPDI                = 22 // GPU report: switch PDIs (LE byte order); switch report: device PDI
-	fieldGPUPDIs            = 26 // Switch report: connected GPU PDIs, followed by port map
-	fieldOpaqueDataVersion  = 34 // Opaque data format version
+	fieldPDI               = 22 // GPU report: switch PDIs (LE byte order); switch report: device PDI
+	fieldGPUPDIs           = 26 // Switch report: connected GPU PDIs, followed by port map
+	fieldOpaqueDataVersion = 34 // Opaque data format version
+
+	// HGX H100/H200 topology: 8 GPUs connected to 4 NVSwitches
+	expectedGPUCount    = 8
+	expectedSwitchCount = 4
 )
 
 // checkSPDMVersion validates the SPDM version byte in the response and warns
@@ -150,11 +154,11 @@ func setsEqual(a, b map[string]struct{}) bool {
 // For each switch: verify its own PDI (field 22) is in the GPU-reported set,
 // and that the GPU PDIs from field 26 are the same 8 GPUs across all switches.
 func validateTopology(gpuReports, switchReports [][]byte) error {
-	if len(gpuReports) != 8 {
-		return fmt.Errorf("expected 8 GPU reports, got %d", len(gpuReports))
+	if len(gpuReports) != expectedGPUCount {
+		return fmt.Errorf("expected %d GPU reports, got %d", expectedGPUCount, len(gpuReports))
 	}
-	if len(switchReports) != 4 {
-		return fmt.Errorf("expected 4 switch reports, got %d", len(switchReports))
+	if len(switchReports) != expectedSwitchCount {
+		return fmt.Errorf("expected %d switch reports, got %d", expectedSwitchCount, len(switchReports))
 	}
 
 	// GPU side: every GPU must see exactly 4 unique switches, identical across all GPUs
@@ -177,8 +181,8 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
-		if len(switchPDIs) != 4 {
-			return fmt.Errorf("%s sees %d switches, expected 4", label, len(switchPDIs))
+		if len(switchPDIs) != expectedSwitchCount {
+			return fmt.Errorf("%s sees %d switches, expected %d", label, len(switchPDIs), expectedSwitchCount)
 		}
 		if expectedSwitches == nil {
 			expectedSwitches = switchPDIs
@@ -186,7 +190,7 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 			return fmt.Errorf("%s switch set differs from GPU[0]", label)
 		}
 	}
-	log.Println("GPU topology OK: all 8 GPUs see the same 4 switches")
+	log.Printf("GPU topology OK: all %d GPUs see the same %d switches", expectedGPUCount, expectedSwitchCount)
 
 	// Switch side: each switch's own PDI must be in the GPU-reported set,
 	// and each must see exactly 8 unique GPUs, identical across all switches
@@ -215,12 +219,12 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 		if !ok {
 			return fmt.Errorf("%s: missing GPU PDI field", label)
 		}
-		gpuPDIs, err := parsePDISet(rawGPUs, 8, false)
+		gpuPDIs, err := parsePDISet(rawGPUs, expectedGPUCount, false)
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
-		if len(gpuPDIs) != 8 {
-			return fmt.Errorf("%s sees %d GPUs, expected 8", label, len(gpuPDIs))
+		if len(gpuPDIs) != expectedGPUCount {
+			return fmt.Errorf("%s sees %d GPUs, expected %d", label, len(gpuPDIs), expectedGPUCount)
 		}
 		if expectedGPUs == nil {
 			expectedGPUs = gpuPDIs
@@ -228,7 +232,7 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 			return fmt.Errorf("%s GPU set differs from switch[0]", label)
 		}
 	}
-	log.Println("Switch topology OK: all 4 switches see the same 8 GPUs")
+	log.Printf("Switch topology OK: all %d switches see the same %d GPUs", expectedSwitchCount, expectedGPUCount)
 
 	return nil
 }

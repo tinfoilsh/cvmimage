@@ -19,12 +19,6 @@ systemctl mask rescue.target
 
 systemctl mask nvidia-powerd.service
 
-# Install pip packages with hash verification from lockfile
-python3 -m venv /opt/venv-attestation
-source /opt/venv-attestation/bin/activate
-pip install --no-cache-dir --require-hashes -r /opt/venv-requirements.txt
-deactivate
-
 mkdir -p /mnt/ramdisk/docker-config
 mkdir -p /mnt/ramdisk/gcloud
 echo "export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud" >> /root/.bashrc

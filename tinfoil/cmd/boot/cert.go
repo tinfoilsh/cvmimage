@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/creasty/defaults"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
@@ -59,11 +60,14 @@ func retryCertificate(fn func() (*tls.Certificate, error), interval time.Duratio
 
 // parseShimConfig converts the raw shim config map into the typed config struct.
 func parseShimConfig(raw ShimConfig) (*shimconfig.Config, error) {
+	var cfg shimconfig.Config
+	if err := defaults.Set(&cfg); err != nil {
+		return nil, fmt.Errorf("setting shim config defaults: %w", err)
+	}
 	yamlBytes, err := yaml.Marshal(raw)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling shim config: %w", err)
 	}
-	var cfg shimconfig.Config
 	if err := yaml.Unmarshal(yamlBytes, &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling shim config: %w", err)
 	}

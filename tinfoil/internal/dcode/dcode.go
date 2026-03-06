@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"sort"
 	"strings"
 
@@ -21,7 +20,7 @@ func gzCompress(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to write data: %v", err)
 	}
 	if err := gz.Close(); err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to close gzip writer: %v", err)
 	}
 	return b.Bytes(), nil
 }
@@ -44,6 +43,9 @@ func Encode(content []byte, domain string) ([]string, error) {
 	// Chunk
 	domainSuffix := "." + domain
 	maxLength := 63 - len(domainSuffix) - 2 // Reserve space for NN prefix
+	if maxLength <= 0 {
+		return nil, fmt.Errorf("domain %q is too long for DNS label encoding", domain)
+	}
 	var domains []string
 	for i := 0; i < len(encoded); i += maxLength {
 		end := min(i+maxLength, len(encoded))
@@ -70,6 +72,13 @@ func EncodeAtt(att *attestation.Document, domain string) ([]string, error) {
 
 // Decode decodes a string of domains into an attestation document
 func Decode(domains []string) (*attestation.Document, error) {
+	for _, d := range domains {
+		label := strings.Split(d, ".")[0]
+		if len(label) < 3 {
+			return nil, fmt.Errorf("malformed domain chunk: %q", d)
+		}
+	}
+
 	// Sort domains by their NN prefix
 	sort.Slice(domains, func(i, j int) bool {
 		return domains[i][:2] < domains[j][:2]
@@ -79,7 +88,6 @@ func Decode(domains []string) (*attestation.Document, error) {
 	var encodedData string
 	for _, domain := range domains {
 		domain = strings.Split(domain, ".")[0]
-		// Remove the 2-digit prefix
 		encodedData += domain[2:]
 	}
 

@@ -128,7 +128,9 @@ func verifyGPUAttestation(info *GPUInfo) error {
 	ok := false
 	defer func() {
 		if !ok {
-			setGPUReadyState(false)
+			if err := setGPUReadyState(false); err != nil {
+				log.Printf("WARNING: failed to disable GPU ready state: %v", err)
+			}
 		}
 	}()
 

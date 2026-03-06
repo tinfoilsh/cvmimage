@@ -90,13 +90,14 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, nil
 	}
 
-	if body, err := io.ReadAll(req.Body); err == nil {
-		if err := json.Unmarshal(body, &cr); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal request body: %w", err)
-		}
-		// Restore the body
-		req.Body = io.NopCloser(bytes.NewReader(body))
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read request body: %w", err)
 	}
+	if err := json.Unmarshal(body, &cr); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request body: %w", err)
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
 
 	// Make the actual request
 	resp, err := t.base.RoundTrip(req)
@@ -126,6 +127,7 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		defer pw.Close()
 
 		scanner := bufio.NewScanner(originalBody)
+		scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "data: ") && line != "data: [DONE]" {

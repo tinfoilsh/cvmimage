@@ -40,13 +40,13 @@ func (s *Signer) NewAPIKey() (string, error) {
 		return "", fmt.Errorf("failed to generate random bytes: %w", err)
 	}
 
-	timeBytes := make([]byte, 8)
+	timeBytes := make([]byte, timestampSize)
 	binary.BigEndian.PutUint64(timeBytes, uint64(time.Now().Unix()))
 
-	validityBytes := make([]byte, 8)
+	validityBytes := make([]byte, validitySize)
 	binary.BigEndian.PutUint64(validityBytes, uint64(s.validity.Seconds()))
 
-	message := make([]byte, 0, nonceSize+timestampSize+validitySize)
+	message := make([]byte, 0, messageSize)
 	message = append(message, nonce...)
 	message = append(message, timeBytes...)
 	message = append(message, validityBytes...)

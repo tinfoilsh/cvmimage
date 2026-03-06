@@ -13,14 +13,13 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/time/rate"
 
-	"tinfoil/internal/config"
+	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/dcode"
 	"tinfoil/internal/key"
 	"tinfoil/internal/key/online"
@@ -39,7 +38,7 @@ var (
 func main() {
 	flag.Parse()
 
-	config, externalConfig, err := config.Load(*configFile, *externalConfigFile)
+	config, externalConfig, err := shimconfig.Load(*configFile, *externalConfigFile)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -76,7 +75,7 @@ func main() {
 	// Generate or load HPKE key
 	serverIdentity, err := identity.FromFile(config.HPKEKeyFile)
 	if err != nil {
-		logrus.Fatalf("Failed to get identity: %v", err)
+		log.Fatalf("Failed to get identity: %v", err)
 	}
 
 	// Generate key for TLS certificate
@@ -100,7 +99,7 @@ func main() {
 		TLSKeyFP: tlsutil.KeyFPBytes(privateKey.Public().(*ecdsa.PublicKey)),
 		HPKEKey:  hpkeKey,
 	}
-	log.WithFields(logrus.Fields{
+	log.WithFields(log.Fields{
 		"tls_key_fp": fmt.Sprintf("%x", aBody.TLSKeyFP),
 		"hpke_key":   fmt.Sprintf("%x", aBody.HPKEKey),
 	}).Info("Attested keys")

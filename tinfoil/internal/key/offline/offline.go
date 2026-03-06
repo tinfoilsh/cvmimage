@@ -9,7 +9,8 @@ const (
 	nonceSize     = 16
 	timestampSize = 8
 	validitySize  = 8
-	totalSize     = nonceSize + timestampSize + validitySize + ed25519.SignatureSize
+	messageSize   = nonceSize + timestampSize + validitySize
+	totalSize     = messageSize + ed25519.SignatureSize
 )
 
 var (

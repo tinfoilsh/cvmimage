@@ -32,7 +32,7 @@ const (
 )
 
 // checkSPDMVersion validates the SPDM version byte in the response and warns
-// if it's not a known version. Returns an error only if the report is too short.
+// if it's not a known version. Silently returns if the report is too short.
 func checkSPDMVersion(report []byte, deviceLabel string) {
 	if len(report) <= spdmRequestLen {
 		return

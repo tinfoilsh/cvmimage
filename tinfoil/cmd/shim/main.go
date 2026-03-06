@@ -14,6 +14,7 @@ import (
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"golang.org/x/time/rate"
 
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/key/online"
@@ -86,6 +87,12 @@ func main() {
 		log.Fatalf("Failed to load TLS certificate: %v", err)
 	}
 
+	// Load boot state (written by boot)
+	bootState, err := boot.Load()
+	if err != nil {
+		log.Warnf("Failed to load boot state: %v", err)
+	}
+
 	tlsConfig := &tls.Config{
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return &cert, nil
@@ -100,7 +107,7 @@ func main() {
 	listenAddr := fmt.Sprintf(":%d", config.ListenPort)
 	httpServer := &http.Server{
 		Addr:      listenAddr,
-		Handler:   NewShimServer(validator, rateLimiter, att, serverIdentity, &cert, config, externalConfig),
+		Handler:   NewShimServer(validator, rateLimiter, att, serverIdentity, &cert, config, externalConfig, bootState),
 		TLSConfig: tlsConfig,
 	}
 

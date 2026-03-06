@@ -57,13 +57,15 @@ func TestAddPaddingToStreamChunk(t *testing.T) {
 			},
 		},
 		{
-			name:  "chunk with empty string finish_reason",
-			input: `{"id":"chatcmpl-456","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":""}]}`,
-			validate: func(t *testing.T, output string) {
-				var result map[string]interface{}
-				json.Unmarshal([]byte(output), &result)
+		name:  "chunk with empty string finish_reason",
+		input: `{"id":"chatcmpl-456","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":""}]}`,
+		validate: func(t *testing.T, output string) {
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Failed to unmarshal output: %v", err)
+			}
 
-				choices := result["choices"].([]interface{})
+			choices := result["choices"].([]interface{})
 				choice := choices[0].(map[string]interface{})
 
 				// Empty string should be preserved
@@ -73,13 +75,15 @@ func TestAddPaddingToStreamChunk(t *testing.T) {
 			},
 		},
 		{
-			name:  "chunk with stop finish_reason",
-			input: `{"id":"chatcmpl-789","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
-			validate: func(t *testing.T, output string) {
-				var result map[string]interface{}
-				json.Unmarshal([]byte(output), &result)
+		name:  "chunk with stop finish_reason",
+		input: `{"id":"chatcmpl-789","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]}`,
+		validate: func(t *testing.T, output string) {
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Failed to unmarshal output: %v", err)
+			}
 
-				choices := result["choices"].([]interface{})
+			choices := result["choices"].([]interface{})
 				choice := choices[0].(map[string]interface{})
 
 				// stop should be preserved
@@ -99,14 +103,16 @@ func TestAddPaddingToStreamChunk(t *testing.T) {
 			},
 		},
 		{
-			name:  "chunk without delta",
-			input: `{"id":"chatcmpl-nodelta","choices":[{"index":0,"message":{"content":"test"}}]}`,
-			validate: func(t *testing.T, output string) {
-				// Should return unchanged when no delta
-				var result map[string]interface{}
-				json.Unmarshal([]byte(output), &result)
+		name:  "chunk without delta",
+		input: `{"id":"chatcmpl-nodelta","choices":[{"index":0,"message":{"content":"test"}}]}`,
+		validate: func(t *testing.T, output string) {
+			// Should return unchanged when no delta
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Failed to unmarshal output: %v", err)
+			}
 
-				choices := result["choices"].([]interface{})
+			choices := result["choices"].([]interface{})
 				choice := choices[0].(map[string]interface{})
 
 				if _, hasDelta := choice["delta"]; hasDelta {
@@ -120,13 +126,15 @@ func TestAddPaddingToStreamChunk(t *testing.T) {
 			shouldError: true,
 		},
 		{
-			name:  "complex nested structure preservation",
-			input: `{"id":"complex","choices":[{"index":0,"delta":{"role":"assistant","content":"Test","tool_calls":[{"id":"call_123","type":"function","function":{"name":"test","arguments":"{}"}}]},"finish_reason":null,"logprobs":{"content":[{"token":"Test","logprob":-0.5}]}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
-			validate: func(t *testing.T, output string) {
-				var result map[string]interface{}
-				json.Unmarshal([]byte(output), &result)
+		name:  "complex nested structure preservation",
+		input: `{"id":"complex","choices":[{"index":0,"delta":{"role":"assistant","content":"Test","tool_calls":[{"id":"call_123","type":"function","function":{"name":"test","arguments":"{}"}}]},"finish_reason":null,"logprobs":{"content":[{"token":"Test","logprob":-0.5}]}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+		validate: func(t *testing.T, output string) {
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("Failed to unmarshal output: %v", err)
+			}
 
-				// Check that complex nested structures are preserved
+			// Check that complex nested structures are preserved
 				choices := result["choices"].([]interface{})
 				choice := choices[0].(map[string]interface{})
 				delta := choice["delta"].(map[string]interface{})

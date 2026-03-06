@@ -32,18 +32,18 @@ func (v *Validator) Validate(apiKey string) error {
 		return ErrInvalidKeyLength
 	}
 
-	message := data[:nonceSize+timestampSize+validitySize]
-	signature := data[nonceSize+timestampSize+validitySize:]
+	message := data[:messageSize]
+	signature := data[messageSize:]
+
+	if len(v.publicKey) != ed25519.PublicKeySize || !ed25519.Verify(v.publicKey, message, signature) {
+		return ErrInvalidSignature
+	}
 
 	timestamp := int64(binary.BigEndian.Uint64(data[nonceSize : nonceSize+timestampSize]))
 	validity := int64(binary.BigEndian.Uint64(data[nonceSize+timestampSize : nonceSize+timestampSize+validitySize]))
 
 	if time.Since(time.Unix(timestamp, 0)) > time.Duration(validity)*time.Second {
 		return ErrAPIKeyExpired
-	}
-
-	if !ed25519.Verify(v.publicKey, message, signature) {
-		return ErrInvalidSignature
 	}
 
 	return nil

@@ -5,7 +5,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"net/http"
@@ -15,10 +14,11 @@ import (
 	"github.com/go-acme/lego/v4/lego"
 	log "github.com/sirupsen/logrus"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"golang.org/x/net/publicsuffix"
 	"golang.org/x/time/rate"
 
+	"tinfoil/internal/attestation"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/dcode"
 	"tinfoil/internal/key"
@@ -109,7 +109,7 @@ func main() {
 	var hpkeKey [32]byte
 	copy(hpkeKey[:], hpkeKeyBytes)
 
-	aBody := AttestationBodyV2{
+	aBody := attestation.BodyV2{
 		TLSKeyFP: tlsutil.KeyFPBytes(privateKey.Public().(*ecdsa.PublicKey)),
 		HPKEKey:  hpkeKey,
 	}
@@ -121,15 +121,12 @@ func main() {
 
 	// Request attestation
 	log.Printf("Fetching attestation over %x", attestationBody)
-	var att *attestation.Document
+	var att *verifier.Document
 	if externalConfig.Domain == "localhost" || *dev || config.DummyAttestation {
 		log.Warn("Using dummy attestation report")
-		att = &attestation.Document{
-			Format: "https://tinfoil.sh/predicate/dummy/v2",
-			Body:   hex.EncodeToString(attestationBody[:]),
-		}
+		att = attestation.DummyReport(attestationBody)
 	} else {
-		att, err = attestationReport(attestationBody)
+		att, err = attestation.Report(attestationBody)
 		if err != nil {
 			log.Fatal(err)
 		}

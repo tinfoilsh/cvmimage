@@ -1,4 +1,4 @@
-module tinfoil-boot
+module tinfoil
 
 go 1.25.0
 

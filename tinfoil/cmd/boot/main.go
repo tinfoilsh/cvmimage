@@ -83,6 +83,16 @@ func run() error {
 		return err
 	}
 
+	log.Println("Initializing crypto and certificates")
+	externalConfig, err := getExternalConfig()
+	if err != nil {
+		log.Printf("Warning: external config not available, using defaults: %v", err)
+		externalConfig = &ExternalConfig{}
+	}
+	if _, err := initCrypto(config, externalConfig); err != nil {
+		return fmt.Errorf("crypto/certificates initialization failed: %w", err)
+	}
+
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(); err != nil {
 		log.Printf("Warning: registry auth setup failed: %v", err)

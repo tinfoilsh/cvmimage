@@ -49,7 +49,10 @@ func checkOpaqueDataVersion(fields map[uint16][]byte, deviceLabel string) {
 	if !ok {
 		return
 	}
-	version := int(binary.LittleEndian.Uint32(raw))
+	var version uint64
+	for i, b := range raw {
+		version |= uint64(b) << (8 * i)
+	}
 	log.Printf("%s opaque data version: %d", deviceLabel, version)
 }
 

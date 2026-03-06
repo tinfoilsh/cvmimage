@@ -279,3 +279,59 @@ func TestReferencePDIHexEncoding(t *testing.T) {
 		t.Errorf("gpuPDI2 hex = %s", got)
 	}
 }
+
+func TestCheckOpaqueDataVersion2Bytes(t *testing.T) {
+	report := buildSPDMReport([]tlvEntry{
+		{typ: fieldOpaqueDataVersion, val: []byte{0x03, 0x00}},
+		{typ: fieldPDI, val: switchPDIsForGPU()},
+	})
+	fields, err := parseSPDMOpaqueFields(report)
+	if err != nil {
+		t.Fatalf("parseSPDMOpaqueFields: %v", err)
+	}
+	raw := fields[fieldOpaqueDataVersion]
+	if len(raw) != 2 {
+		t.Fatalf("expected 2-byte version field, got %d", len(raw))
+	}
+	checkOpaqueDataVersion(fields, "test-device")
+}
+
+func TestCheckOpaqueDataVersion4Bytes(t *testing.T) {
+	report := buildSPDMReport([]tlvEntry{
+		{typ: fieldOpaqueDataVersion, val: []byte{0x05, 0x00, 0x00, 0x00}},
+		{typ: fieldPDI, val: switchPDIsForGPU()},
+	})
+	fields, err := parseSPDMOpaqueFields(report)
+	if err != nil {
+		t.Fatalf("parseSPDMOpaqueFields: %v", err)
+	}
+	raw := fields[fieldOpaqueDataVersion]
+	if len(raw) != 4 {
+		t.Fatalf("expected 4-byte version field, got %d", len(raw))
+	}
+	checkOpaqueDataVersion(fields, "test-device")
+}
+
+func TestCheckOpaqueDataVersion1Byte(t *testing.T) {
+	report := buildSPDMReport([]tlvEntry{
+		{typ: fieldOpaqueDataVersion, val: []byte{0x07}},
+		{typ: fieldPDI, val: switchPDIsForGPU()},
+	})
+	fields, err := parseSPDMOpaqueFields(report)
+	if err != nil {
+		t.Fatalf("parseSPDMOpaqueFields: %v", err)
+	}
+	checkOpaqueDataVersion(fields, "test-device")
+}
+
+func TestCheckOpaqueDataVersionMissing(t *testing.T) {
+	report := buildSPDMReport([]tlvEntry{
+		{typ: fieldPDI, val: switchPDIsForGPU()},
+	})
+	fields, err := parseSPDMOpaqueFields(report)
+	if err != nil {
+		t.Fatalf("parseSPDMOpaqueFields: %v", err)
+	}
+	// should not panic when field is absent
+	checkOpaqueDataVersion(fields, "test-device")
+}

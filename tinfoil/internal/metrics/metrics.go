@@ -133,13 +133,15 @@ func HandleMetrics(externalConfig *config.ExternalConfig) http.HandlerFunc {
 
 		metricsData, err := collectMetrics(&externalConfig.Metadata)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("metrics collection failed: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(metricsData); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("metrics encoding failed: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 	}

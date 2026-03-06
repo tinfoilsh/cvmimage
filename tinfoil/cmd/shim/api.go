@@ -15,6 +15,7 @@ import (
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"tinfoil/internal/acpi"
+	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/key/online"
@@ -128,6 +129,7 @@ func NewShimServer(
 	tlsCert *tls.Certificate,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
+	bootState *boot.State,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
@@ -238,6 +240,15 @@ func NewShimServer(
 		json.NewEncoder(w).Encode(map[string]string{
 			"certificate": string(certPEM),
 		})
+	})
+
+	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
+		if bootState == nil {
+			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(bootState)
 	})
 
 	mux.HandleFunc("/.well-known/tinfoil-metrics", metrics.HandleMetrics(externalConfig))

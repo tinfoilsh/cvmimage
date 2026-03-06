@@ -31,6 +31,12 @@ const (
 	ramdiskTLSKey      = ramdiskTLSDir + "/key.pem"
 	ramdiskAttestation = "/mnt/ramdisk/attestation.json"
 	maxCertRetries     = 10
+	maxCertificateSANs = 100
+
+	// cert-proxy relays through the control plane which responds quickly
+	certProxyRetryInterval = 5 * time.Minute
+	// ACME rate limits are stricter; Let's Encrypt allows 5 failures/hour
+	acmeRetryInterval = 18 * time.Minute
 )
 
 // CryptoArtifacts holds everything produced by initCrypto that the shim needs.
@@ -151,7 +157,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 			if err != nil {
 				return nil, fmt.Errorf("encoding attestation: %w", err)
 			}
-			if len(attDomains)+len(encodedDomains)+reservedSANs <= 100 {
+			if len(attDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
 				encodedDomains = append(encodedDomains, attDomains...)
 			} else {
 				log.Println("WARNING: full attestation too large for certificate SANs")
@@ -161,7 +167,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 			if err != nil {
 				return nil, fmt.Errorf("encoding attestation hash: %w", err)
 			}
-			if len(attHashDomains)+len(encodedDomains)+reservedSANs <= 100 {
+			if len(attHashDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
 				encodedDomains = append(encodedDomains, attHashDomains...)
 			} else {
 				return nil, fmt.Errorf("attestation hash too large for certificate SANs")
@@ -212,7 +218,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 		if err != nil {
 			return nil, fmt.Errorf("creating cert proxy manager: %w", err)
 		}
-		cert, err = retryCertificate(mgr.Certificate, 5*time.Minute)
+		cert, err = retryCertificate(mgr.Certificate, certProxyRetryInterval)
 		if err != nil {
 			return nil, fmt.Errorf("obtaining cert via cert-proxy: %w", err)
 		}
@@ -230,7 +236,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 		if err != nil {
 			return nil, fmt.Errorf("creating ACME cert manager: %w", err)
 		}
-		cert, err = retryCertificate(mgr.Certificate, 18*time.Minute)
+		cert, err = retryCertificate(mgr.Certificate, acmeRetryInterval)
 		if err != nil {
 			return nil, fmt.Errorf("obtaining cert via ACME: %w", err)
 		}

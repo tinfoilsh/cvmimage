@@ -26,6 +26,8 @@ import (
 	tlsutil "tinfoil/internal/tls"
 )
 
+const maxCertRetries = 10
+
 var version = "dev"
 
 var (
@@ -34,6 +36,18 @@ var (
 	dev                = flag.Bool("d", false, "Skip dcode domains, use dummy attestation, and enable verbose logging")
 	httpMode           = flag.Bool("i", false, "Use HTTP instead of HTTPS (insecure)")
 )
+
+func retryCertificate(fn func() (*tls.Certificate, error), interval time.Duration) (*tls.Certificate, error) {
+	for attempt := range maxCertRetries {
+		cert, err := fn()
+		if err == nil {
+			return cert, nil
+		}
+		log.Warnf("Certificate request failed (attempt %d/%d), retrying in %s: %v", attempt+1, maxCertRetries, interval, err)
+		time.Sleep(interval)
+	}
+	return nil, fmt.Errorf("certificate request failed after %d attempts", maxCertRetries)
+}
 
 func main() {
 	flag.Parse()
@@ -232,14 +246,9 @@ func main() {
 			log.Fatalf("Failed to create cert proxy manager: %v", err)
 		}
 
-		duration := 5 * time.Minute
-		for {
-			cert, err = certProxyManager.Certificate()
-			if err == nil {
-				break
-			}
-			log.Warnf("Certificate request failed, will retry in %s: %v", duration.String(), err)
-			time.Sleep(duration)
+		cert, err = retryCertificate(certProxyManager.Certificate, 5*time.Minute)
+		if err != nil {
+			log.Fatalf("Failed to obtain certificate via cert-proxy: %v", err)
 		}
 	} else { // acme: direct ACME via Let's Encrypt
 		dir := lego.LEDirectoryProduction
@@ -259,14 +268,9 @@ func main() {
 			log.Fatalf("Failed to create cert manager: %v", err)
 		}
 
-		duration := 18 * time.Minute
-		for {
-			cert, err = certManager.Certificate()
-			if err == nil {
-				break
-			}
-			log.Warnf("Certificate request failed, will retry in %s: %v", duration.String(), err)
-			time.Sleep(duration)
+		cert, err = retryCertificate(certManager.Certificate, 18*time.Minute)
+		if err != nil {
+			log.Fatalf("Failed to obtain certificate via ACME: %v", err)
 		}
 	}
 

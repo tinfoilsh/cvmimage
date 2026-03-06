@@ -107,28 +107,24 @@ lookup_package() {
         fi
     fi
     
-    # Check third-party repos
+    # Check all third-party repos, try each until we find the package
     local versions=""
     local repo=""
     
-    # NVIDIA CUDA repo
-    if [[ "$pkg_name" =~ ^(cuda-|nvidia-|libnvidia-) ]] && [[ ! "$pkg_name" =~ container ]]; then
-        versions=$(get_versions "$TMPDIR/nvidia_cuda" "$pkg_name")
-        repo="NVIDIA CUDA"
-    # NVIDIA Container Toolkit repo
-    elif [[ "$pkg_name" =~ nvidia-container ]]; then
-        versions=$(get_versions "$TMPDIR/nvidia_container" "$pkg_name")
-        repo="NVIDIA Container"
-    # Docker repo
-    elif [[ "$pkg_name" =~ ^(docker-|containerd) ]]; then
-        versions=$(get_versions "$TMPDIR/docker" "$pkg_name")
-        repo="Docker"
-    # Google Cloud repo
-    elif [[ "$pkg_name" =~ ^google- ]]; then
-        versions=$(get_versions "$TMPDIR/gcloud" "$pkg_name")
-        repo="Google Cloud"
-    else
-        return 1  # Not a third-party package we track
+    local -a repo_names=("NVIDIA CUDA" "NVIDIA Container" "Docker" "Google Cloud")
+    local -a repo_files=("$TMPDIR/nvidia_cuda" "$TMPDIR/nvidia_container" "$TMPDIR/docker" "$TMPDIR/gcloud")
+    
+    for i in "${!repo_names[@]}"; do
+        versions=$(get_versions "${repo_files[$i]}" "$pkg_name")
+        if [ -n "$versions" ]; then
+            repo="${repo_names[$i]}"
+            break
+        fi
+    done
+    
+    if [ -z "$versions" ]; then
+        echo -e "  ${RED}$pkg_name${NC} (NOT FOUND in any repo)"
+        return 0
     fi
     
     if [ -z "$versions" ]; then

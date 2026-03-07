@@ -108,9 +108,8 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !cr.Stream {
 		log.Debug("Not streaming")
 		return resp, nil
-	} else {
-		log.Debug("Starting stream")
 	}
+	log.Debug("Starting stream")
 
 	// SSE headers
 	resp.Header.Set("Cache-Control", "no-cache")

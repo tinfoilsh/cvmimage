@@ -1,8 +1,6 @@
 package attestation
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -12,6 +10,8 @@ import (
 	tdxclient "github.com/google/go-tdx-guest/client"
 	"github.com/klauspost/cpuid/v2"
 	verifierattestation "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+
+	"tinfoil/internal/compress"
 )
 
 type BodyV2 struct {
@@ -26,35 +26,23 @@ func (a BodyV2) Marshal() [64]byte {
 	return result
 }
 
-func gzipCompress(data []byte) ([]byte, error) {
-	var b bytes.Buffer
-	gz := gzip.NewWriter(&b)
-	if _, err := gz.Write(data); err != nil {
-		return nil, fmt.Errorf("failed to write data: %v", err)
-	}
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %v", err)
-	}
-	return b.Bytes(), nil
-}
-
 func sevReport(userData [64]byte) (*verifierattestation.Document, error) {
 	qp, err := sevclient.GetQuoteProvider()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get quote provider: %v", err)
+		return nil, fmt.Errorf("failed to get quote provider: %w", err)
 	}
 	report, err := qp.GetRawQuote(userData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get quote: %v", err)
+		return nil, fmt.Errorf("failed to get quote: %w", err)
 	}
 
 	if len(report) > sevabi.ReportSize {
 		report = report[:sevabi.ReportSize]
 	}
 
-	compressedReport, err := gzipCompress(report)
+	compressedReport, err := compress.Gzip(report)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compress report: %v", err)
+		return nil, fmt.Errorf("failed to compress report: %w", err)
 	}
 
 	return &verifierattestation.Document{
@@ -66,21 +54,21 @@ func sevReport(userData [64]byte) (*verifierattestation.Document, error) {
 func tdxReport(userData [64]byte) (*verifierattestation.Document, error) {
 	qp, err := tdxclient.GetQuoteProvider()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get quote provider: %v", err)
+		return nil, fmt.Errorf("failed to get quote provider: %w", err)
 	}
 
 	if err := qp.IsSupported(); err != nil {
-		return nil, fmt.Errorf("TDX is not supported: %v", err)
+		return nil, fmt.Errorf("TDX is not supported: %w", err)
 	}
 
 	report, err := qp.GetRawQuote(userData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get quote: %v", err)
+		return nil, fmt.Errorf("failed to get quote: %w", err)
 	}
 
-	compressedReport, err := gzipCompress(report)
+	compressedReport, err := compress.Gzip(report)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compress report: %v", err)
+		return nil, fmt.Errorf("failed to compress report: %w", err)
 	}
 
 	return &verifierattestation.Document{

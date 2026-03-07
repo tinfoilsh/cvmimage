@@ -44,9 +44,10 @@ func setupRegistryAuth() error {
 
 	cfg := DockerConfig{Auths: make(map[string]DockerAuth)}
 
-	// Load existing config
-	if data, _ := os.ReadFile(dockerConfigPath); len(data) > 0 {
-		json.Unmarshal(data, &cfg)
+	if data, err := os.ReadFile(dockerConfigPath); err == nil && len(data) > 0 {
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			log.Printf("Warning: failed to parse existing docker config: %v", err)
+		}
 		if cfg.Auths == nil {
 			cfg.Auths = make(map[string]DockerAuth)
 		}

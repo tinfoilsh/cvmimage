@@ -2,10 +2,10 @@ package metrics
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"tinfoil/internal/auth"
 	"tinfoil/internal/config"
 )
 
@@ -61,17 +61,6 @@ var (
 	)
 )
 
-func init() {
-	prometheus.MustRegister(
-		cpuUtilGauge,
-		gpuUtilGauge,
-		cpuMemUtilGauge,
-		gpuMemUtilGauge,
-		cpuMemTotalGauge,
-		gpuMemTotalGauge,
-	)
-}
-
 // updatePrometheusMetrics updates all Prometheus metrics with the latest values
 func updatePrometheusMetrics(metrics *Metrics) {
 	// Reset all gauge vectors to remove stale label combinations
@@ -116,14 +105,20 @@ func updatePrometheusMetrics(metrics *Metrics) {
 
 // HandlePrometheusMetrics handles the /metrics endpoint for Prometheus scraping
 func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) http.HandlerFunc {
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(
+		cpuUtilGauge,
+		gpuUtilGauge,
+		cpuMemUtilGauge,
+		gpuMemUtilGauge,
+		cpuMemTotalGauge,
+		gpuMemTotalGauge,
+	)
+	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Authentication check
-		if metricsAPIKey != "" {
-			apiKey := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if apiKey != metricsAPIKey {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		if !auth.RequireBearer(metricsAPIKey, w, r) {
+			return
 		}
 
 		metrics, err := collectMetrics(metadata)
@@ -132,22 +127,7 @@ func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) ht
 			return
 		}
 
-		// Update all metrics
 		updatePrometheusMetrics(metrics)
-
-		// Create a custom registry without default Go metrics
-		registry := prometheus.NewRegistry()
-		registry.MustRegister(
-			cpuUtilGauge,
-			gpuUtilGauge,
-			cpuMemUtilGauge,
-			gpuMemUtilGauge,
-			cpuMemTotalGauge,
-			gpuMemTotalGauge,
-		)
-
-		// Create handler with custom registry (no default Go metrics)
-		handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 		handler.ServeHTTP(w, r)
 	}
 }

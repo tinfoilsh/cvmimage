@@ -40,12 +40,6 @@ const (
 	acmeRetryInterval = 18 * time.Minute
 )
 
-// CryptoArtifacts holds everything produced by initCrypto that the shim needs.
-type CryptoArtifacts struct {
-	Attestation *verifier.Document
-	TLSCert     *tls.Certificate
-}
-
 func retryCertificate(fn func() (*tls.Certificate, error), interval time.Duration) (*tls.Certificate, error) {
 	for attempt := range maxCertRetries {
 		cert, err := fn()
@@ -76,10 +70,10 @@ func parseShimConfig(raw ShimConfig) (*shimconfig.Config, error) {
 
 // initCrypto generates keys, fetches attestation, and obtains a TLS certificate.
 // This runs before containers start so the attestation-bound cert exists first.
-func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArtifacts, error) {
+func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) error {
 	shimCfg, err := parseShimConfig(bootConfig.Shim)
 	if err != nil {
-		return nil, fmt.Errorf("parsing shim config: %w", err)
+		return fmt.Errorf("parsing shim config: %w", err)
 	}
 
 	domain := ""
@@ -90,30 +84,27 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 		domain = "localhost"
 	}
 
-	// Generate or load HPKE identity
 	hpkeKeyFile := shimCfg.HPKEKeyFile
 	if hpkeKeyFile == "" {
 		hpkeKeyFile = "/mnt/ramdisk/hpke_key.json"
 	}
 	serverIdentity, err := identity.FromFile(hpkeKeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("loading HPKE identity: %w", err)
+		return fmt.Errorf("loading HPKE identity: %w", err)
 	}
 
 	hpkeKeyBytes := serverIdentity.MarshalPublicKey()
 	if len(hpkeKeyBytes) != 32 {
-		return nil, fmt.Errorf("HPKE key length is %d, expected 32", len(hpkeKeyBytes))
+		return fmt.Errorf("HPKE key length is %d, expected 32", len(hpkeKeyBytes))
 	}
 	var hpkeKey [32]byte
 	copy(hpkeKey[:], hpkeKeyBytes)
 
-	// Generate TLS private key
 	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generating TLS key: %w", err)
+		return fmt.Errorf("generating TLS key: %w", err)
 	}
 
-	// Build attestation body binding TLS key fingerprint + HPKE key
 	aBody := attestation.BodyV2{
 		TLSKeyFP: tlsutil.KeyFPBytes(privateKey.Public().(*ecdsa.PublicKey)),
 		HPKEKey:  hpkeKey,
@@ -121,7 +112,6 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
 	attestationBody := aBody.Marshal()
 
-	// Fetch hardware attestation report
 	var att *verifier.Document
 	if domain == "localhost" || shimCfg.DummyAttestation {
 		log.Println("Using dummy attestation report")
@@ -130,11 +120,10 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 		log.Println("Fetching hardware attestation report")
 		att, err = attestation.Report(attestationBody)
 		if err != nil {
-			return nil, fmt.Errorf("fetching attestation report: %w", err)
+			return fmt.Errorf("fetching attestation report: %w", err)
 		}
 	}
 
-	// Build domain list with encoded SANs
 	encodedSANDomain := "tinfoil.sh"
 	if shimCfg.TLSOwnSANDomain {
 		encodedSANDomain = domain
@@ -146,7 +135,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 	var encodedDomains []string
 	hpkeKeyDomains, err := dcode.Encode(hpkeKeyBytes, "hpke."+encodedSANDomain)
 	if err != nil {
-		return nil, fmt.Errorf("encoding HPKE key: %w", err)
+		return fmt.Errorf("encoding HPKE key: %w", err)
 	}
 	encodedDomains = append(encodedDomains, hpkeKeyDomains...)
 
@@ -159,7 +148,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 		if shimCfg.PublishFullAttestation {
 			attDomains, err := dcode.EncodeAtt(att, "att."+encodedSANDomain)
 			if err != nil {
-				return nil, fmt.Errorf("encoding attestation: %w", err)
+				return fmt.Errorf("encoding attestation: %w", err)
 			}
 			if len(attDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
 				encodedDomains = append(encodedDomains, attDomains...)
@@ -169,12 +158,12 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 		} else {
 			attHashDomains, err := dcode.Encode([]byte(att.Hash()), "hatt."+encodedSANDomain)
 			if err != nil {
-				return nil, fmt.Errorf("encoding attestation hash: %w", err)
+				return fmt.Errorf("encoding attestation hash: %w", err)
 			}
 			if len(attHashDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
 				encodedDomains = append(encodedDomains, attHashDomains...)
 			} else {
-				return nil, fmt.Errorf("attestation hash too large for certificate SANs")
+				return fmt.Errorf("attestation hash too large for certificate SANs")
 			}
 		}
 	}
@@ -193,7 +182,6 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 		}
 	}
 
-	// Obtain TLS certificate
 	log.Printf("Obtaining TLS certificate for %d domains (mode=%s)", len(domains), shimCfg.TLSMode)
 
 	cloudflareTokens := getCloudflareTokens(externalConfig)
@@ -203,11 +191,11 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 	if domain == "localhost" || shimCfg.TLSMode == "self-signed" {
 		cert, err = tlsutil.Certificate(privateKey, domains...)
 		if err != nil {
-			return nil, fmt.Errorf("generating self-signed cert: %w", err)
+			return fmt.Errorf("generating self-signed cert: %w", err)
 		}
 	} else if shimCfg.TLSMode == "cert-proxy" {
 		if shimCfg.ControlPlane == "" {
-			return nil, fmt.Errorf("cert-proxy requires control-plane URL")
+			return fmt.Errorf("cert-proxy requires control-plane URL")
 		}
 		var httpChallengeDomains []string
 		var listenPort int
@@ -220,11 +208,11 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 			httpChallengeDomains, listenPort, certAuthToken,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("creating cert proxy manager: %w", err)
+			return fmt.Errorf("creating cert proxy manager: %w", err)
 		}
 		cert, err = retryCertificate(mgr.Certificate, certProxyRetryInterval)
 		if err != nil {
-			return nil, fmt.Errorf("obtaining cert via cert-proxy: %w", err)
+			return fmt.Errorf("obtaining cert via cert-proxy: %w", err)
 		}
 	} else {
 		dir := lego.LEDirectoryProduction
@@ -238,23 +226,22 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) (*CryptoArti
 			cloudflareTokens[0], cloudflareTokens[1],
 		)
 		if err != nil {
-			return nil, fmt.Errorf("creating ACME cert manager: %w", err)
+			return fmt.Errorf("creating ACME cert manager: %w", err)
 		}
 		cert, err = retryCertificate(mgr.Certificate, acmeRetryInterval)
 		if err != nil {
-			return nil, fmt.Errorf("obtaining cert via ACME: %w", err)
+			return fmt.Errorf("obtaining cert via ACME: %w", err)
 		}
 	}
 
-	// Write artifacts to ramdisk
 	if err := writeTLSArtifacts(cert, privateKey); err != nil {
-		return nil, err
+		return err
 	}
 	if err := writeAttestationDoc(att); err != nil {
-		return nil, err
+		return err
 	}
 
-	return &CryptoArtifacts{Attestation: att, TLSCert: cert}, nil
+	return nil
 }
 
 func getCloudflareTokens(ext *ExternalConfig) [2]string {

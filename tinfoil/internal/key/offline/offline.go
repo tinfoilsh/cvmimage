@@ -2,7 +2,7 @@ package offline
 
 import (
 	"crypto/ed25519"
-	"fmt"
+	"errors"
 )
 
 const (
@@ -14,8 +14,8 @@ const (
 )
 
 var (
-	ErrInvalidKeyFormat = fmt.Errorf("invalid key format")
-	ErrInvalidKeyLength = fmt.Errorf("invalid key length")
-	ErrAPIKeyExpired    = fmt.Errorf("API key has expired")
-	ErrInvalidSignature = fmt.Errorf("invalid key signature")
+	ErrInvalidKeyFormat = errors.New("invalid key format")
+	ErrInvalidKeyLength = errors.New("invalid key length")
+	ErrAPIKeyExpired    = errors.New("API key has expired")
+	ErrInvalidSignature = errors.New("invalid key signature")
 )

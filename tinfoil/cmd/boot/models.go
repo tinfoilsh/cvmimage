@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"tinfoil/internal/boot"
 )
 
 // mountModels mounts all model packs from the config
@@ -50,7 +52,7 @@ func mountModelPack(mpk string) error {
 
 	blockDevice := fmt.Sprintf("/dev/disk/by-uuid/%s", uuid)
 	deviceName := fmt.Sprintf("mpk-%s", rootHash)
-	mountPoint := fmt.Sprintf("/mnt/ramdisk/mpk/%s", deviceName)
+	mountPoint := fmt.Sprintf("%s/%s", boot.MPKDir, deviceName)
 
 	log.Printf("Opening verity device %s (uuid=%s)", deviceName, uuid)
 

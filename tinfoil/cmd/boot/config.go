@@ -128,15 +128,12 @@ func loadAndVerifyConfig() (*Config, error) {
 	}
 	config.ShimCfg = shimCfg
 
-	if config.ShimRaw != nil {
-		shimYAML, err := yaml.Marshal(config.ShimRaw)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling shim config: %w", err)
-		}
-		if err := os.WriteFile(boot.ShimConfigPath, shimYAML, 0644); err != nil {
-			return nil, fmt.Errorf("writing shim config: %w", err)
-		}
-		log.Println("Shim config written")
+	shimYAML, err := yaml.Marshal(shimCfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling shim config: %w", err)
+	}
+	if err := os.WriteFile(boot.ShimConfigPath, shimYAML, 0644); err != nil {
+		return nil, fmt.Errorf("writing shim config: %w", err)
 	}
 
 	if err := loadExternalConfig(); err != nil {

@@ -95,6 +95,7 @@ func run() error {
 
 	// 3. CPU attestation
 	start = time.Now()
+	log.Println("Fetching CPU attestation")
 	att, err := fetchCPUAttestation(nodeID, config.ShimCfg)
 	if err != nil {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
@@ -122,6 +123,7 @@ func run() error {
 
 	// 5. Certificate
 	start = time.Now()
+	log.Println("Obtaining TLS certificate")
 	if err := obtainCertificate(nodeID, att, config.ShimCfg, externalConfig); err != nil {
 		tracker.Record("certificate", boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("certificate acquisition failed: %w", err)

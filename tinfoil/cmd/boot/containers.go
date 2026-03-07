@@ -15,6 +15,8 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-units"
+
+	"tinfoil/internal/boot"
 )
 
 // launchContainers starts all containers from the config
@@ -95,7 +97,7 @@ func startContainer(c Container, extConfig *ExternalConfig) error {
 		SecurityOpt:    c.SecurityOpt,
 		ReadonlyRootfs: c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
-		Binds:          []string{ramdiskPath + ":/tinfoil"},
+		Binds:          []string{boot.RamdiskDir + ":/tinfoil"},
 	}
 
 	// Restart policy

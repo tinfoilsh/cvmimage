@@ -10,15 +10,11 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"tinfoil/internal/boot"
 )
 
-const (
-	dockerConfigDir    = "/mnt/ramdisk/docker-config"
-	dockerConfigPath   = "/mnt/ramdisk/docker-config/config.json"
-	gcloudKeyPath      = "/mnt/ramdisk/gcloud_key.json"
-	gcloudConfigPath   = "/mnt/ramdisk/gcloud"
-	authCommandTimeout = 60 * time.Second
-)
+const authCommandTimeout = 60 * time.Second
 
 type DockerConfig struct {
 	Auths map[string]DockerAuth `json:"auths"`
@@ -33,8 +29,8 @@ type DockerAuth struct {
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (or gcloud-key/gcloud-registry for backward compat)
 func setupRegistryAuth() error {
-	os.Setenv("DOCKER_CONFIG", dockerConfigDir)
-	os.Setenv("CLOUDSDK_CONFIG", gcloudConfigPath)
+	os.Setenv("DOCKER_CONFIG", boot.DockerConfigDir)
+	os.Setenv("CLOUDSDK_CONFIG", boot.GCloudConfigPath)
 
 	ext, err := getExternalConfig()
 	if err != nil || ext.Secrets == nil {
@@ -44,7 +40,7 @@ func setupRegistryAuth() error {
 
 	cfg := DockerConfig{Auths: make(map[string]DockerAuth)}
 
-	if data, err := os.ReadFile(dockerConfigPath); err == nil && len(data) > 0 {
+	if data, err := os.ReadFile(boot.DockerConfigPath); err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			log.Printf("Warning: failed to parse existing docker config: %v", err)
 		}
@@ -84,11 +80,11 @@ func setupRegistryAuth() error {
 
 	// Write config
 	if len(cfg.Auths) > 0 {
-		if err := os.MkdirAll(dockerConfigDir, 0700); err != nil {
+		if err := os.MkdirAll(boot.DockerConfigDir, 0700); err != nil {
 			return fmt.Errorf("creating docker config dir: %w", err)
 		}
 		data, _ := json.MarshalIndent(cfg, "", "  ")
-		if err := os.WriteFile(dockerConfigPath, data, 0600); err != nil {
+		if err := os.WriteFile(boot.DockerConfigPath, data, 0600); err != nil {
 			return fmt.Errorf("writing docker config: %w", err)
 		}
 	}
@@ -106,13 +102,13 @@ func getSecret(secrets map[string]string, keys ...string) string {
 }
 
 func setupGCloudAuth(key, registry string) error {
-	if err := os.WriteFile(gcloudKeyPath, []byte(key), 0600); err != nil {
+	if err := os.WriteFile(boot.GCloudKeyPath, []byte(key), 0600); err != nil {
 		return err
 	}
 
-	env := append(os.Environ(), "CLOUDSDK_CONFIG="+gcloudConfigPath)
+	env := append(os.Environ(), "CLOUDSDK_CONFIG="+boot.GCloudConfigPath)
 
-	if err := runCmd(env, "gcloud", "auth", "activate-service-account", "--quiet", "--key-file", gcloudKeyPath); err != nil {
+	if err := runCmd(env, "gcloud", "auth", "activate-service-account", "--quiet", "--key-file", boot.GCloudKeyPath); err != nil {
 		return err
 	}
 

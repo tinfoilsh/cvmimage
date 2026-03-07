@@ -66,6 +66,11 @@ func runSubcommand(cmd string) error {
 
 func run() error {
 	tracker := boot.NewTracker()
+	defer func() {
+		if err := tracker.Write(); err != nil {
+			log.Printf("Warning: failed to write boot state: %v", err)
+		}
+	}()
 
 	start := time.Now()
 	log.Println("Detecting GPUs")
@@ -78,7 +83,6 @@ func run() error {
 		log.Println("Verifying GPU attestation")
 		if err := verifyGPUAttestation(gpuInfo); err != nil {
 			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
-			tracker.Write()
 			return err
 		}
 		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d devices", gpuInfo.DeviceCount))
@@ -91,7 +95,6 @@ func run() error {
 	config, err := loadAndVerifyConfig()
 	if err != nil {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
-		tracker.Write()
 		return err
 	}
 	tracker.Record("config", boot.StatusOK, time.Since(start), "")
@@ -105,7 +108,6 @@ func run() error {
 	}
 	if _, err := initCrypto(config, externalConfig); err != nil {
 		tracker.Record("certificates", boot.StatusFailed, time.Since(start), err.Error())
-		tracker.Write()
 		return fmt.Errorf("crypto/certificates initialization failed: %w", err)
 	}
 	tracker.Record("certificates", boot.StatusOK, time.Since(start), "")
@@ -141,14 +143,9 @@ func run() error {
 	log.Println("Writing shim config")
 	if err := writeShimConfig(config); err != nil {
 		tracker.Record("shim-config", boot.StatusFailed, time.Since(start), err.Error())
-		tracker.Write()
 		return err
 	}
 	tracker.Record("shim-config", boot.StatusOK, time.Since(start), "")
-
-	if err := tracker.Write(); err != nil {
-		log.Printf("Warning: failed to write boot state: %v", err)
-	}
 
 	return nil
 }

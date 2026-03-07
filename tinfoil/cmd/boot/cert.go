@@ -121,26 +121,14 @@ func initCrypto(shimCfg *shimconfig.Config, externalConfig *shimconfig.ExternalC
 	}
 
 	if shimCfg.PublishAttestation {
-		if shimCfg.PublishFullAttestation {
-			attDomains, err := dcode.EncodeAtt(att, "att."+encodedSANDomain)
-			if err != nil {
-				return fmt.Errorf("encoding attestation: %w", err)
-			}
-			if len(attDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
-				encodedDomains = append(encodedDomains, attDomains...)
-			} else {
-				log.Println("WARNING: full attestation too large for certificate SANs")
-			}
+		attHashDomains, err := dcode.Encode([]byte(att.Hash()), "hatt."+encodedSANDomain)
+		if err != nil {
+			return fmt.Errorf("encoding attestation hash: %w", err)
+		}
+		if len(attHashDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
+			encodedDomains = append(encodedDomains, attHashDomains...)
 		} else {
-			attHashDomains, err := dcode.Encode([]byte(att.Hash()), "hatt."+encodedSANDomain)
-			if err != nil {
-				return fmt.Errorf("encoding attestation hash: %w", err)
-			}
-			if len(attHashDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
-				encodedDomains = append(encodedDomains, attHashDomains...)
-			} else {
-				return fmt.Errorf("attestation hash too large for certificate SANs")
-			}
+			return fmt.Errorf("attestation hash too large for certificate SANs")
 		}
 	}
 

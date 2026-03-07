@@ -11,12 +11,11 @@ import (
 )
 
 func init() {
-	log.SetFlags(0) // No timestamp prefix
+	log.SetFlags(0)
 }
 
 func main() {
 	if len(os.Args) > 1 {
-		// Subcommand mode: run individual step for debugging
 		if err := runSubcommand(os.Args[1]); err != nil {
 			log.Printf("Failed: %v", err)
 			os.Exit(1)
@@ -24,7 +23,6 @@ func main() {
 		return
 	}
 
-	// Normal boot sequence
 	log.Println("Tinfoil boot starting")
 
 	if err := run(); err != nil {
@@ -35,12 +33,9 @@ func main() {
 	log.Println("Tinfoil boot complete")
 }
 
-// runSubcommand runs a single step using config from ramdisk (for debugging)
 func runSubcommand(cmd string) error {
-	// Validate command first
 	switch cmd {
 	case "containers", "models":
-		// Valid command
 	default:
 		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|models]", cmd)
 	}
@@ -73,13 +68,47 @@ func run() error {
 		}
 	}()
 
+	// 1. Config
 	start := time.Now()
+	log.Println("Loading configuration")
+	config, err := loadAndVerifyConfig()
+	if err != nil {
+		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	externalConfig, err := getExternalConfig()
+	if err != nil {
+		log.Printf("Warning: external config not available, using defaults: %v", err)
+		externalConfig = &shimconfig.ExternalConfig{}
+	}
+	tracker.Record("config", boot.StatusOK, time.Since(start), "")
+
+	// 2. Identity
+	start = time.Now()
+	log.Println("Generating node identity")
+	nodeID, err := generateIdentity(config.ShimCfg, externalConfig)
+	if err != nil {
+		tracker.Record("identity", boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	tracker.Record("identity", boot.StatusOK, time.Since(start), nodeID.Domain)
+
+	// 3. CPU attestation
+	start = time.Now()
+	att, err := fetchCPUAttestation(nodeID, config.ShimCfg)
+	if err != nil {
+		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(att.Format))
+
+	// 4. GPU attestation
+	start = time.Now()
 	log.Println("Detecting GPUs")
 	gpuInfo, err := detectGPUs()
 	if err != nil {
 		return err
 	}
-
 	if gpuInfo.HasNvidia {
 		log.Println("Verifying GPU attestation")
 		if err := verifyGPUAttestation(gpuInfo); err != nil {
@@ -91,28 +120,15 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs detected")
 	}
 
+	// 5. Certificate
 	start = time.Now()
-	log.Println("Loading configuration")
-	config, err := loadAndVerifyConfig()
-	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
-		return err
+	if err := obtainCertificate(nodeID, att, config.ShimCfg, externalConfig); err != nil {
+		tracker.Record("certificate", boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("certificate acquisition failed: %w", err)
 	}
-	tracker.Record("config", boot.StatusOK, time.Since(start), "")
+	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	start = time.Now()
-	log.Println("Initializing crypto and certificates")
-	externalConfig, err := getExternalConfig()
-	if err != nil {
-		log.Printf("Warning: external config not available, using defaults: %v", err)
-		externalConfig = &shimconfig.ExternalConfig{}
-	}
-	if err := initCrypto(config.ShimCfg, externalConfig); err != nil {
-		tracker.Record("certificates", boot.StatusFailed, time.Since(start), err.Error())
-		return fmt.Errorf("crypto/certificates initialization failed: %w", err)
-	}
-	tracker.Record("certificates", boot.StatusOK, time.Since(start), "")
-
+	// 6. Registry auth
 	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(); err != nil {
@@ -122,6 +138,7 @@ func run() error {
 		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 	}
 
+	// 7. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config); err != nil {
@@ -131,6 +148,7 @@ func run() error {
 		tracker.Record("models", boot.StatusOK, time.Since(start), "")
 	}
 
+	// 8. Containers
 	start = time.Now()
 	log.Println("Launching containers")
 	if err := launchContainers(config); err != nil {

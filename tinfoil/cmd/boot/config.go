@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
@@ -15,14 +16,12 @@ import (
 
 // Config represents the main configuration file
 type Config struct {
-	ShimVersion string      `yaml:"shim-version"`
-	Shim        ShimConfig  `yaml:"shim"`
-	Models      []ModelSpec `yaml:"models"`
-	Containers  []Container `yaml:"containers"`
+	ShimVersion string                 `yaml:"shim-version"`
+	ShimRaw     map[string]interface{} `yaml:"shim"`
+	ShimCfg     *shimconfig.Config     `yaml:"-"`
+	Models      []ModelSpec            `yaml:"models"`
+	Containers  []Container            `yaml:"containers"`
 }
-
-// ShimConfig is stored as raw YAML to preserve all fields for tfshim
-type ShimConfig map[string]interface{}
 
 // ModelSpec represents a model pack specification
 type ModelSpec struct {
@@ -123,12 +122,43 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	// Also read external config if it exists
+	shimCfg, err := parseShimConfig(config.ShimRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parsing shim config: %w", err)
+	}
+	config.ShimCfg = shimCfg
+
+	if config.ShimRaw != nil {
+		shimYAML, err := yaml.Marshal(config.ShimRaw)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling shim config: %w", err)
+		}
+		if err := os.WriteFile(boot.ShimConfigPath, shimYAML, 0644); err != nil {
+			return nil, fmt.Errorf("writing shim config: %w", err)
+		}
+		log.Println("Shim config written")
+	}
+
 	if err := loadExternalConfig(); err != nil {
 		log.Printf("Warning: external config not loaded: %v", err)
 	}
 
 	return &config, nil
+}
+
+func parseShimConfig(raw map[string]interface{}) (*shimconfig.Config, error) {
+	var cfg shimconfig.Config
+	if err := defaults.Set(&cfg); err != nil {
+		return nil, fmt.Errorf("setting defaults: %w", err)
+	}
+	yamlBytes, err := yaml.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling: %w", err)
+	}
+	if err := yaml.Unmarshal(yamlBytes, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshaling: %w", err)
+	}
+	return &cfg, nil
 }
 
 // loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)

@@ -107,7 +107,7 @@ func run() error {
 		log.Printf("Warning: external config not available, using defaults: %v", err)
 		externalConfig = &shimconfig.ExternalConfig{}
 	}
-	if err := initCrypto(config, externalConfig); err != nil {
+	if err := initCrypto(config.ShimCfg, externalConfig); err != nil {
 		tracker.Record("certificates", boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("crypto/certificates initialization failed: %w", err)
 	}
@@ -139,14 +139,6 @@ func run() error {
 	} else {
 		tracker.Record("containers", boot.StatusOK, time.Since(start), "")
 	}
-
-	start = time.Now()
-	log.Println("Writing shim config")
-	if err := writeShimConfig(config); err != nil {
-		tracker.Record("shim-config", boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	tracker.Record("shim-config", boot.StatusOK, time.Since(start), "")
 
 	return nil
 }

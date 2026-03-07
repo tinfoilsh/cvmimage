@@ -53,15 +53,9 @@ type Metadata struct {
 }
 
 type ExternalConfig struct {
-	// Populated from env/secrets sections after loading
-	Domain              string
-	CloudflareDNSToken  string
-	CloudflareZoneToken string
-	MetricsAPIKey       string
-	ACPIAPIKey          string
-	CertAuthToken       string
+	MetricsAPIKey string
+	ACPIAPIKey    string
 
-	// New format sections
 	Env      map[string]string `yaml:"env"`
 	Secrets  map[string]string `yaml:"secrets"`
 	Metadata Metadata          `yaml:"metadata"`
@@ -110,16 +104,9 @@ func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, erro
 		return nil, nil, fmt.Errorf("failed to set defaults: %v", err)
 	}
 
-	// Populate fields from new format sections
-	if externalConfig.Env != nil {
-		externalConfig.Domain = externalConfig.Env["DOMAIN"]
-	}
 	if externalConfig.Secrets != nil {
-		externalConfig.CloudflareDNSToken = externalConfig.Secrets["cloudflare-dns-token"]
-		externalConfig.CloudflareZoneToken = externalConfig.Secrets["cloudflare-zone-token"]
 		externalConfig.MetricsAPIKey = externalConfig.Secrets["metrics-api-key"]
 		externalConfig.ACPIAPIKey = externalConfig.Secrets["acpi-api-key"]
-		externalConfig.CertAuthToken = externalConfig.Secrets["CERT_AUTH_TOKEN"]
 	}
 
 	return &config, &externalConfig, nil

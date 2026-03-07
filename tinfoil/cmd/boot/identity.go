@@ -20,10 +20,15 @@ type NodeIdentity struct {
 	Domain       string
 }
 
+const x25519PublicKeySize = 32
+
 func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.ExternalConfig) (*NodeIdentity, error) {
 	domain := ""
 	if externalConfig.Env != nil {
 		domain = externalConfig.Env["DOMAIN"]
+	}
+	if domain == "" && !shimCfg.DummyAttestation {
+		return nil, fmt.Errorf("DOMAIN not set in external config (set dummy-attestation: true for local dev)")
 	}
 	if domain == "" {
 		domain = "localhost"
@@ -39,8 +44,8 @@ func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.Ext
 	}
 
 	hpkeKeyBytes := serverIdentity.MarshalPublicKey()
-	if len(hpkeKeyBytes) != 32 {
-		return nil, fmt.Errorf("HPKE key length is %d, expected 32", len(hpkeKeyBytes))
+	if len(hpkeKeyBytes) != x25519PublicKeySize {
+		return nil, fmt.Errorf("HPKE key length is %d, expected %d", len(hpkeKeyBytes), x25519PublicKeySize)
 	}
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)

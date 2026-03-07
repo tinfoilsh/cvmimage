@@ -11,7 +11,12 @@ func RequireBearer(apiKey string, w http.ResponseWriter, r *http.Request) bool {
 	if apiKey == "" {
 		return true
 	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	header := r.Header.Get("Authorization")
+	if len(header) < 7 || !strings.EqualFold(header[:7], "bearer ") {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	token := header[7:]
 	if token != apiKey {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false

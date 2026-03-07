@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
+	shimconfig "tinfoil/internal/config"
 )
 
 // Config represents the main configuration file
@@ -162,19 +163,13 @@ func loadExternalConfig() error {
 	return nil
 }
 
-// ExternalConfig represents the external configuration file structure
-type ExternalConfig struct {
-	Env     map[string]string `yaml:"env"`
-	Secrets map[string]string `yaml:"secrets"`
-}
-
-func getExternalConfig() (*ExternalConfig, error) {
+func getExternalConfig() (*shimconfig.ExternalConfig, error) {
 	data, err := os.ReadFile(boot.ExternalConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading external config: %w", err)
 	}
 
-	var config ExternalConfig
+	var config shimconfig.ExternalConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parsing external config: %w", err)
 	}

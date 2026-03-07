@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"tinfoil/internal/boot"
+	shimconfig "tinfoil/internal/config"
 )
 
 func init() {
@@ -104,7 +105,7 @@ func run() error {
 	externalConfig, err := getExternalConfig()
 	if err != nil {
 		log.Printf("Warning: external config not available, using defaults: %v", err)
-		externalConfig = &ExternalConfig{}
+		externalConfig = &shimconfig.ExternalConfig{}
 	}
 	if err := initCrypto(config, externalConfig); err != nil {
 		tracker.Record("certificates", boot.StatusFailed, time.Since(start), err.Error())

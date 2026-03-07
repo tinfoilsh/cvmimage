@@ -28,6 +28,10 @@ import (
 )
 
 const (
+	secretCloudflareDNSToken  = "CLOUDFLARE_DNS_TOKEN"
+	secretCloudflareZoneToken = "CLOUDFLARE_ZONE_TOKEN"
+	secretCertAuthToken       = "CERT_AUTH_TOKEN"
+
 	maxCertRetries     = 10
 	maxCertificateSANs = 100
 
@@ -67,7 +71,7 @@ func parseShimConfig(raw ShimConfig) (*shimconfig.Config, error) {
 
 // initCrypto generates keys, fetches attestation, and obtains a TLS certificate.
 // This runs before containers start so the attestation-bound cert exists first.
-func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) error {
+func initCrypto(bootConfig *Config, externalConfig *shimconfig.ExternalConfig) error {
 	shimCfg, err := parseShimConfig(bootConfig.Shim)
 	if err != nil {
 		return fmt.Errorf("parsing shim config: %w", err)
@@ -181,8 +185,9 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) error {
 
 	log.Printf("Obtaining TLS certificate for %d domains (mode=%s)", len(domains), shimCfg.TLSMode)
 
-	cloudflareTokens := getCloudflareTokens(externalConfig)
-	certAuthToken := getCertAuthToken(externalConfig)
+	cfDNS := externalConfig.GetSecret(secretCloudflareDNSToken)
+	cfZone := externalConfig.GetSecret(secretCloudflareZoneToken)
+	certAuthToken := externalConfig.GetSecret(secretCertAuthToken)
 
 	var cert *tls.Certificate
 	if domain == "localhost" || shimCfg.TLSMode == "self-signed" {
@@ -220,7 +225,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) error {
 			domains, shimCfg.Email, shimCfg.CacheDir, dir,
 			tlsutil.ChallengeMode(shimCfg.TLSChallengeMode),
 			shimCfg.ListenPort, privateKey,
-			cloudflareTokens[0], cloudflareTokens[1],
+			cfDNS, cfZone,
 		)
 		if err != nil {
 			return fmt.Errorf("creating ACME cert manager: %w", err)
@@ -239,20 +244,6 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) error {
 	}
 
 	return nil
-}
-
-func getCloudflareTokens(ext *ExternalConfig) [2]string {
-	if ext.Secrets == nil {
-		return [2]string{}
-	}
-	return [2]string{ext.Secrets["cloudflare-dns-token"], ext.Secrets["cloudflare-zone-token"]}
-}
-
-func getCertAuthToken(ext *ExternalConfig) string {
-	if ext.Secrets == nil {
-		return ""
-	}
-	return ext.Secrets["CERT_AUTH_TOKEN"]
 }
 
 func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {

@@ -38,9 +38,8 @@ type Config struct {
 	Email       string  `yaml:"email" default:"tls@tinfoil.sh"`
 	HPKEKeyFile string  `yaml:"hpke-key-file" default:"/mnt/ramdisk/hpke_key.json"`
 
-	PublishAttestation     bool `yaml:"publish-attestation" default:"true"`
-	PublishFullAttestation bool `yaml:"publish-full-attestation" default:"false"`
-	DummyAttestation       bool `yaml:"dummy-attestation" default:"false"`
+	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
+	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
 
 	Verbose bool `yaml:"verbose"`
 }

@@ -12,7 +12,6 @@ import (
 type Config struct {
 	ListenPort   int `yaml:"listen-port" default:"443"`
 	UpstreamPort int `yaml:"upstream-port"`
-	ControlPort  int `yaml:"control-port" default:"8086"`
 
 	Paths         []string `yaml:"paths"`
 	OriginDomains []string `yaml:"origins"`

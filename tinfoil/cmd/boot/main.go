@@ -106,7 +106,7 @@ func run() error {
 		log.Printf("Warning: external config not available, using defaults: %v", err)
 		externalConfig = &ExternalConfig{}
 	}
-	if _, err := initCrypto(config, externalConfig); err != nil {
+	if err := initCrypto(config, externalConfig); err != nil {
 		tracker.Record("certificates", boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("crypto/certificates initialization failed: %w", err)
 	}

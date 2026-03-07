@@ -9,22 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
+	"tinfoil/internal/auth"
 	"tinfoil/internal/config"
 )
 
 func HandleQemuACPI(cfg *config.Config, externalConfig *config.ExternalConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if externalConfig.ACPIAPIKey != "" {
-			apiKey := strings.TrimPrefix(
-				r.Header.Get("Authorization"),
-				"Bearer ",
-			)
-			if apiKey != externalConfig.ACPIAPIKey {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		if !auth.RequireBearer(externalConfig.ACPIAPIKey, w, r) {
+			return
 		}
 
 		var buf bytes.Buffer
@@ -45,17 +38,17 @@ func HandleQemuACPI(cfg *config.Config, externalConfig *config.ExternalConfig) h
 			}
 		} else {
 			tw := tar.NewWriter(&buf)
-			type acpi_file struct {
+			type acpiFile struct {
 				Path string
 				Name string
 			}
-			acpi_files := []acpi_file{
+			acpiFiles := []acpiFile{
 				{Path: "/sys/firmware/qemu_fw_cfg/by_name/etc/acpi/tables/raw", Name: "acpi_tables.bin"},
 				{Path: "/sys/firmware/qemu_fw_cfg/by_name/etc/acpi/rsdp/raw", Name: "rsdp.bin"},
 				{Path: "/sys/firmware/qemu_fw_cfg/by_name/etc/table-loader/raw", Name: "table_loader.bin"},
 			}
 
-			for _, af := range acpi_files {
+			for _, af := range acpiFiles {
 				data, err := os.ReadFile(af.Path)
 				if err != nil {
 					http.Error(w, fmt.Sprintf("Failed to read ACPI source file %s", af.Name), http.StatusInternalServerError)

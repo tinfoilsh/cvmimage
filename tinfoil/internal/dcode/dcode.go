@@ -11,19 +11,9 @@ import (
 	"strings"
 
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
-)
 
-func gzCompress(data []byte) ([]byte, error) {
-	var b bytes.Buffer
-	gz := gzip.NewWriter(&b)
-	if _, err := gz.Write(data); err != nil {
-		return nil, fmt.Errorf("failed to write data: %v", err)
-	}
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %v", err)
-	}
-	return b.Bytes(), nil
-}
+	"tinfoil/internal/compress"
+)
 
 func gzDecompress(data []byte) ([]byte, error) {
 	gzReader, err := gzip.NewReader(bytes.NewReader(data))
@@ -63,7 +53,7 @@ func EncodeAtt(att *attestation.Document, domain string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal attestation: %v", err)
 	}
-	compressed, err := gzCompress(attJSON)
+	compressed, err := compress.Gzip(attJSON)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compress attestation: %v", err)
 	}

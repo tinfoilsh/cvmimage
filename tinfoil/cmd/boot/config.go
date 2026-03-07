@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -188,8 +189,7 @@ func readDiskAndStripNulls(path string) ([]byte, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	// Strip null bytes (config mounted as disk may have padding)
-	data = []byte(strings.TrimRight(string(data), "\x00"))
+	data = bytes.TrimRight(data, "\x00")
 	return data, nil
 }
 

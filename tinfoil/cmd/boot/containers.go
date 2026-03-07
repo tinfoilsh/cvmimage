@@ -277,11 +277,13 @@ func parseGPUs(gpus interface{}) *container.DeviceRequest {
 	return req
 }
 
-// parseDuration parses a duration string, returns 0 on error
 func parseDuration(s string) time.Duration {
 	if s == "" {
 		return 0
 	}
-	d, _ := time.ParseDuration(s)
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		log.Printf("Warning: invalid duration %q: %v", s, err)
+	}
 	return d
 }

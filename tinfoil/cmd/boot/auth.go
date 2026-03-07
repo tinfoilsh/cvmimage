@@ -14,7 +14,11 @@ import (
 	"tinfoil/internal/boot"
 )
 
-const authCommandTimeout = 60 * time.Second
+const (
+	secretGCloudKey      = "GCLOUD_KEY"
+	secretGCloudRegistry = "GCLOUD_REGISTRY"
+	authCommandTimeout   = 60 * time.Second
+)
 
 type DockerConfig struct {
 	Auths map[string]DockerAuth `json:"auths"`
@@ -70,8 +74,14 @@ func setupRegistryAuth() error {
 	}
 
 	// GCloud auth via CLI (supports both formats)
-	gcloudKey := getSecret(ext.Secrets, "GCLOUD_KEY", "gcloud-key")
-	gcloudRegistry := getSecret(ext.Secrets, "GCLOUD_REGISTRY", "gcloud-registry")
+	gcloudKey := ext.GetSecret(secretGCloudKey)
+	if gcloudKey == "" {
+		gcloudKey = ext.GetSecret("gcloud-key")
+	}
+	gcloudRegistry := ext.GetSecret(secretGCloudRegistry)
+	if gcloudRegistry == "" {
+		gcloudRegistry = ext.GetSecret("gcloud-registry")
+	}
 	if gcloudKey != "" {
 		if err := setupGCloudAuth(gcloudKey, gcloudRegistry); err != nil {
 			log.Printf("Warning: gcloud auth failed: %v", err)
@@ -89,16 +99,6 @@ func setupRegistryAuth() error {
 		}
 	}
 	return nil
-}
-
-// getSecret returns the first non-empty value from the given keys
-func getSecret(secrets map[string]string, keys ...string) string {
-	for _, k := range keys {
-		if v := secrets[k]; v != "" && v != "null" {
-			return v
-		}
-	}
-	return ""
 }
 
 func setupGCloudAuth(key, registry string) error {

@@ -17,6 +17,7 @@ import (
 	"github.com/docker/go-units"
 
 	"tinfoil/internal/boot"
+	shimconfig "tinfoil/internal/config"
 )
 
 // launchContainers starts all containers from the config
@@ -26,13 +27,18 @@ func launchContainers(config *Config) error {
 		return nil
 	}
 
-	// Load external config once for env/secrets expansion
-	extConfig, _ := getExternalConfig() // nil is fine, we'll warn per-key
+	extConfig, _ := getExternalConfig()
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("creating docker client: %w", err)
+	}
+	defer cli.Close()
 
 	log.Printf("Launching %d containers", len(config.Containers))
 	var errors []string
 	for _, c := range config.Containers {
-		if err := startContainer(c, extConfig); err != nil {
+		if err := startContainer(cli, c, extConfig); err != nil {
 			log.Printf("Error starting container %s: %v", c.Name, err)
 			errors = append(errors, fmt.Sprintf("%s: %v", c.Name, err))
 		}
@@ -45,16 +51,10 @@ func launchContainers(config *Config) error {
 }
 
 // startContainer starts a Docker container using the Docker SDK
-func startContainer(c Container, extConfig *ExternalConfig) error {
+func startContainer(cli *client.Client, c Container, extConfig *shimconfig.ExternalConfig) error {
 	if c.Image == "" {
 		return fmt.Errorf("no image specified for container %s", c.Name)
 	}
-
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return fmt.Errorf("creating docker client: %w", err)
-	}
-	defer cli.Close()
 
 	// Build environment variables
 	env := buildEnv(c.Env, c.Secrets, extConfig)
@@ -205,7 +205,7 @@ func pullImage(cli *client.Client, imageName string) error {
 }
 
 // buildEnv parses env entries and secrets from external config
-func buildEnv(envItems []interface{}, secrets []string, extConfig *ExternalConfig) []string {
+func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.ExternalConfig) []string {
 	var env []string
 
 	// Process env items
@@ -232,14 +232,10 @@ func buildEnv(envItems []interface{}, secrets []string, extConfig *ExternalConfi
 
 	// Process secrets (lookup from external-config secrets section)
 	for _, key := range secrets {
-		if extConfig != nil && extConfig.Secrets != nil {
-			if val, ok := extConfig.Secrets[key]; ok {
-				env = append(env, key+"="+val)
-			} else {
-				log.Printf("Warning: secret key %s not found in external config", key)
-			}
+		if v := extConfig.GetSecret(key); v != "" {
+			env = append(env, key+"="+v)
 		} else {
-			log.Printf("Warning: secret key %s not found (no external config)", key)
+			log.Printf("Warning: secret key %s not found in external config", key)
 		}
 	}
 

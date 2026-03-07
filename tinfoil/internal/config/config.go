@@ -45,6 +45,11 @@ type Config struct {
 	Verbose bool `yaml:"verbose"`
 }
 
+const (
+	SecretMetricsAPIKey = "METRICS_API_KEY"
+	SecretACPIAPIKey    = "ACPI_API_KEY"
+)
+
 type Metadata struct {
 	ID     string `yaml:"id"`
 	Domain string `yaml:"domain"`
@@ -59,6 +64,17 @@ type ExternalConfig struct {
 	Env      map[string]string `yaml:"env"`
 	Secrets  map[string]string `yaml:"secrets"`
 	Metadata Metadata          `yaml:"metadata"`
+}
+
+func (e *ExternalConfig) GetSecret(key string) string {
+	if e == nil || e.Secrets == nil {
+		return ""
+	}
+	v := e.Secrets[key]
+	if v == "null" {
+		return ""
+	}
+	return v
 }
 
 // Load loads the config from the given files
@@ -104,10 +120,8 @@ func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, erro
 		return nil, nil, fmt.Errorf("failed to set defaults: %v", err)
 	}
 
-	if externalConfig.Secrets != nil {
-		externalConfig.MetricsAPIKey = externalConfig.Secrets["metrics-api-key"]
-		externalConfig.ACPIAPIKey = externalConfig.Secrets["acpi-api-key"]
-	}
+	externalConfig.MetricsAPIKey = externalConfig.GetSecret(SecretMetricsAPIKey)
+	externalConfig.ACPIAPIKey = externalConfig.GetSecret(SecretACPIAPIKey)
 
 	return &config, &externalConfig, nil
 }

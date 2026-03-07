@@ -21,16 +21,13 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/attestation"
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/dcode"
 	tlsutil "tinfoil/internal/tls"
 )
 
 const (
-	ramdiskTLSDir      = "/mnt/ramdisk/tls"
-	ramdiskTLSCert     = ramdiskTLSDir + "/cert.pem"
-	ramdiskTLSKey      = ramdiskTLSDir + "/key.pem"
-	ramdiskAttestation = "/mnt/ramdisk/attestation.json"
 	maxCertRetries     = 10
 	maxCertificateSANs = 100
 
@@ -86,7 +83,7 @@ func initCrypto(bootConfig *Config, externalConfig *ExternalConfig) error {
 
 	hpkeKeyFile := shimCfg.HPKEKeyFile
 	if hpkeKeyFile == "" {
-		hpkeKeyFile = "/mnt/ramdisk/hpke_key.json"
+		hpkeKeyFile = boot.HPKEKeyPath
 	}
 	serverIdentity, err := identity.FromFile(hpkeKeyFile)
 	if err != nil {
@@ -259,12 +256,12 @@ func getCertAuthToken(ext *ExternalConfig) string {
 }
 
 func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
-	if err := os.MkdirAll(ramdiskTLSDir, 0700); err != nil {
+	if err := os.MkdirAll(boot.TLSDir, 0700); err != nil {
 		return fmt.Errorf("creating TLS directory: %w", err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
-	if err := os.WriteFile(ramdiskTLSCert, certPEM, 0644); err != nil {
+	if err := os.WriteFile(boot.TLSCertPath, certPEM, 0644); err != nil {
 		return fmt.Errorf("writing TLS cert: %w", err)
 	}
 
@@ -274,7 +271,7 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 		return fmt.Errorf("marshaling TLS key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(ramdiskTLSKey, keyPEM, 0600); err != nil {
+	if err := os.WriteFile(boot.TLSKeyPath, keyPEM, 0600); err != nil {
 		return fmt.Errorf("writing TLS key: %w", err)
 	}
 
@@ -287,7 +284,7 @@ func writeAttestationDoc(att *verifier.Document) error {
 	if err != nil {
 		return fmt.Errorf("marshaling attestation document: %w", err)
 	}
-	if err := os.WriteFile(ramdiskAttestation, data, 0644); err != nil {
+	if err := os.WriteFile(boot.AttestationPath, data, 0644); err != nil {
 		return fmt.Errorf("writing attestation document: %w", err)
 	}
 	log.Println("Attestation document written to ramdisk")

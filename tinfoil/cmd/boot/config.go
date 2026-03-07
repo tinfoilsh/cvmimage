@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"tinfoil/internal/boot"
 )
 
 // Config represents the main configuration file
@@ -78,11 +80,8 @@ type Healthcheck struct {
 }
 
 const (
-	ramdiskPath        = "/mnt/ramdisk"
-	configPath         = "/mnt/ramdisk/config.yml"
-	externalConfigPath = "/mnt/ramdisk/external-config.yml"
-	configDiskPath     = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-config"
-	externalDiskPath   = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-ext-config"
+	configDiskPath   = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-config"
+	externalDiskPath = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-ext-config"
 )
 
 // loadAndVerifyConfig reads the config from disk and verifies its hash
@@ -113,7 +112,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	log.Printf("Config hash verified: %s", actualHash)
 
 	// Write verified config to ramdisk
-	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+	if err := os.WriteFile(boot.ConfigPath, configData, 0644); err != nil {
 		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
@@ -133,7 +132,7 @@ func loadAndVerifyConfig() (*Config, error) {
 
 // loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)
 func loadConfigFromRamdisk() (*Config, error) {
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(boot.ConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading config from ramdisk: %w", err)
 	}
@@ -156,7 +155,7 @@ func loadExternalConfig() error {
 		return fmt.Errorf("reading external config disk: %w", err)
 	}
 
-	if err := os.WriteFile(externalConfigPath, data, 0600); err != nil {
+	if err := os.WriteFile(boot.ExternalConfigPath, data, 0600); err != nil {
 		return fmt.Errorf("writing external config: %w", err)
 	}
 
@@ -170,7 +169,7 @@ type ExternalConfig struct {
 }
 
 func getExternalConfig() (*ExternalConfig, error) {
-	data, err := os.ReadFile(externalConfigPath)
+	data, err := os.ReadFile(boot.ExternalConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading external config: %w", err)
 	}

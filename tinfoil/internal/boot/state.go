@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-const StatePath = "/mnt/ramdisk/boot-state.json"
-
 type State struct {
 	Stages      []Stage   `json:"stages"`
 	StartedAt   time.Time `json:"started_at"`

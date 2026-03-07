@@ -8,55 +8,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const (
-	nvidiaVendorID    = "0x10de"
-	multiGPUThreshold = 12 // 8 GPUs + 4 NVSwitches
-
-	nvattestTimeout = 5 * time.Minute
-)
-
-type GPUInfo struct {
-	HasNvidia   bool
-	DeviceCount int
-	IsMultiGPU  bool
-}
-
-func detectGPUs() (*GPUInfo, error) {
-	info := &GPUInfo{}
-
-	pciPath := "/sys/bus/pci/devices"
-	entries, err := os.ReadDir(pciPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading PCI devices: %w", err)
-	}
-
-	for _, entry := range entries {
-		vendorPath := filepath.Join(pciPath, entry.Name(), "vendor")
-		vendorData, err := os.ReadFile(vendorPath)
-		if err != nil {
-			continue
-		}
-		if strings.TrimSpace(string(vendorData)) == nvidiaVendorID {
-			info.DeviceCount++
-		}
-	}
-
-	info.HasNvidia = info.DeviceCount > 0
-	info.IsMultiGPU = info.DeviceCount >= multiGPUThreshold
-
-	if info.HasNvidia {
-		log.Printf("NVIDIA devices detected: %d (multi_gpu=%v)", info.DeviceCount, info.IsMultiGPU)
-	}
-
-	return info, nil
-}
+const nvattestTimeout = 5 * time.Minute
 
 func runNvattest(device string) error {
 	log.Printf("Running nvattest attest for %s", device)
@@ -75,7 +32,7 @@ func runNvattest(device string) error {
 	return nil
 }
 
-type nvatTestEvidenceOutput struct {
+type nvattestEvidenceOutput struct {
 	Evidences []struct {
 		Evidence string `json:"evidence"`
 	} `json:"evidences"`
@@ -96,7 +53,7 @@ func collectEvidence(device string) ([][]byte, error) {
 		return nil, fmt.Errorf("nvattest collect-evidence %s: %w", device, err)
 	}
 
-	var parsed nvatTestEvidenceOutput
+	var parsed nvattestEvidenceOutput
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		return nil, fmt.Errorf("parsing collect-evidence %s JSON: %w", device, err)
 	}
@@ -135,7 +92,8 @@ func setGPUReadyState(accepting bool) error {
 	return nil
 }
 
-func verifyGPUAttestation(info *GPUInfo) error {
+// verifyGPUAttestation runs attestation for the expected number of GPUs (1 or 8).
+func verifyGPUAttestation(expectedGPUs int) error {
 	ok := false
 	defer func() {
 		if !ok {
@@ -149,7 +107,7 @@ func verifyGPUAttestation(info *GPUInfo) error {
 		return err
 	}
 
-	if info.IsMultiGPU {
+	if expectedGPUs == 8 {
 		if err := runNvattest("nvswitch"); err != nil {
 			return err
 		}
@@ -159,6 +117,10 @@ func verifyGPUAttestation(info *GPUInfo) error {
 		if err != nil {
 			return fmt.Errorf("collecting GPU evidence: %w", err)
 		}
+		if len(gpuReports) != expectedGPUs {
+			return fmt.Errorf("expected %d GPU reports, got %d", expectedGPUs, len(gpuReports))
+		}
+
 		switchReports, err := collectEvidence("nvswitch")
 		if err != nil {
 			return fmt.Errorf("collecting switch evidence: %w", err)

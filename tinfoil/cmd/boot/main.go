@@ -105,20 +105,15 @@ func run() error {
 
 	// 4. GPU attestation
 	start = time.Now()
-	log.Println("Detecting GPUs")
-	gpuInfo, err := detectGPUs()
-	if err != nil {
-		return err
-	}
-	if gpuInfo.HasNvidia {
-		log.Println("Verifying GPU attestation")
-		if err := verifyGPUAttestation(gpuInfo); err != nil {
+	if config.GPUs > 0 {
+		log.Printf("Verifying GPU attestation (%d GPUs)", config.GPUs)
+		if err := verifyGPUAttestation(config.GPUs); err != nil {
 			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 			return err
 		}
-		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d devices", gpuInfo.DeviceCount))
+		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d GPUs", config.GPUs))
 	} else {
-		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs detected")
+		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "gpus not set in config")
 	}
 
 	// 5. Certificate

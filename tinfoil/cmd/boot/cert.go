@@ -13,12 +13,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/creasty/defaults"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"golang.org/x/net/publicsuffix"
-	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/boot"
@@ -53,30 +51,7 @@ func retryCertificate(fn func() (*tls.Certificate, error), interval time.Duratio
 	return nil, fmt.Errorf("certificate request failed after %d attempts", maxCertRetries)
 }
 
-// parseShimConfig converts the raw shim config map into the typed config struct.
-func parseShimConfig(raw ShimConfig) (*shimconfig.Config, error) {
-	var cfg shimconfig.Config
-	if err := defaults.Set(&cfg); err != nil {
-		return nil, fmt.Errorf("setting shim config defaults: %w", err)
-	}
-	yamlBytes, err := yaml.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling shim config: %w", err)
-	}
-	if err := yaml.Unmarshal(yamlBytes, &cfg); err != nil {
-		return nil, fmt.Errorf("unmarshaling shim config: %w", err)
-	}
-	return &cfg, nil
-}
-
-// initCrypto generates keys, fetches attestation, and obtains a TLS certificate.
-// This runs before containers start so the attestation-bound cert exists first.
-func initCrypto(bootConfig *Config, externalConfig *shimconfig.ExternalConfig) error {
-	shimCfg, err := parseShimConfig(bootConfig.Shim)
-	if err != nil {
-		return fmt.Errorf("parsing shim config: %w", err)
-	}
-
+func initCrypto(shimCfg *shimconfig.Config, externalConfig *shimconfig.ExternalConfig) error {
 	domain := ""
 	if externalConfig.Env != nil {
 		domain = externalConfig.Env["DOMAIN"]

@@ -19,6 +19,9 @@ type Config struct {
 	ShimVersion string                 `yaml:"shim-version"`
 	ShimRaw     map[string]interface{} `yaml:"shim"`
 	ShimCfg     *shimconfig.Config     `yaml:"-"`
+	CPUs        int                    `yaml:"cpus"`
+	Memory      int                    `yaml:"memory"`
+	GPUs        int                    `yaml:"gpus"`
 	Models      []ModelSpec            `yaml:"models"`
 	Containers  []Container            `yaml:"containers"`
 }
@@ -120,6 +123,10 @@ func loadAndVerifyConfig() (*Config, error) {
 	var config Config
 	if err := yaml.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	if config.GPUs != 0 && config.GPUs != 1 && config.GPUs != 8 {
+		return nil, fmt.Errorf("gpus must be 0, 1, or 8 (got %d)", config.GPUs)
 	}
 
 	shimCfg, err := parseShimConfig(config.ShimRaw)

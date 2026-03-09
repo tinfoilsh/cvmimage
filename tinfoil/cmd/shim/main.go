@@ -25,7 +25,6 @@ var version = "dev"
 var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
-	dev                = flag.Bool("d", false, "Enable verbose logging")
 	httpMode           = flag.Bool("i", false, "Use HTTP instead of HTTPS (insecure)")
 )
 

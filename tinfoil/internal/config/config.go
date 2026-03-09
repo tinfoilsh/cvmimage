@@ -40,8 +40,6 @@ type Config struct {
 
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
 	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
-
-	Verbose bool `yaml:"verbose"`
 }
 
 const (

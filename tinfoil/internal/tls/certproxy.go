@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"time"
 
-	log "github.com/sirupsen/logrus"
+	"log"
 )
 
 const certProxyTimeout = 5 * time.Minute
@@ -83,7 +83,7 @@ func (m *CertProxyManager) Certificate() (*tls.Certificate, error) {
 
 	// Check cache first
 	if _, err := os.Stat(certFile); err == nil {
-		log.Info("Certificate found in cache, using cached certificate")
+		log.Println("Certificate found in cache, using cached certificate")
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load cached certificate: %w", err)
@@ -95,7 +95,7 @@ func (m *CertProxyManager) Certificate() (*tls.Certificate, error) {
 }
 
 func (m *CertProxyManager) obtainCertificate(certFile, keyFile string) (*tls.Certificate, error) {
-	log.Debugf("Requesting certificate via cert proxy for: %v", m.domains)
+	log.Printf("Requesting certificate via cert proxy for: %v", m.domains)
 
 	csrPEM, err := m.createCSR()
 	if err != nil {
@@ -129,7 +129,7 @@ func (m *CertProxyManager) obtainCertificate(certFile, keyFile string) (*tls.Cer
 		return nil, fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
-	log.Info("Certificate obtained via cert proxy")
+	log.Println("Certificate obtained via cert proxy")
 	return &cert, nil
 }
 
@@ -137,7 +137,7 @@ func (m *CertProxyManager) obtainCertificate(certFile, keyFile string) (*tls.Cer
 // Phase 1: send CSR + http_domains, get challenge tokens back
 // Phase 2: serve HTTP-01 challenges, then call /cert/ready to get the certificate
 func (m *CertProxyManager) obtainWithHTTPRelay(csrPEM []byte) ([]byte, error) {
-	log.Infof("Using mixed challenge relay (HTTP-01 for %v)", m.httpChallengeDomains)
+	log.Printf("Using mixed challenge relay (HTTP-01 for %v)", m.httpChallengeDomains)
 
 	// Phase 1: request order with HTTP challenge domains
 	certURL, err := url.JoinPath(m.controlPlaneURL, "api", "shim", "cert")
@@ -200,7 +200,7 @@ func (m *CertProxyManager) obtainWithHTTPRelay(csrPEM []byte) ([]byte, error) {
 			if len(tokenPreview) > 8 {
 				tokenPreview = tokenPreview[:8]
 			}
-			log.Debugf("Serving HTTP-01 challenge for %s (token=%s...)", ch.Domain, tokenPreview)
+			log.Printf("Serving HTTP-01 challenge for %s (token=%s...)", ch.Domain, tokenPreview)
 		}
 		srv := &http.Server{
 			Handler:           mux,
@@ -214,12 +214,12 @@ func (m *CertProxyManager) obtainWithHTTPRelay(csrPEM []byte) ([]byte, error) {
 		}
 		go func() {
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-				log.Warnf("HTTP challenge server error: %v", err)
+				log.Printf("Warning: HTTP challenge server error: %v", err)
 			}
 		}()
 		defer srv.Close()
 	} else {
-		log.Info("No HTTP-01 challenges returned, proceeding directly to phase 2")
+		log.Println("No HTTP-01 challenges returned, proceeding directly to phase 2")
 	}
 
 	// Phase 2: signal ready and get certificate

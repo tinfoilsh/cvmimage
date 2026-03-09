@@ -9,7 +9,7 @@ import (
 	"github.com/klauspost/cpuid/v2"
 	"github.com/mackerelio/go-osstat/cpu"
 	"github.com/mackerelio/go-osstat/memory"
-	log "github.com/sirupsen/logrus"
+	"log"
 
 	"tinfoil/internal/auth"
 	"tinfoil/internal/config"
@@ -108,7 +108,7 @@ func collectMetrics(metadata *config.Metadata) (*Metrics, error) {
 	// Set GPU metrics if available
 	gpuType, totalMem, usedMem, gpuUtil, err := gpuMetrics()
 	if err != nil {
-		log.Warnf("failed to get GPU metrics: %v", err)
+		log.Printf("Warning: failed to get GPU metrics: %v", err)
 	}
 	metrics.GPUMemTotal = totalMem
 	metrics.GPUMemUtil = usedMem

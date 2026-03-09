@@ -15,7 +15,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.10
 	github.com/mackerelio/go-osstat v0.2.6
 	github.com/prometheus/client_golang v1.23.2
-	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.1.7
 	github.com/tinfoilsh/tinfoil-go/verifier v0.12.0
@@ -59,6 +58,7 @@ require (
 	github.com/secure-systems-lab/go-securesystemslib v0.10.0 // indirect
 	github.com/sigstore/protobuf-specs v0.5.0 // indirect
 	github.com/sigstore/sigstore v1.10.4 // indirect
+	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.64.0 // indirect

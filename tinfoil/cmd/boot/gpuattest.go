@@ -128,8 +128,8 @@ func setGPUReadyState(accepting bool) error {
 // GPURawEvidence holds the raw nvattest collect-evidence JSON output.
 // Each device's evidence contains hardware-signed SPDM reports and cert chains.
 type GPURawEvidence struct {
-	GPU     json.RawMessage `json:"gpu,omitempty"`
-	Switch  json.RawMessage `json:"nvswitch,omitempty"`
+	GPU    json.RawMessage `json:"gpu,omitempty"`
+	Switch json.RawMessage `json:"nvswitch,omitempty"`
 }
 
 // verifyGPUAttestation runs attestation for the expected number of GPUs (1 or 8).

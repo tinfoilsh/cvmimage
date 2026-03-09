@@ -16,13 +16,13 @@ import (
 
 // Config represents the main configuration file
 type Config struct {
-	ShimRaw     map[string]interface{} `yaml:"shim"`
-	ShimCfg     *shimconfig.Config     `yaml:"-"`
-	CPUs        int                    `yaml:"cpus"`
-	Memory      int                    `yaml:"memory"`
-	GPUs        int                    `yaml:"gpus"`
-	Models      []ModelSpec            `yaml:"models"`
-	Containers  []Container            `yaml:"containers"`
+	ShimRaw    map[string]interface{} `yaml:"shim"`
+	ShimCfg    *shimconfig.Config     `yaml:"-"`
+	CPUs       int                    `yaml:"cpus"`
+	Memory     int                    `yaml:"memory"`
+	GPUs       int                    `yaml:"gpus"`
+	Models     []ModelSpec            `yaml:"models"`
+	Containers []Container            `yaml:"containers"`
 }
 
 // ModelSpec represents a model pack specification

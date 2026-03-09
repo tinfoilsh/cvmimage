@@ -8,12 +8,44 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
 
-const nvattestTimeout = 5 * time.Minute
+const (
+	nvattestTimeout   = 5 * time.Minute
+	nvidiaVendorID    = "0x10de"
+	multiGPUThreshold = 12 // 8 GPUs + 4 NVSwitches
+)
+
+// detectGPUCount scans PCI devices and returns 0, 1, or 8.
+func detectGPUCount() (int, error) {
+	pciPath := "/sys/bus/pci/devices"
+	entries, err := os.ReadDir(pciPath)
+	if err != nil {
+		return 0, fmt.Errorf("reading PCI devices: %w", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "vendor"))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(data)) == nvidiaVendorID {
+			count++
+		}
+	}
+	if count >= multiGPUThreshold {
+		return 8, nil
+	}
+	if count > 0 {
+		return 1, nil
+	}
+	return 0, nil
+}
 
 func runNvattest(device string) error {
 	log.Printf("Running nvattest attest for %s", device)

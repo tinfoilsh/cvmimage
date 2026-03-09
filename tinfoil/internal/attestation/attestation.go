@@ -34,11 +34,12 @@ func (a BodyV2) Marshal() [64]byte {
 // Report fetches the raw hardware attestation report and platform identifier.
 func Report(userData [64]byte) (report []byte, platform string, err error) {
 	if cpuid.CPU.IsVendor(cpuid.AMD) {
-		qp, err := sevclient.GetQuoteProvider()
+		var qp sevclient.QuoteProvider
+		qp, err = sevclient.GetQuoteProvider()
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get quote provider: %w", err)
 		}
-		report, err := qp.GetRawQuote(userData)
+		report, err = qp.GetRawQuote(userData)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get quote: %w", err)
 		}
@@ -47,14 +48,15 @@ func Report(userData [64]byte) (report []byte, platform string, err error) {
 		}
 		return report, PlatformSEVSNP, nil
 	} else if cpuid.CPU.IsVendor(cpuid.Intel) {
-		qp, err := tdxclient.GetQuoteProvider()
+		var qp tdxclient.QuoteProvider
+		qp, err = tdxclient.GetQuoteProvider()
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get quote provider: %w", err)
 		}
-		if err := qp.IsSupported(); err != nil {
+		if err = qp.IsSupported(); err != nil {
 			return nil, "", fmt.Errorf("TDX is not supported: %w", err)
 		}
-		report, err := qp.GetRawQuote(userData)
+		report, err = qp.GetRawQuote(userData)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get quote: %w", err)
 		}

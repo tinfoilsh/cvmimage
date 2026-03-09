@@ -110,6 +110,7 @@ func run() error {
 		var err error
 		gpuCount, err = detectGPUCount()
 		if err != nil {
+			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 			return err
 		}
 		if gpuCount > 0 {

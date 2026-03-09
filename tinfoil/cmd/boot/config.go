@@ -16,7 +16,6 @@ import (
 
 // Config represents the main configuration file
 type Config struct {
-	ShimVersion string                 `yaml:"shim-version"`
 	ShimRaw     map[string]interface{} `yaml:"shim"`
 	ShimCfg     *shimconfig.Config     `yaml:"-"`
 	CPUs        int                    `yaml:"cpus"`

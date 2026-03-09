@@ -30,7 +30,7 @@ func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
 		Body:   "deadbeef",
 	}
 
-	return NewShimServer(nil, nil, att, id, nil, cfg, extCfg, nil)
+	return NewShimServer(nil, nil, att, nil, id, nil, cfg, extCfg, nil)
 }
 
 func TestPathNotAllowed_Returns404(t *testing.T) {

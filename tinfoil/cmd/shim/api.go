@@ -223,7 +223,11 @@ func NewShimServer(
 
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Query().Get("v") == "3" && attV3 != nil {
+		if r.URL.Query().Get("v") == "3" {
+			if attV3 == nil {
+				http.Error(w, "V3 attestation not available", http.StatusServiceUnavailable)
+				return
+			}
 			w.Write(attV3)
 			return
 		}

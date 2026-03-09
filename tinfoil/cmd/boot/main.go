@@ -105,18 +105,29 @@ func run() error {
 
 	// 4. GPU attestation
 	start = time.Now()
-	var gpuEvidence *GPURawEvidence
-	if config.GPUs > 0 {
-		log.Printf("Verifying GPU attestation (%d GPUs)", config.GPUs)
+	gpuCount := config.GPUs
+	if gpuCount == 0 {
 		var err error
-		gpuEvidence, err = verifyGPUAttestation(config.GPUs)
+		gpuCount, err = detectGPUCount()
+		if err != nil {
+			return err
+		}
+		if gpuCount > 0 {
+			log.Printf("GPUs not set in config, detected %d from hardware", gpuCount)
+		}
+	}
+	var gpuEvidence *GPURawEvidence
+	if gpuCount > 0 {
+		log.Printf("Verifying GPU attestation (%d GPUs)", gpuCount)
+		var err error
+		gpuEvidence, err = verifyGPUAttestation(gpuCount)
 		if err != nil {
 			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 			return err
 		}
-		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d GPUs", config.GPUs))
+		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d GPUs", gpuCount))
 	} else {
-		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "gpus not set in config")
+		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
 	}
 
 	// Write V3 attestation (CPU + GPU raw evidence, no gzip)

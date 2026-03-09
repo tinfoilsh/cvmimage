@@ -14,6 +14,11 @@ import (
 	"tinfoil/internal/compress"
 )
 
+const (
+	PlatformSEVSNP = "sev-snp"
+	PlatformTDX    = "tdx"
+)
+
 type BodyV2 struct {
 	TLSKeyFP [32]byte
 	HPKEKey  [32]byte
@@ -26,65 +31,57 @@ func (a BodyV2) Marshal() [64]byte {
 	return result
 }
 
-func sevReport(userData [64]byte) (*verifierattestation.Document, error) {
-	qp, err := sevclient.GetQuoteProvider()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get quote provider: %w", err)
-	}
-	report, err := qp.GetRawQuote(userData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get quote: %w", err)
-	}
-
-	if len(report) > sevabi.ReportSize {
-		report = report[:sevabi.ReportSize]
-	}
-
-	compressedReport, err := compress.Gzip(report)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compress report: %w", err)
-	}
-
-	return &verifierattestation.Document{
-		Format: verifierattestation.SevGuestV2,
-		Body:   base64.StdEncoding.EncodeToString(compressedReport),
-	}, nil
-}
-
-func tdxReport(userData [64]byte) (*verifierattestation.Document, error) {
-	qp, err := tdxclient.GetQuoteProvider()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get quote provider: %w", err)
-	}
-
-	if err := qp.IsSupported(); err != nil {
-		return nil, fmt.Errorf("TDX is not supported: %w", err)
-	}
-
-	report, err := qp.GetRawQuote(userData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get quote: %w", err)
-	}
-
-	compressedReport, err := compress.Gzip(report)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compress report: %w", err)
-	}
-
-	return &verifierattestation.Document{
-		Format: verifierattestation.TdxGuestV2,
-		Body:   base64.StdEncoding.EncodeToString(compressedReport),
-	}, nil
-}
-
-// Report fetches a hardware attestation report (SEV-SNP or TDX) binding the given user data.
-func Report(userData [64]byte) (*verifierattestation.Document, error) {
+// Report fetches the raw hardware attestation report and platform identifier.
+func Report(userData [64]byte) (report []byte, platform string, err error) {
 	if cpuid.CPU.IsVendor(cpuid.AMD) {
-		return sevReport(userData)
+		qp, err := sevclient.GetQuoteProvider()
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get quote provider: %w", err)
+		}
+		report, err := qp.GetRawQuote(userData)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get quote: %w", err)
+		}
+		if len(report) > sevabi.ReportSize {
+			report = report[:sevabi.ReportSize]
+		}
+		return report, PlatformSEVSNP, nil
 	} else if cpuid.CPU.IsVendor(cpuid.Intel) {
-		return tdxReport(userData)
+		qp, err := tdxclient.GetQuoteProvider()
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get quote provider: %w", err)
+		}
+		if err := qp.IsSupported(); err != nil {
+			return nil, "", fmt.Errorf("TDX is not supported: %w", err)
+		}
+		report, err := qp.GetRawQuote(userData)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get quote: %w", err)
+		}
+		return report, PlatformTDX, nil
 	}
-	return nil, fmt.Errorf("attestation report for vendor %s not supported", cpuid.CPU.VendorString)
+	return nil, "", fmt.Errorf("attestation report for vendor %s not supported", cpuid.CPU.VendorString)
+}
+
+// V2Document wraps a raw report into the legacy V2 format (base64+gzip).
+func V2Document(rawReport []byte, platform string) (*verifierattestation.Document, error) {
+	compressed, err := compress.Gzip(rawReport)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compress report: %w", err)
+	}
+	var format verifierattestation.PredicateType
+	switch platform {
+	case PlatformSEVSNP:
+		format = verifierattestation.SevGuestV2
+	case PlatformTDX:
+		format = verifierattestation.TdxGuestV2
+	default:
+		return nil, fmt.Errorf("unsupported platform for V2: %s", platform)
+	}
+	return &verifierattestation.Document{
+		Format: format,
+		Body:   base64.StdEncoding.EncodeToString(compressed),
+	}, nil
 }
 
 // DummyReport returns a non-cryptographic attestation document for dev/localhost use.

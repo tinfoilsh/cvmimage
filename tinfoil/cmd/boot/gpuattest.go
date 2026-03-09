@@ -34,13 +34,14 @@ func runNvattest(device string) error {
 
 type nvattestEvidenceOutput struct {
 	Evidences []struct {
-		Evidence string `json:"evidence"`
+		Evidence    string `json:"evidence"`
+		Certificate string `json:"certificate"`
 	} `json:"evidences"`
 	ResultCode    int    `json:"result_code"`
 	ResultMessage string `json:"result_message"`
 }
 
-func collectEvidence(device string) ([][]byte, error) {
+func collectEvidence(device string) ([][]byte, json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), nvattestTimeout)
 	defer cancel()
 
@@ -48,28 +49,28 @@ func collectEvidence(device string) ([][]byte, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("nvattest collect-evidence %s timed out after %s", device, nvattestTimeout)
+			return nil, nil, fmt.Errorf("nvattest collect-evidence %s timed out after %s", device, nvattestTimeout)
 		}
-		return nil, fmt.Errorf("nvattest collect-evidence %s: %w", device, err)
+		return nil, nil, fmt.Errorf("nvattest collect-evidence %s: %w", device, err)
 	}
 
 	var parsed nvattestEvidenceOutput
 	if err := json.Unmarshal(out, &parsed); err != nil {
-		return nil, fmt.Errorf("parsing collect-evidence %s JSON: %w", device, err)
+		return nil, nil, fmt.Errorf("parsing collect-evidence %s JSON: %w", device, err)
 	}
 	if parsed.ResultCode != 0 {
-		return nil, fmt.Errorf("collect-evidence %s failed: %s (code %d)", device, parsed.ResultMessage, parsed.ResultCode)
+		return nil, nil, fmt.Errorf("collect-evidence %s failed: %s (code %d)", device, parsed.ResultMessage, parsed.ResultCode)
 	}
 
 	reports := make([][]byte, 0, len(parsed.Evidences))
 	for i, ev := range parsed.Evidences {
 		raw, err := base64.StdEncoding.DecodeString(ev.Evidence)
 		if err != nil {
-			return nil, fmt.Errorf("decoding evidence[%d]: %w", i, err)
+			return nil, nil, fmt.Errorf("decoding evidence[%d]: %w", i, err)
 		}
 		reports = append(reports, raw)
 	}
-	return reports, nil
+	return reports, json.RawMessage(out), nil
 }
 
 func setGPUReadyState(accepting bool) error {
@@ -92,8 +93,16 @@ func setGPUReadyState(accepting bool) error {
 	return nil
 }
 
+// GPURawEvidence holds the raw nvattest collect-evidence JSON output.
+// Each device's evidence contains hardware-signed SPDM reports and cert chains.
+type GPURawEvidence struct {
+	GPU     json.RawMessage `json:"gpu,omitempty"`
+	Switch  json.RawMessage `json:"nvswitch,omitempty"`
+}
+
 // verifyGPUAttestation runs attestation for the expected number of GPUs (1 or 8).
-func verifyGPUAttestation(expectedGPUs int) error {
+// Returns the raw evidence for inclusion in the attestation envelope.
+func verifyGPUAttestation(expectedGPUs int) (*GPURawEvidence, error) {
 	ok := false
 	defer func() {
 		if !ok {
@@ -104,39 +113,44 @@ func verifyGPUAttestation(expectedGPUs int) error {
 	}()
 
 	if err := runNvattest("gpu"); err != nil {
-		return err
+		return nil, err
 	}
 
-	if expectedGPUs == 8 {
+	evidence := &GPURawEvidence{}
+
+	log.Println("Collecting GPU evidence")
+	gpuReports, gpuRaw, err := collectEvidence("gpu")
+	if err != nil {
+		return nil, fmt.Errorf("collecting GPU evidence: %w", err)
+	}
+	if len(gpuReports) != expectedGPUs {
+		return nil, fmt.Errorf("expected %d GPU reports, got %d", expectedGPUs, len(gpuReports))
+	}
+	evidence.GPU = gpuRaw
+
+	if expectedGPUs > 1 {
 		if err := runNvattest("nvswitch"); err != nil {
-			return err
+			return nil, err
 		}
 
-		log.Println("Collecting evidence for topology validation")
-		gpuReports, err := collectEvidence("gpu")
+		log.Println("Collecting NVSwitch evidence for topology validation")
+		switchReports, switchRaw, err := collectEvidence("nvswitch")
 		if err != nil {
-			return fmt.Errorf("collecting GPU evidence: %w", err)
+			return nil, fmt.Errorf("collecting switch evidence: %w", err)
 		}
-		if len(gpuReports) != expectedGPUs {
-			return fmt.Errorf("expected %d GPU reports, got %d", expectedGPUs, len(gpuReports))
-		}
-
-		switchReports, err := collectEvidence("nvswitch")
-		if err != nil {
-			return fmt.Errorf("collecting switch evidence: %w", err)
-		}
+		evidence.Switch = switchRaw
 
 		log.Println("Validating PPCIe topology")
 		if err := validateTopology(gpuReports, switchReports); err != nil {
-			return fmt.Errorf("topology validation failed: %w", err)
+			return nil, fmt.Errorf("topology validation failed: %w", err)
 		}
 	}
 
 	if err := setGPUReadyState(true); err != nil {
-		return fmt.Errorf("enabling GPU ready state: %w", err)
+		return nil, fmt.Errorf("enabling GPU ready state: %w", err)
 	}
 
 	ok = true
 	log.Println("GPU attestation verified")
-	return nil
+	return evidence, nil
 }

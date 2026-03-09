@@ -11,15 +11,16 @@ import (
 	"slices"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"tinfoil/internal/acpi"
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/key/online"
 	"tinfoil/internal/metrics"
+
+	log "github.com/sirupsen/logrus"
+	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 )
 
@@ -125,6 +126,7 @@ func NewShimServer(
 	validator key.Validator,
 	rateLimiter *RateLimiter,
 	att *attestation.Document,
+	attV3 json.RawMessage,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	config *config.Config,
@@ -221,6 +223,10 @@ func NewShimServer(
 
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("v") == "3" && attV3 != nil {
+			w.Write(attV3)
+			return
+		}
 		json.NewEncoder(w).Encode(att)
 	})))
 

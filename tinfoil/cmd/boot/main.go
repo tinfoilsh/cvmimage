@@ -96,18 +96,21 @@ func run() error {
 	// 3. CPU attestation
 	start = time.Now()
 	log.Println("Fetching CPU attestation")
-	att, err := fetchCPUAttestation(nodeID, config.ShimCfg)
+	cpuAtt, err := fetchCPUAttestation(nodeID, config.ShimCfg)
 	if err != nil {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(att.Format))
+	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
 	// 4. GPU attestation
 	start = time.Now()
+	var gpuEvidence *GPURawEvidence
 	if config.GPUs > 0 {
 		log.Printf("Verifying GPU attestation (%d GPUs)", config.GPUs)
-		if err := verifyGPUAttestation(config.GPUs); err != nil {
+		var err error
+		gpuEvidence, err = verifyGPUAttestation(config.GPUs)
+		if err != nil {
 			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 			return err
 		}
@@ -116,10 +119,17 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "gpus not set in config")
 	}
 
+	// Write V3 attestation (CPU + GPU raw evidence, no gzip)
+	if cpuAtt.RawReport != nil {
+		if err := writeAttestationV3(cpuAtt, gpuEvidence); err != nil {
+			log.Printf("Warning: failed to write V3 attestation: %v", err)
+		}
+	}
+
 	// 5. Certificate
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
-	if err := obtainCertificate(nodeID, att, config.ShimCfg, externalConfig); err != nil {
+	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
 		tracker.Record("certificate", boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("certificate acquisition failed: %w", err)
 	}

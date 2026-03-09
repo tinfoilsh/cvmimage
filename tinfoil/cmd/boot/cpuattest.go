@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,7 +16,13 @@ import (
 	tlsutil "tinfoil/internal/tls"
 )
 
-func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*verifier.Document, error) {
+type CPUAttestation struct {
+	RawReport []byte
+	Platform  string
+	V2Doc     *verifier.Document
+}
+
+func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAttestation, error) {
 	var hpkeKey [32]byte
 	copy(hpkeKey[:], id.HPKEKeyBytes)
 
@@ -26,24 +33,35 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*verifie
 	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
 	userData := aBody.Marshal()
 
-	var att *verifier.Document
 	if id.Domain == "localhost" || shimCfg.DummyAttestation {
 		log.Println("Using dummy attestation report")
-		att = attestation.DummyReport(userData)
-	} else {
-		log.Println("Fetching hardware attestation report")
-		var err error
-		att, err = attestation.Report(userData)
-		if err != nil {
-			return nil, fmt.Errorf("fetching attestation report: %w", err)
+		doc := attestation.DummyReport(userData)
+		if err := writeAttestationDoc(doc); err != nil {
+			return nil, err
 		}
+		return &CPUAttestation{V2Doc: doc, Platform: "dummy"}, nil
 	}
 
-	if err := writeAttestationDoc(att); err != nil {
+	log.Println("Fetching hardware attestation report")
+	rawReport, platform, err := attestation.Report(userData)
+	if err != nil {
+		return nil, fmt.Errorf("fetching attestation report: %w", err)
+	}
+
+	v2Doc, err := attestation.V2Document(rawReport, platform)
+	if err != nil {
+		return nil, fmt.Errorf("building V2 document: %w", err)
+	}
+
+	if err := writeAttestationDoc(v2Doc); err != nil {
 		return nil, err
 	}
 
-	return att, nil
+	return &CPUAttestation{
+		RawReport: rawReport,
+		Platform:  platform,
+		V2Doc:     v2Doc,
+	}, nil
 }
 
 func writeAttestationDoc(att *verifier.Document) error {
@@ -54,6 +72,45 @@ func writeAttestationDoc(att *verifier.Document) error {
 	if err := os.WriteFile(boot.AttestationPath, data, 0644); err != nil {
 		return fmt.Errorf("writing attestation document: %w", err)
 	}
-	log.Println("Attestation document written to ramdisk")
+	log.Println("V2 attestation document written to ramdisk")
+	return nil
+}
+
+const attestationV3Format = "https://tinfoil.sh/predicate/attestation/v3"
+
+type attestationV3 struct {
+	Format   string          `json:"format"`
+	CPU      attestationCPU  `json:"cpu"`
+	GPU      json.RawMessage `json:"gpu,omitempty"`
+	NVSwitch json.RawMessage `json:"nvswitch,omitempty"`
+}
+
+type attestationCPU struct {
+	Platform string `json:"platform"`
+	Report   string `json:"report"`
+}
+
+func writeAttestationV3(cpuAtt *CPUAttestation, gpuEvidence *GPURawEvidence) error {
+	v3 := attestationV3{
+		Format: attestationV3Format,
+		CPU: attestationCPU{
+			Platform: cpuAtt.Platform,
+			Report:   base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
+		},
+	}
+
+	if gpuEvidence != nil {
+		v3.GPU = gpuEvidence.GPU
+		v3.NVSwitch = gpuEvidence.Switch
+	}
+
+	data, err := json.Marshal(v3)
+	if err != nil {
+		return fmt.Errorf("marshaling V3 attestation: %w", err)
+	}
+	if err := os.WriteFile(boot.AttestationV3Path, data, 0644); err != nil {
+		return fmt.Errorf("writing V3 attestation: %w", err)
+	}
+	log.Println("V3 attestation document written to ramdisk")
 	return nil
 }

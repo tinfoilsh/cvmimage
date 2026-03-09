@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"log"
 )
 
 // addPaddingToStreamChunk adds a random padding field to the delta object in a streaming chunk
@@ -106,10 +106,8 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if !cr.Stream {
-		log.Debug("Not streaming")
 		return resp, nil
 	}
-	log.Debug("Starting stream")
 
 	// SSE headers
 	resp.Header.Set("Cache-Control", "no-cache")
@@ -133,7 +131,7 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				data := strings.TrimPrefix(line, "data: ")
 				modifiedData, err := addPaddingToStreamChunk(data)
 				if err != nil {
-					log.Warnf("Failed to add padding to chunk: %v", err)
+					log.Printf("Warning: failed to add padding to chunk: %v", err)
 					pw.Write([]byte(line + "\n"))
 					continue
 				}

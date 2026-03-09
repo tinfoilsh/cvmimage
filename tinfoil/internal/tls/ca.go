@@ -21,7 +21,7 @@ import (
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
-	log "github.com/sirupsen/logrus"
+	"log"
 )
 
 type acmeUser struct {
@@ -120,14 +120,14 @@ func NewCertManager(
 	// Only register if certificate doesn't exist in cache
 	certFile := filepath.Join(cacheDir, "cert.pem")
 	if _, err := os.Stat(certFile); os.IsNotExist(err) {
-		log.Debug("Registering ACME account")
+		log.Println("Registering ACME account")
 		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 		if err != nil {
 			return nil, fmt.Errorf("failed to register account: %w", err)
 		}
 		user.Registration = reg
 	} else {
-		log.Debug("Certificate exists in cache, skipping ACME registration")
+		log.Println("Certificate exists in cache, skipping ACME registration")
 	}
 
 	return &CertManager{
@@ -144,7 +144,7 @@ func (m *CertManager) Certificate() (*tls.Certificate, error) {
 	keyFile := filepath.Join(m.cacheDir, "key.pem")
 
 	if _, err := os.Stat(certFile); err == nil {
-		log.Info("Certificate found in cache, using cached certificate")
+		log.Println("Certificate found in cache, using cached certificate")
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load cached certificate: %w", err)
@@ -152,7 +152,7 @@ func (m *CertManager) Certificate() (*tls.Certificate, error) {
 		return &cert, nil
 	}
 
-	log.Debugf("Requesting certificate for: %v", m.domains)
+	log.Printf("Requesting certificate for: %v", m.domains)
 	certResource, err := m.client.Certificate.Obtain(certificate.ObtainRequest{
 		Domains:    m.domains,
 		Bundle:     true,
@@ -181,7 +181,7 @@ func (m *CertManager) Certificate() (*tls.Certificate, error) {
 		return nil, fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
-	log.Debug("Certificate obtained")
+	log.Println("Certificate obtained")
 	return &cert, nil
 }
 

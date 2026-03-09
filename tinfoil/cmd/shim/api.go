@@ -18,7 +18,7 @@ import (
 	"tinfoil/internal/key/online"
 	"tinfoil/internal/metrics"
 
-	log "github.com/sirupsen/logrus"
+	"log"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
@@ -91,7 +91,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 		if origin != "" {
 			// Allow only configured origins
 			if len(config.OriginDomains) > 0 && !slices.Contains(config.OriginDomains, origin) {
-				log.Debugf("CORS origin not allowed: %s", origin)
+				// CORS origin not allowed
 				writeJSONError(w, "CORS origin not allowed.", errTypeInvalidRequest, http.StatusForbidden)
 				return
 			}
@@ -110,12 +110,12 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Headers", reqHdr)
 
 			if r.Method == http.MethodOptions {
-				log.Debugf("CORS OPTIONS request: %s", origin)
+				// CORS preflight
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
 
-			log.Tracef("CORS request allowed: %s", origin)
+			// CORS allowed
 		}
 
 		next.ServeHTTP(w, r)
@@ -152,7 +152,7 @@ func NewShimServer(
 			req.Header.Set("Forwarded", fmt.Sprintf("host=\"%s\"", originalHost))
 			req.Header.Set("X-Forwarded-Host", originalHost)
 
-			log.Debugf("Proxying request to %+v", req.URL.String())
+			// proxied
 		},
 		Transport: &streamTransport{
 			base: http.DefaultTransport,
@@ -163,7 +163,7 @@ func NewShimServer(
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Errorf("proxy error: %v", err)
+			log.Printf("proxy error: %v", err)
 			writeJSONError(w, errMsgServerError, errTypeServer, http.StatusBadGateway)
 		},
 	}
@@ -184,7 +184,7 @@ func NewShimServer(
 			}
 
 			if err := validator.Validate(apiKey); err != nil {
-				log.Warnf("Failed to validate API key: %v", err)
+				log.Printf("Warning: failed to validate API key: %v", err)
 				var validationErr *online.ValidationError
 				if errors.As(err, &validationErr) {
 					// Pass through the JSON error body from the control plane

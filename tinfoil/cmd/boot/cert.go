@@ -152,7 +152,10 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 		return fmt.Errorf("creating TLS directory: %w", err)
 	}
 
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
+	var certPEM []byte
+	for _, derCert := range cert.Certificate {
+		certPEM = append(certPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derCert})...)
+	}
 	if err := os.WriteFile(boot.TLSCertPath, certPEM, 0644); err != nil {
 		return fmt.Errorf("writing TLS cert: %w", err)
 	}

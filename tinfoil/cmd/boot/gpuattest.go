@@ -132,6 +132,39 @@ type GPURawEvidence struct {
 	Switch json.RawMessage `json:"nvswitch,omitempty"`
 }
 
+type dummyEvidenceEntry struct {
+	Arch        string `json:"arch"`
+	Certificate string `json:"certificate"`
+	Evidence    string `json:"evidence"`
+	Nonce       string `json:"nonce"`
+}
+
+type dummyEvidenceOutput struct {
+	Evidences     []dummyEvidenceEntry `json:"evidences"`
+	ResultCode    int                  `json:"result_code"`
+	ResultMessage string               `json:"result_message"`
+}
+
+// dummyGPUEvidence returns mock GPU evidence matching the nvattest JSON format.
+func dummyGPUEvidence(gpuCount int) *GPURawEvidence {
+	gpuOut := dummyEvidenceOutput{ResultCode: 0, ResultMessage: "dummy-attestation"}
+	for range gpuCount {
+		gpuOut.Evidences = append(gpuOut.Evidences, dummyEvidenceEntry{Arch: "DUMMY"})
+	}
+	gpuRaw, _ := json.Marshal(gpuOut)
+	evidence := &GPURawEvidence{GPU: json.RawMessage(gpuRaw)}
+
+	if gpuCount > 1 {
+		switchOut := dummyEvidenceOutput{ResultCode: 0, ResultMessage: "dummy-attestation"}
+		for range 4 {
+			switchOut.Evidences = append(switchOut.Evidences, dummyEvidenceEntry{Arch: "DUMMY"})
+		}
+		switchRaw, _ := json.Marshal(switchOut)
+		evidence.Switch = json.RawMessage(switchRaw)
+	}
+	return evidence
+}
+
 // verifyGPUAttestation runs attestation for the expected number of GPUs (1 or 8).
 // Returns the raw evidence for inclusion in the attestation envelope.
 func verifyGPUAttestation(expectedGPUs int) (*GPURawEvidence, error) {

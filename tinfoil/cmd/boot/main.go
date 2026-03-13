@@ -118,7 +118,14 @@ func run() error {
 		}
 	}
 	var gpuEvidence *GPURawEvidence
-	if gpuCount > 0 {
+	if gpuCount > 0 && config.ShimCfg.DummyAttestation {
+		log.Printf("Skipping GPU attestation for %d GPUs (dummy-attestation mode)", gpuCount)
+		gpuEvidence = dummyGPUEvidence(gpuCount)
+		if err := setGPUReadyState(true); err != nil {
+			log.Printf("Warning: failed to set GPU ready state: %v", err)
+		}
+		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), fmt.Sprintf("%d GPUs (dummy)", gpuCount))
+	} else if gpuCount > 0 {
 		log.Printf("Verifying GPU attestation (%d GPUs)", gpuCount)
 		var err error
 		gpuEvidence, err = verifyGPUAttestation(gpuCount)

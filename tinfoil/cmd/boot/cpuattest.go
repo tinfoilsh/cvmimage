@@ -39,7 +39,11 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 		if err := writeAttestationDoc(doc); err != nil {
 			return nil, err
 		}
-		return &CPUAttestation{V2Doc: doc, Platform: "dummy"}, nil
+		return &CPUAttestation{
+			RawReport: userData[:],
+			Platform:  "dummy",
+			V2Doc:     doc,
+		}, nil
 	}
 
 	log.Println("Fetching hardware attestation report")

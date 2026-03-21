@@ -20,6 +20,7 @@ type CPUAttestation struct {
 	RawReport []byte
 	Platform  string
 	V2Doc     *verifier.Document
+	VCEK      []byte // DER-encoded VCEK certificate, populated by self-verification
 }
 
 func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAttestation, error) {
@@ -61,10 +62,24 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 		return nil, err
 	}
 
+	// Self-verify to obtain the VCEK certificate.
+	var vcek []byte
+	log.Println("Self-verifying attestation to obtain VCEK certificate")
+	verification, err := v2Doc.Verify()
+	if err != nil {
+		log.Printf("Warning: self-verification failed (VCEK will not be included): %v", err)
+	} else {
+		vcek = verification.VCEK
+		if vcek != nil {
+			log.Printf("VCEK certificate obtained (%d bytes)", len(vcek))
+		}
+	}
+
 	return &CPUAttestation{
 		RawReport: rawReport,
 		Platform:  platform,
 		V2Doc:     v2Doc,
+		VCEK:      vcek,
 	}, nil
 }
 
@@ -87,6 +102,7 @@ type attestationV3 struct {
 	CPU      attestationCPU  `json:"cpu"`
 	GPU      json.RawMessage `json:"gpu,omitempty"`
 	NVSwitch json.RawMessage `json:"nvswitch,omitempty"`
+	VCEK     string          `json:"vcek,omitempty"` // base64 DER VCEK certificate
 }
 
 type attestationCPU struct {
@@ -101,6 +117,10 @@ func writeAttestationV3(cpuAtt *CPUAttestation, gpuEvidence *GPURawEvidence) err
 			Platform: cpuAtt.Platform,
 			Report:   base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
 		},
+	}
+
+	if cpuAtt.VCEK != nil {
+		v3.VCEK = base64.StdEncoding.EncodeToString(cpuAtt.VCEK)
 	}
 
 	if gpuEvidence != nil {

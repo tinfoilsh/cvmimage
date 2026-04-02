@@ -61,12 +61,7 @@ func runSubcommand(cmd string) error {
 }
 
 func run() error {
-	tracker := boot.NewTracker()
-	defer func() {
-		if err := tracker.Write(); err != nil {
-			log.Printf("Warning: failed to write boot state: %v", err)
-		}
-	}()
+	tracker := boot.NewTracker(boot.InitialStages)
 
 	// 1. Config
 	start := time.Now()
@@ -174,7 +169,7 @@ func run() error {
 		tracker.Record("models", boot.StatusOK, time.Since(start), "")
 	}
 
-	// 8. Containers
+	// 8. Containers + health checks
 	log.Println("Launching containers")
 	if err := launchContainersAndWaitHealthy(tracker, config); err != nil {
 		return err

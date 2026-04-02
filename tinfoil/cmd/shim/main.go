@@ -99,26 +99,118 @@ func bootStagesHandler() http.Handler {
 
 const artifactPollInterval = 1 * time.Second
 
-// upgradeWhenReady polls for boot artifacts on the ramdisk. Once everything
-// is available, it builds the full shim handler and swaps it in. If boot
-// fails or an artifact can't be loaded, the failure is recorded as a "shim"
-// stage and the shim stays in boot-stages-only mode.
+// upgradeWhenReady polls for boot artifacts on the ramdisk, waits for all
+// boot stages to complete, then builds the full shim handler and swaps it in.
+// On failure the shim stays in boot-stages-only mode.
 func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) {
 	start := time.Now()
 
-	if err := doUpgrade(handler, cert); err != nil {
-		log.Printf("Shim upgrade failed: %v", err)
-		boot.AppendStage("shim", boot.StatusFailed, time.Since(start), err.Error())
-		return
-	}
+	err := func() error {
+		type configPair struct {
+			config   *shimconfig.Config
+			external *shimconfig.ExternalConfig
+		}
+		cfgPair, err := waitForArtifact("Shim config", func() (configPair, error) {
+			c, e, err := shimconfig.Load(*configFile, *externalConfigFile)
+			return configPair{c, e}, err
+		})
+		if err != nil {
+			return err
+		}
+		config, externalConfig := cfgPair.config, cfgPair.external
+		log.Printf("Shim config loaded: upstream-port=%d tls-mode=%s paths=%d", config.UpstreamPort, config.TLSMode, len(config.Paths))
 
-	boot.AppendStage("shim", boot.StatusOK, time.Since(start), "")
+		realCert, err := waitForArtifact("TLS certificate", func() (tls.Certificate, error) {
+			return tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
+		})
+		if err != nil {
+			return err
+		}
+		cert.Store(&realCert)
+
+		att, err := waitForArtifact("Attestation document", func() (*verifier.Document, error) {
+			return loadAttestation()
+		})
+		if err != nil {
+			return err
+		}
+
+		var attV3 json.RawMessage
+		if data, err := os.ReadFile(boot.AttestationV3Path); err == nil {
+			if json.Valid(data) {
+				attV3 = data
+			} else {
+				log.Println("Warning: V3 attestation file is not valid JSON, ignoring")
+			}
+		}
+
+		serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
+			return identity.FromFile(config.HPKEKeyFile)
+		})
+		if err != nil {
+			return err
+		}
+
+		// Wait for all boot stages (except shim) to resolve
+		waitUntil(func() bool {
+			state, err := boot.Load()
+			if err != nil {
+				return false
+			}
+			for _, s := range state.Stages {
+				if s.Status == boot.StatusPending && s.Name != boot.StageShim {
+					return false
+				}
+			}
+			return true
+		})
+
+		// API key validator
+		var validator key.Validator
+		if config.ControlPlane != "" {
+			controlPlaneURL, err := url.Parse(config.ControlPlane)
+			if err != nil {
+				return fmt.Errorf("parsing control plane URL: %w", err)
+			}
+
+			if config.Authenticated {
+				validator, err = online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate").String())
+				if err != nil {
+					return fmt.Errorf("initializing API key verifier: %w", err)
+				}
+			} else {
+				log.Println("Warning: API key verification disabled (unauthenticated endpoint)")
+			}
+		} else {
+			log.Println("Warning: API key verification disabled (no control plane)")
+		}
+
+		var rateLimiter *RateLimiter
+		if config.RateLimit > 0 {
+			rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
+		}
+
+		fullHandler := NewShimServer(validator, rateLimiter, att, attV3, serverIdentity, cert.Load(), config, externalConfig)
+		handler.Store(fullHandler)
+
+		log.Println("Shim fully operational")
+		return nil
+	}()
+
+	if err != nil {
+		log.Printf("Shim upgrade failed: %v", err)
+		boot.RecordStage(boot.StageShim, boot.StatusFailed, time.Since(start), err.Error())
+	} else {
+		boot.RecordStage(boot.StageShim, boot.StatusOK, time.Since(start), "")
+	}
+	boot.Complete()
 }
 
 // waitForArtifact polls load until it succeeds or boot fails.
 func waitForArtifact[T any](name string, load func() (T, error)) (T, error) {
 	for {
-		if bootFailed() {
+		state, _ := boot.Load()
+		if state != nil && state.HasFailed() {
 			var zero T
 			return zero, fmt.Errorf("boot failed before %s was provisioned", name)
 		}
@@ -131,91 +223,10 @@ func waitForArtifact[T any](name string, load func() (T, error)) (T, error) {
 	}
 }
 
-func doUpgrade(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) error {
-	type configPair struct {
-		config   *shimconfig.Config
-		external *shimconfig.ExternalConfig
+func waitUntil(cond func() bool) {
+	for !cond() {
+		time.Sleep(artifactPollInterval)
 	}
-	cfgPair, err := waitForArtifact("Shim config", func() (configPair, error) {
-		c, e, err := shimconfig.Load(*configFile, *externalConfigFile)
-		return configPair{c, e}, err
-	})
-	if err != nil {
-		return err
-	}
-	config, externalConfig := cfgPair.config, cfgPair.external
-	log.Printf("Shim config loaded: upstream-port=%d tls-mode=%s paths=%d", config.UpstreamPort, config.TLSMode, len(config.Paths))
-
-	realCert, err := waitForArtifact("TLS certificate", func() (tls.Certificate, error) {
-		return tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
-	})
-	if err != nil {
-		return err
-	}
-	cert.Store(&realCert)
-
-	att, err := waitForArtifact("Attestation document", func() (*verifier.Document, error) {
-		return loadAttestation()
-	})
-	if err != nil {
-		return err
-	}
-
-	var attV3 json.RawMessage
-	if data, err := os.ReadFile(boot.AttestationV3Path); err == nil {
-		if json.Valid(data) {
-			attV3 = data
-		} else {
-			log.Println("Warning: V3 attestation file is not valid JSON, ignoring")
-		}
-	}
-
-	serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
-		return identity.FromFile(config.HPKEKeyFile)
-	})
-	if err != nil {
-		return err
-	}
-
-	// API key validator
-	var validator key.Validator
-	if config.ControlPlane != "" {
-		controlPlaneURL, err := url.Parse(config.ControlPlane)
-		if err != nil {
-			return fmt.Errorf("parsing control plane URL: %w", err)
-		}
-
-		if config.Authenticated {
-			validator, err = online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate").String())
-			if err != nil {
-				return fmt.Errorf("initializing API key verifier: %w", err)
-			}
-		} else {
-			log.Println("Warning: API key verification disabled (unauthenticated endpoint)")
-		}
-	} else {
-		log.Println("Warning: API key verification disabled (no control plane)")
-	}
-
-	var rateLimiter *RateLimiter
-	if config.RateLimit > 0 {
-		rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
-	}
-
-	fullHandler := NewShimServer(validator, rateLimiter, att, attV3, serverIdentity, cert.Load(), config, externalConfig)
-	handler.Store(fullHandler)
-
-	log.Println("Shim fully operational")
-	return nil
-}
-
-// bootFailed checks if the boot process has recorded a failed stage.
-func bootFailed() bool {
-	state, err := boot.Load()
-	if err != nil {
-		return false
-	}
-	return state.HasFailed()
 }
 
 func generateEphemeralCert() (tls.Certificate, error) {

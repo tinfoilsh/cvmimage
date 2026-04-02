@@ -96,6 +96,9 @@ func (s *State) HasFailed() bool {
 func AppendStage(name, status string, duration time.Duration, detail string) error {
 	state, err := Load()
 	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("loading boot state: %w", err)
+		}
 		state = &State{StartedAt: time.Now()}
 	}
 	state.Stages = append(state.Stages, Stage{

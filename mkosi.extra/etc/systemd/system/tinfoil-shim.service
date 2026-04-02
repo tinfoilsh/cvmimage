@@ -1,7 +1,7 @@
 [Unit]
 Description=Tinfoil Shim Service
-After=tinfoil-boot.service
-BindsTo=tinfoil-boot.service
+After=tinfoil-ramdisk.service
+Requires=tinfoil-ramdisk.service
 
 [Service]
 Type=simple
@@ -9,3 +9,6 @@ ExecStart=/usr/local/bin/tinfoil-shim
 Restart=always
 RestartSec=5
 User=root
+
+[Install]
+WantedBy=default.target

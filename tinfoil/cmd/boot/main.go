@@ -175,13 +175,9 @@ func run() error {
 	}
 
 	// 8. Containers
-	start = time.Now()
 	log.Println("Launching containers")
-	if err := launchContainers(config); err != nil {
-		log.Printf("Warning: container launch failed: %v", err)
-		tracker.Record("containers", boot.StatusWarning, time.Since(start), err.Error())
-	} else {
-		tracker.Record("containers", boot.StatusOK, time.Since(start), "")
+	if err := launchContainersAndWaitHealthy(tracker, config); err != nil {
+		return err
 	}
 
 	return nil

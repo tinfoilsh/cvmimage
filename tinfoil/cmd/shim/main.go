@@ -130,7 +130,7 @@ func doUpgrade(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) err
 		}
 		time.Sleep(artifactPollInterval)
 	}
-	log.Printf("Shim config loaded: %+v", config)
+	log.Printf("Shim config loaded: upstream-port=%d tls-mode=%s paths=%d", config.UpstreamPort, config.TLSMode, len(config.Paths))
 
 	// Wait for TLS certificate (or boot failure)
 	for {

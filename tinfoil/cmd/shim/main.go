@@ -28,8 +28,6 @@ import (
 	"tinfoil/internal/key/online"
 )
 
-var version = "dev"
-
 var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
@@ -51,7 +49,7 @@ func main() {
 	}
 	cert.Store(&ephemeral)
 
-	handler.Store(bootStagesHandler())
+	handler.Store(http.HandlerFunc(bootStagesHandler().ServeHTTP))
 
 	tlsConfig := &tls.Config{
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -74,7 +72,7 @@ func main() {
 	// Wait for boot to provision artifacts, then upgrade to the full handler.
 	go upgradeWhenReady(&handler, &cert)
 
-	log.Printf("Starting tinfoil shim %s (waiting for boot)", version)
+	log.Printf("Starting tinfoil shim (waiting for boot)")
 	log.Fatal(srv.ListenAndServeTLS("", ""))
 }
 
@@ -191,7 +189,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 
 		fullHandler := NewShimServer(validator, rateLimiter, att, attV3, serverIdentity, cert.Load(), config, externalConfig)
-		handler.Store(fullHandler)
+		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")
 		return nil

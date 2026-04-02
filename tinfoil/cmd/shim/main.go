@@ -62,7 +62,11 @@ func main() {
 	srv := &http.Server{
 		Addr: ":443",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handler.Load().(http.Handler).ServeHTTP(w, r)
+			if h, ok := handler.Load().(http.Handler); ok {
+				h.ServeHTTP(w, r)
+			} else {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
 		}),
 		TLSConfig: tlsConfig,
 	}
@@ -210,7 +214,7 @@ func doUpgrade(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) err
 	fullHandler := NewShimServer(validator, rateLimiter, att, attV3, serverIdentity, realCert, config, externalConfig)
 	handler.Store(fullHandler)
 
-	log.Printf("Shim fully operational on :%d", config.ListenPort)
+	log.Println("Shim fully operational")
 	return nil
 }
 

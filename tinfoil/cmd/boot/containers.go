@@ -20,6 +20,8 @@ import (
 	shimconfig "tinfoil/internal/config"
 )
 
+const healthPollInterval = 5 * time.Second
+
 // launchContainers starts all containers from the config
 func launchContainers(config *Config) error {
 	if len(config.Containers) == 0 {
@@ -48,6 +50,111 @@ func launchContainers(config *Config) error {
 		return fmt.Errorf("failed to start %d container(s): %s", len(errors), strings.Join(errors, "; "))
 	}
 	return nil
+}
+
+// launchContainersAndWaitHealthy starts all containers and then waits for
+// those with healthchecks to become healthy. Each container launch and health
+// result is recorded as its own boot stage.
+func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error {
+	if len(config.Containers) == 0 {
+		log.Println("No containers to launch")
+		return nil
+	}
+
+	extConfig, _ := getExternalConfig()
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("creating docker client: %w", err)
+	}
+	defer cli.Close()
+
+	// Launch each container, recording a stage per container
+	for _, c := range config.Containers {
+		start := time.Now()
+		if err := startContainer(cli, c, extConfig); err != nil {
+			log.Printf("Error starting container %s: %v", c.Name, err)
+			tracker.Record("container:"+c.Name, boot.StatusFailed, time.Since(start), err.Error())
+			return fmt.Errorf("starting container %s: %w", c.Name, err)
+		}
+		tracker.Record("container:"+c.Name, boot.StatusOK, time.Since(start), "")
+	}
+
+	// Wait for containers with healthchecks
+	return waitForContainersHealthy(tracker, cli, config.Containers)
+}
+
+// waitForContainersHealthy polls Docker until every container that has a
+// healthcheck defined reports "healthy" or "unhealthy". Each container is
+// recorded as its own boot stage (e.g. "health:ml-training").
+func waitForContainersHealthy(tracker *boot.Tracker, cli *client.Client, containers []Container) error {
+	type pending struct {
+		name  string
+		start time.Time
+	}
+	var tracked []pending
+	for _, c := range containers {
+		if c.Healthcheck != nil {
+			tracked = append(tracked, pending{name: c.Name, start: time.Now()})
+		}
+	}
+	if len(tracked) == 0 {
+		return nil
+	}
+
+	log.Printf("Waiting for %d container(s) to become healthy", len(tracked))
+
+	var failed []string
+	remaining := make(map[string]time.Time, len(tracked))
+	for _, t := range tracked {
+		remaining[t.name] = t.start
+	}
+
+	for len(remaining) > 0 {
+		for name, start := range remaining {
+			info, err := cli.ContainerInspect(context.Background(), name)
+			if err != nil {
+				continue
+			}
+			if info.State == nil || info.State.Health == nil {
+				continue
+			}
+			switch info.State.Health.Status {
+			case container.Healthy:
+				tracker.Record("health:"+name, boot.StatusOK, time.Since(start), "")
+				delete(remaining, name)
+				log.Printf("Container %s is healthy", name)
+			case container.Unhealthy:
+				detail := "unhealthy"
+				if msg := lastHealthLog(info.State.Health); msg != "" {
+					detail = msg
+				}
+				tracker.Record("health:"+name, boot.StatusFailed, time.Since(start), detail)
+				delete(remaining, name)
+				failed = append(failed, name)
+				log.Printf("Container %s is unhealthy: %s", name, detail)
+			}
+		}
+		if len(remaining) > 0 {
+			time.Sleep(healthPollInterval)
+		}
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("unhealthy containers: %v", failed)
+	}
+	return nil
+}
+
+func lastHealthLog(h *container.Health) string {
+	if h == nil || len(h.Log) == 0 {
+		return ""
+	}
+	last := h.Log[len(h.Log)-1]
+	if last.Output != "" {
+		return last.Output
+	}
+	return fmt.Sprintf("exit %d", last.ExitCode)
 }
 
 // startContainer starts a Docker container using the Docker SDK

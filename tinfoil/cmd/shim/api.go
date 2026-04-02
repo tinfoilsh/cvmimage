@@ -131,7 +131,6 @@ func NewShimServer(
 	tlsCert *tls.Certificate,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
-	bootState *boot.State,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
@@ -253,12 +252,13 @@ func NewShimServer(
 	})
 
 	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
-		if bootState == nil {
+		state, err := boot.Load()
+		if err != nil {
 			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(bootState)
+		json.NewEncoder(w).Encode(state)
 	})
 
 	mux.HandleFunc("/.well-known/tinfoil-metrics", metrics.HandleMetrics(externalConfig))

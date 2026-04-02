@@ -2,7 +2,7 @@
 Description=Tinfoil Boot Service
 After=network-online.target docker.service containerd.service nvidia-persistenced.service nvidia-fabricmanager.service nvidia-cdi-refresh.service
 Requires=network-online.target docker.service containerd.service
-Wants=nvidia-persistenced.service nvidia-fabricmanager.service nvidia-cdi-refresh.service tinfoil-shim.service
+Wants=nvidia-persistenced.service nvidia-fabricmanager.service nvidia-cdi-refresh.service
 
 [Service]
 Type=oneshot

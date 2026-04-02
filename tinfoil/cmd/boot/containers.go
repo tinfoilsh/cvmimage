@@ -88,28 +88,19 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 // healthcheck defined reports "healthy" or "unhealthy". Each container is
 // recorded as its own boot stage (e.g. "health:ml-training").
 func waitForContainersHealthy(tracker *boot.Tracker, cli *client.Client, containers []Container) error {
-	type pending struct {
-		name  string
-		start time.Time
-	}
-	var tracked []pending
+	remaining := make(map[string]time.Time)
 	for _, c := range containers {
 		if c.Healthcheck != nil {
-			tracked = append(tracked, pending{name: c.Name, start: time.Now()})
+			remaining[c.Name] = time.Now()
 		}
 	}
-	if len(tracked) == 0 {
+	if len(remaining) == 0 {
 		return nil
 	}
 
-	log.Printf("Waiting for %d container(s) to become healthy", len(tracked))
+	log.Printf("Waiting for %d container(s) to become healthy", len(remaining))
 
 	var failed []string
-	remaining := make(map[string]time.Time, len(tracked))
-	for _, t := range tracked {
-		remaining[t.name] = t.start
-	}
-
 	for len(remaining) > 0 {
 		for name, start := range remaining {
 			info, err := cli.ContainerInspect(context.Background(), name)

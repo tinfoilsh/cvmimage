@@ -115,51 +115,51 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 	boot.AppendStage("shim", boot.StatusOK, time.Since(start), "")
 }
 
-func doUpgrade(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) error {
-	// Wait for config files (or boot failure)
-	var config *shimconfig.Config
-	var externalConfig *shimconfig.ExternalConfig
+// waitForArtifact polls load until it succeeds or boot fails.
+func waitForArtifact[T any](name string, load func() (T, error)) (T, error) {
 	for {
 		if bootFailed() {
-			return fmt.Errorf("boot failed")
+			var zero T
+			return zero, fmt.Errorf("boot failed before %s was provisioned", name)
 		}
-		var err error
-		config, externalConfig, err = shimconfig.Load(*configFile, *externalConfigFile)
+		val, err := load()
 		if err == nil {
-			break
+			log.Printf("%s loaded", name)
+			return val, nil
 		}
 		time.Sleep(artifactPollInterval)
 	}
+}
+
+func doUpgrade(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) error {
+	type configPair struct {
+		config   *shimconfig.Config
+		external *shimconfig.ExternalConfig
+	}
+	cfgPair, err := waitForArtifact("Shim config", func() (configPair, error) {
+		c, e, err := shimconfig.Load(*configFile, *externalConfigFile)
+		return configPair{c, e}, err
+	})
+	if err != nil {
+		return err
+	}
+	config, externalConfig := cfgPair.config, cfgPair.external
 	log.Printf("Shim config loaded: upstream-port=%d tls-mode=%s paths=%d", config.UpstreamPort, config.TLSMode, len(config.Paths))
 
-	// Wait for TLS certificate (or boot failure)
-	for {
-		if bootFailed() {
-			return fmt.Errorf("boot failed before TLS certificate was provisioned")
-		}
-		realCert, err := tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
-		if err == nil {
-			cert.Store(&realCert)
-			log.Println("TLS certificate loaded")
-			break
-		}
-		time.Sleep(artifactPollInterval)
+	realCert, err := waitForArtifact("TLS certificate", func() (tls.Certificate, error) {
+		return tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
+	})
+	if err != nil {
+		return err
 	}
+	cert.Store(&realCert)
 
-	// Wait for attestation document (or boot failure)
-	var att *verifier.Document
-	for {
-		if bootFailed() {
-			return fmt.Errorf("boot failed before attestation was provisioned")
-		}
-		var err error
-		att, err = loadAttestation()
-		if err == nil {
-			break
-		}
-		time.Sleep(artifactPollInterval)
+	att, err := waitForArtifact("Attestation document", func() (*verifier.Document, error) {
+		return loadAttestation()
+	})
+	if err != nil {
+		return err
 	}
-	log.Println("Attestation document loaded")
 
 	var attV3 json.RawMessage
 	if data, err := os.ReadFile(boot.AttestationV3Path); err == nil {
@@ -170,20 +170,12 @@ func doUpgrade(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) err
 		}
 	}
 
-	// Wait for HPKE identity (or boot failure)
-	var serverIdentity *identity.Identity
-	for {
-		if bootFailed() {
-			return fmt.Errorf("boot failed before HPKE identity was provisioned")
-		}
-		var err error
-		serverIdentity, err = identity.FromFile(config.HPKEKeyFile)
-		if err == nil {
-			break
-		}
-		time.Sleep(artifactPollInterval)
+	serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
+		return identity.FromFile(config.HPKEKeyFile)
+	})
+	if err != nil {
+		return err
 	}
-	log.Println("HPKE identity loaded")
 
 	// API key validator
 	var validator key.Validator
@@ -210,8 +202,7 @@ func doUpgrade(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) err
 		rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
 	}
 
-	realCert := cert.Load()
-	fullHandler := NewShimServer(validator, rateLimiter, att, attV3, serverIdentity, realCert, config, externalConfig)
+	fullHandler := NewShimServer(validator, rateLimiter, att, attV3, serverIdentity, cert.Load(), config, externalConfig)
 	handler.Store(fullHandler)
 
 	log.Println("Shim fully operational")

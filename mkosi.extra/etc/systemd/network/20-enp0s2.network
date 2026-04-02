@@ -3,3 +3,4 @@ Name=enp0s2
 
 [Network]
 DHCP=yes
+IPv6AcceptRA=no

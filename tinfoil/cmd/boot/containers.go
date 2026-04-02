@@ -52,12 +52,14 @@ func launchContainers(config *Config) error {
 	return nil
 }
 
-// launchContainersAndWaitHealthy starts all containers and then waits for
-// those with healthchecks to become healthy. Each container launch and health
-// result is recorded as its own boot stage.
+// launchContainersAndWaitHealthy launches all containers in parallel with
+// health checking. Each container is pulled and started, then those with
+// healthchecks are polled until healthy/unhealthy. Per-container health
+// status is tracked as substages of the "containers" stage.
 func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
+		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
 		return nil
 	}
 
@@ -69,72 +71,106 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 	}
 	defer cli.Close()
 
-	// Launch each container, recording a stage per container
+	start := time.Now()
+
+	// Initialize substages: one per container with a healthcheck
+	var substages []boot.Stage
 	for _, c := range config.Containers {
-		start := time.Now()
+		if c.Healthcheck != nil {
+			substages = append(substages, boot.Stage{Name: c.Name, Status: boot.StatusPending})
+		}
+	}
+	if len(substages) > 0 {
+		tracker.RecordSubstages(boot.StageContainers, substages)
+	}
+
+	// Launch containers and begin health polling concurrently.
+	// pending tracks containers still waiting for a health verdict.
+	pending := make(map[string]time.Time)
+	var launchErrors []string
+
+	for _, c := range config.Containers {
 		if err := startContainer(cli, c, extConfig); err != nil {
 			log.Printf("Error starting container %s: %v", c.Name, err)
-			tracker.Record("container:"+c.Name, boot.StatusFailed, time.Since(start), err.Error())
-			return fmt.Errorf("starting container %s: %w", c.Name, err)
+			launchErrors = append(launchErrors, fmt.Sprintf("%s: %v", c.Name, err))
+			continue
 		}
-		tracker.Record("container:"+c.Name, boot.StatusOK, time.Since(start), "")
-	}
-
-	// Wait for containers with healthchecks
-	return waitForContainersHealthy(tracker, cli, config.Containers)
-}
-
-// waitForContainersHealthy polls Docker until every container that has a
-// healthcheck defined reports "healthy" or "unhealthy". Each container is
-// recorded as its own boot stage (e.g. "health:ml-training").
-func waitForContainersHealthy(tracker *boot.Tracker, cli *client.Client, containers []Container) error {
-	remaining := make(map[string]time.Time)
-	for _, c := range containers {
 		if c.Healthcheck != nil {
-			remaining[c.Name] = time.Now()
+			pending[c.Name] = time.Now()
+		}
+
+		// Between container launches, poll health on already-started containers
+		pollHealth(cli, pending, &substages)
+		if len(substages) > 0 {
+			tracker.RecordSubstages(boot.StageContainers, substages)
 		}
 	}
-	if len(remaining) == 0 {
-		return nil
+
+	if len(launchErrors) > 0 {
+		detail := strings.Join(launchErrors, "; ")
+		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
+		return fmt.Errorf("failed to start %d container(s): %s", len(launchErrors), detail)
 	}
 
-	log.Printf("Waiting for %d container(s) to become healthy", len(remaining))
-
+	// All launched; wait for remaining health checks
 	var failed []string
-	for len(remaining) > 0 {
-		for name, start := range remaining {
-			info, err := cli.ContainerInspect(context.Background(), name)
-			if err != nil {
-				continue
-			}
-			if info.State == nil || info.State.Health == nil {
-				continue
-			}
-			switch info.State.Health.Status {
-			case container.Healthy:
-				tracker.Record("health:"+name, boot.StatusOK, time.Since(start), "")
-				delete(remaining, name)
-				log.Printf("Container %s is healthy", name)
-			case container.Unhealthy:
-				detail := "unhealthy"
-				if msg := lastHealthLog(info.State.Health); msg != "" {
-					detail = msg
-				}
-				tracker.Record("health:"+name, boot.StatusFailed, time.Since(start), detail)
-				delete(remaining, name)
-				failed = append(failed, name)
-				log.Printf("Container %s is unhealthy: %s", name, detail)
-			}
-		}
-		if len(remaining) > 0 {
-			time.Sleep(healthPollInterval)
-		}
+	for len(pending) > 0 {
+		time.Sleep(healthPollInterval)
+		failed = pollHealth(cli, pending, &substages)
+		tracker.RecordSubstages(boot.StageContainers, substages)
 	}
 
 	if len(failed) > 0 {
-		return fmt.Errorf("unhealthy containers: %v", failed)
+		detail := fmt.Sprintf("unhealthy containers: %v", failed)
+		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
+		return fmt.Errorf("%s", detail)
 	}
+
+	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
 	return nil
+}
+
+// pollHealth checks health status for all pending containers, updating
+// substages and removing resolved entries from pending. Returns names of
+// containers that resolved as unhealthy.
+func pollHealth(cli *client.Client, pending map[string]time.Time, substages *[]boot.Stage) []string {
+	var failed []string
+	for name, start := range pending {
+		info, err := cli.ContainerInspect(context.Background(), name)
+		if err != nil {
+			continue
+		}
+		if info.State == nil || info.State.Health == nil {
+			continue
+		}
+		switch info.State.Health.Status {
+		case container.Healthy:
+			updateSubstage(substages, name, boot.StatusOK, time.Since(start), "")
+			delete(pending, name)
+			log.Printf("Container %s is healthy", name)
+		case container.Unhealthy:
+			detail := "unhealthy"
+			if msg := lastHealthLog(info.State.Health); msg != "" {
+				detail = msg
+			}
+			updateSubstage(substages, name, boot.StatusFailed, time.Since(start), detail)
+			delete(pending, name)
+			failed = append(failed, name)
+			log.Printf("Container %s is unhealthy: %s", name, detail)
+		}
+	}
+	return failed
+}
+
+func updateSubstage(substages *[]boot.Stage, name, status string, duration time.Duration, detail string) {
+	for i := range *substages {
+		if (*substages)[i].Name == name {
+			(*substages)[i].Status = status
+			(*substages)[i].Duration = duration
+			(*substages)[i].Detail = detail
+			return
+		}
+	}
 }
 
 func lastHealthLog(h *container.Health) string {

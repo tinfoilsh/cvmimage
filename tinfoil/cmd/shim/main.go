@@ -163,6 +163,8 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return true
 		})
 
+		start = time.Now()
+
 		// API key validator
 		var validator key.Validator
 		if config.ControlPlane != "" {

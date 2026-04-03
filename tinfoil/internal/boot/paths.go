@@ -1,21 +1,27 @@
 package boot
 
 const (
-	RamdiskDir         = "/mnt/ramdisk"
-	TLSDir             = RamdiskDir + "/tls"
-	TLSCertPath        = TLSDir + "/cert.pem"
-	TLSKeyPath         = TLSDir + "/key.pem"
-	AttestationPath    = RamdiskDir + "/attestation.json"
-	AttestationV3Path  = RamdiskDir + "/attestation-v3.json"
-	HPKEKeyPath        = RamdiskDir + "/hpke_key.json"
-	ConfigPath         = RamdiskDir + "/config.yml"
-	ExternalConfigPath = RamdiskDir + "/external-config.yml"
-	ShimConfigPath     = RamdiskDir + "/shim.yml"
-	DockerConfigDir    = RamdiskDir + "/docker-config"
-	DockerConfigPath   = DockerConfigDir + "/config.json"
-	GCloudKeyPath      = RamdiskDir + "/gcloud_key.json"
-	GCloudConfigPath   = RamdiskDir + "/gcloud"
-	CacheDir           = RamdiskDir + "/tfshim-cache"
-	MPKDir             = RamdiskDir + "/mpk"
-	StatePath          = RamdiskDir + "/boot-state.json"
+	RamdiskDir = "/mnt/ramdisk"
+	PublicDir  = RamdiskDir + "/public"
+	PrivateDir = RamdiskDir + "/private"
+
+	// Public — mounted read-only into containers as /tinfoil
+	ConfigPath         = PublicDir + "/config.yml"
+	ExternalConfigPath = PublicDir + "/external-config.yml"
+	AttestationPath    = PublicDir + "/attestation.json"
+	AttestationV3Path  = PublicDir + "/attestation-v3.json"
+	MPKDir             = PublicDir + "/mpk"
+
+	// Private — only accessible to boot and shim processes
+	TLSDir           = PrivateDir + "/tls"
+	TLSCertPath      = TLSDir + "/cert.pem"
+	TLSKeyPath       = TLSDir + "/key.pem"
+	HPKEKeyPath      = PrivateDir + "/hpke_key.json"
+	ShimConfigPath   = PrivateDir + "/shim.yml"
+	DockerConfigDir  = PrivateDir + "/docker-config"
+	DockerConfigPath = DockerConfigDir + "/config.json"
+	GCloudKeyPath    = PrivateDir + "/gcloud_key.json"
+	GCloudConfigPath = PrivateDir + "/gcloud"
+	CacheDir         = PrivateDir + "/tfshim-cache"
+	StatePath        = PrivateDir + "/boot-state.json"
 )

@@ -292,7 +292,7 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 		SecurityOpt:    c.SecurityOpt,
 		ReadonlyRootfs: c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
-		Binds:          []string{boot.RamdiskDir + ":/tinfoil"},
+		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
 
 	// Restart policy

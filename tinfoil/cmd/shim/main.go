@@ -163,6 +163,11 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return true
 		})
 
+		// Abort if any boot stage failed
+		if state, err := boot.Load(); err == nil && state.HasFailed() {
+			return fmt.Errorf("boot stage failed, not upgrading shim")
+		}
+
 		start = time.Now()
 
 		// API key validator

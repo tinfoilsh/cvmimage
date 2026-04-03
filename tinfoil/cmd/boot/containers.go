@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	dockerconfig "github.com/docker/cli/cli/config"
@@ -40,7 +41,13 @@ func launchContainers(config *Config) error {
 	log.Printf("Launching %d containers", len(config.Containers))
 	var errors []string
 	for _, c := range config.Containers {
-		if err := startContainer(cli, c, extConfig); err != nil {
+		log.Printf("Pulling image %s (%s)", c.Name, c.Image)
+		if err := pullImage(cli, c.Image); err != nil {
+			log.Printf("Error pulling image for %s: %v", c.Name, err)
+			errors = append(errors, fmt.Sprintf("%s: pulling image: %v", c.Name, err))
+			continue
+		}
+		if err := createAndStartContainer(cli, c, extConfig); err != nil {
 			log.Printf("Error starting container %s: %v", c.Name, err)
 			errors = append(errors, fmt.Sprintf("%s: %v", c.Name, err))
 		}
@@ -53,9 +60,8 @@ func launchContainers(config *Config) error {
 }
 
 // launchContainersAndWaitHealthy launches all containers in parallel with
-// health checking. Each container is pulled and started, then those with
-// healthchecks are polled until healthy/unhealthy. Per-container health
-// status is tracked as substages of the "containers" stage.
+// health checking. Each container is tracked as a substage of "containers"
+// with per-phase sub-substages (pull, start, healthy).
 func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
@@ -73,97 +79,132 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 
 	start := time.Now()
 
-	// Initialize substages: one per container with a healthcheck
+	// Initialize substages: one per container, each with phase sub-substages.
 	var substages []boot.Stage
 	for _, c := range config.Containers {
-		if c.Healthcheck != nil {
-			substages = append(substages, boot.Stage{Name: c.Name, Status: boot.StatusPending})
-		}
-	}
-	if len(substages) > 0 {
-		tracker.RecordSubstages(boot.StageContainers, substages)
-	}
-
-	// Launch containers and begin health polling concurrently.
-	// pending tracks containers still waiting for a health verdict.
-	pending := make(map[string]time.Time)
-	var launchErrors []string
-
-	for _, c := range config.Containers {
-		if err := startContainer(cli, c, extConfig); err != nil {
-			log.Printf("Error starting container %s: %v", c.Name, err)
-			launchErrors = append(launchErrors, fmt.Sprintf("%s: %v", c.Name, err))
-			continue
+		phases := []boot.Stage{
+			{Name: "pull", Status: boot.StatusPending},
+			{Name: "start", Status: boot.StatusPending},
 		}
 		if c.Healthcheck != nil {
-			pending[c.Name] = time.Now()
+			phases = append(phases, boot.Stage{Name: "healthy", Status: boot.StatusPending})
 		}
+		substages = append(substages, boot.Stage{
+			Name:   c.Name,
+			Status: boot.StatusPending,
+			Stages: phases,
+		})
+	}
+	tracker.RecordSubstages(boot.StageContainers, substages)
 
-		// Between container launches, poll health on already-started containers
-		if newlyFailed := pollHealth(cli, pending, &substages); len(newlyFailed) > 0 {
-			detail := fmt.Sprintf("unhealthy containers: %v", newlyFailed)
-			tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
-			return fmt.Errorf("%s", detail)
-		}
-		if len(substages) > 0 {
-			tracker.RecordSubstages(boot.StageContainers, substages)
+	// Launch all containers in parallel. Each goroutine handles the full
+	// lifecycle: pull → start → wait-healthy.
+	var mu sync.Mutex
+	flush := func() { tracker.RecordSubstages(boot.StageContainers, substages) }
+
+	errs := make([]error, len(config.Containers))
+	var wg sync.WaitGroup
+	for i, c := range config.Containers {
+		wg.Add(1)
+		go func(i int, c Container) {
+			defer wg.Done()
+			errs[i] = runContainer(cli, c, extConfig, &substages, &mu, flush)
+		}(i, c)
+	}
+	wg.Wait()
+
+	var failures []string
+	for _, err := range errs {
+		if err != nil {
+			failures = append(failures, err.Error())
 		}
 	}
-
-	if len(launchErrors) > 0 {
-		detail := strings.Join(launchErrors, "; ")
+	if len(failures) > 0 {
+		detail := strings.Join(failures, "; ")
 		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
-		return fmt.Errorf("failed to start %d container(s): %s", len(launchErrors), detail)
-	}
-
-	// All launched; wait for remaining health checks
-	var failed []string
-	for len(pending) > 0 {
-		time.Sleep(healthPollInterval)
-		failed = append(failed, pollHealth(cli, pending, &substages)...)
-		tracker.RecordSubstages(boot.StageContainers, substages)
-	}
-
-	if len(failed) > 0 {
-		detail := fmt.Sprintf("unhealthy containers: %v", failed)
-		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
-		return fmt.Errorf("%s", detail)
+		return fmt.Errorf("container failures: %s", detail)
 	}
 
 	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
 	return nil
 }
 
-// pollHealth checks health status for all pending containers, updating
-// substages and removing resolved entries from pending. Returns names of
-// containers that resolved as unhealthy.
-func pollHealth(cli *client.Client, pending map[string]time.Time, substages *[]boot.Stage) []string {
-	var failed []string
-	for name, start := range pending {
-		info, err := cli.ContainerInspect(context.Background(), name)
-		if err != nil {
-			continue
-		}
-		if info.State == nil || info.State.Health == nil {
+// runContainer handles the full lifecycle of a single container:
+// pull → create+start → wait-healthy. Substage updates are mutex-protected.
+func runContainer(
+	cli *client.Client,
+	c Container,
+	extConfig *shimconfig.ExternalConfig,
+	substages *[]boot.Stage,
+	mu *sync.Mutex,
+	flush func(),
+) error {
+	cStart := time.Now()
+
+	record := func(phase, status string, d time.Duration, detail string) {
+		mu.Lock()
+		updateSubstagePhase(substages, c.Name, phase, status, d, detail)
+		flush()
+		mu.Unlock()
+	}
+	finish := func(status, detail string) {
+		mu.Lock()
+		updateSubstage(substages, c.Name, status, time.Since(cStart), detail)
+		flush()
+		mu.Unlock()
+	}
+
+	// Pull
+	pullStart := time.Now()
+	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
+	if err := pullImage(cli, c.Image); err != nil {
+		detail := fmt.Sprintf("pulling image: %v", err)
+		record("pull", boot.StatusFailed, time.Since(pullStart), detail)
+		finish(boot.StatusFailed, detail)
+		return fmt.Errorf("%s: %s", c.Name, detail)
+	}
+	record("pull", boot.StatusOK, time.Since(pullStart), "")
+
+	// Create + start
+	startPhase := time.Now()
+	if err := createAndStartContainer(cli, c, extConfig); err != nil {
+		detail := fmt.Sprintf("starting: %v", err)
+		record("start", boot.StatusFailed, time.Since(startPhase), detail)
+		finish(boot.StatusFailed, detail)
+		return fmt.Errorf("%s: %s", c.Name, detail)
+	}
+	record("start", boot.StatusOK, time.Since(startPhase), "")
+
+	if c.Healthcheck == nil {
+		finish(boot.StatusOK, "")
+		return nil
+	}
+
+	// Wait for Docker health verdict
+	healthStart := time.Now()
+	for {
+		time.Sleep(healthPollInterval)
+		info, err := cli.ContainerInspect(context.Background(), c.Name)
+		if err != nil || info.State == nil || info.State.Health == nil {
 			continue
 		}
 		switch info.State.Health.Status {
 		case container.Healthy:
-			updateSubstage(substages, name, boot.StatusOK, time.Since(start), "")
-			delete(pending, name)
-			log.Printf("Container %s is healthy", name)
+			record("healthy", boot.StatusOK, time.Since(healthStart), "")
+			finish(boot.StatusOK, "")
+			log.Printf("Container %s is healthy", c.Name)
+			return nil
 		case container.Unhealthy:
 			detail := "unhealthy"
 			if msg := lastHealthLog(info.State.Health); msg != "" {
 				detail = msg
 			}
-			updateSubstage(substages, name, boot.StatusFailed, time.Since(start), detail)
-			delete(pending, name)
-			failed = append(failed, name)
-			log.Printf("Container %s is unhealthy: %s", name, detail)
+			record("healthy", boot.StatusFailed, time.Since(healthStart), detail)
+			finish(boot.StatusFailed, detail)
+			log.Printf("Container %s is unhealthy: %s", c.Name, detail)
+			return fmt.Errorf("%s: %s", c.Name, detail)
 		}
 	}
-	return failed
 }
 
 func updateSubstage(substages *[]boot.Stage, name, status string, duration time.Duration, detail string) {
@@ -172,6 +213,22 @@ func updateSubstage(substages *[]boot.Stage, name, status string, duration time.
 			(*substages)[i].Status = status
 			(*substages)[i].Duration = duration
 			(*substages)[i].Detail = detail
+			return
+		}
+	}
+}
+
+func updateSubstagePhase(substages *[]boot.Stage, containerName, phase, status string, duration time.Duration, detail string) {
+	for i := range *substages {
+		if (*substages)[i].Name == containerName {
+			for j := range (*substages)[i].Stages {
+				if (*substages)[i].Stages[j].Name == phase {
+					(*substages)[i].Stages[j].Status = status
+					(*substages)[i].Stages[j].Duration = duration
+					(*substages)[i].Stages[j].Detail = detail
+					return
+				}
+			}
 			return
 		}
 	}
@@ -188,8 +245,8 @@ func lastHealthLog(h *container.Health) string {
 	return fmt.Sprintf("exit %d", last.ExitCode)
 }
 
-// startContainer starts a Docker container using the Docker SDK
-func startContainer(cli *client.Client, c Container, extConfig *shimconfig.ExternalConfig) error {
+// createAndStartContainer creates and starts a container (image must already be pulled).
+func createAndStartContainer(cli *client.Client, c Container, extConfig *shimconfig.ExternalConfig) error {
 	if c.Image == "" {
 		return fmt.Errorf("no image specified for container %s", c.Name)
 	}
@@ -273,12 +330,6 @@ func startContainer(cli *client.Client, c Container, extConfig *shimconfig.Exter
 	// GPU configuration
 	if req := parseGPUs(c.GPUs); req != nil {
 		hostConfig.DeviceRequests = []container.DeviceRequest{*req}
-	}
-
-	// Pull the image via Docker
-	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
-	if err := pullImage(cli, c.Image); err != nil {
-		return fmt.Errorf("pulling image: %w", err)
 	}
 
 	log.Printf("Creating container %s", c.Name)

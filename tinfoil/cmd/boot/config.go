@@ -18,11 +18,18 @@ import (
 type Config struct {
 	ShimRaw    map[string]interface{} `yaml:"shim"`
 	ShimCfg    *shimconfig.Config     `yaml:"-"`
+	Network    NetworkConfig          `yaml:"network"`
 	CPUs       int                    `yaml:"cpus"`
 	Memory     int                    `yaml:"memory"`
 	GPUs       int                    `yaml:"gpus"`
 	Models     []ModelSpec            `yaml:"models"`
 	Containers []Container            `yaml:"containers"`
+}
+
+// NetworkConfig defines network-level firewall rules enforced via nftables.
+// The shim's listen-port is always allowed implicitly.
+type NetworkConfig struct {
+	AllowedInboundPorts []int `yaml:"allowed-inbound-ports"`
 }
 
 // ModelSpec represents a model pack specification

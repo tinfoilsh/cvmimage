@@ -159,7 +159,13 @@ func run() error {
 		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 	}
 
-	// 7. Models
+	// 7. Firewall
+	log.Println("Configuring firewall")
+	if err := setupFirewall(config); err != nil {
+		log.Printf("Warning: firewall setup failed: %v", err)
+	}
+
+	// 8. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config); err != nil {
@@ -169,7 +175,7 @@ func run() error {
 		tracker.Record("models", boot.StatusOK, time.Since(start), "")
 	}
 
-	// 8. Containers + health checks
+	// 9. Containers + health checks
 	log.Println("Launching containers")
 	if err := launchContainersAndWaitHealthy(tracker, config); err != nil {
 		return err

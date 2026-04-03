@@ -70,6 +70,7 @@ func (t *Tracker) Record(name, status string, duration time.Duration, detail str
 	updated := false
 	for i := range t.state.Stages {
 		if t.state.Stages[i].Name == name {
+			stage.Stages = t.state.Stages[i].Stages
 			t.state.Stages[i] = stage
 			updated = true
 			break

@@ -160,9 +160,13 @@ func run() error {
 	}
 
 	// 7. Firewall
+	start = time.Now()
 	log.Println("Configuring firewall")
 	if err := setupFirewall(config); err != nil {
 		log.Printf("Warning: firewall setup failed: %v", err)
+		tracker.Record(boot.StageFirewall, boot.StatusWarning, time.Since(start), err.Error())
+	} else {
+		tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
 	}
 
 	// 8. Models

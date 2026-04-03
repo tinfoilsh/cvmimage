@@ -100,7 +100,11 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 		}
 
 		// Between container launches, poll health on already-started containers
-		pollHealth(cli, pending, &substages)
+		if newlyFailed := pollHealth(cli, pending, &substages); len(newlyFailed) > 0 {
+			detail := fmt.Sprintf("unhealthy containers: %v", newlyFailed)
+			tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
+			return fmt.Errorf("%s", detail)
+		}
 		if len(substages) > 0 {
 			tracker.RecordSubstages(boot.StageContainers, substages)
 		}
@@ -116,7 +120,7 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 	var failed []string
 	for len(pending) > 0 {
 		time.Sleep(healthPollInterval)
-		failed = pollHealth(cli, pending, &substages)
+		failed = append(failed, pollHealth(cli, pending, &substages)...)
 		tracker.RecordSubstages(boot.StageContainers, substages)
 	}
 

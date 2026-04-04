@@ -79,7 +79,9 @@ func setupRegistryAuth() error {
 	}
 	if gcloudKey != "" {
 		// Write key file for containers that mount it directly (e.g., Pollux)
-		os.WriteFile(boot.GCloudKeyPath, []byte(gcloudKey), 0600)
+		if err := os.WriteFile(boot.GCloudKeyPath, []byte(gcloudKey), 0600); err != nil {
+			log.Printf("Warning: failed to write GCloud key file: %v", err)
+		}
 	}
 	if gcloudKey != "" && gcloudRegistry != "" {
 		registries := strings.Split(gcloudRegistry, ",")

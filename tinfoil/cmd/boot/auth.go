@@ -1,15 +1,12 @@
 package main
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
-	"time"
 
 	"tinfoil/internal/boot"
 )
@@ -17,7 +14,6 @@ import (
 const (
 	secretGCloudKey      = "GCLOUD_KEY"
 	secretGCloudRegistry = "GCLOUD_REGISTRY"
-	authCommandTimeout   = 60 * time.Second
 )
 
 type DockerConfig struct {
@@ -31,10 +27,9 @@ type DockerAuth struct {
 // setupRegistryAuth configures Docker auth from external-config secrets.
 // Supports:
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
-//   - GCLOUD_KEY/GCLOUD_REGISTRY (or gcloud-key/gcloud-registry for backward compat)
+//   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
 func setupRegistryAuth() error {
 	os.Setenv("DOCKER_CONFIG", boot.DockerConfigDir)
-	os.Setenv("CLOUDSDK_CONFIG", boot.GCloudConfigPath)
 
 	ext, err := getExternalConfig()
 	if err != nil || ext.Secrets == nil {
@@ -73,7 +68,7 @@ func setupRegistryAuth() error {
 		log.Printf("Auth configured: %s", host)
 	}
 
-	// GCloud auth via CLI (supports both formats)
+	// GCP Artifact Registry auth via service account JSON key
 	gcloudKey := ext.GetSecret(secretGCloudKey)
 	if gcloudKey == "" {
 		gcloudKey = ext.GetSecret("gcloud-key")
@@ -83,8 +78,19 @@ func setupRegistryAuth() error {
 		gcloudRegistry = ext.GetSecret("gcloud-registry")
 	}
 	if gcloudKey != "" {
-		if err := setupGCloudAuth(gcloudKey, gcloudRegistry); err != nil {
-			log.Printf("Warning: gcloud auth failed: %v", err)
+		// Write key file for containers that mount it directly (e.g., Pollux)
+		os.WriteFile(boot.GCloudKeyPath, []byte(gcloudKey), 0600)
+	}
+	if gcloudKey != "" && gcloudRegistry != "" {
+		registries := strings.Split(gcloudRegistry, ",")
+		for _, reg := range registries {
+			reg = strings.TrimSpace(reg)
+			if reg != "" && registryPattern.MatchString(reg) {
+				cfg.Auths[reg] = DockerAuth{
+					Auth: base64.StdEncoding.EncodeToString([]byte("_json_key_base64:" + base64.StdEncoding.EncodeToString([]byte(gcloudKey)))),
+				}
+				log.Printf("Auth configured: %s (GCP service account)", reg)
+			}
 		}
 	}
 
@@ -101,36 +107,3 @@ func setupRegistryAuth() error {
 	return nil
 }
 
-func setupGCloudAuth(key, registry string) error {
-	if err := os.WriteFile(boot.GCloudKeyPath, []byte(key), 0600); err != nil {
-		return err
-	}
-
-	env := append(os.Environ(), "CLOUDSDK_CONFIG="+boot.GCloudConfigPath)
-
-	if err := runCmd(env, "gcloud", "auth", "activate-service-account", "--quiet", "--key-file", boot.GCloudKeyPath); err != nil {
-		return err
-	}
-
-	if registry != "" && registryPattern.MatchString(registry) {
-		return runCmd(env, "gcloud", "auth", "configure-docker", "--quiet", registry)
-	}
-	return nil
-}
-
-func runCmd(env []string, name string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), authCommandTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = env
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("%s timed out", name)
-		}
-		return err
-	}
-	return nil
-}

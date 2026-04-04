@@ -13,7 +13,6 @@ const (
 	DockerConfigDir    = RamdiskDir + "/docker-config"
 	DockerConfigPath   = DockerConfigDir + "/config.json"
 	GCloudKeyPath      = RamdiskDir + "/gcloud_key.json"
-	GCloudConfigPath   = RamdiskDir + "/gcloud"
 	CacheDir           = RamdiskDir + "/tfshim-cache"
 	MPKDir             = RamdiskDir + "/mpk"
 	StatePath          = RamdiskDir + "/boot-state.json"

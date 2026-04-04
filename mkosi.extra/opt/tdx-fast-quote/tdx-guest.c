@@ -64,7 +64,7 @@ static DEFINE_MUTEX(quote_lock);
  * GetQuote request timeout in seconds. Expect that 30 seconds
  * is enough time for QE to respond to any Quote requests.
  */
-static u32 getquote_timeout = 30;
+static u32 getquote_timeout = 3000;
 
 static long tdx_get_report0(struct tdx_report_req __user *req)
 {
@@ -223,6 +223,11 @@ static int tdx_report_new(struct tsm_report *report, void *data)
 	ret = wait_for_quote_completion(quote_buf, getquote_timeout);
 	if (ret) {
 		pr_err("GetQuote request timedout\n");
+		goto done;
+	}
+
+	if (quote_buf->out_len > GET_QUOTE_BUF_SIZE - sizeof(*quote_buf)) {
+		ret = -EIO;
 		goto done;
 	}
 

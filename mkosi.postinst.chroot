@@ -23,3 +23,21 @@ mkdir -p /mnt/ramdisk/docker-config
 mkdir -p /mnt/ramdisk/gcloud
 echo "export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud" >> /root/.bashrc
 echo "export DOCKER_CONFIG=/mnt/ramdisk/docker-config" >> /root/.bashrc
+
+# Build patched tdx-guest.ko
+EXPECTED_KERNEL_MAJOR="6.14"
+KVER=$(ls /lib/modules/ | sort -V | tail -1)
+if [[ "$KVER" != ${EXPECTED_KERNEL_MAJOR}* ]]; then
+    echo "ERROR: Kernel $KVER does not match vendored tdx-guest.c (expected ${EXPECTED_KERNEL_MAJOR}.*)"
+    exit 1
+fi
+if [ -f /opt/tdx-fast-quote/tdx-guest.c ]; then
+    BUILDDIR=$(mktemp -d)
+    cp /opt/tdx-fast-quote/tdx-guest.c "$BUILDDIR/"
+    cp /usr/src/linux-headers-${KVER}/drivers/virt/coco/tdx-guest/Makefile "$BUILDDIR/"
+    make -C /usr/src/linux-headers-${KVER} M="$BUILDDIR" modules 2>&1 | tail -3
+    install -D "$BUILDDIR/tdx-guest.ko" /lib/modules/${KVER}/updates/tdx-guest.ko
+    depmod "$KVER"
+    rm -rf "$BUILDDIR" /opt/tdx-fast-quote
+    echo "tdx-guest.ko installed"
+fi

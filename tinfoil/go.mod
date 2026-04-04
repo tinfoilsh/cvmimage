@@ -12,7 +12,6 @@ require (
 	github.com/google/go-sev-guest v0.14.1
 	github.com/google/go-tdx-guest v0.3.1
 	github.com/jarcoal/httpmock v1.3.1
-	github.com/klauspost/cpuid/v2 v2.2.10
 	github.com/mackerelio/go-osstat v0.2.6
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1

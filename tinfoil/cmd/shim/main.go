@@ -22,10 +22,12 @@ import (
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"golang.org/x/time/rate"
 
+	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/key/online"
+	tlsutil "tinfoil/internal/tls"
 )
 
 var (
@@ -133,15 +135,6 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 
-		var attV3 json.RawMessage
-		if data, err := os.ReadFile(boot.AttestationV3Path); err == nil {
-			if json.Valid(data) {
-				attV3 = data
-			} else {
-				log.Println("Warning: V3 attestation file is not valid JSON, ignoring")
-			}
-		}
-
 		serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
 			return identity.FromFile(config.HPKEKeyFile)
 		})
@@ -195,7 +188,18 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
 		}
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, attV3, serverIdentity, cert.Load(), config, externalConfig)
+		// Build identity body for fresh attestation (binds TLS key + HPKE key to hardware)
+		realCertParsed := cert.Load()
+		tlsPub, ok := realCertParsed.PrivateKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("TLS key is not ECDSA")
+		}
+		identityBody := tinfoilattestation.BodyV2{
+			TLSKeyFP: tlsutil.KeyFPBytes(&tlsPub.PublicKey),
+		}
+		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
+
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, serverIdentity, realCertParsed, config, externalConfig)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

@@ -3,17 +3,31 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
-	"github.com/klauspost/cpuid/v2"
 	"github.com/mackerelio/go-osstat/cpu"
 	"github.com/mackerelio/go-osstat/memory"
-	"log"
 
 	"tinfoil/internal/auth"
 	"tinfoil/internal/config"
 )
+
+func cpuVendor() string {
+	data, err := os.ReadFile("/proc/cpuinfo")
+	if err != nil {
+		return "unknown"
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if k, v, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(k) == "vendor_id" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return "unknown"
+}
 
 // Metrics represents the system metrics data structure
 type Metrics struct {
@@ -87,7 +101,7 @@ func collectMetrics(metadata *config.Metadata) (*Metrics, error) {
 		ID:      metadata.ID,
 		Domain:  metadata.Domain,
 		Image:   metadata.Image,
-		CPUType: cpuid.CPU.VendorString,
+		CPUType: cpuVendor(),
 	}
 
 	memory, err := memory.Get()

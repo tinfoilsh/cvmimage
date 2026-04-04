@@ -2,23 +2,25 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"slices"
 	"strings"
 
 	"tinfoil/internal/acpi"
+	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/key/online"
 	"tinfoil/internal/metrics"
 
-	"log"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
@@ -126,7 +128,7 @@ func NewShimServer(
 	validator key.Validator,
 	rateLimiter *RateLimiter,
 	att *attestation.Document,
-	attV3 json.RawMessage,
+	identityBody tinfoilattestation.BodyV2,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	config *config.Config,
@@ -222,14 +224,57 @@ func NewShimServer(
 
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
+		// V3 attestation — always fresh, with verifier-supplied or random nonce
 		if r.URL.Query().Get("v") == "3" {
-			if attV3 == nil {
-				http.Error(w, "V3 attestation not available", http.StatusServiceUnavailable)
+			var nonce []byte
+			if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
+				var err error
+				nonce, err = hex.DecodeString(nonceHex)
+				if err != nil || len(nonce) != 32 {
+					writeJSONError(w, "Invalid nonce: must be exactly 32 bytes (64 hex chars)", errTypeInvalidRequest, http.StatusBadRequest)
+					return
+				}
+			} else {
+				var err error
+				nonce, err = tinfoilattestation.RandomNonce()
+				if err != nil {
+					writeJSONError(w, "Failed to generate nonce", errTypeServer, http.StatusInternalServerError)
+					return
+				}
+			}
+
+			// Collect fresh GPU evidence with nonce
+			var gpuJSON json.RawMessage
+			var gpuNonce32 [32]byte
+			copy(gpuNonce32[:], nonce)
+			gpuEvidence, err := tinfoilattestation.CollectGPUEvidence(gpuNonce32)
+			if err != nil {
+				log.Printf("GPU evidence collection failed (non-fatal): %v", err)
+			} else if len(gpuEvidence.Evidences) > 0 {
+				gpuJSON, _ = json.Marshal(gpuEvidence)
+			}
+
+			// Build signed V3: GPU evidence hash is bound into CPU REPORT_DATA
+			v3, err := tinfoilattestation.BuildV3(
+				identityBody.TLSKeyFP,
+				identityBody.HPKEKey,
+				nonce,
+				gpuJSON,
+				nil, // NVSwitch: TODO when NSCQ support is added
+				tlsCert,
+			)
+			if err != nil {
+				log.Printf("V3 attestation build failed: %v", err)
+				writeJSONError(w, "Failed to build attestation", errTypeServer, http.StatusInternalServerError)
 				return
 			}
-			w.Write(attV3)
+
+			json.NewEncoder(w).Encode(v3)
 			return
 		}
+
+		// Legacy V2
 		json.NewEncoder(w).Encode(att)
 	})))
 

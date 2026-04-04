@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/ecdsa"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -77,44 +76,5 @@ func writeAttestationDoc(att *verifier.Document) error {
 		return fmt.Errorf("writing attestation document: %w", err)
 	}
 	log.Println("V2 attestation document written to ramdisk")
-	return nil
-}
-
-const attestationV3Format = "https://tinfoil.sh/predicate/attestation/v3"
-
-type attestationV3 struct {
-	Format   string          `json:"format"`
-	CPU      attestationCPU  `json:"cpu"`
-	GPU      json.RawMessage `json:"gpu,omitempty"`
-	NVSwitch json.RawMessage `json:"nvswitch,omitempty"`
-}
-
-type attestationCPU struct {
-	Platform string `json:"platform"`
-	Report   string `json:"report"`
-}
-
-func writeAttestationV3(cpuAtt *CPUAttestation, gpuEvidence *GPURawEvidence) error {
-	v3 := attestationV3{
-		Format: attestationV3Format,
-		CPU: attestationCPU{
-			Platform: cpuAtt.Platform,
-			Report:   base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
-		},
-	}
-
-	if gpuEvidence != nil {
-		v3.GPU = gpuEvidence.GPU
-		v3.NVSwitch = gpuEvidence.Switch
-	}
-
-	data, err := json.Marshal(v3)
-	if err != nil {
-		return fmt.Errorf("marshaling V3 attestation: %w", err)
-	}
-	if err := os.WriteFile(boot.AttestationV3Path, data, 0644); err != nil {
-		return fmt.Errorf("writing V3 attestation: %w", err)
-	}
-	log.Println("V3 attestation document written to ramdisk")
 	return nil
 }

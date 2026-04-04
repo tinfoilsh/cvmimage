@@ -112,10 +112,8 @@ func run() error {
 			log.Printf("GPUs not set in config, detected %d from hardware", gpuCount)
 		}
 	}
-	var gpuEvidence *GPURawEvidence
 	if gpuCount > 0 && config.ShimCfg.DummyAttestation {
 		log.Printf("Skipping GPU attestation for %d GPUs (dummy-attestation mode)", gpuCount)
-		gpuEvidence = dummyGPUEvidence(gpuCount)
 		if err := setGPUReadyState(true); err != nil {
 			log.Printf("Warning: failed to set GPU ready state: %v", err)
 		}
@@ -123,7 +121,7 @@ func run() error {
 	} else if gpuCount > 0 {
 		log.Printf("Verifying GPU attestation (%d GPUs)", gpuCount)
 		var err error
-		gpuEvidence, err = verifyGPUAttestation(gpuCount)
+		_, err = verifyGPUAttestation(gpuCount)
 		if err != nil {
 			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 			return err
@@ -131,13 +129,6 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d GPUs", gpuCount))
 	} else {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
-	}
-
-	// Write V3 attestation (CPU + GPU raw evidence, no gzip)
-	if cpuAtt.RawReport != nil {
-		if err := writeAttestationV3(cpuAtt, gpuEvidence); err != nil {
-			log.Printf("Warning: failed to write V3 attestation: %v", err)
-		}
 	}
 
 	// 5. Certificate

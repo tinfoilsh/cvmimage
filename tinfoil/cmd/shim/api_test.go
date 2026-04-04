@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 )
@@ -30,7 +31,7 @@ func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
 		Body:   "deadbeef",
 	}
 
-	return NewShimServer(nil, nil, att, nil, id, nil, cfg, extCfg)
+	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, id, nil, cfg, extCfg)
 }
 
 func TestPathNotAllowed_Returns404(t *testing.T) {

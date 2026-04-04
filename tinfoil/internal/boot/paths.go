@@ -6,7 +6,6 @@ const (
 	TLSCertPath        = TLSDir + "/cert.pem"
 	TLSKeyPath         = TLSDir + "/key.pem"
 	AttestationPath    = RamdiskDir + "/attestation.json"
-	AttestationV3Path  = RamdiskDir + "/attestation-v3.json"
 	HPKEKeyPath        = RamdiskDir + "/hpke_key.json"
 	ConfigPath         = RamdiskDir + "/config.yml"
 	ExternalConfigPath = RamdiskDir + "/external-config.yml"

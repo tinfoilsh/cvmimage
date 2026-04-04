@@ -199,7 +199,10 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, serverIdentity, realCertParsed, config, externalConfig)
+		gpuCount := tinfoilattestation.DetectGPUCount()
+		log.Printf("Detected %d GPU(s) for attestation", gpuCount)
+
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, gpuCount, serverIdentity, realCertParsed, config, externalConfig)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

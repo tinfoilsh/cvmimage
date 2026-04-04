@@ -1,9 +1,13 @@
 package attestation
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os/exec"
+	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 )
@@ -24,6 +28,20 @@ type GPUEvidenceCollection struct {
 var archNames = map[nvml.DeviceArchitecture]string{
 	nvml.DEVICE_ARCH_HOPPER:    "HOPPER",
 	nvml.DEVICE_ARCH_BLACKWELL: "BLACKWELL",
+}
+
+// DetectGPUCount returns the number of NVIDIA GPUs, or 0 if NVML is unavailable.
+func DetectGPUCount() int {
+	ret := nvml.Init()
+	if ret != nvml.SUCCESS {
+		return 0
+	}
+	defer nvml.Shutdown()
+	count, ret := nvml.DeviceGetCount()
+	if ret != nvml.SUCCESS {
+		return 0
+	}
+	return count
 }
 
 // CollectGPUEvidence collects fresh attestation evidence from all GPUs using
@@ -79,4 +97,29 @@ func CollectGPUEvidence(nonce [32]byte) (*GPUEvidenceCollection, error) {
 	}
 
 	return &GPUEvidenceCollection{Evidences: evidences}, nil
+}
+
+// CollectNVSwitchEvidence collects fresh NVSwitch attestation evidence via
+// the nvattest CLI (NSCQ is not exposed through go-nvml). The nonce must be
+// exactly 32 bytes.
+func CollectNVSwitchEvidence(nonce [32]byte) (json.RawMessage, error) {
+	nonceHex := hex.EncodeToString(nonce[:])
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "nvattest", "collect-evidence",
+		"--device", "nvswitch",
+		"--nonce", nonceHex,
+		"--format", "json",
+	).Output()
+	if err != nil {
+		return nil, fmt.Errorf("nvattest collect-evidence nvswitch: %w", err)
+	}
+
+	if !json.Valid(out) {
+		return nil, fmt.Errorf("nvattest returned invalid JSON")
+	}
+
+	return json.RawMessage(out), nil
 }

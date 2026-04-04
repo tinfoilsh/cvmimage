@@ -115,10 +115,11 @@ type V3 struct {
 }
 
 type V3ReportData struct {
-	TLSKeyFP        string `json:"tls_key_fp"`
-	HPKEKey         string `json:"hpke_key"`
-	Nonce           string `json:"nonce"`
-	GPUEvidenceHash string `json:"gpu_evidence_hash"`
+	TLSKeyFP             string `json:"tls_key_fp"`
+	HPKEKey              string `json:"hpke_key"`
+	Nonce                string `json:"nonce"`
+	GPUEvidenceHash      string `json:"gpu_evidence_hash,omitempty"`
+	NVSwitchEvidenceHash string `json:"nvswitch_evidence_hash,omitempty"`
 }
 
 type V3CPU struct {
@@ -128,26 +129,34 @@ type V3CPU struct {
 
 // ComputeReportData computes the 64-byte REPORT_DATA as:
 //
-//	SHA-256(tls_key_fp || hpke_key || nonce || gpu_evidence_hash)
+//	SHA-256(tls_key_fp || hpke_key || nonce || gpu_evidence_hash || nvswitch_evidence_hash)
 //
 // padded to 64 bytes with zeros.
-func ComputeReportData(tlsKeyFP [32]byte, hpkeKey [32]byte, nonce []byte, gpuEvidenceHash []byte) [64]byte {
+func ComputeReportData(tlsKeyFP [32]byte, hpkeKey [32]byte, nonce []byte, gpuEvidenceHash []byte, nvswitchEvidenceHash []byte) [64]byte {
 	h := sha256.New()
 	h.Write(tlsKeyFP[:])
 	h.Write(hpkeKey[:])
 	h.Write(nonce)
 	h.Write(gpuEvidenceHash)
+	h.Write(nvswitchEvidenceHash)
 	var result [64]byte
 	copy(result[:32], h.Sum(nil))
 	return result
 }
 
-// GPUEvidenceHash computes SHA-256 over the raw GPU evidence JSON.
-func GPUEvidenceHash(gpuJSON []byte) []byte {
-	if len(gpuJSON) == 0 {
-		return make([]byte, 32)
+func hexOrEmpty(b []byte) string {
+	if len(b) == 0 {
+		return ""
 	}
-	h := sha256.Sum256(gpuJSON)
+	return hex.EncodeToString(b)
+}
+
+// EvidenceHash computes SHA-256 over raw evidence JSON. Returns nil for empty input.
+func EvidenceHash(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	h := sha256.Sum256(data)
 	return h[:]
 }
 
@@ -171,8 +180,9 @@ func BuildV3(
 	nvswitchJSON json.RawMessage,
 	tlsCert *tls.Certificate,
 ) (*V3, error) {
-	gpuHash := GPUEvidenceHash(gpuJSON)
-	reportData := ComputeReportData(tlsKeyFP, hpkeKey, nonce, gpuHash)
+	gpuHash := EvidenceHash(gpuJSON)
+	nvswitchHash := EvidenceHash(nvswitchJSON)
+	reportData := ComputeReportData(tlsKeyFP, hpkeKey, nonce, gpuHash, nvswitchHash)
 
 	rawReport, platform, err := Report(reportData)
 	if err != nil {
@@ -191,10 +201,11 @@ func BuildV3(
 	v3 := &V3{
 		Format: V3Format,
 		ReportData: V3ReportData{
-			TLSKeyFP:        hex.EncodeToString(tlsKeyFP[:]),
-			HPKEKey:         hex.EncodeToString(hpkeKey[:]),
-			Nonce:           hex.EncodeToString(nonce),
-			GPUEvidenceHash: hex.EncodeToString(gpuHash),
+			TLSKeyFP:             hex.EncodeToString(tlsKeyFP[:]),
+			HPKEKey:              hex.EncodeToString(hpkeKey[:]),
+			Nonce:                hex.EncodeToString(nonce),
+			GPUEvidenceHash:      hexOrEmpty(gpuHash),
+			NVSwitchEvidenceHash: hexOrEmpty(nvswitchHash),
 		},
 		CPU: V3CPU{
 			Platform: platform,

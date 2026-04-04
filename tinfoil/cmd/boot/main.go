@@ -102,14 +102,15 @@ func run() error {
 	start = time.Now()
 	gpuCount := config.GPUs
 	if gpuCount == 0 {
-		var err error
-		gpuCount, err = detectGPUCount()
+		detected, err := detectGPUCount()
 		if err != nil {
 			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 			return err
 		}
-		if gpuCount > 0 {
-			log.Printf("GPUs not set in config, detected %d from hardware", gpuCount)
+		if detected > 0 {
+			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start),
+				fmt.Sprintf("detected %d GPU(s) but config declares gpus: 0 — set the correct gpu count in the config", detected))
+			return fmt.Errorf("gpu count mismatch: detected %d, config says 0", detected)
 		}
 	}
 	if gpuCount > 0 && config.ShimCfg.DummyAttestation {

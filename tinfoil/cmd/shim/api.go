@@ -129,6 +129,7 @@ func NewShimServer(
 	rateLimiter *RateLimiter,
 	att *attestation.Document,
 	identityBody tinfoilattestation.BodyV2,
+	gpuCount int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	config *config.Config,
@@ -244,24 +245,33 @@ func NewShimServer(
 				}
 			}
 
-			// Collect fresh GPU evidence with nonce
-			var gpuJSON json.RawMessage
-			var gpuNonce32 [32]byte
-			copy(gpuNonce32[:], nonce)
-			gpuEvidence, err := tinfoilattestation.CollectGPUEvidence(gpuNonce32)
-			if err != nil {
-				log.Printf("GPU evidence collection failed (non-fatal): %v", err)
-			} else if len(gpuEvidence.Evidences) > 0 {
-				gpuJSON, _ = json.Marshal(gpuEvidence)
+			// Collect fresh GPU and NVSwitch evidence with nonce (skip if no hardware)
+			var gpuJSON, nvswitchJSON json.RawMessage
+			var nonce32 [32]byte
+			copy(nonce32[:], nonce)
+			if gpuCount > 0 {
+				gpuEvidence, err := tinfoilattestation.CollectGPUEvidence(nonce32)
+				if err != nil {
+					log.Printf("GPU evidence collection failed (non-fatal): %v", err)
+				} else if len(gpuEvidence.Evidences) > 0 {
+					gpuJSON, _ = json.Marshal(gpuEvidence)
+				}
+				if gpuCount >= 8 {
+					nvswitchJSON, err = tinfoilattestation.CollectNVSwitchEvidence(nonce32)
+					if err != nil {
+						log.Printf("NVSwitch evidence collection failed (non-fatal): %v", err)
+						nvswitchJSON = nil
+					}
+				}
 			}
 
-			// Build signed V3: GPU evidence hash is bound into CPU REPORT_DATA
+			// Build signed V3: GPU + NVSwitch evidence hashes bound into CPU REPORT_DATA
 			v3, err := tinfoilattestation.BuildV3(
 				identityBody.TLSKeyFP,
 				identityBody.HPKEKey,
 				nonce,
 				gpuJSON,
-				nil, // NVSwitch: TODO when NSCQ support is added
+				nvswitchJSON,
 				tlsCert,
 			)
 			if err != nil {

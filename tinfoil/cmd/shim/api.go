@@ -226,26 +226,14 @@ func NewShimServer(
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		// V3 attestation — always fresh, with verifier-supplied or random nonce
-		if r.URL.Query().Get("v") == "3" {
-			var nonce []byte
-			if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
-				var err error
-				nonce, err = hex.DecodeString(nonceHex)
-				if err != nil || len(nonce) != 32 {
-					writeJSONError(w, "Invalid nonce: must be exactly 32 bytes (64 hex chars)", errTypeInvalidRequest, http.StatusBadRequest)
-					return
-				}
-			} else {
-				var err error
-				nonce, err = tinfoilattestation.RandomNonce()
-				if err != nil {
-					writeJSONError(w, "Failed to generate nonce", errTypeServer, http.StatusInternalServerError)
-					return
-				}
+		// Fresh attestation with nonce: ?nonce=<64 hex chars>
+		if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
+			nonce, err := hex.DecodeString(nonceHex)
+			if err != nil || len(nonce) != 32 {
+				writeJSONError(w, "Invalid nonce: must be exactly 32 bytes (64 hex chars)", errTypeInvalidRequest, http.StatusBadRequest)
+				return
 			}
 
-			// Collect fresh GPU and NVSwitch evidence with nonce (skip if no hardware)
 			var gpuJSON, nvswitchJSON json.RawMessage
 			var nonce32 [32]byte
 			copy(nonce32[:], nonce)
@@ -265,8 +253,7 @@ func NewShimServer(
 				}
 			}
 
-			// Build signed V3: GPU + NVSwitch evidence hashes bound into CPU REPORT_DATA
-			v3, err := tinfoilattestation.BuildV3(
+			fresh, err := tinfoilattestation.BuildAttestation(
 				identityBody.TLSKeyFP,
 				identityBody.HPKEKey,
 				nonce,
@@ -275,16 +262,16 @@ func NewShimServer(
 				tlsCert,
 			)
 			if err != nil {
-				log.Printf("V3 attestation build failed: %v", err)
+				log.Printf("Fresh attestation failed: %v", err)
 				writeJSONError(w, "Failed to build attestation", errTypeServer, http.StatusInternalServerError)
 				return
 			}
 
-			json.NewEncoder(w).Encode(v3)
+			json.NewEncoder(w).Encode(fresh)
 			return
 		}
 
-		// Legacy V2
+		// Legacy (no nonce)
 		json.NewEncoder(w).Encode(att)
 	})))
 

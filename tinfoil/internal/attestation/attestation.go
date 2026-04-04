@@ -100,21 +100,19 @@ func DummyReport(userData [64]byte) *verifierattestation.Document {
 	}
 }
 
-// V3 types — shared between boot (writes to ramdisk) and shim (serves endpoint)
+const AttestationFormat = "https://tinfoil.sh/predicate/attestation/v3"
 
-const V3Format = "https://tinfoil.sh/predicate/attestation/v3"
-
-type V3 struct {
+type Attestation struct {
 	Format      string          `json:"format"`
-	ReportData  V3ReportData    `json:"report_data"`
-	CPU         V3CPU           `json:"cpu"`
+	ReportData  ReportDataInfo  `json:"report_data"`
+	CPU         CPUReport       `json:"cpu"`
 	GPU         json.RawMessage `json:"gpu,omitempty"`
 	NVSwitch    json.RawMessage `json:"nvswitch,omitempty"`
 	Certificate string          `json:"certificate"`
 	Signature   string          `json:"signature"`
 }
 
-type V3ReportData struct {
+type ReportDataInfo struct {
 	TLSKeyFP             string `json:"tls_key_fp"`
 	HPKEKey              string `json:"hpke_key"`
 	Nonce                string `json:"nonce"`
@@ -122,7 +120,7 @@ type V3ReportData struct {
 	NVSwitchEvidenceHash string `json:"nvswitch_evidence_hash,omitempty"`
 }
 
-type V3CPU struct {
+type CPUReport struct {
 	Platform string `json:"platform"`
 	Report   string `json:"report"`
 }
@@ -169,17 +167,17 @@ func RandomNonce() ([]byte, error) {
 	return nonce, nil
 }
 
-// BuildV3 constructs and signs a complete V3 attestation document.
-// It collects a fresh CPU report with the gpu evidence hash bound into REPORT_DATA,
+// BuildAttestation constructs and signs a fresh attestation document.
+// It collects a fresh CPU report with evidence hashes bound into REPORT_DATA,
 // then signs the entire payload with the TLS private key.
-func BuildV3(
+func BuildAttestation(
 	tlsKeyFP [32]byte,
 	hpkeKey [32]byte,
 	nonce []byte,
 	gpuJSON json.RawMessage,
 	nvswitchJSON json.RawMessage,
 	tlsCert *tls.Certificate,
-) (*V3, error) {
+) (*Attestation, error) {
 	gpuHash := EvidenceHash(gpuJSON)
 	nvswitchHash := EvidenceHash(nvswitchJSON)
 	reportData := ComputeReportData(tlsKeyFP, hpkeKey, nonce, gpuHash, nvswitchHash)
@@ -198,16 +196,16 @@ func BuildV3(
 		}))
 	}
 
-	v3 := &V3{
-		Format: V3Format,
-		ReportData: V3ReportData{
+	att := &Attestation{
+		Format: AttestationFormat,
+		ReportData: ReportDataInfo{
 			TLSKeyFP:             hex.EncodeToString(tlsKeyFP[:]),
 			HPKEKey:              hex.EncodeToString(hpkeKey[:]),
 			Nonce:                hex.EncodeToString(nonce),
 			GPUEvidenceHash:      hexOrEmpty(gpuHash),
 			NVSwitchEvidenceHash: hexOrEmpty(nvswitchHash),
 		},
-		CPU: V3CPU{
+		CPU: CPUReport{
 			Platform: platform,
 			Report:   base64.StdEncoding.EncodeToString(rawReport),
 		},
@@ -216,19 +214,18 @@ func BuildV3(
 		Certificate: certPEM,
 	}
 
-	// Sign the document (signature field is empty during signing)
-	sig, err := signV3(v3, tlsCert)
+	sig, err := signAttestation(att, tlsCert)
 	if err != nil {
-		return nil, fmt.Errorf("signing V3 attestation: %w", err)
+		return nil, fmt.Errorf("signing attestation: %w", err)
 	}
-	v3.Signature = sig
+	att.Signature = sig
 
-	return v3, nil
+	return att, nil
 }
 
-// signV3 signs the V3 document with the TLS private key.
+// signAttestation signs the document with the TLS private key.
 // The signature covers SHA-256 of the JSON-serialized document (with signature field empty).
-func signV3(v3 *V3, tlsCert *tls.Certificate) (string, error) {
+func signAttestation(att *Attestation, tlsCert *tls.Certificate) (string, error) {
 	if tlsCert == nil || tlsCert.PrivateKey == nil {
 		return "", nil
 	}
@@ -237,7 +234,7 @@ func signV3(v3 *V3, tlsCert *tls.Certificate) (string, error) {
 		return "", fmt.Errorf("TLS key is not ECDSA")
 	}
 
-	data, err := json.Marshal(v3)
+	data, err := json.Marshal(att)
 	if err != nil {
 		return "", fmt.Errorf("marshaling for signing: %w", err)
 	}

@@ -39,7 +39,7 @@ func (a BodyV2) Marshal() [64]byte {
 
 // Report fetches the raw hardware attestation report and platform identifier.
 func Report(userData [64]byte) (report []byte, platform string, err error) {
-	if _, err := os.Stat("/dev/sev-guest"); err == nil {
+	if _, statErr := os.Stat("/dev/sev-guest"); statErr == nil {
 		var qp sevclient.QuoteProvider
 		qp, err = sevclient.GetQuoteProvider()
 		if err != nil {
@@ -53,7 +53,7 @@ func Report(userData [64]byte) (report []byte, platform string, err error) {
 			report = report[:sevabi.ReportSize]
 		}
 		return report, PlatformSEVSNP, nil
-	} else if _, err := os.Stat("/dev/tdx_guest"); err == nil {
+	} else if _, statErr := os.Stat("/dev/tdx_guest"); statErr == nil {
 		var qp tdxclient.QuoteProvider
 		qp, err = tdxclient.GetQuoteProvider()
 		if err != nil {
@@ -227,7 +227,7 @@ func BuildAttestation(
 // The signature covers SHA-256 of the JSON-serialized document (with signature field empty).
 func signAttestation(att *Attestation, tlsCert *tls.Certificate) (string, error) {
 	if tlsCert == nil || tlsCert.PrivateKey == nil {
-		return "", nil
+		return "", fmt.Errorf("TLS certificate or private key is nil, cannot sign attestation")
 	}
 	ecKey, ok := tlsCert.PrivateKey.(*ecdsa.PrivateKey)
 	if !ok {

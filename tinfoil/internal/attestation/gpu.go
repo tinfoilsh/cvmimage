@@ -88,6 +88,13 @@ func CollectGPUEvidence(nonce [32]byte) (*GPUEvidenceCollection, error) {
 			return nil, fmt.Errorf("GetConfComputeGpuCertificate(%d): %s", i, nvml.ErrorString(ret))
 		}
 
+		if report.AttestationReportSize > uint32(len(report.AttestationReport)) {
+			return nil, fmt.Errorf("GPU %d: attestation report size %d exceeds buffer", i, report.AttestationReportSize)
+		}
+		if cert.AttestationCertChainSize > uint32(len(cert.AttestationCertChain)) {
+			return nil, fmt.Errorf("GPU %d: cert chain size %d exceeds buffer", i, cert.AttestationCertChainSize)
+		}
+
 		evidences = append(evidences, GPUEvidence{
 			Arch:        archName,
 			Certificate: base64.StdEncoding.EncodeToString(cert.AttestationCertChain[:cert.AttestationCertChainSize]),

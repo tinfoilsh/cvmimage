@@ -155,11 +155,10 @@ func run() error {
 	start = time.Now()
 	log.Println("Configuring firewall")
 	if err := setupFirewall(config); err != nil {
-		log.Printf("Warning: firewall setup failed: %v", err)
-		tracker.Record(boot.StageFirewall, boot.StatusWarning, time.Since(start), err.Error())
-	} else {
-		tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
+		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("firewall setup failed: %w", err)
 	}
+	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
 
 	// 8. Models
 	start = time.Now()

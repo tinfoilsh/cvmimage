@@ -93,6 +93,43 @@ func TestBuildEnvNilConfig(t *testing.T) {
 	}
 }
 
+func TestValidateContainers(t *testing.T) {
+	const goodImage = "ghcr.io/tinfoilsh/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tests := []struct {
+		name      string
+		c         Container
+		debugMode bool
+		wantErr   bool
+	}{
+		{"digest-pinned ok", Container{Name: "ok", Image: goodImage}, false, false},
+		{"tag-only image rejected", Container{Name: "bad", Image: "alpine:latest"}, false, true},
+		{"short digest rejected", Container{Name: "bad", Image: "alpine@sha256:deadbeef"}, false, true},
+		{"missing image rejected", Container{Name: "bad"}, false, true},
+		{"pid host rejected", Container{Name: "x", Image: goodImage, PidMode: "host"}, false, true},
+		{"pid host allowed in debug", Container{Name: "x", Image: goodImage, PidMode: "host"}, true, false},
+		{"ipc host rejected", Container{Name: "x", Image: goodImage, IPC: "host"}, false, true},
+		{"sys_admin cap rejected", Container{Name: "x", Image: goodImage, CapAdd: []string{"SYS_ADMIN"}}, false, true},
+		{"cap_ prefix rejected", Container{Name: "x", Image: goodImage, CapAdd: []string{"CAP_NET_ADMIN"}}, false, true},
+		{"lowercase cap rejected", Container{Name: "x", Image: goodImage, CapAdd: []string{"sys_ptrace"}}, false, true},
+		{"benign cap allowed", Container{Name: "x", Image: goodImage, CapAdd: []string{"IPC_LOCK"}}, false, false},
+		{"dangerous cap allowed in debug", Container{Name: "x", Image: goodImage, CapAdd: []string{"SYS_ADMIN"}}, true, false},
+		{"external env LD_PRELOAD rejected", Container{Name: "x", Image: goodImage, Env: []interface{}{"LD_PRELOAD"}}, false, true},
+		{"external env PYTHONPATH rejected", Container{Name: "x", Image: goodImage, Env: []interface{}{"PYTHONPATH"}}, false, true},
+		{"external env benign allowed", Container{Name: "x", Image: goodImage, Env: []interface{}{"DOMAIN"}}, false, false},
+		{"hardcoded env LD_PRELOAD allowed", Container{Name: "x", Image: goodImage, Env: []interface{}{map[string]interface{}{"LD_PRELOAD": "/x"}}}, false, false},
+		{"secret HF_TOKEN rejected", Container{Name: "x", Image: goodImage, Secrets: []string{"HF_TOKEN"}}, false, true},
+		{"secret API_KEY allowed", Container{Name: "x", Image: goodImage, Secrets: []string{"API_KEY"}}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateContainers([]Container{tt.c}, tt.debugMode)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("got err=%v, wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestParseDuration(t *testing.T) {
 	tests := []struct {
 		input string

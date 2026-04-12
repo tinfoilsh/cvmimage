@@ -195,8 +195,10 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 	log.Printf("GPU topology OK: all %d GPUs see the same %d switches", expectedGPUCount, expectedSwitchCount)
 
 	// Switch side: each switch's own PDI must be in the GPU-reported set,
-	// and each must see exactly 8 unique GPUs, identical across all switches
+	// each must appear exactly once, and each must see exactly 8 unique GPUs
+	// identical across all switches.
 	var expectedGPUs map[string]struct{}
+	seenSwitchPDIs := make(map[string]struct{}, expectedSwitchCount)
 	for i, report := range switchReports {
 		label := fmt.Sprintf("switch[%d]", i)
 		checkSPDMVersion(report, label)
@@ -216,6 +218,10 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 		if _, ok := expectedSwitches[devicePDI]; !ok {
 			return fmt.Errorf("%s PDI %s not in GPU-reported switch set", label, devicePDI)
 		}
+		if _, dup := seenSwitchPDIs[devicePDI]; dup {
+			return fmt.Errorf("%s PDI %s already reported by another switch", label, devicePDI)
+		}
+		seenSwitchPDIs[devicePDI] = struct{}{}
 
 		rawGPUs, ok := fields[fieldGPUPDIs]
 		if !ok {

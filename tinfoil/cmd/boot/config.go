@@ -60,7 +60,7 @@ type Container struct {
 	CapDrop     []string    `yaml:"cap_drop,omitempty"`
 	SecurityOpt []string    `yaml:"security_opt,omitempty"`
 	Runtime     string      `yaml:"runtime,omitempty"`      // e.g., "nvidia"
-	NetworkMode string      `yaml:"network_mode,omitempty"` // "host", "bridge", "none" (default: "host")
+	NetworkMode string      `yaml:"network_mode,omitempty"` // "host", "bridge", "none" (default: "bridge")
 	IPC         string      `yaml:"ipc,omitempty"`          // e.g., "host"
 	PidMode     string      `yaml:"pid,omitempty"`          // "host" for host PID namespace
 	GPUs        interface{} `yaml:"gpus,omitempty"`         // "all", "0,1,2,3", or count (int)
@@ -125,14 +125,21 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
-	// Parse config
+	// Parse config strictly so typos in security-relevant fields fail loudly
+	// instead of silently falling back to defaults.
 	var config Config
-	if err := yaml.Unmarshal(configData, &config); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(configData))
+	dec.KnownFields(true)
+	if err := dec.Decode(&config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
 	if config.GPUs != 0 && config.GPUs != 1 && config.GPUs != 8 {
 		return nil, fmt.Errorf("gpus must be 0, 1, or 8 (got %d)", config.GPUs)
+	}
+
+	if err := validateContainers(config.Containers, isDebugMode()); err != nil {
+		return nil, fmt.Errorf("validating containers: %w", err)
 	}
 
 	shimCfg, err := parseShimConfig(config.ShimRaw)
@@ -225,6 +232,14 @@ func readDiskAndStripNulls(path string) ([]byte, error) {
 
 	data = bytes.TrimRight(data, "\x00")
 	return data, nil
+}
+
+// isDebugMode reports whether the kernel cmdline contains tinfoil-debug=on.
+// The cmdline is measured into RTMR[2] / the SNP launch digest, so debug mode
+// is distinguishable to remote verifiers.
+func isDebugMode() bool {
+	v, err := getCmdlineParam("tinfoil-debug")
+	return err == nil && v == "on"
 }
 
 // getCmdlineParam extracts a parameter value from /proc/cmdline

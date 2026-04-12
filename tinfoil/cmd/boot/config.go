@@ -139,6 +139,9 @@ func loadAndVerifyConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
 	}
+	if shimCfg.DummyAttestation && !isDebugBuild() {
+		return nil, fmt.Errorf("dummy-attestation is set but kernel cmdline lacks tinfoil-debug=on; refusing to disable hardware attestation on a release image")
+	}
 	config.ShimCfg = shimCfg
 
 	shimYAML, err := yaml.Marshal(shimCfg)
@@ -225,6 +228,15 @@ func readDiskAndStripNulls(path string) ([]byte, error) {
 
 	data = bytes.TrimRight(data, "\x00")
 	return data, nil
+}
+
+// isDebugBuild reports whether the kernel was booted with tinfoil-debug=on.
+// Debug-only behaviors (dummy attestation, localhost domain) must be gated on
+// this so they are only reachable on images whose firmware measurement differs
+// from a release image.
+func isDebugBuild() bool {
+	v, err := getCmdlineParam("tinfoil-debug")
+	return err == nil && v == "on"
 }
 
 // getCmdlineParam extracts a parameter value from /proc/cmdline

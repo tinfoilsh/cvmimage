@@ -33,6 +33,9 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 	userData := aBody.Marshal()
 
 	if id.Domain == "localhost" || shimCfg.DummyAttestation {
+		if !isDebugBuild() {
+			return nil, fmt.Errorf("dummy attestation requested (domain=%q, dummy-attestation=%t) but kernel cmdline lacks tinfoil-debug=on", id.Domain, shimCfg.DummyAttestation)
+		}
 		log.Println("Using dummy attestation report")
 		doc := attestation.DummyReport(userData)
 		if err := writeAttestationDoc(doc); err != nil {

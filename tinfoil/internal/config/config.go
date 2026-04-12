@@ -34,9 +34,9 @@ type Config struct {
 
 	RateLimit   float64 `yaml:"rate-limit"`
 	RateBurst   int     `yaml:"rate-burst"`
-	CacheDir    string  `yaml:"cache-dir" default:"/mnt/ramdisk/tfshim-cache"`
+	CacheDir    string  `yaml:"cache-dir" default:"/mnt/ramdisk/private/tfshim-cache"`
 	Email       string  `yaml:"email" default:"tls@tinfoil.sh"`
-	HPKEKeyFile string  `yaml:"hpke-key-file" default:"/mnt/ramdisk/hpke_key.json"`
+	HPKEKeyFile string  `yaml:"hpke-key-file" default:"/mnt/ramdisk/private/hpke_key.json"`
 
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
 	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`

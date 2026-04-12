@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 
@@ -41,6 +42,9 @@ func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.Ext
 	serverIdentity, err := identity.FromFile(hpkeKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("loading HPKE identity: %w", err)
+	}
+	if err := os.Chmod(hpkeKeyFile, 0o600); err != nil {
+		return nil, fmt.Errorf("restricting HPKE key permissions: %w", err)
 	}
 
 	hpkeKeyBytes := serverIdentity.MarshalPublicKey()

@@ -27,8 +27,8 @@ type Config struct {
 	// When false, no API key checks are performed regardless of AuthenticatedEndpoints.
 	Authenticated bool `yaml:"authenticated" default:"false"`
 	// AuthenticatedEndpoints is the list of endpoint patterns that require API key authentication.
-	// If absent (nil), defaults to ["/v1/chat/completions"] for backwards compatibility.
-	// If present but empty, no endpoints require authentication.
+	// If absent (nil), all endpoints require authentication.
+	// If present but empty, no endpoints require authentication (explicit opt-out).
 	// Supports the same wildcard patterns as Paths (e.g. "/v1/*").
 	AuthenticatedEndpoints *[]string `yaml:"authenticated-endpoints"`
 
@@ -40,6 +40,11 @@ type Config struct {
 
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
 	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
+
+	// ExpectedGPUs is the GPU count from the attested boot config. The shim
+	// uses this (not runtime NVML detection) to decide whether GPU evidence
+	// is mandatory, so a host that breaks NVML cannot silently strip it.
+	ExpectedGPUs int `yaml:"expected-gpus" default:"0"`
 }
 
 const (

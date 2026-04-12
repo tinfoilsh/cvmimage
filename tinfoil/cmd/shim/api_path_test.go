@@ -22,6 +22,11 @@ func TestPathMatchesPattern(t *testing.T) {
 		{"wildcard no match different prefix", "/v1/user/*", "/v1/admin/123", false},
 		{"wildcard no match partial prefix", "/v1/user/*", "/v1/username", false},
 
+		// Segment-boundary enforcement for non-slash-terminated wildcards
+		{"bare wildcard matches self", "/v1/chat*", "/v1/chat", true},
+		{"bare wildcard matches subpath", "/v1/chat*", "/v1/chat/completions", true},
+		{"bare wildcard rejects sibling", "/v1/chat*", "/v1/chatsmuggled", false},
+
 		// Edge cases
 		{"wildcard only matches all", "/*", "/anything/here", true},
 		{"wildcard at root", "/*", "/", true},

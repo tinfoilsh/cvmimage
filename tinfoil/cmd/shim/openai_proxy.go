@@ -62,6 +62,34 @@ func addPaddingToStreamChunk(data string) (string, error) {
 	return string(modified), nil
 }
 
+// unsafeRequestFields are vLLM-specific request fields that allow callers to
+// supply Jinja templates or processor kwargs. Stripping them keeps the
+// upstream's template-rendering surface limited to operator-shipped templates.
+var unsafeRequestFields = []string{
+	"chat_template",
+	"chat_template_kwargs",
+	"mm_processor_kwargs",
+	"guided_decoding_backend",
+}
+
+func stripUnsafeRequestFields(body []byte) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	changed := false
+	for _, k := range unsafeRequestFields {
+		if _, ok := m[k]; ok {
+			delete(m, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return body, nil
+	}
+	return json.Marshal(m)
+}
+
 type chatRequest struct {
 	Model    string `json:"model"`
 	Stream   bool   `json:"stream"`
@@ -97,7 +125,13 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := json.Unmarshal(body, &cr); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal request body: %w", err)
 	}
+	body, err = stripUnsafeRequestFields(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sanitise request body: %w", err)
+	}
 	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 
 	// Make the actual request
 	resp, err := t.base.RoundTrip(req)

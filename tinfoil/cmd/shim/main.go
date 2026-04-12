@@ -54,6 +54,7 @@ func main() {
 	handler.Store(http.HandlerFunc(bootStagesHandler().ServeHTTP))
 
 	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS13,
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return cert.Load(), nil
 		},
@@ -199,8 +200,11 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
 
-		gpuCount := tinfoilattestation.DetectGPUCount()
-		log.Printf("Detected %d GPU(s) for attestation", gpuCount)
+		gpuCount := config.ExpectedGPUs
+		if detected := tinfoilattestation.DetectGPUCount(); detected != gpuCount {
+			log.Printf("Warning: NVML reports %d GPU(s) but attested config expects %d; using attested value", detected, gpuCount)
+		}
+		log.Printf("Expected %d GPU(s) for attestation", gpuCount)
 
 		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, gpuCount, serverIdentity, realCertParsed, config, externalConfig)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))

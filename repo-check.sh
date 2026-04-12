@@ -51,10 +51,6 @@ echo -n "Fetching NVIDIA Container Toolkit repo..."
 curl -sL "https://nvidia.github.io/libnvidia-container/stable/deb/${ARCH}/Packages" > "$TMPDIR/nvidia_container"
 echo " done"
 
-echo -n "Fetching Google Cloud repo..."
-curl -sL "https://packages.cloud.google.com/apt/dists/cloud-sdk/main/binary-${ARCH}/Packages" > "$TMPDIR/gcloud"
-echo " done"
-
 echo ""
 
 # Helper function to get versions from Packages file (reads from temp file)
@@ -77,8 +73,6 @@ lookup_package() {
     if [[ "$pkg_name" =~ ^(cuda-|nvidia-|libnvidia-|nvattest|libnvat) ]]; then
         is_third_party=true
     elif [[ "$pkg_name" =~ ^(docker-|containerd) ]]; then
-        is_third_party=true
-    elif [[ "$pkg_name" =~ ^google- ]]; then
         is_third_party=true
     fi
     
@@ -111,8 +105,8 @@ lookup_package() {
     local versions=""
     local repo=""
     
-    local -a repo_names=("NVIDIA CUDA" "NVIDIA Container" "Docker" "Google Cloud")
-    local -a repo_files=("$TMPDIR/nvidia_cuda" "$TMPDIR/nvidia_container" "$TMPDIR/docker" "$TMPDIR/gcloud")
+    local -a repo_names=("NVIDIA CUDA" "NVIDIA Container" "Docker")
+    local -a repo_files=("$TMPDIR/nvidia_cuda" "$TMPDIR/nvidia_container" "$TMPDIR/docker")
     
     for i in "${!repo_names[@]}"; do
         versions=$(get_versions "${repo_files[$i]}" "$pkg_name")

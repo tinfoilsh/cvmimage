@@ -149,7 +149,7 @@ static int wait_for_quote_completion(struct tdx_quote_buf *quote_buf, u32 timeou
 	 * Quote requests usually take a few seconds to complete, so waking up
 	 * once per second to recheck the status is fine for this use case.
 	 */
-	while (quote_buf->status == GET_QUOTE_IN_FLIGHT && i++ < timeout) {
+	while (READ_ONCE(quote_buf->status) == GET_QUOTE_IN_FLIGHT && i++ < timeout) {
 		if (msleep_interruptible(10))
 			return -EINTR;
 	}
@@ -162,6 +162,7 @@ static int tdx_report_new(struct tsm_report *report, void *data)
 	u8 *buf, *reportdata = NULL, *tdreport = NULL;
 	struct tdx_quote_buf *quote_buf = quote_data;
 	struct tsm_desc *desc = &report->desc;
+	u32 out_len;
 	int ret;
 	u64 err;
 
@@ -174,7 +175,7 @@ static int tdx_report_new(struct tsm_report *report, void *data)
 	 * Quote buf status is still in GET_QUOTE_IN_FLIGHT (owned by
 	 * VMM), don't permit any new request.
 	 */
-	if (quote_buf->status == GET_QUOTE_IN_FLIGHT) {
+	if (READ_ONCE(quote_buf->status) == GET_QUOTE_IN_FLIGHT) {
 		ret = -EBUSY;
 		goto done;
 	}
@@ -226,19 +227,25 @@ static int tdx_report_new(struct tsm_report *report, void *data)
 		goto done;
 	}
 
-	if (quote_buf->out_len > GET_QUOTE_BUF_SIZE - sizeof(*quote_buf)) {
+	/*
+	 * quote_buf is shared (decrypted) memory writable by the VMM at any
+	 * time. Snapshot out_len once so the bounds check, copy, and reported
+	 * length all use the same value.
+	 */
+	out_len = READ_ONCE(quote_buf->out_len);
+	if (out_len > GET_QUOTE_BUF_SIZE - sizeof(*quote_buf)) {
 		ret = -EIO;
 		goto done;
 	}
 
-	buf = kvmemdup(quote_buf->data, quote_buf->out_len, GFP_KERNEL);
+	buf = kvmemdup(quote_buf->data, out_len, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
 		goto done;
 	}
 
 	report->outblob = buf;
-	report->outblob_len = quote_buf->out_len;
+	report->outblob_len = out_len;
 
 	/*
 	 * TODO: parse the PEM-formatted cert chain out of the quote buffer when

@@ -20,8 +20,6 @@ systemctl mask rescue.target
 systemctl mask nvidia-powerd.service
 
 mkdir -p /mnt/ramdisk/docker-config
-mkdir -p /mnt/ramdisk/gcloud
-echo "export CLOUDSDK_CONFIG=/mnt/ramdisk/gcloud" >> /root/.bashrc
 echo "export DOCKER_CONFIG=/mnt/ramdisk/docker-config" >> /root/.bashrc
 
 # Build patched tdx-guest.ko
@@ -32,6 +30,10 @@ if [[ "$KVER" != ${EXPECTED_KERNEL_MAJOR}* ]]; then
     exit 1
 fi
 if [ -f /opt/tdx-fast-quote/tdx-guest.c ]; then
+    # Verify the vendored source matches the reviewed copy in this repo.
+    # Update this hash whenever mkosi.extra/opt/tdx-fast-quote/tdx-guest.c changes.
+    TDX_GUEST_SHA256="159ec49b4eababaf999483988fb4b167d66ac554a2c6ba9ed199ae248259bcb2"
+    echo "${TDX_GUEST_SHA256}  /opt/tdx-fast-quote/tdx-guest.c" | sha256sum -c -
     BUILDDIR=$(mktemp -d)
     cp /opt/tdx-fast-quote/tdx-guest.c "$BUILDDIR/"
     cp /usr/src/linux-headers-${KVER}/drivers/virt/coco/tdx-guest/Makefile "$BUILDDIR/"

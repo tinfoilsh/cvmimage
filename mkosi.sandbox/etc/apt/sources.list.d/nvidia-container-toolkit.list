@@ -1,1 +1,5 @@
+# NOTE: This repo is fetched live and is NOT covered by APT::Snapshot in
+# 50snapshot. The version pins in mkosi.conf bind the version string only,
+# not the package bytes. For full reproducibility, vendor the required .debs
+# into packages/ (see mkosi.conf PackageDirectories) and remove this source.
 deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /

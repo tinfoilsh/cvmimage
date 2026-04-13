@@ -1,4 +1,5 @@
-cmdline = "readonly=on console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-debug=on tinfoil-config-hash=$(shell sha256sum config.yml | cut -d ' ' -f 1)"
+cmdline = readonly=on console=ttyS0 root=/dev/sda2 tinfoil-config-hash=$(shell sha256sum config.yml | cut -d ' ' -f 1)
+debug_flags = earlyprintk=serial tinfoil-debug=on
 
 memory = 4096M
 cpus = 32
@@ -38,7 +39,7 @@ run:
 		-bios /home/ubuntu/cvmimage/OVMF.fd \
 		-kernel ./tinfoilcvm.vmlinuz \
 		-initrd ./tinfoilcvm.initrd \
-		-append $(cmdline) \
+		-append "$(cmdline) $(debug_flags)" \
 		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw,readonly=on \
 		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
 		-device scsi-hd,drive=disk0 \
@@ -62,7 +63,7 @@ measure:
 		--mode snp \
 		--vcpus=$(cpus) \
 		--vcpu-type=EPYC-v4 \
-		--append=$(cmdline) \
+		--append="$(cmdline)" \
 		--ovmf ./OVMF.fd \
 		--kernel tinfoilcvm.vmlinuz \
 		--initrd tinfoilcvm.initrd) && \

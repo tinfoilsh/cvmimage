@@ -14,7 +14,8 @@ func TestRequireBearer(t *testing.T) {
 		wantOK     bool
 		wantStatus int
 	}{
-		{"empty key allows all", "", "", true, 0},
+		{"empty key rejects all", "", "", false, http.StatusUnauthorized},
+		{"empty key rejects valid-looking token", "", "Bearer something", false, http.StatusUnauthorized},
 		{"valid token", "secret", "Bearer secret", true, 0},
 		{"case insensitive scheme", "secret", "bearer secret", true, 0},
 		{"uppercase scheme", "secret", "BEARER secret", true, 0},

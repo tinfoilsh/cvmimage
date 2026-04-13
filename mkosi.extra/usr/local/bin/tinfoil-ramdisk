@@ -13,10 +13,23 @@ if [ $SIZE -lt 16 ]; then
     SIZE=4
 fi
 
-mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
-chmod 777 /mnt/ramdisk
+mount -t tmpfs -o size=${SIZE}G,mode=0755,nodev,nosuid tmpfs /mnt/ramdisk
+
+# private/ holds enclave keys, secrets, and daemon state — never exposed to
+# workload containers.
+mkdir -p /mnt/ramdisk/private
+chmod 700 /mnt/ramdisk/private
+
+# public/ is bind-mounted read-only into workload containers at /tinfoil.
+mkdir -p /mnt/ramdisk/public
+chmod 755 /mnt/ramdisk/public
+
+# Daemon data roots (docker/containerd start before tinfoil-boot).
+mkdir -p /mnt/ramdisk/private/docker
+mkdir -p /mnt/ramdisk/private/containerd/root
+mkdir -p /mnt/ramdisk/private/containerd/run
 
 # Mount tmp as ramdisk
-mount -t tmpfs -o size=512M tmpfs /tmp
+mount -t tmpfs -o size=512M,mode=1777,nodev,nosuid tmpfs /tmp
 
 echo "Ramdisk ready"

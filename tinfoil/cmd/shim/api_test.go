@@ -90,10 +90,10 @@ func TestRequiresAuth(t *testing.T) {
 		path                   string
 		want                   bool
 	}{
-		// Nil (absent from config): default behaviour — only /v1/chat/completions
+		// Nil (absent from config): all paths require auth (secure default)
 		{"default nil, chat completions", nil, "/v1/chat/completions", true},
-		{"default nil, other path", nil, "/v1/models", false},
-		{"default nil, root", nil, "/", false},
+		{"default nil, other path", nil, "/v1/models", true},
+		{"default nil, root", nil, "/", true},
 
 		// Empty list: no endpoints require auth
 		{"empty list, chat completions", ptr([]string{}), "/v1/chat/completions", false},

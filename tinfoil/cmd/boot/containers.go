@@ -277,10 +277,12 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 		}
 	}
 
-	// Host configuration
+	// Host configuration. Default to bridge networking so workload containers
+	// do not share the host network namespace (and thus the shim's loopback
+	// listeners) unless the attested config explicitly requests it.
 	networkMode := c.NetworkMode
 	if networkMode == "" {
-		networkMode = "host" // Default to host networking
+		networkMode = "bridge"
 	}
 	hostConfig := &container.HostConfig{
 		NetworkMode:    container.NetworkMode(networkMode),

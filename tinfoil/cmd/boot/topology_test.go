@@ -40,10 +40,11 @@ type tlvEntry struct {
 // so the Go hex values here are the direct byte-for-byte equivalents.
 
 // test_gpu_topology_check line 34 — switch PDIs reported by each GPU:
-//   b'@\xb9\xc6\xb3\xd7H\xfd\x90'
-//   b'\xfd\xb5)\xf1G<\xb2%'
-//   b'\x10C\xc1N\x83Y\x96c'
-//   b'\xd0\xf6\x9d\x02\x8e\x15\n\xaa'
+//
+//	b'@\xb9\xc6\xb3\xd7H\xfd\x90'
+//	b'\xfd\xb5)\xf1G<\xb2%'
+//	b'\x10C\xc1N\x83Y\x96c'
+//	b'\xd0\xf6\x9d\x02\x8e\x15\n\xaa'
 var (
 	// b'@\xb9\xc6\xb3\xd7H\xfd\x90'  →  @ = 0x40, H = 0x48
 	switchA = []byte{0x40, 0xb9, 0xc6, 0xb3, 0xd7, 0x48, 0xfd, 0x90}
@@ -66,14 +67,15 @@ var (
 )
 
 // OPAQUE_FIELD_ID_SWITCH_GPU_PDIS (line 48-49):
-//   b'@\xb9\xc6\xb3\xd7H\xfd\x90'
-//   b'\xfd\xb5)\xf1G<\xb2%'
-//   b"\xbf\\\xc6'\xc8\x13\xae\xd8"   →  \\ = 0x5c, ' = 0x27
-//   b'\xe2\xd8[Y\x0eq2\x98'           →  [ = 0x5b, Y = 0x59, q = 0x71, 2 = 0x32
-//   b'\x10C\xc1N\x83Y\x96c'
-//   b'1d\x9c\xf1\x1c\x82\x08X'       →  1 = 0x31, d = 0x64, X = 0x58
-//   b'\xd0\xf6\x9d\x02\x8e\x15\n\xaa'
-//   b'\xd0\xf6\x9d\x02\x8e\x15\n\xab'
+//
+//	b'@\xb9\xc6\xb3\xd7H\xfd\x90'
+//	b'\xfd\xb5)\xf1G<\xb2%'
+//	b"\xbf\\\xc6'\xc8\x13\xae\xd8"   →  \\ = 0x5c, ' = 0x27
+//	b'\xe2\xd8[Y\x0eq2\x98'           →  [ = 0x5b, Y = 0x59, q = 0x71, 2 = 0x32
+//	b'\x10C\xc1N\x83Y\x96c'
+//	b'1d\x9c\xf1\x1c\x82\x08X'       →  1 = 0x31, d = 0x64, X = 0x58
+//	b'\xd0\xf6\x9d\x02\x8e\x15\n\xaa'
+//	b'\xd0\xf6\x9d\x02\x8e\x15\n\xab'
 var (
 	gpuPDI0 = []byte{0x40, 0xb9, 0xc6, 0xb3, 0xd7, 0x48, 0xfd, 0x90}
 	gpuPDI1 = []byte{0xfd, 0xb5, 0x29, 0xf1, 0x47, 0x3c, 0xb2, 0x25}
@@ -86,7 +88,8 @@ var (
 )
 
 // test_gpu_topology_check line 43 — expected unique_switches after LE read:
-//   {'639659834ec14310', '90fd48d7b3c6b940', 'aa0a158e029df6d0', '25b23c47f129b5fd'}
+//
+//	{'639659834ec14310', '90fd48d7b3c6b940', 'aa0a158e029df6d0', '25b23c47f129b5fd'}
 //
 // Like the Python reference, our Go code applies readFieldAsLittleEndian to
 // GPU-reported switch PDIs, reversing the byte order before hex encoding.
@@ -257,6 +260,26 @@ func TestValidateTopologySwitchPDINotInGPUSet(t *testing.T) {
 	}
 	if err := validateTopology(gpuReports, switchReports); err == nil {
 		t.Fatal("expected topology error for unknown switch PDI")
+	}
+}
+
+func TestValidateTopologyDuplicateSwitchPDI(t *testing.T) {
+	gpuReports := make([][]byte, 8)
+	for i := range gpuReports {
+		gpuReports[i] = buildSPDMReport([]tlvEntry{
+			{typ: fieldPDI, val: switchPDIsForGPU()},
+		})
+	}
+	// switch[2] reuses switchDevA's PDI: each PDI is in the GPU-reported set,
+	// but the four reports do not cover four distinct devices.
+	switchReports := [][]byte{
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevA}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevB}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevA}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevD}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+	}
+	if err := validateTopology(gpuReports, switchReports); err == nil {
+		t.Fatal("expected topology error for duplicate switch device PDI")
 	}
 }
 

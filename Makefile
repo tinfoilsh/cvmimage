@@ -15,7 +15,7 @@ clean:
 
 deepclean:
 	mkosi clean
-	sudo rm -rf tinfoilcvm.*
+	sudo rm -f packages/nvattest_*.deb packages/libnvat_*.deb
 
 build: nvattest
 	mkdir -p packages mkosi.extra/usr/local/bin

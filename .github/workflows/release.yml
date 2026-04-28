@@ -62,6 +62,7 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD":/workspace -w /workspace \
+            -v nvattest-apt-cache:/var/cache/apt \
             -e DEBIAN_FRONTEND=noninteractive \
             -e HOST_UID="$(id -u)" \
             -e HOST_GID="$(id -g)" \

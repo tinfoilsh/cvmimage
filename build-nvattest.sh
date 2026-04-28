@@ -8,7 +8,6 @@ set -Eeuo pipefail
 UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
 UPSTREAM_TAG=2026.03.02
 UPSTREAM_SHA=0c1be386a8fbb8f2766a6a556d10df86f5fed9d3
-APT_SNAPSHOT_DATE=20260424T000000Z
 
 # Transitive CMake FetchContent deps. We pre-fetch each at the expected SHA
 # *before* cmake runs and pass FETCHCONTENT_SOURCE_DIR_<NAME>, so a moved
@@ -43,24 +42,16 @@ BUILD="${WORK}/build"
 INSTALL="${WORK}/install"
 mkdir -p "${OUT_DIR}"
 
-# Bootstrap toolchain from snapshot.ubuntu.com (reproducible). ca-certificates
-# first so apt can do TLS to snapshot; integrity is enforced by GPG either way.
-# Drop docker-clean so /var/cache/apt/archives survives across container runs
+# Install build deps from the live archive. The toolchain is throwaway —
+# it never ships in the image — so we don't pin its bytes. The bytes that
+# do ship (the produced .debs) are constrained by the source/dep SHAs
+# above. Drop docker-clean so /var/cache/apt/archives survives across
+# container runs (see Makefile volume mount).
 export DEBIAN_FRONTEND=noninteractive
 rm -f /etc/apt/apt.conf.d/docker-clean
 apt-get update -q
-apt-get install -y --no-install-recommends ca-certificates
-cat > /etc/apt/sources.list.d/ubuntu.sources <<EOF
-Types: deb
-URIs: https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT_DATE}
-Suites: resolute resolute-updates resolute-security
-Components: main universe restricted multiverse
-Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-Check-Valid-Until: no
-EOF
-apt-get update -q
 apt-get install -y --no-install-recommends \
-    build-essential cmake git perl pkg-config rustc cargo \
+    ca-certificates build-essential cmake git perl pkg-config rustc cargo \
     libxml2-dev curl xz-utils
 
 # Clone upstream and verify SHA.

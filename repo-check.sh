@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-UBUNTU_CODENAME="noble"        # Ubuntu release codename (noble, jammy, etc.)
-UBUNTU_VERSION="ubuntu2404"    # For NVIDIA repos (ubuntu2404, ubuntu2204, etc.)
+UBUNTU_CODENAME="resolute"     # Ubuntu release codename (resolute, noble, jammy, etc.)
+UBUNTU_VERSION="ubuntu2604"    # For NVIDIA repos (ubuntu2604, ubuntu2404, etc.)
 ARCH="amd64"                   # Target architecture
 
 MKOSI_CONF="${1:-mkosi.conf}"
@@ -74,7 +74,7 @@ lookup_package() {
     
     # Check if this is a third-party package (by name pattern)
     local is_third_party=false
-    if [[ "$pkg_name" =~ ^(cuda-|nvidia-|libnvidia-) ]]; then
+    if [[ "$pkg_name" =~ ^(cuda-|nvidia-|libnvidia-|nvattest|libnvat) ]]; then
         is_third_party=true
     elif [[ "$pkg_name" =~ ^(docker-|containerd) ]]; then
         is_third_party=true

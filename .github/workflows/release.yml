@@ -31,10 +31,10 @@ jobs:
       - name: Install build dependencies
         run: |
           # Use Ubuntu snapshot to pin packages
-          SNAPSHOT_DATE="20250107T000000Z"
-          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list
-          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          SNAPSHOT_DATE="20260424T000000Z"
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute main restricted universe multiverse" | sudo tee /etc/apt/sources.list
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
     
           sudo apt-get update
           sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils
@@ -54,6 +54,19 @@ jobs:
           go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-boot ./cmd/boot
           go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-shim ./cmd/shim
           sha256sum ../mkosi.extra/usr/local/bin/tinfoil-boot ../mkosi.extra/usr/local/bin/tinfoil-shim
+
+      # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. The image digest
+      # is also pinned in cvmimage/Makefile; rotate both together via
+      # `docker buildx imagetools inspect ubuntu:26.04`.
+      - name: Build nvattest from source (in resolute container)
+        run: |
+          docker run --rm \
+            -v "$PWD":/workspace -w /workspace \
+            -e DEBIAN_FRONTEND=noninteractive \
+            ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4 \
+            bash -c './build-nvattest.sh'
+          sudo chown -R "$USER:$USER" packages
+          ls -la packages/
 
       - name: Build image
         run: |

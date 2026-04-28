@@ -1,0 +1,27 @@
+Fast-quote optimization for TDX guest driver.
+
+The default `tdx-guest` driver polls every 1s for the VMM to fulfill a
+`TDG.VP.VMCALL<GetQuote>` request, which adds ~1s of avoidable latency
+per attestation. This patch drops the poll interval to 10ms and bumps
+the iteration count so the wall-clock timeout stays at ~30s.
+
+--- a/tdx-guest.c
++++ b/tdx-guest.c
+@@ -202,7 +202,7 @@
+  * GetQuote request timeout in seconds. Expect that 30 seconds
+  * is enough time for QE to respond to any Quote requests.
+  */
+-static u32 getquote_timeout = 30;
++static u32 getquote_timeout = 3000;
+ 
+ static long tdx_get_report0(struct tdx_report_req __user *req)
+ {
+@@ -259,7 +259,7 @@
+ 	 * once per second to recheck the status is fine for this use case.
+ 	 */
+ 	while (quote_buf->status == GET_QUOTE_IN_FLIGHT && i++ < timeout) {
+-		if (msleep_interruptible(MSEC_PER_SEC))
++		if (msleep_interruptible(10))
+ 			return -EINTR;
+ 	}
+ 

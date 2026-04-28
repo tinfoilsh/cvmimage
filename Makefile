@@ -31,9 +31,10 @@ packages/nvattest_1.2.0.1772475102-1_amd64.deb: build-nvattest.sh
 	docker run --rm \
 		-v "$(CURDIR)":/workspace -w /workspace \
 		-e DEBIAN_FRONTEND=noninteractive \
+		-e HOST_UID="$${SUDO_UID:-$$(id -u)}" \
+		-e HOST_GID="$${SUDO_GID:-$$(id -g)}" \
 		ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4 \
 		bash -c './build-nvattest.sh'
-	@chown -R "$${SUDO_UID:-$$(id -u)}:$${SUDO_GID:-$$(id -g)}" packages
 
 python-lockfile:
 	pip-compile --generate-hashes --allow-unsafe --output-file=mkosi.extra/opt/venv-requirements.txt python-requirements.in

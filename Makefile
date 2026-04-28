@@ -30,6 +30,7 @@ nvattest: packages/nvattest_1.2.0.1772475102-1_amd64.deb
 packages/nvattest_1.2.0.1772475102-1_amd64.deb: build-nvattest.sh
 	docker run --rm \
 		-v "$(CURDIR)":/workspace -w /workspace \
+		-v nvattest-apt-cache:/var/cache/apt \
 		-e DEBIAN_FRONTEND=noninteractive \
 		-e HOST_UID="$${SUDO_UID:-$$(id -u)}" \
 		-e HOST_GID="$${SUDO_GID:-$$(id -g)}" \

@@ -45,7 +45,9 @@ mkdir -p "${OUT_DIR}"
 
 # Bootstrap toolchain from snapshot.ubuntu.com (reproducible). ca-certificates
 # first so apt can do TLS to snapshot; integrity is enforced by GPG either way.
+# Drop docker-clean so /var/cache/apt/archives survives across container runs
 export DEBIAN_FRONTEND=noninteractive
+rm -f /etc/apt/apt.conf.d/docker-clean
 apt-get update -q
 apt-get install -y --no-install-recommends ca-certificates
 cat > /etc/apt/sources.list.d/ubuntu.sources <<EOF
@@ -58,9 +60,8 @@ Check-Valid-Until: no
 EOF
 apt-get update -q
 apt-get install -y --no-install-recommends \
-    cmake clang g++ git make perl pkg-config rustc cargo \
-    libxml2-dev autoconf automake libtool patchelf dpkg-dev \
-    curl xz-utils tar binutils
+    build-essential cmake git perl pkg-config rustc cargo \
+    libxml2-dev curl xz-utils
 
 # Clone upstream and verify SHA.
 git clone --depth=1 --branch "${UPSTREAM_TAG}" "${UPSTREAM_URL}" "${SRC}"

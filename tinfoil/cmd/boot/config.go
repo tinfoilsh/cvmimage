@@ -139,6 +139,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
 	}
+	shimCfg.ExpectedGPUs = config.GPUs
 	config.ShimCfg = shimCfg
 
 	shimYAML, err := yaml.Marshal(shimCfg)

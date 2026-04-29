@@ -34,7 +34,16 @@ import (
 func pathMatchesPattern(pattern, path string) bool {
 	if strings.HasSuffix(pattern, "*") {
 		prefix := strings.TrimSuffix(pattern, "*")
-		return strings.HasPrefix(path, prefix)
+		if !strings.HasPrefix(path, prefix) {
+			return false
+		}
+		// Require the wildcard to begin at a path-segment boundary so that
+		// "/v1/chat*" cannot match "/v1/chatsmuggled".
+		if strings.HasSuffix(prefix, "/") {
+			return true
+		}
+		rest := path[len(prefix):]
+		return rest == "" || rest[0] == '/'
 	}
 	return pattern == path
 }
@@ -50,14 +59,23 @@ func pathAllowed(allowedPaths []string, path string) bool {
 }
 
 // requiresAuth reports whether path requires API key authentication.
-// If authenticatedEndpoints is nil (not configured), it defaults to only
-// requiring auth for /v1/chat/completions for backwards compatibility.
-// If authenticatedEndpoints is an empty slice, no paths require auth.
+// If authenticatedEndpoints is nil (not configured), all paths require auth.
+// If authenticatedEndpoints is an empty slice, no paths require auth (explicit opt-out).
 func requiresAuth(authenticatedEndpoints *[]string, path string) bool {
 	if authenticatedEndpoints == nil {
-		return path == "/v1/chat/completions"
+		return true
 	}
 	return pathAllowed(*authenticatedEndpoints, path)
+}
+
+// extractBearerToken returns the token portion of an Authorization header,
+// accepting any capitalisation of the "Bearer" scheme.
+func extractBearerToken(header string) string {
+	const scheme = "bearer "
+	if len(header) < len(scheme) || !strings.EqualFold(header[:len(scheme)], scheme) {
+		return ""
+	}
+	return strings.TrimSpace(header[len(scheme):])
 }
 
 // OpenAI-compatible error type strings returned in API error responses.
@@ -147,6 +165,7 @@ func NewShimServer(
 			req.Header.Set("Host", "localhost")
 			req.Host = "localhost"
 			req.Header.Del(ehbpProtocol.EncapsulatedKeyHeader)
+			req.Header.Del("Authorization")
 
 			// Forward original host and protocol to the upstream
 			req.Header.Del("Forwarded")
@@ -178,7 +197,7 @@ func NewShimServer(
 	}
 
 	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		apiKey := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		apiKey := extractBearerToken(r.Header.Get("Authorization"))
 		if validator != nil && requiresAuth(config.AuthenticatedEndpoints, r.URL.Path) {
 			if len(apiKey) == 0 {
 				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
@@ -189,8 +208,7 @@ func NewShimServer(
 				log.Printf("Warning: failed to validate API key: %v", err)
 				var validationErr *online.ValidationError
 				if errors.As(err, &validationErr) {
-					// Pass through the JSON error body from the control plane
-					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 					w.WriteHeader(validationErr.StatusCode)
 					fmt.Fprint(w, validationErr.Message)
 				} else {
@@ -240,15 +258,22 @@ func NewShimServer(
 			if gpuCount > 0 {
 				gpuEvidence, err := tinfoilattestation.CollectGPUEvidence(nonce32)
 				if err != nil {
-					log.Printf("GPU evidence collection failed (non-fatal): %v", err)
-				} else if len(gpuEvidence.Evidences) > 0 {
-					gpuJSON, _ = json.Marshal(gpuEvidence)
+					log.Printf("GPU evidence collection failed for %d expected GPU(s): %v", gpuCount, err)
+					writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+					return
 				}
+				if got := len(gpuEvidence.Evidences); got != gpuCount {
+					log.Printf("GPU evidence count mismatch: expected %d, got %d", gpuCount, got)
+					writeJSONError(w, "GPU attestation evidence incomplete", errTypeServer, http.StatusInternalServerError)
+					return
+				}
+				gpuJSON, _ = json.Marshal(gpuEvidence)
 				if gpuCount >= 8 {
 					nvswitchJSON, err = tinfoilattestation.CollectNVSwitchEvidence(nonce32)
 					if err != nil {
-						log.Printf("NVSwitch evidence collection failed (non-fatal): %v", err)
-						nvswitchJSON = nil
+						log.Printf("NVSwitch evidence collection failed: %v", err)
+						writeJSONError(w, "NVSwitch attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+						return
 					}
 				}
 			}

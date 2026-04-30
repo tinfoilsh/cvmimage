@@ -9,9 +9,13 @@ on:
         description: 'Version (e.g., 0.5.17)'
         required: true
 
+permissions: {}
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       repos: ${{ steps.repos.outputs.repos }}
@@ -53,6 +57,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.repos != '[]'
     runs-on: ubuntu-latest
+    permissions: {}
     strategy:
       matrix:
         repo: ${{ fromJson(needs.prepare.outputs.repos) }}

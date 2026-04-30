@@ -18,8 +18,10 @@ jobs:
     steps:
       - name: Check if prerelease
         id: check-prerelease
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           else
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
@@ -71,8 +73,10 @@ jobs:
           ls -la packages/
 
       - name: Build image
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          sudo /opt/pipx_bin/mkosi --image-version ${{ github.ref_name }}
+          sudo /opt/pipx_bin/mkosi --image-version "$REF_NAME"
 
       - name: Fix permissions
         run: |
@@ -82,11 +86,13 @@ jobs:
 
       - name: Generate manifest
         id: manifest
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           # Generate manifest JSON
-          cat > /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json << EOF
+          cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
           {
-            "version": "${{ github.ref_name }}",
+            "version": "${REF_NAME}",
             "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
             "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
             "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')",
@@ -94,17 +100,17 @@ jobs:
             "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
-          
+
           # Copy artifacts with versioned names
-          cp tinfoilcvm.initrd /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
-          cp tinfoilcvm.vmlinuz /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
-          cp tinfoilcvm.raw /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
-          
+          cp tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
+          cp tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
+          cp tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
+
           # Generate checksums
           cd /tmp/out
-          sha256sum * | tee tinfoil-inference-${{ github.ref_name }}-checksums.sha256
-          
-          echo "digest=sha256:$(sha256sum tinfoil-inference-${{ github.ref_name }}-manifest.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          sha256sum * | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
+
+          echo "digest=sha256:$(sha256sum "tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
@@ -128,36 +134,39 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          IS_PRERELEASE: ${{ steps.check-prerelease.outputs.is_prerelease }}
         run: |
           PRERELEASE_FLAG=""
-          if [ "${{ steps.check-prerelease.outputs.is_prerelease }}" = "true" ]; then
+          if [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
           fi
-          
-          gh release create "${{ github.ref_name }}" \
-            -R ${{ github.repository }} \
+
+          gh release create "$REF_NAME" \
+            -R "$REPOSITORY" \
             $PRERELEASE_FLAG \
-            --title "${{ github.ref_name }}" \
+            --title "$REF_NAME" \
             --notes "### Downloads
-          - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.vmlinuz
-          - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.initrd
-          - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${{ github.ref_name }}.raw
+          - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.vmlinuz
+          - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.initrd
+          - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.raw
 
           ### Manifest
           \`\`\`json
-          $(cat /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json)
+          $(cat "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json")
           \`\`\`" \
-            /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json \
-            /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
+            "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" \
+            "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256"
 
       - name: Trigger config repo updates
         if: steps.check-prerelease.outputs.is_prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           # Strip 'v' prefix for version
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${REF_NAME#v}"
 
           # Trigger the update workflow
           gh workflow run update-config-repos.yml --field version="$VERSION"
-        env:
-          GH_TOKEN: ${{ github.token }}

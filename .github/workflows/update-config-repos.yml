@@ -18,15 +18,19 @@ jobs:
     steps:
       - name: Get version
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
           else
             # Remove 'v' prefix if present
-            VERSION="${{ github.event.release.tag_name }}"
-            VERSION="${VERSION#v}"
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            VERSION="${TAG_NAME#v}"
           fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Find repos with tinfoil-functions topic
         id: repos
@@ -55,9 +59,11 @@ jobs:
       fail-fast: false
     steps:
       - id: parse
+        env:
+          REPO: ${{ matrix.repo }}
         run: |
-          echo "owner=$(echo '${{ matrix.repo }}' | cut -d'/' -f1)" >> $GITHUB_OUTPUT
-          echo "name=$(echo '${{ matrix.repo }}' | cut -d'/' -f2)" >> $GITHUB_OUTPUT
+          echo "owner=$(echo "$REPO" | cut -d'/' -f1)" >> "$GITHUB_OUTPUT"
+          echo "name=$(echo "$REPO" | cut -d'/' -f2)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/create-github-app-token@v1
         id: app-token
@@ -73,9 +79,11 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Update cvm-version
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           if [ -f tinfoil-config.yml ]; then
-            sed -i "s|^cvm-version:.*|cvm-version: ${{ needs.prepare.outputs.version }}|" tinfoil-config.yml
+            sed -i "s|^cvm-version:.*|cvm-version: ${VERSION}|" tinfoil-config.yml
           fi
 
       - uses: peter-evans/create-pull-request@v6

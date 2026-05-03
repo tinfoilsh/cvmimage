@@ -7,6 +7,7 @@ import (
 
 type Validator interface {
 	Validate(apiKey string) error
+	ValidateWithIP(apiKey string) error
 }
 
 var (

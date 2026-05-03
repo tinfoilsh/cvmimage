@@ -12,17 +12,22 @@ import (
 const validationTimeout = 10 * time.Second
 
 type Validator struct {
-	server string
-	client *http.Client
+	keyServer      string
+	keyAndIPServer string
+	client         *http.Client
 }
 
-func NewValidator(server string) (*Validator, error) {
-	if !strings.HasPrefix(server, "https://") {
-		return nil, fmt.Errorf("validation server must use HTTPS: %s", server)
+func NewValidator(keyServer, keyAndIPServer string) (*Validator, error) {
+	if !strings.HasPrefix(keyServer, "https://") {
+		return nil, fmt.Errorf("validation server must use HTTPS: %s", keyServer)
+	}
+	if !strings.HasPrefix(keyAndIPServer, "https://") {
+		return nil, fmt.Errorf("validation server must use HTTPS: %s", keyAndIPServer)
 	}
 	return &Validator{
-		server: server,
-		client: &http.Client{Timeout: validationTimeout},
+		keyServer:      keyServer,
+		keyAndIPServer: keyAndIPServer,
+		client:         &http.Client{Timeout: validationTimeout},
 	}, nil
 }
 
@@ -36,7 +41,15 @@ func (e *ValidationError) Error() string {
 }
 
 func (v *Validator) Validate(apiKey string) error {
-	resp, err := v.client.Post(v.server, "application/json", bytes.NewBufferString(apiKey))
+	return v.post(v.keyServer, apiKey)
+}
+
+func (v *Validator) ValidateWithIP(apiKey string) error {
+	return v.post(v.keyAndIPServer, apiKey)
+}
+
+func (v *Validator) post(server, apiKey string) error {
+	resp, err := v.client.Post(server, "application/json", bytes.NewBufferString(apiKey))
 	if err != nil {
 		return fmt.Errorf("validation request failed: %w", err)
 	}

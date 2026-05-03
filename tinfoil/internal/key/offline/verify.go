@@ -22,6 +22,13 @@ func NewValidator(publicKey string) (*Validator, error) {
 	}, nil
 }
 
+// ValidateWithIP delegates to Validate. The offline validator has no notion
+// of caller IPs, so the key-and-IP variant performs the same signature and
+// expiry checks as the key-only path.
+func (v *Validator) ValidateWithIP(apiKey string) error {
+	return v.Validate(apiKey)
+}
+
 // Validate checks if an API key is signed and not expired
 func (v *Validator) Validate(apiKey string) error {
 	data, err := base64.RawURLEncoding.DecodeString(apiKey)

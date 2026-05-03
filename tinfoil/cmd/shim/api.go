@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -25,6 +27,13 @@ import (
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 )
+
+// maxValidationBodyPeek caps how many bytes of an upstream request body the
+// shim will buffer in order to extract policy fields (e.g. "model") before
+// validation. Bodies up to this size are fully buffered; larger bodies are
+// buffered up to this cap and the rest is streamed straight through, so the
+// model field is still found if it appears within the cap window.
+const maxValidationBodyPeek = 1 << 20 // 1 MiB
 
 // pathMatchesPattern checks if a request path matches a pattern.
 // Patterns can be exact matches or use a trailing * for prefix matching.
@@ -47,6 +56,44 @@ func pathAllowed(allowedPaths []string, path string) bool {
 		}
 	}
 	return false
+}
+
+// extractModel reads up to maxValidationBodyPeek bytes from r.Body, attempts
+// to decode a top-level JSON object, and returns the value of its "model"
+// field if present. The original body is restored on r so the upstream
+// request continues to see the full payload unchanged. A best-effort parse
+// is used: any error (non-JSON, missing field, oversized body) yields "".
+func extractModel(r *http.Request) string {
+	if r.Body == nil {
+		return ""
+	}
+
+	limited := io.LimitReader(r.Body, maxValidationBodyPeek)
+	peek, err := io.ReadAll(limited)
+	if err != nil {
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(peek))
+		return ""
+	}
+
+	// Restore the body: replay the buffered bytes, then continue with the
+	// remainder (if any) of the original stream.
+	original := r.Body
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.MultiReader(bytes.NewReader(peek), original),
+		Closer: original,
+	}
+
+	var probe struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(peek, &probe); err != nil {
+		return ""
+	}
+	return probe.Model
 }
 
 // authPolicy reports whether path requires API key authentication, and
@@ -194,11 +241,16 @@ func NewShimServer(
 				return
 			}
 
+			validationReq := key.Request{
+				APIKey: apiKey,
+				Model:  extractModel(r),
+			}
+
 			var err error
 			if validateIP {
-				err = validator.ValidateWithIP(apiKey)
+				err = validator.ValidateWithIP(validationReq)
 			} else {
-				err = validator.Validate(apiKey)
+				err = validator.Validate(validationReq)
 			}
 			if err != nil {
 				log.Printf("Warning: failed to validate API key: %v", err)

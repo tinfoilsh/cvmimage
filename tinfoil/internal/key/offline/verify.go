@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"time"
+
+	"tinfoil/internal/key/keyreq"
 )
 
 type Validator struct {
@@ -23,15 +25,17 @@ func NewValidator(publicKey string) (*Validator, error) {
 }
 
 // ValidateWithIP delegates to Validate. The offline validator has no notion
-// of caller IPs, so the key-and-IP variant performs the same signature and
-// expiry checks as the key-only path.
-func (v *Validator) ValidateWithIP(apiKey string) error {
-	return v.Validate(apiKey)
+// of caller IPs or model policy, so the key-and-IP variant performs the same
+// signature and expiry checks as the key-only path.
+func (v *Validator) ValidateWithIP(req keyreq.Request) error {
+	return v.Validate(req)
 }
 
-// Validate checks if an API key is signed and not expired
-func (v *Validator) Validate(apiKey string) error {
-	data, err := base64.RawURLEncoding.DecodeString(apiKey)
+// Validate checks if an API key is signed and not expired. The Model field
+// of req is ignored: model policy is enforced by the control plane and has
+// no equivalent in the offline path.
+func (v *Validator) Validate(req keyreq.Request) error {
+	data, err := base64.RawURLEncoding.DecodeString(req.APIKey)
 	if err != nil {
 		return ErrInvalidKeyFormat
 	}

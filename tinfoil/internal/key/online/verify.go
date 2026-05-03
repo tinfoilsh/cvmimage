@@ -2,11 +2,14 @@ package online
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"tinfoil/internal/key/keyreq"
 )
 
 const validationTimeout = 10 * time.Second
@@ -40,16 +43,21 @@ func (e *ValidationError) Error() string {
 	return e.Message
 }
 
-func (v *Validator) Validate(apiKey string) error {
-	return v.post(v.keyServer, apiKey)
+func (v *Validator) Validate(req keyreq.Request) error {
+	return v.post(v.keyServer, req)
 }
 
-func (v *Validator) ValidateWithIP(apiKey string) error {
-	return v.post(v.keyAndIPServer, apiKey)
+func (v *Validator) ValidateWithIP(req keyreq.Request) error {
+	return v.post(v.keyAndIPServer, req)
 }
 
-func (v *Validator) post(server, apiKey string) error {
-	resp, err := v.client.Post(server, "application/json", bytes.NewBufferString(apiKey))
+func (v *Validator) post(server string, req keyreq.Request) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshalling validation request: %w", err)
+	}
+
+	resp, err := v.client.Post(server, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("validation request failed: %w", err)
 	}
@@ -59,13 +67,13 @@ func (v *Validator) post(server, apiKey string) error {
 		return nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	return &ValidationError{
 		StatusCode: resp.StatusCode,
-		Message:    string(body),
+		Message:    string(respBody),
 	}
 }

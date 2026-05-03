@@ -5,7 +5,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"tinfoil/internal/key/keyreq"
 )
+
+func req(apiKey string) keyreq.Request {
+	return keyreq.Request{APIKey: apiKey}
+}
 
 func TestOfflineKeySignValidate(t *testing.T) {
 	signer, err := NewSigner(24 * time.Hour)
@@ -21,9 +27,9 @@ func TestOfflineKeySignValidate(t *testing.T) {
 
 	verifier, err := NewValidator(signer.PubKey())
 
-	assert.Nil(t, verifier.Validate(key1))
-	assert.Nil(t, verifier.Validate(key2))
-	assert.NotNil(t, verifier.Validate(key1+"a"))
+	assert.Nil(t, verifier.Validate(req(key1)))
+	assert.Nil(t, verifier.Validate(req(key2)))
+	assert.NotNil(t, verifier.Validate(req(key1+"a")))
 }
 
 func TestOfflineKeyExpiry(t *testing.T) {
@@ -36,7 +42,7 @@ func TestOfflineKeyExpiry(t *testing.T) {
 	verifier, err := NewValidator(signer.PubKey())
 	assert.Nil(t, err)
 
-	assert.Nil(t, verifier.Validate(key))
+	assert.Nil(t, verifier.Validate(req(key)))
 	time.Sleep(2 * time.Second)
-	assert.NotNil(t, verifier.Validate(key))
+	assert.NotNil(t, verifier.Validate(req(key)))
 }

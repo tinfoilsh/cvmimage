@@ -9,6 +9,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type AuthenticatedEndpoint struct {
+	Path       string `yaml:"path"`
+	ValidateIP bool   `yaml:"validate-ip" default:"false"`
+}
+
 type Config struct {
 	ListenPort   int `yaml:"listen-port" default:"443"`
 	UpstreamPort int `yaml:"upstream-port"`
@@ -27,10 +32,13 @@ type Config struct {
 	// When false, no API key checks are performed regardless of AuthenticatedEndpoints.
 	Authenticated bool `yaml:"authenticated" default:"false"`
 	// AuthenticatedEndpoints is the list of endpoint patterns that require API key authentication.
-	// If absent (nil), defaults to ["/v1/chat/completions"] for backwards compatibility.
+	// If absent (nil), defaults to [{Path: "/v1/chat/completions"}] for backwards compatibility.
 	// If present but empty, no endpoints require authentication.
 	// Supports the same wildcard patterns as Paths (e.g. "/v1/*").
-	AuthenticatedEndpoints *[]string `yaml:"authenticated-endpoints"`
+	// When ValidateIP is true the shim calls /api/shim/validate-key-and-ip on the
+	// control plane (key + caller IP check); otherwise it calls /api/shim/validate-key
+	// (key only).
+	AuthenticatedEndpoints *[]AuthenticatedEndpoint `yaml:"authenticated-endpoints"`
 
 	RateLimit   float64 `yaml:"rate-limit"`
 	RateBurst   int     `yaml:"rate-burst"`

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -155,6 +157,48 @@ func TestWriteValidationFailureDoesNotLeakInternalError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), errMsgServerError) {
 		t.Fatalf("expected generic server error, got: %q", rec.Body.String())
+	}
+}
+
+func TestExtractModel(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"chat completion with model", `{"model":"llama-3","messages":[]}`, "llama-3"},
+		{"model only", `{"model":"mixtral"}`, "mixtral"},
+		{"missing model field", `{"messages":[]}`, ""},
+		{"empty body", ``, ""},
+		{"non-json body", `not json at all`, ""},
+		{"model after other fields", `{"messages":[],"model":"gpt-oss-120b"}`, "gpt-oss-120b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(tt.body))
+			got := extractModel(req)
+			if got != tt.want {
+				t.Errorf("extractModel(%q) = %q, want %q", tt.body, got, tt.want)
+			}
+
+			// Body must be fully readable after extraction.
+			restored, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("reading restored body: %v", err)
+			}
+			if !bytes.Equal(restored, []byte(tt.body)) {
+				t.Errorf("body not preserved: got %q, want %q", restored, tt.body)
+			}
+		})
+	}
+}
+
+func TestExtractModel_NilBody(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Body = nil
+	if got := extractModel(req); got != "" {
+		t.Errorf("expected empty model for nil body, got %q", got)
 	}
 }
 

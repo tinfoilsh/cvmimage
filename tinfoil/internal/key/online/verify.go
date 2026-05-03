@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"tinfoil/internal/key/keyreq"
+	"tinfoil/internal/key"
 )
 
 const validationTimeout = 10 * time.Second
@@ -43,15 +43,15 @@ func (e *ValidationError) Error() string {
 	return e.Message
 }
 
-func (v *Validator) Validate(req keyreq.Request) error {
+func (v *Validator) Validate(req key.Request) error {
 	return v.post(v.keyServer, req)
 }
 
-func (v *Validator) ValidateWithIP(req keyreq.Request) error {
+func (v *Validator) ValidateWithIP(req key.Request) error {
 	return v.post(v.keyAndIPServer, req)
 }
 
-func (v *Validator) post(server string, req keyreq.Request) error {
+func (v *Validator) post(server string, req key.Request) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("marshalling validation request: %w", err)

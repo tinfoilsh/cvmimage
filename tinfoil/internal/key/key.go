@@ -1,21 +1,14 @@
 package key
 
-import (
-	"tinfoil/internal/key/keyreq"
-	"tinfoil/internal/key/offline"
-	"tinfoil/internal/key/online"
-)
-
-// Request is re-exported here so callers can use key.Request without depending
-// on the internal keyreq subpackage directly.
-type Request = keyreq.Request
+// Request is the payload sent to the control plane for API key validation.
+// The Model field is optional and used for per-key/per-org policy checks
+// (e.g. model blocklists) on the control plane side.
+type Request struct {
+	APIKey string `json:"api_key"`
+	Model  string `json:"model,omitempty"`
+}
 
 type Validator interface {
 	Validate(req Request) error
 	ValidateWithIP(req Request) error
 }
-
-var (
-	_ Validator = &offline.Validator{}
-	_ Validator = &online.Validator{}
-)

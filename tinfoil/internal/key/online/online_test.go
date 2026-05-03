@@ -9,7 +9,7 @@ import (
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 
-	"tinfoil/internal/key/keyreq"
+	"tinfoil/internal/key"
 )
 
 func TestVerifyOnline(t *testing.T) {
@@ -23,7 +23,7 @@ func TestVerifyOnline(t *testing.T) {
 			return httpmock.NewStringResponse(http.StatusInternalServerError, "Internal server error"), nil
 		}
 
-		var parsed keyreq.Request
+		var parsed key.Request
 		if err := json.Unmarshal(body, &parsed); err != nil {
 			return httpmock.NewStringResponse(http.StatusBadRequest, "bad json"), nil
 		}
@@ -44,15 +44,15 @@ func TestVerifyOnline(t *testing.T) {
 	)
 	assert.Nil(t, err)
 
-	assert.Nil(t, v.Validate(keyreq.Request{APIKey: "good-key", Model: "llama-3"}))
+	assert.Nil(t, v.Validate(key.Request{APIKey: "good-key", Model: "llama-3"}))
 	assert.Equal(t, "llama-3", lastModel)
 
-	assert.NotNil(t, v.Validate(keyreq.Request{APIKey: "bad-key"}))
+	assert.NotNil(t, v.Validate(key.Request{APIKey: "bad-key"}))
 
-	assert.Nil(t, v.ValidateWithIP(keyreq.Request{APIKey: "good-key", Model: "mixtral"}))
+	assert.Nil(t, v.ValidateWithIP(key.Request{APIKey: "good-key", Model: "mixtral"}))
 	assert.Equal(t, "mixtral", lastModel)
 
-	assert.NotNil(t, v.ValidateWithIP(keyreq.Request{APIKey: "bad-key"}))
+	assert.NotNil(t, v.ValidateWithIP(key.Request{APIKey: "bad-key"}))
 }
 
 func TestRejectHTTP(t *testing.T) {

@@ -2,10 +2,13 @@ package online
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
+
+	"tinfoil/internal/key"
 )
 
 const validationTimeout = 10 * time.Second
@@ -33,8 +36,13 @@ func (e *ValidationError) Error() string {
 	return http.StatusText(e.StatusCode)
 }
 
-func (v *Validator) Validate(apiKey string) error {
-	resp, err := v.client.Post(v.server, "application/json", bytes.NewBufferString(apiKey))
+func (v *Validator) Validate(req key.Request) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshalling validation request: %w", err)
+	}
+
+	resp, err := v.client.Post(v.server, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("validation request failed: %w", err)
 	}

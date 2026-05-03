@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"time"
+
+	"tinfoil/internal/key"
 )
 
 type Validator struct {
@@ -22,9 +24,11 @@ func NewValidator(publicKey string) (*Validator, error) {
 	}, nil
 }
 
-// Validate checks if an API key is signed and not expired
-func (v *Validator) Validate(apiKey string) error {
-	data, err := base64.RawURLEncoding.DecodeString(apiKey)
+// Validate checks if an API key is signed and not expired. The Model field
+// of req is ignored: model policy is enforced by the control plane and has
+// no equivalent in the offline path.
+func (v *Validator) Validate(req key.Request) error {
+	data, err := base64.RawURLEncoding.DecodeString(req.APIKey)
 	if err != nil {
 		return ErrInvalidKeyFormat
 	}

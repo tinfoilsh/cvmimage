@@ -220,7 +220,7 @@ func NewShimServer(
 				return
 			}
 
-			if err := validator.Validate(apiKey); err != nil {
+			if err := validator.Validate(key.Request{APIKey: apiKey}); err != nil {
 				log.Printf("Warning: failed to validate API key: %v", err)
 				writeValidationFailure(w, err)
 				return

@@ -81,37 +81,64 @@ func TestPathAllowed_ProxiesToUpstream(t *testing.T) {
 	}
 }
 
-func TestRequiresAuth(t *testing.T) {
-	ptr := func(s []string) *[]string { return &s }
+func TestAuthPolicy(t *testing.T) {
+	ptr := func(s []config.AuthenticatedEndpoint) *[]config.AuthenticatedEndpoint { return &s }
 
 	tests := []struct {
-		name                   string
-		authenticatedEndpoints *[]string
-		path                   string
-		want                   bool
+		name           string
+		endpoints      *[]config.AuthenticatedEndpoint
+		path           string
+		wantRequired   bool
+		wantValidateIP bool
 	}{
-		// Nil (absent from config): default behaviour — only /v1/chat/completions
-		{"default nil, chat completions", nil, "/v1/chat/completions", true},
-		{"default nil, other path", nil, "/v1/models", false},
-		{"default nil, root", nil, "/", false},
+		// Nil (absent from config): default behaviour — only /v1/chat/completions, key-only
+		{"default nil, chat completions", nil, "/v1/chat/completions", true, false},
+		{"default nil, other path", nil, "/v1/models", false, false},
+		{"default nil, root", nil, "/", false, false},
 
 		// Empty list: no endpoints require auth
-		{"empty list, chat completions", ptr([]string{}), "/v1/chat/completions", false},
-		{"empty list, other path", ptr([]string{}), "/v1/models", false},
+		{"empty list, chat completions", ptr([]config.AuthenticatedEndpoint{}), "/v1/chat/completions", false, false},
+		{"empty list, other path", ptr([]config.AuthenticatedEndpoint{}), "/v1/models", false, false},
 
-		// Custom list: only listed patterns require auth
-		{"custom list, exact match", ptr([]string{"/v1/chat/completions", "/v1/embeddings"}), "/v1/chat/completions", true},
-		{"custom list, second entry", ptr([]string{"/v1/chat/completions", "/v1/embeddings"}), "/v1/embeddings", true},
-		{"custom list, unlisted path", ptr([]string{"/v1/chat/completions", "/v1/embeddings"}), "/v1/models", false},
-		{"custom list, wildcard", ptr([]string{"/v1/*"}), "/v1/anything", true},
-		{"custom list, wildcard no match", ptr([]string{"/v1/*"}), "/v2/chat", false},
+		// Custom list: only listed patterns require auth, ValidateIP is per entry
+		{
+			"custom list, exact match key-only",
+			ptr([]config.AuthenticatedEndpoint{{Path: "/v1/chat/completions"}, {Path: "/v1/embeddings"}}),
+			"/v1/chat/completions", true, false,
+		},
+		{
+			"custom list, exact match validate-ip",
+			ptr([]config.AuthenticatedEndpoint{{Path: "/v1/chat/completions", ValidateIP: true}, {Path: "/v1/embeddings"}}),
+			"/v1/chat/completions", true, true,
+		},
+		{
+			"custom list, second entry without ip",
+			ptr([]config.AuthenticatedEndpoint{{Path: "/v1/chat/completions", ValidateIP: true}, {Path: "/v1/embeddings"}}),
+			"/v1/embeddings", true, false,
+		},
+		{
+			"custom list, unlisted path",
+			ptr([]config.AuthenticatedEndpoint{{Path: "/v1/chat/completions"}, {Path: "/v1/embeddings"}}),
+			"/v1/models", false, false,
+		},
+		{
+			"custom list, wildcard match",
+			ptr([]config.AuthenticatedEndpoint{{Path: "/v1/*", ValidateIP: true}}),
+			"/v1/anything", true, true,
+		},
+		{
+			"custom list, wildcard no match",
+			ptr([]config.AuthenticatedEndpoint{{Path: "/v1/*", ValidateIP: true}}),
+			"/v2/chat", false, false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := requiresAuth(tt.authenticatedEndpoints, tt.path)
-			if got != tt.want {
-				t.Errorf("requiresAuth(%v, %q) = %v, want %v", tt.authenticatedEndpoints, tt.path, got, tt.want)
+			gotRequired, gotValidateIP := authPolicy(tt.endpoints, tt.path)
+			if gotRequired != tt.wantRequired || gotValidateIP != tt.wantValidateIP {
+				t.Errorf("authPolicy(%v, %q) = (%v, %v), want (%v, %v)",
+					tt.endpoints, tt.path, gotRequired, gotValidateIP, tt.wantRequired, tt.wantValidateIP)
 			}
 		})
 	}

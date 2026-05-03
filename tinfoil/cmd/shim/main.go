@@ -172,7 +172,11 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			}
 
 			if config.Authenticated {
-				validator, err = online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate").String())
+				base := controlPlaneURL.JoinPath("api", "shim")
+				validator, err = online.NewValidator(
+					base.JoinPath("validate-key").String(),
+					base.JoinPath("validate-key-and-ip").String(),
+				)
 				if err != nil {
 					return fmt.Errorf("initializing API key verifier: %w", err)
 				}

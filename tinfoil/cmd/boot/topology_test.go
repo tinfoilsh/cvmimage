@@ -156,7 +156,7 @@ func TestSwitchTopologyCheck(t *testing.T) {
 		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevC}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
 		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevD}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
 	}
-	if err := validateTopology(gpuReports, switchReports); err != nil {
+	if err := validateTopology(gpuReports, switchReports, hopperGPUCount, hopperSwitchCount); err != nil {
 		t.Fatalf("expected topology OK, got: %v", err)
 	}
 }
@@ -197,13 +197,13 @@ func TestGPUTopologyCheckWithDisabledLinks(t *testing.T) {
 // --- Additional failure cases (no Python equivalents) ---
 
 func TestValidateTopologyWrongGPUCount(t *testing.T) {
-	if err := validateTopology(make([][]byte, 7), make([][]byte, 4)); err == nil {
+	if err := validateTopology(make([][]byte, 7), make([][]byte, 4), hopperGPUCount, hopperSwitchCount); err == nil {
 		t.Fatal("expected error for wrong GPU count")
 	}
 }
 
 func TestValidateTopologyWrongSwitchCount(t *testing.T) {
-	if err := validateTopology(make([][]byte, 8), make([][]byte, 3)); err == nil {
+	if err := validateTopology(make([][]byte, 8), make([][]byte, 3), hopperGPUCount, hopperSwitchCount); err == nil {
 		t.Fatal("expected error for wrong switch count")
 	}
 }
@@ -235,7 +235,7 @@ func TestValidateTopologyGPUSeesDifferentSwitches(t *testing.T) {
 		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevC}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
 		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevD}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
 	}
-	if err := validateTopology(gpuReports, switchReports); err == nil {
+	if err := validateTopology(gpuReports, switchReports, hopperGPUCount, hopperSwitchCount); err == nil {
 		t.Fatal("expected topology error for mismatched switch set")
 	}
 }
@@ -255,7 +255,7 @@ func TestValidateTopologySwitchPDINotInGPUSet(t *testing.T) {
 		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevC}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
 		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevD}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
 	}
-	if err := validateTopology(gpuReports, switchReports); err == nil {
+	if err := validateTopology(gpuReports, switchReports, hopperGPUCount, hopperSwitchCount); err == nil {
 		t.Fatal("expected topology error for unknown switch PDI")
 	}
 }

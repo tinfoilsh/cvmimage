@@ -26,9 +26,9 @@ const (
 	fieldGPUPDIs           = 26 // Switch report: connected GPU PDIs, followed by port map
 	fieldOpaqueDataVersion = 34 // Opaque data format version
 
-	// HGX H100/H200 topology: 8 GPUs connected to 4 NVSwitches
-	expectedGPUCount    = 8
-	expectedSwitchCount = 4
+	// HGX H100/H200 PPCIe: 8 GPUs ↔ 4 NVSwitches.
+	hopperGPUCount    = 8
+	hopperSwitchCount = 4
 )
 
 // checkSPDMVersion validates the SPDM version byte in the response and warns
@@ -148,19 +148,17 @@ func setsEqual(a, b map[string]struct{}) bool {
 	return true
 }
 
-// validateTopology cross-checks GPU and switch attestation reports to verify
-// the PPCIe fabric forms a correct 8-GPU / 4-switch mesh.
-//
-// For each GPU: extract the switch PDIs from opaque field 22 and verify all
-// GPUs report the same 4 switches.
-// For each switch: verify its own PDI (field 22) is in the GPU-reported set,
-// and that the GPU PDIs from field 26 are the same 8 GPUs across all switches.
-func validateTopology(gpuReports, switchReports [][]byte) error {
-	if len(gpuReports) != expectedGPUCount {
-		return fmt.Errorf("expected %d GPU reports, got %d", expectedGPUCount, len(gpuReports))
+// validateTopology cross-checks GPU and switch SPDM reports to verify
+// the fabric forms a correct gpuCount × switchCount mesh: every GPU
+// must see the same set of switchCount switches (opaque field 22),
+// every switch must report itself in that set and see the same gpuCount
+// GPUs (opaque field 26).
+func validateTopology(gpuReports, switchReports [][]byte, gpuCount, switchCount int) error {
+	if len(gpuReports) != gpuCount {
+		return fmt.Errorf("expected %d GPU reports, got %d", gpuCount, len(gpuReports))
 	}
-	if len(switchReports) != expectedSwitchCount {
-		return fmt.Errorf("expected %d switch reports, got %d", expectedSwitchCount, len(switchReports))
+	if len(switchReports) != switchCount {
+		return fmt.Errorf("expected %d switch reports, got %d", switchCount, len(switchReports))
 	}
 
 	// GPU side: every GPU must see exactly 4 unique switches, identical across all GPUs
@@ -183,8 +181,8 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
-		if len(switchPDIs) != expectedSwitchCount {
-			return fmt.Errorf("%s sees %d switches, expected %d", label, len(switchPDIs), expectedSwitchCount)
+		if len(switchPDIs) != switchCount {
+			return fmt.Errorf("%s sees %d switches, expected %d", label, len(switchPDIs), switchCount)
 		}
 		if expectedSwitches == nil {
 			expectedSwitches = switchPDIs
@@ -192,7 +190,7 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 			return fmt.Errorf("%s switch set differs from GPU[0]", label)
 		}
 	}
-	log.Printf("GPU topology OK: all %d GPUs see the same %d switches", expectedGPUCount, expectedSwitchCount)
+	log.Printf("GPU topology OK: all %d GPUs see the same %d switches", gpuCount, switchCount)
 
 	// Switch side: each switch's own PDI must be in the GPU-reported set,
 	// and each must see exactly 8 unique GPUs, identical across all switches
@@ -221,12 +219,12 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 		if !ok {
 			return fmt.Errorf("%s: missing GPU PDI field", label)
 		}
-		gpuPDIs, err := parsePDISet(rawGPUs, expectedGPUCount, false)
+		gpuPDIs, err := parsePDISet(rawGPUs, gpuCount, false)
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
-		if len(gpuPDIs) != expectedGPUCount {
-			return fmt.Errorf("%s sees %d GPUs, expected %d", label, len(gpuPDIs), expectedGPUCount)
+		if len(gpuPDIs) != gpuCount {
+			return fmt.Errorf("%s sees %d GPUs, expected %d", label, len(gpuPDIs), gpuCount)
 		}
 		if expectedGPUs == nil {
 			expectedGPUs = gpuPDIs
@@ -234,7 +232,7 @@ func validateTopology(gpuReports, switchReports [][]byte) error {
 			return fmt.Errorf("%s GPU set differs from switch[0]", label)
 		}
 	}
-	log.Printf("Switch topology OK: all %d switches see the same %d GPUs", expectedSwitchCount, expectedGPUCount)
+	log.Printf("Switch topology OK: all %d switches see the same %d GPUs", switchCount, gpuCount)
 
 	return nil
 }

@@ -1,0 +1,11 @@
+#!/bin/bash
+# Exit 0 if a PCIe-visible NVIDIA NVSwitch (vendor 10de + class 0x068000)
+# is present in this guest. Used to gate nvidia-fabricmanager.service.
+
+for dev_dir in /sys/bus/pci/devices/*; do
+    vendor=$(cat "$dev_dir/vendor" 2>/dev/null) || continue
+    [ "$vendor" = "0x10de" ] || continue
+    class=$(cat "$dev_dir/class" 2>/dev/null) || continue
+    [ "$class" = "0x068000" ] && exit 0
+done
+exit 1

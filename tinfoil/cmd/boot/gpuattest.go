@@ -24,70 +24,63 @@ const (
 	gpuDeviceIDB200 = "0x2901"
 )
 
-// detectGPUCount returns the number of NVIDIA 3D-controller PCI devices
-// in the guest. The caller validates against the config-declared count.
-func detectGPUCount() (int, error) {
-	pciPath := "/sys/bus/pci/devices"
+// forEachNVIDIAGPU iterates over PCI devices that are NVIDIA GPUs
+// (vendor 0x10de + 3D-controller class), invoking fn with each device's
+// sysfs entry name. Walking stops if fn returns false.
+func forEachNVIDIAGPU(fn func(entryName string) bool) error {
+	const pciPath = "/sys/bus/pci/devices"
 	entries, err := os.ReadDir(pciPath)
 	if err != nil {
-		return 0, fmt.Errorf("reading PCI devices: %w", err)
+		return fmt.Errorf("reading PCI devices: %w", err)
 	}
-	count := 0
 	for _, entry := range entries {
 		vendor, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "vendor"))
-		if err != nil {
-			continue
-		}
-		if strings.TrimSpace(string(vendor)) != nvidiaVendorID {
+		if err != nil || strings.TrimSpace(string(vendor)) != nvidiaVendorID {
 			continue
 		}
 		class, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "class"))
-		if err != nil {
+		if err != nil || strings.TrimSpace(string(class)) != nvidiaGPUClass {
 			continue
 		}
-		if strings.TrimSpace(string(class)) == nvidiaGPUClass {
-			count++
+		if !fn(entry.Name()) {
+			return nil
 		}
+	}
+	return nil
+}
+
+// detectGPUCount returns the number of NVIDIA 3D-controller PCI devices
+// in the guest. The caller validates against the config-declared count.
+func detectGPUCount() (int, error) {
+	count := 0
+	if err := forEachNVIDIAGPU(func(string) bool { count++; return true }); err != nil {
+		return 0, err
 	}
 	return count, nil
 }
 
 // detectGPUArch returns "h100", "h200", "b200", or "" from the first GPU.
 func detectGPUArch() (string, error) {
-	pciPath := "/sys/bus/pci/devices"
-	entries, err := os.ReadDir(pciPath)
-	if err != nil {
-		return "", fmt.Errorf("reading PCI devices: %w", err)
-	}
-	for _, entry := range entries {
-		vendor, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "vendor"))
+	const pciPath = "/sys/bus/pci/devices"
+	var arch string
+	err := forEachNVIDIAGPU(func(entryName string) bool {
+		device, err := os.ReadFile(filepath.Join(pciPath, entryName, "device"))
 		if err != nil {
-			continue
-		}
-		if strings.TrimSpace(string(vendor)) != nvidiaVendorID {
-			continue
-		}
-		class, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "class"))
-		if err != nil {
-			continue
-		}
-		if strings.TrimSpace(string(class)) != nvidiaGPUClass {
-			continue
-		}
-		device, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "device"))
-		if err != nil {
-			continue
+			return true
 		}
 		switch strings.TrimSpace(string(device)) {
 		case gpuDeviceIDH100:
-			return "h100", nil
+			arch = "h100"
 		case gpuDeviceIDH200:
-			return "h200", nil
+			arch = "h200"
 		case gpuDeviceIDB200:
-			return "b200", nil
+			arch = "b200"
+		default:
+			return true
 		}
-	}
-	return "", nil
+		return false
+	})
+	return arch, err
 }
 
 func runNvattest(device string) error {

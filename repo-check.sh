@@ -187,4 +187,21 @@ while IFS= read -r line; do
 done < "$MKOSI_CONF"
 
 echo ""
+GUEST_DRIVER=$(grep -E '^[[:space:]]*nvidia-driver-open=' "$MKOSI_CONF" | sed -E 's/^[^=]*=//' | head -1)
+if [ -n "$GUEST_DRIVER" ]; then
+    nvidia_versions=$(get_versions "$TMPDIR/nvidia_cuda" "nvidia-driver-open")
+    if [ -n "$nvidia_versions" ] && [[ "$GUEST_DRIVER" =~ ^([0-9]+)\. ]]; then
+        series="${BASH_REMATCH[1]}"
+        series_versions=$(echo "$nvidia_versions" | grep "^${series}\." || true)
+        latest_in_series=$(echo "$series_versions" | tail -1)
+        if [ -n "$latest_in_series" ] && version_lt "$GUEST_DRIVER" "$latest_in_series"; then
+            echo "=== Host driver update reminder ==="
+            echo -e "  ${YELLOW}Newer nvidia-driver-open available: $latest_in_series (pinned: $GUEST_DRIVER)${NC}"
+            echo -e "  ${YELLOW}When you bump the guest driver, also update the host's${NC}"
+            echo -e "  ${YELLOW}nvidia-fabricmanager and libnvidia-nscq to the same R-branch.${NC}"
+            echo ""
+        fi
+    fi
+fi
+
 echo "=== Done ==="

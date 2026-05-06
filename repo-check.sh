@@ -63,6 +63,27 @@ get_versions() {
     ' "$file" | sort -V | uniq
 }
 
+# Returns the latest version in $versions whose major-series matches
+# $current_version's. Falls back to the overall latest if no match.
+# NVIDIA driver R-branches must not cross major series, so this avoids
+# suggesting a "newer" version that's actually in a different branch.
+latest_in_same_series() {
+    local versions="$1"
+    local current_version="$2"
+    local fallback_latest
+    fallback_latest=$(echo "$versions" | tail -1)
+    if [[ "$current_version" =~ ^([0-9]+)\. ]]; then
+        local series="${BASH_REMATCH[1]}"
+        local series_versions
+        series_versions=$(echo "$versions" | grep "^${series}\." || true)
+        if [ -n "$series_versions" ]; then
+            echo "$series_versions" | tail -1
+            return
+        fi
+    fi
+    echo "$fallback_latest"
+}
+
 # Check package in all repos and report
 lookup_package() {
     local pkg_name="$1"
@@ -125,16 +146,12 @@ lookup_package() {
     
     if [ -n "$current_version" ]; then
         if echo "$versions" | grep -qx "$current_version"; then
-            # For NVIDIA, only compare within same driver series (e.g., 580.x.x)
             local compare_latest="$latest"
-            if [[ "$repo" =~ ^NVIDIA ]] && [[ "$current_version" =~ ^([0-9]+)\. ]]; then
-                local series="${BASH_REMATCH[1]}"
-                local series_versions=$(echo "$versions" | grep "^${series}\." || true)
-                if [ -n "$series_versions" ]; then
-                    compare_latest=$(echo "$series_versions" | tail -1)
-                fi
+            # NVIDIA driver R-branches don't cross major series — restrict
+            # the "newer available" comparison to the same series.
+            if [[ "$repo" =~ ^NVIDIA ]]; then
+                compare_latest=$(latest_in_same_series "$versions" "$current_version")
             fi
-            # Check if newer version available
             if version_lt "$current_version" "$compare_latest"; then
                 echo -e "  ${YELLOW}$pkg_name=$current_version${NC} ($repo - newer available: $compare_latest)"
             else
@@ -187,16 +204,19 @@ while IFS= read -r line; do
 done < "$MKOSI_CONF"
 
 echo ""
+# When the pinned nvidia-driver-open is older than what's available in
+# the NVIDIA CUDA repo, remind the operator to also bump the host's
+# nvidia-fabricmanager / libnvidia-nscq to the matching R-branch
+# (NVIDIA's CC support matrix requires guest driver and host FM to be
+# on the same R-branch).
 GUEST_DRIVER=$(grep -E '^[[:space:]]*nvidia-driver-open=' "$MKOSI_CONF" | sed -E 's/^[^=]*=//' | head -1)
 if [ -n "$GUEST_DRIVER" ]; then
     nvidia_versions=$(get_versions "$TMPDIR/nvidia_cuda" "nvidia-driver-open")
-    if [ -n "$nvidia_versions" ] && [[ "$GUEST_DRIVER" =~ ^([0-9]+)\. ]]; then
-        series="${BASH_REMATCH[1]}"
-        series_versions=$(echo "$nvidia_versions" | grep "^${series}\." || true)
-        latest_in_series=$(echo "$series_versions" | tail -1)
-        if [ -n "$latest_in_series" ] && version_lt "$GUEST_DRIVER" "$latest_in_series"; then
+    if [ -n "$nvidia_versions" ]; then
+        latest=$(latest_in_same_series "$nvidia_versions" "$GUEST_DRIVER")
+        if [ -n "$latest" ] && version_lt "$GUEST_DRIVER" "$latest"; then
             echo "=== Host driver update reminder ==="
-            echo -e "  ${YELLOW}Newer nvidia-driver-open available: $latest_in_series (pinned: $GUEST_DRIVER)${NC}"
+            echo -e "  ${YELLOW}Newer nvidia-driver-open available: $latest (pinned: $GUEST_DRIVER)${NC}"
             echo -e "  ${YELLOW}When you bump the guest driver, also update the host's${NC}"
             echo -e "  ${YELLOW}nvidia-fabricmanager and libnvidia-nscq to the same R-branch.${NC}"
             echo ""

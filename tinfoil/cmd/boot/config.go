@@ -93,6 +93,22 @@ const (
 	externalDiskPath = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-ext-config"
 )
 
+var supportedGPUCounts = map[int]bool{
+	0: true,
+	1: true,
+	2: true,
+	4: true,
+	6: true,
+	8: true,
+}
+
+func validateGPUCount(count int) error {
+	if !supportedGPUCounts[count] {
+		return fmt.Errorf("gpus must be one of 0, 1, 2, 4, 6, or 8 (got %d)", count)
+	}
+	return nil
+}
+
 // loadAndVerifyConfig reads the config from disk and verifies its hash
 func loadAndVerifyConfig() (*Config, error) {
 	if _, err := os.Stat(configDiskPath); os.IsNotExist(err) {
@@ -131,8 +147,8 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	if config.GPUs != 0 && config.GPUs != 1 && config.GPUs != 8 {
-		return nil, fmt.Errorf("gpus must be 0, 1, or 8 (got %d)", config.GPUs)
+	if err := validateGPUCount(config.GPUs); err != nil {
+		return nil, err
 	}
 
 	shimCfg, err := parseShimConfig(config.ShimRaw)

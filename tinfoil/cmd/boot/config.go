@@ -60,7 +60,7 @@ type Container struct {
 	CapDrop     []string    `yaml:"cap_drop,omitempty"`
 	SecurityOpt []string    `yaml:"security_opt,omitempty"`
 	Runtime     string      `yaml:"runtime,omitempty"`      // e.g., "nvidia"
-	NetworkMode string      `yaml:"network_mode,omitempty"` // "host", "bridge", "none" (default: "host")
+	NetworkMode string      `yaml:"network_mode,omitempty"` // "host", "bridge", "none" (default: "bridge")
 	IPC         string      `yaml:"ipc,omitempty"`          // e.g., "host"
 	PidMode     string      `yaml:"pid,omitempty"`          // "host" for host PID namespace
 	GPUs        interface{} `yaml:"gpus,omitempty"`         // "all", "0,1,2,3", or count (int)
@@ -198,6 +198,12 @@ func loadConfigFromRamdisk() (*Config, error) {
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+
+	shimCfg, err := parseShimConfig(config.ShimRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parsing shim config: %w", err)
+	}
+	config.ShimCfg = shimCfg
 
 	return &config, nil
 }

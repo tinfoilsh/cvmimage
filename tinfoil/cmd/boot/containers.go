@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,11 +16,14 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
+
+const shimLoopbackHostIP = "127.0.0.1"
 
 const healthPollInterval = 5 * time.Second
 
@@ -40,14 +44,18 @@ func launchContainers(config *Config) error {
 
 	log.Printf("Launching %d containers", len(config.Containers))
 	var errors []string
-	for _, c := range config.Containers {
+	for i, c := range config.Containers {
 		log.Printf("Pulling image %s (%s)", c.Name, c.Image)
 		if err := pullImage(cli, c.Image); err != nil {
 			log.Printf("Error pulling image for %s: %v", c.Name, err)
 			errors = append(errors, fmt.Sprintf("%s: pulling image: %v", c.Name, err))
 			continue
 		}
-		if err := createAndStartContainer(cli, c, extConfig); err != nil {
+		publishPort := 0
+		if i == 0 {
+			publishPort = config.ShimCfg.UpstreamPort
+		}
+		if err := createAndStartContainer(cli, c, extConfig, publishPort); err != nil {
 			log.Printf("Error starting container %s: %v", c.Name, err)
 			errors = append(errors, fmt.Sprintf("%s: %v", c.Name, err))
 		}
@@ -105,11 +113,15 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 	errs := make([]error, len(config.Containers))
 	var wg sync.WaitGroup
 	for i, c := range config.Containers {
+		publishPort := 0
+		if i == 0 {
+			publishPort = config.ShimCfg.UpstreamPort
+		}
 		wg.Add(1)
-		go func(i int, c Container) {
+		go func(i int, c Container, publishPort int) {
 			defer wg.Done()
-			errs[i] = runContainer(cli, c, extConfig, &substages, &mu, flush)
-		}(i, c)
+			errs[i] = runContainer(cli, c, extConfig, publishPort, &substages, &mu, flush)
+		}(i, c, publishPort)
 	}
 	wg.Wait()
 
@@ -135,6 +147,7 @@ func runContainer(
 	cli *client.Client,
 	c Container,
 	extConfig *shimconfig.ExternalConfig,
+	publishPort int,
 	substages *[]boot.Stage,
 	mu *sync.Mutex,
 	flush func(),
@@ -167,7 +180,7 @@ func runContainer(
 
 	// Create + start
 	startPhase := time.Now()
-	if err := createAndStartContainer(cli, c, extConfig); err != nil {
+	if err := createAndStartContainer(cli, c, extConfig, publishPort); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
 		record("start", boot.StatusFailed, time.Since(startPhase), detail)
 		finish(boot.StatusFailed, detail)
@@ -246,7 +259,7 @@ func lastHealthLog(h *container.Health) string {
 }
 
 // createAndStartContainer creates and starts a container (image must already be pulled).
-func createAndStartContainer(cli *client.Client, c Container, extConfig *shimconfig.ExternalConfig) error {
+func createAndStartContainer(cli *client.Client, c Container, extConfig *shimconfig.ExternalConfig, publishPort int) error {
 	if c.Image == "" {
 		return fmt.Errorf("no image specified for container %s", c.Name)
 	}
@@ -280,7 +293,7 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 	// Host configuration
 	networkMode := c.NetworkMode
 	if networkMode == "" {
-		networkMode = "host" // Default to host networking
+		networkMode = "bridge"
 	}
 	hostConfig := &container.HostConfig{
 		NetworkMode:    container.NetworkMode(networkMode),
@@ -293,6 +306,26 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 		ReadonlyRootfs: c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
+	}
+
+	// Auto-publish the shim's upstream port on host loopback for the
+	// upstream container.
+	//
+	// By convention the first entry in `containers:` is the upstream.
+	if publishPort > 0 && networkMode != "host" {
+		if publishPort < 1 || publishPort > 65535 {
+			return fmt.Errorf("invalid upstream port %d for container %s", publishPort, c.Name)
+		}
+		port, err := nat.NewPort("tcp", strconv.Itoa(publishPort))
+		if err != nil {
+			return fmt.Errorf("building port spec for container %s: %w", c.Name, err)
+		}
+		containerConfig.ExposedPorts = nat.PortSet{port: struct{}{}}
+		hostConfig.PortBindings = nat.PortMap{port: []nat.PortBinding{{
+			HostIP:   shimLoopbackHostIP,
+			HostPort: strconv.Itoa(publishPort),
+		}}}
+		log.Printf("Container %s: publishing upstream port %d on %s", c.Name, publishPort, shimLoopbackHostIP)
 	}
 
 	// Restart policy

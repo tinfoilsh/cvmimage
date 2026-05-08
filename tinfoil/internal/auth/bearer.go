@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 )
@@ -17,7 +18,7 @@ func RequireBearer(apiKey string, w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	token := header[7:]
-	if token != apiKey {
+	if subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}

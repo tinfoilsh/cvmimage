@@ -34,13 +34,9 @@ func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.Ext
 		domain = "localhost"
 	}
 
-	serverIdentity, err := identity.FromFile(shimCfg.HPKEKeyFile)
+	serverIdentity, err := loadOrCreateHPKEIdentity(shimCfg.HPKEKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("loading HPKE identity: %w", err)
-	}
-	// identity.FromFile creates the key file with 0644 on first run.
-	if err := os.Chmod(shimCfg.HPKEKeyFile, 0o600); err != nil {
-		return nil, fmt.Errorf("restricting HPKE key permissions: %w", err)
 	}
 
 	hpkeKeyBytes := serverIdentity.MarshalPublicKey()
@@ -59,4 +55,25 @@ func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.Ext
 		HPKEKeyBytes: hpkeKeyBytes,
 		Domain:       domain,
 	}, nil
+}
+
+// loadOrCreateHPKEIdentity returns the HPKE identity at path, generating and
+// persisting a new one with mode 0600 when the file does not yet exist.
+// identity.FromFile would create a fresh key world-readable (0644).
+func loadOrCreateHPKEIdentity(path string) (*identity.Identity, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		i, err := identity.NewIdentity()
+		if err != nil {
+			return nil, fmt.Errorf("creating HPKE identity: %w", err)
+		}
+		b, err := i.Export()
+		if err != nil {
+			return nil, fmt.Errorf("exporting HPKE identity: %w", err)
+		}
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			return nil, fmt.Errorf("writing HPKE identity: %w", err)
+		}
+		return i, nil
+	}
+	return identity.FromFile(path)
 }

@@ -5,8 +5,14 @@ cpus = 32
 
 all: clean build
 
+# tinfoilcvm.hash is written as an artifact of `build`; read it from there if
+# present, otherwise extract from the UKI as a fallback.
 hash:
-	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2
+	@if [ -f tinfoilcvm.hash ]; then \
+	    cat tinfoilcvm.hash; \
+	else \
+	    objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2; \
+	fi
 
 clean:
 	sudo rm -rf tinfoilcvm.*
@@ -23,6 +29,8 @@ build: nvattest
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
 	mkosi --force
 	rm -f tinfoilcvm
+	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2 > tinfoilcvm.hash
+	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
 # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. See build-nvattest.sh.
 nvattest: packages/nvattest_1.2.0.1772475102-1_amd64.deb

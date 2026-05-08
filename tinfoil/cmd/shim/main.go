@@ -136,7 +136,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 
 		serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
-			return identity.FromFile(config.HPKEKeyFile)
+			return identity.FromFile(boot.HPKEKeyPath)
 		})
 		if err != nil {
 			return err

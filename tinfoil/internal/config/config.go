@@ -7,8 +7,6 @@ import (
 
 	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
-
-	"tinfoil/internal/boot"
 )
 
 type Config struct {
@@ -34,11 +32,9 @@ type Config struct {
 	// Supports the same wildcard patterns as Paths (e.g. "/v1/*").
 	AuthenticatedEndpoints *[]string `yaml:"authenticated-endpoints"`
 
-	RateLimit   float64 `yaml:"rate-limit"`
-	RateBurst   int     `yaml:"rate-burst"`
-	CacheDir    string  `yaml:"cache-dir"`
-	Email       string  `yaml:"email" default:"tls@tinfoil.sh"`
-	HPKEKeyFile string  `yaml:"hpke-key-file"`
+	RateLimit float64 `yaml:"rate-limit"`
+	RateBurst int     `yaml:"rate-burst"`
+	Email     string  `yaml:"email" default:"tls@tinfoil.sh"`
 
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
 	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
@@ -89,13 +85,6 @@ func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, erro
 	}
 	if err := yaml.Unmarshal(configBytes, &config); err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal config: %v", err)
-	}
-
-	if config.CacheDir == "" {
-		config.CacheDir = boot.CacheDir
-	}
-	if config.HPKEKeyFile == "" {
-		config.HPKEKeyFile = boot.HPKEKeyPath
 	}
 
 	if config.UpstreamPort == 0 {

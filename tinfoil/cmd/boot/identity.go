@@ -10,6 +10,7 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -34,7 +35,7 @@ func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.Ext
 		domain = "localhost"
 	}
 
-	serverIdentity, err := loadOrCreateHPKEIdentity(shimCfg.HPKEKeyFile)
+	serverIdentity, err := loadOrCreateHPKEIdentity(boot.HPKEKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading HPKE identity: %w", err)
 	}

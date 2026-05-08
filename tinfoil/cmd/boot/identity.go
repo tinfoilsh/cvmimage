@@ -10,7 +10,6 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 
-	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -35,17 +34,12 @@ func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.Ext
 		domain = "localhost"
 	}
 
-	hpkeKeyFile := shimCfg.HPKEKeyFile
-	if hpkeKeyFile == "" {
-		hpkeKeyFile = boot.HPKEKeyPath
-	}
-	serverIdentity, err := identity.FromFile(hpkeKeyFile)
+	serverIdentity, err := identity.FromFile(shimCfg.HPKEKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("loading HPKE identity: %w", err)
 	}
-	// identity.FromFile creates the key file with 0644 on first run; tighten
-	// it so the HPKE private key isn't world-readable on the ramdisk.
-	if err := os.Chmod(hpkeKeyFile, 0o600); err != nil {
+	// identity.FromFile creates the key file with 0644 on first run.
+	if err := os.Chmod(shimCfg.HPKEKeyFile, 0o600); err != nil {
 		return nil, fmt.Errorf("restricting HPKE key permissions: %w", err)
 	}
 

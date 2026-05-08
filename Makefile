@@ -1,19 +1,14 @@
-cmdline = "readonly=on console=ttyS0 earlyprintk=serial root=/dev/sda2 tinfoil-debug=on tinfoil-config-hash=$(shell sha256sum config.yml | cut -d ' ' -f 1)"
-
-memory = 4096M
-cpus = 32
-
 all: clean build
 
 # tinfoilcvm.hash is written as an artifact of `build`; read it from there if
 # present, otherwise extract the dm-verity roothash from the UKI's .cmdline
-# section. grep -oE finds the roothash= token regardless of position so the
+# section. grep -aoE finds the roothash= token regardless of position so the
 # command stays correct even if mkosi adds other kv pairs to the cmdline.
 hash:
 	@if [ -f tinfoilcvm.hash ]; then \
 	    cat tinfoilcvm.hash; \
 	else \
-	    objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -oE 'roothash=[a-f0-9]+' | cut -d= -f2; \
+	    objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -aoE 'roothash=[a-f0-9]+' | cut -d= -f2; \
 	fi
 
 clean:
@@ -31,7 +26,7 @@ build: nvattest
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
 	mkosi --force
 	rm -f tinfoilcvm
-	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -oE 'roothash=[a-f0-9]+' | cut -d= -f2 > tinfoilcvm.hash
+	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -aoE 'roothash=[a-f0-9]+' | cut -d= -f2 > tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
 # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. See build-nvattest.sh.
@@ -49,44 +44,3 @@ packages/nvattest_1.2.0.1772475102-1_amd64.deb: build-nvattest.sh
 
 python-lockfile:
 	pip-compile --generate-hashes --allow-unsafe --output-file=mkosi.extra/opt/venv-requirements.txt python-requirements.in
-
-run:
-	stty intr ^]
-	sudo ~/qemu/build/qemu-system-x86_64 \
-		-enable-kvm \
-		-cpu EPYC-v4 \
-		-machine q35 -smp $(cpus),maxcpus=$(cpus) \
-		-m $(memory) \
-		-no-reboot \
-		-bios /home/ubuntu/cvmimage/OVMF.fd \
-		-kernel ./tinfoilcvm.vmlinuz \
-		-initrd ./tinfoilcvm.initrd \
-		-append $(cmdline) \
-		-drive file=./tinfoilcvm.raw,if=none,id=disk0,format=raw,readonly=on \
-		-device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true \
-		-device scsi-hd,drive=disk0 \
-		-drive file=config.yml,if=none,id=disk1,format=raw,readonly=on \
-		-device virtio-scsi-pci,id=scsi1,disable-legacy=on,iommu_platform=true \
-		-device scsi-hd,drive=disk1 \
-		-machine memory-encryption=sev0,vmport=off \
-		-object memory-backend-memfd,id=ram1,size=$(memory),share=true,prealloc=false \
-		-machine memory-backend=ram1 -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=5,kernel-hashes=on \
-		-net nic,model=e1000 -net user,hostfwd=tcp::8444-:443 \
-		-nographic -monitor pty -monitor unix:monitor,server,nowait
-	stty intr ^c
-
-# -drive file=~/models/qwen-0.5b.mpk,if=none,id=disk2,format=raw,readonly=on \
-# -device virtio-scsi-pci,id=scsi2,disable-legacy=on,iommu_platform=true \
-# -device scsi-hd,drive=disk2 \
-# -machine memory-encryption=sev0,vmport=off \
-
-measure:
-	@MEASUREMENT=$$(sev-snp-measure \
-		--mode snp \
-		--vcpus=$(cpus) \
-		--vcpu-type=EPYC-v4 \
-		--append=$(cmdline) \
-		--ovmf ./OVMF.fd \
-		--kernel tinfoilcvm.vmlinuz \
-		--initrd tinfoilcvm.initrd) && \
-	echo "{ \"measurement\": \"$$MEASUREMENT\" }"

@@ -71,35 +71,55 @@ func (e *ExternalConfig) GetSecret(key string) string {
 	return v
 }
 
-// Load loads the config from the given files
-func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, error) {
+// Decode populates a Config from a yaml.Node (a parsed YAML subtree),
+// applies defaults, and validates. Used by boot, which has already parsed
+// the parent config and needs to type the `shim:` subsection.
+func Decode(n *yaml.Node) (*Config, error) {
 	var config Config
 	if err := defaults.Set(&config); err != nil {
-		return nil, nil, fmt.Errorf("failed to set defaults: %v", err)
+		return nil, fmt.Errorf("failed to set defaults: %v", err)
 	}
+	if err := n.Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode config: %v", err)
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
 
+func (c *Config) Validate() error {
+	if c.UpstreamPort == 0 {
+		return fmt.Errorf("upstream port is not set")
+	}
+	if !slices.Contains([]string{"self-signed", "acme", "cert-proxy"}, c.TLSMode) {
+		return fmt.Errorf("invalid TLS mode: %s (must be self-signed, acme, or cert-proxy)", c.TLSMode)
+	}
+	if !slices.Contains([]string{"production", "staging"}, c.TLSEnv) {
+		return fmt.Errorf("invalid TLS environment: %s (must be production or staging)", c.TLSEnv)
+	}
+	if !slices.Contains([]string{"tls", "dns", "http"}, c.TLSChallengeMode) {
+		return fmt.Errorf("invalid TLS challenge mode: %s (must be tls, dns, or http)", c.TLSChallengeMode)
+	}
+	if c.TLSWildcard && c.TLSChallengeMode != "dns" {
+		return fmt.Errorf("tls-wildcard requires tls-challenge: dns (wildcard certs cannot use %s challenge)", c.TLSChallengeMode)
+	}
+	return nil
+}
+
+// Load reads and parses both config files from disk.
+func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, error) {
 	configBytes, err := os.ReadFile(configFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read config file: %v", err)
 	}
-	if err := yaml.Unmarshal(configBytes, &config); err != nil {
+	var node yaml.Node
+	if err := yaml.Unmarshal(configBytes, &node); err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal config: %v", err)
 	}
-
-	if config.UpstreamPort == 0 {
-		return nil, nil, fmt.Errorf("upstream port is not set")
-	}
-	if !slices.Contains([]string{"self-signed", "acme", "cert-proxy"}, config.TLSMode) {
-		return nil, nil, fmt.Errorf("invalid TLS mode: %s (must be self-signed, acme, or cert-proxy)", config.TLSMode)
-	}
-	if !slices.Contains([]string{"production", "staging"}, config.TLSEnv) {
-		return nil, nil, fmt.Errorf("invalid TLS environment: %s (must be production or staging)", config.TLSEnv)
-	}
-	if !slices.Contains([]string{"tls", "dns", "http"}, config.TLSChallengeMode) {
-		return nil, nil, fmt.Errorf("invalid TLS challenge mode: %s (must be tls, dns, or http)", config.TLSChallengeMode)
-	}
-	if config.TLSWildcard && config.TLSChallengeMode != "dns" {
-		return nil, nil, fmt.Errorf("tls-wildcard requires tls-challenge: dns (wildcard certs cannot use %s challenge)", config.TLSChallengeMode)
+	config, err := Decode(&node)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	externalConfigBytes, err := os.ReadFile(externalConfigFile)
@@ -117,5 +137,5 @@ func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, erro
 	externalConfig.MetricsAPIKey = externalConfig.GetSecret(SecretMetricsAPIKey)
 	externalConfig.ACPIAPIKey = externalConfig.GetSecret(SecretACPIAPIKey)
 
-	return &config, &externalConfig, nil
+	return config, &externalConfig, nil
 }

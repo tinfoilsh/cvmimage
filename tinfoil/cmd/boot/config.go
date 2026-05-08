@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
@@ -16,14 +15,14 @@ import (
 
 // Config represents the main configuration file
 type Config struct {
-	ShimRaw    map[string]interface{} `yaml:"shim"`
-	ShimCfg    *shimconfig.Config     `yaml:"-"`
-	Network    NetworkConfig          `yaml:"network"`
-	CPUs       int                    `yaml:"cpus"`
-	Memory     int                    `yaml:"memory"`
-	GPUs       int                    `yaml:"gpus"`
-	Models     []ModelSpec            `yaml:"models"`
-	Containers []Container            `yaml:"containers"`
+	ShimRaw    yaml.Node          `yaml:"shim"`
+	ShimCfg    *shimconfig.Config `yaml:"-"`
+	Network    NetworkConfig      `yaml:"network"`
+	CPUs       int                `yaml:"cpus"`
+	Memory     int                `yaml:"memory"`
+	GPUs       int                `yaml:"gpus"`
+	Models     []ModelSpec        `yaml:"models"`
+	Containers []Container        `yaml:"containers"`
 }
 
 // NetworkConfig defines network-level firewall rules enforced via nftables.
@@ -151,7 +150,7 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, err
 	}
 
-	shimCfg, err := parseShimConfig(config.ShimRaw)
+	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
 	}
@@ -172,21 +171,6 @@ func loadAndVerifyConfig() (*Config, error) {
 	return &config, nil
 }
 
-func parseShimConfig(raw map[string]interface{}) (*shimconfig.Config, error) {
-	var cfg shimconfig.Config
-	if err := defaults.Set(&cfg); err != nil {
-		return nil, fmt.Errorf("setting defaults: %w", err)
-	}
-	yamlBytes, err := yaml.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling: %w", err)
-	}
-	if err := yaml.Unmarshal(yamlBytes, &cfg); err != nil {
-		return nil, fmt.Errorf("unmarshaling: %w", err)
-	}
-	return &cfg, nil
-}
-
 // loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)
 func loadConfigFromRamdisk() (*Config, error) {
 	data, err := os.ReadFile(boot.ConfigPath)
@@ -199,7 +183,7 @@ func loadConfigFromRamdisk() (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	shimCfg, err := parseShimConfig(config.ShimRaw)
+	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
 	}

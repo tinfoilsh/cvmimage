@@ -7,7 +7,7 @@ Wants=nvidia-persistenced.service nvidia-fabricmanager.service nvidia-cdi-refres
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/tinfoil-boot
+ExecStart=/usr/bin/tinfoil-boot
 User=root
 Group=root
 StandardOutput=journal+console

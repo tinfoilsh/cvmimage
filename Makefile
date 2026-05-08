@@ -18,9 +18,9 @@ deepclean:
 	sudo rm -f packages/nvattest_*.deb packages/libnvat_*.deb
 
 build: nvattest
-	mkdir -p packages mkosi.extra/usr/local/bin
-	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-boot ./cmd/boot
-	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-shim ./cmd/shim
+	mkdir -p packages mkosi.extra/usr/bin
+	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
+	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
 	mkosi --force
 	rm -f tinfoilcvm
 

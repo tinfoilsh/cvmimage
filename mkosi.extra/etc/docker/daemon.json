@@ -1,5 +1,5 @@
 {
-    "data-root": "/mnt/ramdisk/docker",
+    "data-root": "/mnt/ramdisk/private/docker",
     "features": {
         "containerd-snapshotter": true
     },

@@ -1,4 +1,4 @@
 version = 3
 
-root = "/mnt/ramdisk/containerd/root"
-state = "/mnt/ramdisk/containerd/run"
+root = "/mnt/ramdisk/private/containerd/root"
+state = "/mnt/ramdisk/private/containerd/run"

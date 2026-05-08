@@ -13,17 +13,23 @@ if [ $SIZE -lt 16 ]; then
     SIZE=4
 fi
 
-mount -t tmpfs -o size=${SIZE}G tmpfs /mnt/ramdisk
+mount -t tmpfs -o size=${SIZE}G,mode=0755,nodev,nosuid tmpfs /mnt/ramdisk
 
-# Public dir: read-only mount for containers (/tinfoil)
-mkdir -p /mnt/ramdisk/public
-chmod 755 /mnt/ramdisk/public
-
-# Private dir: boot + shim only (TLS keys, HPKE, registry creds)
+# Private dir: boot + shim only (TLS keys, HPKE, registry creds, daemon state).
 mkdir -p /mnt/ramdisk/private
 chmod 700 /mnt/ramdisk/private
 
-# Mount tmp as ramdisk
-mount -t tmpfs -o size=512M tmpfs /tmp
+# Public dir: read-only bind mount into workload containers at /tinfoil.
+mkdir -p /mnt/ramdisk/public
+chmod 755 /mnt/ramdisk/public
+
+# Daemon data roots live under private/ so they sit behind the 0700 parent and
+# outside any container mount. docker/containerd start before tinfoil-boot, so
+# these must exist by the time their units are activated.
+mkdir -p /mnt/ramdisk/private/docker
+mkdir -p /mnt/ramdisk/private/containerd/root
+mkdir -p /mnt/ramdisk/private/containerd/run
+
+mount -t tmpfs -o size=512M,mode=1777,nodev,nosuid tmpfs /tmp
 
 echo "Ramdisk ready"

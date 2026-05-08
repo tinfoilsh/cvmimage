@@ -6,12 +6,14 @@ cpus = 32
 all: clean build
 
 # tinfoilcvm.hash is written as an artifact of `build`; read it from there if
-# present, otherwise extract from the UKI as a fallback.
+# present, otherwise extract the dm-verity roothash from the UKI's .cmdline
+# section. grep -oE finds the roothash= token regardless of position so the
+# command stays correct even if mkosi adds other kv pairs to the cmdline.
 hash:
 	@if [ -f tinfoilcvm.hash ]; then \
 	    cat tinfoilcvm.hash; \
 	else \
-	    objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2; \
+	    objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -oE 'roothash=[a-f0-9]+' | cut -d= -f2; \
 	fi
 
 clean:
@@ -29,7 +31,7 @@ build: nvattest
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
 	mkosi --force
 	rm -f tinfoilcvm
-	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2 > tinfoilcvm.hash
+	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -oE 'roothash=[a-f0-9]+' | cut -d= -f2 > tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
 # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. See build-nvattest.sh.

@@ -60,7 +60,7 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr: ":443",
+		Addr: fmt.Sprintf(":%d", boot.ShimListenPort),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if h, ok := handler.Load().(http.Handler); ok {
 				h.ServeHTTP(w, r)

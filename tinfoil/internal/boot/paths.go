@@ -23,4 +23,7 @@ const (
 	GCloudKeyPath      = PrivateDir + "/gcloud_key.json"
 	CacheDir           = PrivateDir + "/tfshim-cache"
 	StatePath          = PrivateDir + "/boot-state.json"
+
+	// ShimListenPort is the public TLS port served by tinfoil-shim.
+	ShimListenPort = 443
 )

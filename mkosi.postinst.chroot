@@ -24,9 +24,6 @@ systemctl mask nvidia-powerd.service
 
 systemctl mask systemd-networkd-persistent-storage.service
 
-# Pre-create the ramdisk mount point in the read-only rootfs so
-# tinfoil-ramdisk.service has somewhere to mount the tmpfs onto.
-mkdir -p /mnt/ramdisk
 echo "export DOCKER_CONFIG=/mnt/ramdisk/private/docker-config" >> /root/.bashrc
 
 # Build patched tdx-guest.ko. The audit surface is the small

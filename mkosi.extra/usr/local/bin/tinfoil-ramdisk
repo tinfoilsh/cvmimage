@@ -23,13 +23,6 @@ chmod 700 /mnt/ramdisk/private
 mkdir -p /mnt/ramdisk/public
 chmod 755 /mnt/ramdisk/public
 
-# Daemon data roots live under private/ so they sit behind the 0700 parent and
-# outside any container mount. docker/containerd start before tinfoil-boot, so
-# these must exist by the time their units are activated.
-mkdir -p /mnt/ramdisk/private/docker
-mkdir -p /mnt/ramdisk/private/containerd/root
-mkdir -p /mnt/ramdisk/private/containerd/run
-
 mount -t tmpfs -o size=512M,mode=1777,nodev,nosuid tmpfs /tmp
 
 echo "Ramdisk ready"

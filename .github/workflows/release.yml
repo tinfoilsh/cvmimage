@@ -46,7 +46,7 @@ jobs:
           sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils
           sudo pipx install git+https://github.com/systemd/mkosi.git@54c625c380ef5500f17460981a3c67b109b6a847 #v25.3
           sudo pipx ensurepath
-          mkdir -p packages mkosi.extra/usr/local/bin
+          mkdir -p packages mkosi.extra/usr/bin
 
       - name: Setup Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
@@ -56,11 +56,11 @@ jobs:
 
       - name: Build tinfoil binaries
         run: |
-          mkdir -p mkosi.extra/usr/local/bin
+          mkdir -p mkosi.extra/usr/bin
           cd tinfoil
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-boot ./cmd/boot
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/local/bin/tinfoil-shim ./cmd/shim
-          sha256sum ../mkosi.extra/usr/local/bin/tinfoil-boot ../mkosi.extra/usr/local/bin/tinfoil-shim
+          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
+          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
+          sha256sum ../mkosi.extra/usr/bin/tinfoil-boot ../mkosi.extra/usr/bin/tinfoil-shim
 
       # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. The image
       # digest is also pinned in Makefile; rotate both together via

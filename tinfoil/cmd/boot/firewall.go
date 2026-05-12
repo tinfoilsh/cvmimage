@@ -31,11 +31,13 @@ func setupContainerNetworkFirewall(trustedDomains []string, trustAllDomains bool
 		return fmt.Errorf("nft add return-traffic rule: %w (%s)", err, out)
 	}
 
-	// Block container-net from initiating connections to the host via the
-	// container-net gateway IP. We insert it at the top of the input chain
-	// for priority.
+	// Block new connections from container-net to the host (the shim's :443,
+	// admin endpoints, etc.). Inserted first so it fires before the static
+	// `tcp dport 443 accept`. Scoped to `ct state new` so reply traffic on
+	// host→container connections (the shim's responses from the upstream)
+	// still matches the static `ct state established,related accept` rule.
 	out, err = exec.Command("nft", "insert", "rule", "inet", "tinfoil", "input",
-		"iif", containerBridgeName, "drop").CombinedOutput()
+		"iif", containerBridgeName, "ct", "state", "new", "drop").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nft add block container->host rule: %w (%s)", err, out)
 	}

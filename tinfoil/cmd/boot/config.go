@@ -29,6 +29,9 @@ type Config struct {
 // The shim's listen-port is always allowed implicitly.
 type NetworkConfig struct {
 	AllowedInboundPorts []int `yaml:"allowed-inbound-ports"`
+	// TrustedDomains is an allowlist of hostnames containers may reach over the
+	// internet. When empty, all public (non-RFC-1918) destinations are permitted.
+	TrustedDomains []string `yaml:"trusted-domains"`
 }
 
 // ModelSpec represents a model pack specification

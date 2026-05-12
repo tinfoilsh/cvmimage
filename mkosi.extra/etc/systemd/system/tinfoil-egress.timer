@@ -1,0 +1,14 @@
+[Unit]
+Description=Tinfoil Container Egress Filter Timer
+
+[Timer]
+# Re-run tinfoil-egress 60 seconds after each previous run completes.
+# The initial call is done by tinfoil-boot, so this timer only handles
+# subsequent refreshes.
+OnUnitActiveSec=60s
+# 1s accuracy so the timer fires close to the 60s boundary rather than being
+# coalesced with other timers (default accuracy is 1 minute).
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

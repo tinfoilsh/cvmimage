@@ -28,6 +28,32 @@ const healthPollInterval = 5 * time.Second
 const containerNetworkName = "container-net" // Docker network name
 const containerBridgeName = "container-net"  // Linux interface name (<=15 chars)
 
+// resolveUpstreamHost looks up the bridge IP of the upstream container so
+// the shim can dial it directly. By convention the first container in the
+// config is the upstream. Returns "" if the lookup fails; the shim then
+// falls back to its legacy 127.0.0.1 dial.
+func resolveUpstreamHost(cli *client.Client, containers []Container) string {
+	if len(containers) == 0 {
+		return ""
+	}
+	name := containers[0].Name
+	info, err := cli.ContainerInspect(context.Background(), name)
+	if err != nil {
+		log.Printf("Warning: cannot resolve upstream host for %q: %v", name, err)
+		return ""
+	}
+	if info.NetworkSettings == nil {
+		log.Printf("Warning: container %q has no NetworkSettings", name)
+		return ""
+	}
+	ep, ok := info.NetworkSettings.Networks[containerNetworkName]
+	if !ok || ep == nil || ep.IPAddress == "" {
+		log.Printf("Warning: container %q has no IP on %q", name, containerNetworkName)
+		return ""
+	}
+	return ep.IPAddress
+}
+
 func setupContainerNetwork(cli *client.Client, cfg *Config) error {
 	_, err := cli.NetworkInspect(context.Background(), containerNetworkName, dockernetwork.InspectOptions{})
 	if cerrdefs.IsNotFound(err) {
@@ -83,6 +109,12 @@ func launchContainers(config *Config) error {
 	if len(errors) > 0 {
 		return fmt.Errorf("failed to start %d container(s): %s", len(errors), strings.Join(errors, "; "))
 	}
+
+	config.ShimCfg.UpstreamHost = resolveUpstreamHost(cli, config.Containers)
+	if err := writeShimConfig(config.ShimCfg); err != nil {
+		return fmt.Errorf("writing shim config: %w", err)
+	}
+	log.Printf("Shim upstream resolved: %s:%d", config.ShimCfg.UpstreamHost, config.ShimCfg.UpstreamPort)
 	return nil
 }
 
@@ -155,6 +187,13 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
 		return fmt.Errorf("container failures: %s", detail)
 	}
+
+	config.ShimCfg.UpstreamHost = resolveUpstreamHost(cli, config.Containers)
+	if err := writeShimConfig(config.ShimCfg); err != nil {
+		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("writing shim config: %w", err)
+	}
+	log.Printf("Shim upstream resolved: %s:%d", config.ShimCfg.UpstreamHost, config.ShimCfg.UpstreamPort)
 
 	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
 	return nil

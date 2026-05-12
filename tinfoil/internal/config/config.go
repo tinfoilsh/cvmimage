@@ -11,6 +11,12 @@ import (
 
 type Config struct {
 	UpstreamPort int `yaml:"upstream-port"`
+	// UpstreamHost is the address the shim's reverse proxy dials for
+	// every request. Operator-config does not set this; tinfoil-boot
+	// resolves the upstream container's bridge IP at launch and writes
+	// it into shim.yml. When empty the shim falls back to "127.0.0.1"
+	// (legacy path; useful only when there is no upstream container).
+	UpstreamHost string `yaml:"upstream-host,omitempty"`
 
 	Paths         []string `yaml:"paths"`
 	OriginDomains []string `yaml:"origins"`

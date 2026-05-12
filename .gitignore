@@ -16,4 +16,5 @@ tinfoil-boot/tinfoil-boot
 tinfoil/boot
 tinfoil/shim
 mkosi.extra/usr/bin/tinfoil-boot
+mkosi.extra/usr/bin/tinfoil-egress
 mkosi.extra/usr/bin/tinfoil-shim

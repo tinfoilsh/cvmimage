@@ -138,12 +138,18 @@ func NewShimServer(
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
 
+	upstreamHost := config.UpstreamHost
+	if upstreamHost == "" {
+		upstreamHost = "127.0.0.1"
+	}
+	upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
+
 	proxy := httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			originalHost := req.Host
 
 			req.URL.Scheme = "http"
-			req.URL.Host = fmt.Sprintf("127.0.0.1:%d", config.UpstreamPort)
+			req.URL.Host = upstreamAddr
 			req.Header.Set("Host", "localhost")
 			req.Host = "localhost"
 			req.Header.Del(ehbpProtocol.EncapsulatedKeyHeader)

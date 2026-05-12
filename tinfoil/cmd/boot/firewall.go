@@ -15,7 +15,8 @@ import (
 // set every 60 seconds. When trustedDomains is empty, all public destinations
 // are allowed.
 func setupContainerNetworkFirewall(trustedDomains []string) error {
-	privateRanges := "{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8 }"
+	privateIPv4Ranges := "{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8 }"
+	privateIPv6Ranges := "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
 
 	// Allow return traffic into containers for connections they initiated.
 	out, err := exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
@@ -39,7 +40,8 @@ func setupContainerNetworkFirewall(trustedDomains []string) error {
 		// from reaching other VMs or host-internal services.
 		out, err := exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
 			"iif", containerBridgeName,
-			"ip", "daddr", "!=", privateRanges, "accept").CombinedOutput()
+			"ip", "daddr", "!=", privateIPv4Ranges, "accept",
+			"ip6", "daddr", "!=", privateIPv6Ranges, "accept").CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("nft add forward rule: %w (%s)", err, out)
 		}
@@ -53,7 +55,8 @@ func setupContainerNetworkFirewall(trustedDomains []string) error {
 	// Drop RFC 1918 / link-local explicitly before the allowlist.
 	out, err = exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
 		"iif", containerBridgeName,
-		"ip", "daddr", privateRanges, "drop").CombinedOutput()
+		"ip", "daddr", privateIPv4Ranges, "drop",
+		"ip6", "daddr", privateIPv6Ranges, "drop").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nft add drop-private rule: %w (%s)", err, out)
 	}

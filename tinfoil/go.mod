@@ -4,10 +4,10 @@ go 1.25.5
 
 require (
 	github.com/NVIDIA/go-nvml v0.13.0-1
+	github.com/containerd/errdefs v1.0.0
 	github.com/creasty/defaults v1.8.0
 	github.com/docker/cli v29.2.0+incompatible
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/docker/go-connections v0.6.0
 	github.com/docker/go-units v0.5.0
 	github.com/go-acme/lego/v4 v4.30.1
 	github.com/google/go-sev-guest v0.14.1
@@ -29,11 +29,11 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker-credential-helpers v0.9.5 // indirect
+	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

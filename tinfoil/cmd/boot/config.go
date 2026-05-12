@@ -59,7 +59,7 @@ type Container struct {
 	CapDrop     []string    `yaml:"cap_drop,omitempty"`
 	SecurityOpt []string    `yaml:"security_opt,omitempty"`
 	Runtime     string      `yaml:"runtime,omitempty"`      // e.g., "nvidia"
-	NetworkMode string      `yaml:"network_mode,omitempty"` // "host", "bridge", "none" (default: "bridge")
+	NetworkMode string      `yaml:"network_mode,omitempty"` // no longer honoured; flagged at parse time so legacy configs fail loud
 	IPC         string      `yaml:"ipc,omitempty"`          // e.g., "host"
 	PidMode     string      `yaml:"pid,omitempty"`          // "host" for host PID namespace
 	GPUs        interface{} `yaml:"gpus,omitempty"`         // "all", "0,1,2,3", or count (int)

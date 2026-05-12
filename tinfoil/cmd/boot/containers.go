@@ -43,7 +43,7 @@ func setupContainerNetwork(cli *client.Client, cfg *Config) error {
 	} else if err != nil {
 		return fmt.Errorf("checking whether docker network %q exists: %w", containerNetworkName, err)
 	}
-	return setupContainerNetworkFirewall(cfg.Network.TrustedDomains)
+	return setupContainerNetworkFirewall(cfg.Network.TrustedDomains, cfg.Network.TrustAllDomains)
 }
 
 // launchContainers starts all containers from the config

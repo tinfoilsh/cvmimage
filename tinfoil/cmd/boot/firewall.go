@@ -14,8 +14,18 @@ func setupContainerNetworkFirewall(trustedDomains []string, trustAllDomains bool
 	privateIPv4Ranges := "{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8 }"
 	privateIPv6Ranges := "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
 
-	// Allow return traffic into containers for connections they initiated.
+	// Allow container ↔ container traffic. Only fires when br_netfilter is
+	// loaded with bridge-nf-call-iptables=1, in which case bridged frames
+	// also traverse this L3 forward hook and would otherwise be dropped
+	// (both endpoints sit in the bridge's RFC1918 subnet).
 	out, err := exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
+		"iif", containerBridgeName, "oif", containerBridgeName, "accept").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("nft add sibling-traffic rule: %w (%s)", err, out)
+	}
+
+	// Allow return traffic into containers for connections they initiated.
+	out, err = exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
 		"oif", containerBridgeName, "ct", "state", "established,related", "accept").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("nft add return-traffic rule: %w (%s)", err, out)

@@ -28,7 +28,7 @@ const healthPollInterval = 5 * time.Second
 const containerNetworkName = "container-net" // Docker network name
 const containerBridgeName = "container-net"  // Linux interface name (<=15 chars)
 
-func setupContainerNetwork(cli *client.Client) error {
+func setupContainerNetwork(cli *client.Client, cfg *Config) error {
 	_, err := cli.NetworkInspect(context.Background(), containerNetworkName, dockernetwork.InspectOptions{})
 	if cerrdefs.IsNotFound(err) {
 		_, err = cli.NetworkCreate(context.Background(), containerNetworkName, dockernetwork.CreateOptions{
@@ -43,7 +43,7 @@ func setupContainerNetwork(cli *client.Client) error {
 	} else if err != nil {
 		return fmt.Errorf("checking whether docker network %q exists: %w", containerNetworkName, err)
 	}
-	return setupContainerNetworkFirewall()
+	return setupContainerNetworkFirewall(cfg.Network.TrustedDomains)
 }
 
 // launchContainers starts all containers from the config
@@ -61,7 +61,7 @@ func launchContainers(config *Config) error {
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(cli); err != nil {
+	if err := setupContainerNetwork(cli, config); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
 	}
 
@@ -104,7 +104,7 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(cli); err != nil {
+	if err := setupContainerNetwork(cli, config); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
 	}
 

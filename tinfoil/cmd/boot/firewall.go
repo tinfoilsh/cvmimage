@@ -44,30 +44,34 @@ func setupContainerNetworkFirewall(trustedDomains []string, trustAllDomains bool
 
 	switch {
 	case trustAllDomains:
-		// Drops traffic destined for RFC 1918 / link-local to prevent containers
-		// from reaching other VMs or host-internal services.
+		// One rule per address family: nft rejects multiple verdicts in a
+		// single rule (`accept` is terminal).
 		out, err := exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
-			"iif", containerBridgeName,
-			"ip", "daddr", "!=", privateIPv4Ranges, "accept",
-			"ip6", "daddr", "!=", privateIPv6Ranges, "accept").CombinedOutput()
+			"iif", containerBridgeName, "ip", "daddr", "!=", privateIPv4Ranges, "accept").CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("nft add forward rule: %w (%s)", err, out)
+			return fmt.Errorf("nft add forward v4 rule: %w (%s)", err, out)
+		}
+		out, err = exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
+			"iif", containerBridgeName, "ip6", "daddr", "!=", privateIPv6Ranges, "accept").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("nft add forward v6 rule: %w (%s)", err, out)
 		}
 		log.Println("Firewall: trust-all-domains active, unrestricted public egress permitted")
 		return nil
 
 	case len(trustedDomains) > 0:
-		// Trusted-domains mode: create an empty set; tinfoil-egress populates it.
 		exec.Command("nft", "add", "set", "inet", "tinfoil", "container-outgoing-allow",
 			"{ type ipv4_addr; }").Run()
 
-		// Drop RFC 1918 / link-local explicitly before the allowlist.
-		out, err = exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
-			"iif", containerBridgeName,
-			"ip", "daddr", privateIPv4Ranges, "drop",
-			"ip6", "daddr", privateIPv6Ranges, "drop").CombinedOutput()
+		out, err := exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
+			"iif", containerBridgeName, "ip", "daddr", privateIPv4Ranges, "drop").CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("nft add drop-private rule: %w (%s)", err, out)
+			return fmt.Errorf("nft add drop-private v4 rule: %w (%s)", err, out)
+		}
+		out, err = exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
+			"iif", containerBridgeName, "ip6", "daddr", privateIPv6Ranges, "drop").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("nft add drop-private v6 rule: %w (%s)", err, out)
 		}
 
 		// Allow only trusted IPs; chain policy drops everything else.

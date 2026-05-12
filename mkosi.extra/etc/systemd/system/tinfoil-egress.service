@@ -1,0 +1,14 @@
+[Unit]
+Description=Tinfoil Container Egress Filter Service
+After=nftables.service
+Requires=nftables.service tinfoil-boot.service
+
+[Service]
+# Use oneshot as `systemctl start` blocks until the process exits, so any
+# resolution or nftables errors will propogate.
+Type=oneshot
+ExecStart=/usr/bin/tinfoil-egress
+User=root
+Group=root
+StandardOutput=journal+console
+StandardError=journal+console

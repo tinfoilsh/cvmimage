@@ -30,8 +30,13 @@ type Config struct {
 type NetworkConfig struct {
 	AllowedInboundPorts []int `yaml:"allowed-inbound-ports"`
 	// TrustedDomains is an allowlist of hostnames containers may reach over the
-	// internet. When empty, all public (non-RFC-1918) destinations are permitted.
+	// public internet. tinfoil-egress resolves each name to one or more IPs at
+	// boot and refreshes every 60s. Cannot be combined with TrustAllDomains.
 	TrustedDomains []string `yaml:"trusted-domains"`
+	// TrustAllDomains opts the enclave into unrestricted public Internet egress.
+	// RFC1918 / link-local destinations remain blocked; only public addresses
+	// are reachable. Cannot be combined with a non-empty TrustedDomains.
+	TrustAllDomains bool `yaml:"trust-all-domains"`
 }
 
 // ModelSpec represents a model pack specification
@@ -65,6 +70,12 @@ type Container struct {
 	IPC         string      `yaml:"ipc,omitempty"`     // e.g., "host"
 	PidMode     string      `yaml:"pid,omitempty"`     // "host" for host PID namespace
 	GPUs        interface{} `yaml:"gpus,omitempty"`    // "all", "0,1,2,3", or count (int)
+
+	// NetworkMode is no longer honoured: every container is attached to the
+	// shared container-net bridge unconditionally. The field is preserved on
+	// the struct so the parser can detect legacy configs and reject them with
+	// an actionable error instead of silently dropping the value.
+	NetworkMode string `yaml:"network_mode,omitempty"`
 
 	// Resource limits
 	ShmSize  string            `yaml:"shm_size,omitempty"`  // "2g"
@@ -152,6 +163,10 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, err
 	}
 
+	if err := validateNetwork(&config); err != nil {
+		return nil, fmt.Errorf("network config: %w", err)
+	}
+
 	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
@@ -183,6 +198,10 @@ func loadConfigFromRamdisk() (*Config, error) {
 	var config Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	if err := validateNetwork(&config); err != nil {
+		return nil, fmt.Errorf("network config: %w", err)
 	}
 
 	shimCfg, err := shimconfig.Decode(&config.ShimRaw)

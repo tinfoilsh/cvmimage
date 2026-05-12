@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	shimconfig "tinfoil/internal/config"
 )
 
 func TestValidateNetwork(t *testing.T) {
@@ -75,6 +77,22 @@ func TestValidateNetwork(t *testing.T) {
 			}},
 			wantErr:    true,
 			wantErrSub: "network_mode is removed",
+		},
+		{
+			name: "shim.upstream-container matches a container → accept",
+			cfg: Config{
+				ShimCfg:    &shimconfig.Config{UpstreamContainer: "router"},
+				Containers: []Container{{Name: "router"}, {Name: "worker"}},
+			},
+		},
+		{
+			name: "shim.upstream-container with no matching container → reject",
+			cfg: Config{
+				ShimCfg:    &shimconfig.Config{UpstreamContainer: "ghost"},
+				Containers: []Container{{Name: "router"}},
+			},
+			wantErr:    true,
+			wantErrSub: "does not match any containers",
 		},
 	}
 	for _, tt := range tests {

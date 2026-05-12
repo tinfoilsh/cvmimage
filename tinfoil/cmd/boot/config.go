@@ -168,6 +168,10 @@ func loadAndVerifyConfig() (*Config, error) {
 	}
 	config.ShimCfg = shimCfg
 
+	if shimCfg.UpstreamContainer == "" && len(config.Containers) > 0 {
+		shimCfg.UpstreamContainer = config.Containers[0].Name
+	}
+
 	shimYAML, err := yaml.Marshal(shimCfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling shim config: %w", err)

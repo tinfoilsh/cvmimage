@@ -11,6 +11,9 @@ import (
 
 type Config struct {
 	UpstreamPort int `yaml:"upstream-port"`
+	// UpstreamContainer names the workload container the shim proxies to.
+	// Optional: tinfoil-boot defaults it to the first entry of containers[].
+	UpstreamContainer string `yaml:"upstream-container,omitempty"`
 
 	Paths         []string `yaml:"paths"`
 	OriginDomains []string `yaml:"origins"`

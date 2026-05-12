@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -118,7 +119,8 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 		config, externalConfig := cfgPair.config, cfgPair.external
-		log.Printf("Shim config loaded: upstream-port=%d tls-mode=%s paths=%d", config.UpstreamPort, config.TLSMode, len(config.Paths))
+		log.Printf("Shim config loaded: upstream-container=%s upstream-port=%d tls-mode=%s paths=%d",
+			config.UpstreamContainer, config.UpstreamPort, config.TLSMode, len(config.Paths))
 
 		realCert, err := waitForArtifact("TLS certificate", func() (tls.Certificate, error) {
 			return tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
@@ -202,7 +204,14 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		gpuCount := tinfoilattestation.DetectGPUCount()
 		log.Printf("Detected %d GPU(s) for attestation", gpuCount)
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, gpuCount, serverIdentity, realCertParsed, config, externalConfig)
+		upstreamHost, err := resolveUpstreamHost(context.Background(), config.UpstreamContainer)
+		if err != nil {
+			return fmt.Errorf("resolving upstream container: %w", err)
+		}
+		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
+		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
+
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, gpuCount, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

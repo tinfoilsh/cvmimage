@@ -59,8 +59,11 @@ jobs:
           mkdir -p mkosi.extra/usr/bin
           cd tinfoil
           go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
+          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
           go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
-          sha256sum ../mkosi.extra/usr/bin/tinfoil-boot ../mkosi.extra/usr/bin/tinfoil-shim
+          sha256sum ../mkosi.extra/usr/bin/tinfoil-boot \
+                    ../mkosi.extra/usr/bin/tinfoil-egress \
+                    ../mkosi.extra/usr/bin/tinfoil-shim
 
       # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. The image
       # digest is also pinned in Makefile; rotate both together via

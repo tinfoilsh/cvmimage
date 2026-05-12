@@ -134,15 +134,10 @@ func NewShimServer(
 	tlsCert *tls.Certificate,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
+	upstreamAddr string,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-
-	upstreamHost := config.UpstreamHost
-	if upstreamHost == "" {
-		upstreamHost = "127.0.0.1"
-	}
-	upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 
 	proxy := httputil.ReverseProxy{
 		Director: func(req *http.Request) {

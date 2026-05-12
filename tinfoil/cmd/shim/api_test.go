@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -30,8 +31,9 @@ func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
+	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
 
-	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg)
+	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, upstreamAddr)
 }
 
 func TestPathNotAllowed_Returns404(t *testing.T) {

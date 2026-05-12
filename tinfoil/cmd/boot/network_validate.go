@@ -42,6 +42,22 @@ func validateNetwork(cfg *Config) error {
 			return fmt.Errorf("network.trusted-domains[%d] %q: %w", i, host, err)
 		}
 	}
+
+	if cfg.ShimCfg != nil && cfg.ShimCfg.UpstreamContainer != "" {
+		found := false
+		for _, c := range cfg.Containers {
+			if c.Name == cfg.ShimCfg.UpstreamContainer {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf(
+				"shim.upstream-container %q does not match any containers[].name",
+				cfg.ShimCfg.UpstreamContainer,
+			)
+		}
+	}
 	return nil
 }
 

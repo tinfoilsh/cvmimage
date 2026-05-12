@@ -173,26 +173,26 @@ func loadAndVerifyConfig() (*Config, error) {
 	}
 	config.ShimCfg = shimCfg
 
+	// Default the upstream container name to the first entry of
+	// `containers:` so single-container configs need no extra ceremony.
+	// Validation below will reject names that don't match any container.
+	if shimCfg.UpstreamContainer == "" && len(config.Containers) > 0 {
+		shimCfg.UpstreamContainer = config.Containers[0].Name
+	}
+
+	shimYAML, err := yaml.Marshal(shimCfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling shim config: %w", err)
+	}
+	if err := os.WriteFile(boot.ShimConfigPath, shimYAML, 0644); err != nil {
+		return nil, fmt.Errorf("writing shim config: %w", err)
+	}
+
 	if err := loadExternalConfig(); err != nil {
 		log.Printf("Warning: external config not loaded: %v", err)
 	}
 
 	return &config, nil
-}
-
-// writeShimConfig persists the shim config to the ramdisk so tinfoil-shim
-// can read it on startup. Called by the boot orchestrator after the
-// upstream container has come up and its bridge IP has been stamped into
-// shimCfg.UpstreamHost.
-func writeShimConfig(shimCfg *shimconfig.Config) error {
-	shimYAML, err := yaml.Marshal(shimCfg)
-	if err != nil {
-		return fmt.Errorf("marshaling shim config: %w", err)
-	}
-	if err := os.WriteFile(boot.ShimConfigPath, shimYAML, 0644); err != nil {
-		return fmt.Errorf("writing shim config: %w", err)
-	}
-	return nil
 }
 
 // loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)

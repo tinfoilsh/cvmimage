@@ -11,12 +11,13 @@ import (
 
 type Config struct {
 	UpstreamPort int `yaml:"upstream-port"`
-	// UpstreamHost is the address the shim's reverse proxy dials for
-	// every request. Operator-config does not set this; tinfoil-boot
-	// resolves the upstream container's bridge IP at launch and writes
-	// it into shim.yml. When empty the shim falls back to "127.0.0.1"
-	// (legacy path; useful only when there is no upstream container).
-	UpstreamHost string `yaml:"upstream-host,omitempty"`
+	// UpstreamContainer is the name of the container the shim proxies to.
+	// Optional in the operator-facing config: when unset, tinfoil-boot
+	// defaults it to the first entry of `containers:` so single-container
+	// enclaves work without ceremony. Set it explicitly in multi-container
+	// configs to avoid the implicit "first by convention" rule. The shim
+	// resolves the name to a bridge IP at startup via the Docker socket.
+	UpstreamContainer string `yaml:"upstream-container,omitempty"`
 
 	Paths         []string `yaml:"paths"`
 	OriginDomains []string `yaml:"origins"`

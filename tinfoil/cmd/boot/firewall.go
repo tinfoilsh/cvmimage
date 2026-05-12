@@ -64,14 +64,19 @@ func setupContainerNetworkFirewall(trustedDomains []string, trustAllDomains bool
 
 	switch {
 	case trustAllDomains:
-		// Drops traffic destined for RFC 1918 / link-local to prevent containers
-		// from reaching other VMs or host-internal services.
-		out, err := exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
-			"iif", containerBridgeName,
-			"ip", "daddr", "!=", privateIPv4Ranges, "accept",
-			"ip6", "daddr", "!=", privateIPv6Ranges, "accept").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("nft add forward rule: %w (%s)", err, out)
+		// Accept outbound to any public IP — but not RFC1918 / link-local,
+		// so containers can't reach other VMs or host-internal services.
+		// Two rules: one each for v4 and v6. nft refuses to combine them
+		// into a single rule ("Statement after terminal statement has no
+		// effect" — `accept` is terminal, so the v6 clause would be dead).
+		for _, args := range [][]string{
+			{"iif", containerBridgeName, "ip", "daddr", "!=", privateIPv4Ranges, "accept"},
+			{"iif", containerBridgeName, "ip6", "daddr", "!=", privateIPv6Ranges, "accept"},
+		} {
+			out, err := exec.Command("nft", append([]string{"add", "rule", "inet", "tinfoil", "forward"}, args...)...).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("nft add forward rule: %w (%s)", err, out)
+			}
 		}
 		log.Println("Firewall: trust-all-domains active, unrestricted public egress permitted")
 		return nil
@@ -81,13 +86,16 @@ func setupContainerNetworkFirewall(trustedDomains []string, trustAllDomains bool
 		exec.Command("nft", "add", "set", "inet", "tinfoil", "container-outgoing-allow",
 			"{ type ipv4_addr; }").Run()
 
-		// Drop RFC 1918 / link-local explicitly before the allowlist.
-		out, err = exec.Command("nft", "add", "rule", "inet", "tinfoil", "forward",
-			"iif", containerBridgeName,
-			"ip", "daddr", privateIPv4Ranges, "drop",
-			"ip6", "daddr", privateIPv6Ranges, "drop").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("nft add drop-private rule: %w (%s)", err, out)
+		// Drop RFC1918 / link-local explicitly before the allowlist. Two
+		// rules for the same reason as above.
+		for _, args := range [][]string{
+			{"iif", containerBridgeName, "ip", "daddr", privateIPv4Ranges, "drop"},
+			{"iif", containerBridgeName, "ip6", "daddr", privateIPv6Ranges, "drop"},
+		} {
+			out, err := exec.Command("nft", append([]string{"add", "rule", "inet", "tinfoil", "forward"}, args...)...).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("nft add drop-private rule: %w (%s)", err, out)
+			}
 		}
 
 		// Allow only trusted IPs; chain policy drops everything else.

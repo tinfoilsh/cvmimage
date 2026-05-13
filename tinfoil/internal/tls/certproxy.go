@@ -148,9 +148,11 @@ func (m *CertProxyManager) obtainWithHTTPRelay(csrPEM []byte) ([]byte, error) {
 	reqBody, err := json.Marshal(struct {
 		CSR         string   `json:"csr"`
 		HTTPDomains []string `json:"http_domains"`
+		Token       string   `json:"token,omitempty"`
 	}{
 		CSR:         string(csrPEM),
 		HTTPDomains: m.httpChallengeDomains,
+		Token:       m.certAuthToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -230,7 +232,11 @@ func (m *CertProxyManager) obtainWithHTTPRelay(csrPEM []byte) ([]byte, error) {
 
 	readyBody, err := json.Marshal(struct {
 		OrderID string `json:"order_id"`
-	}{OrderID: phase1.OrderID})
+		Token   string `json:"token,omitempty"`
+	}{
+		OrderID: phase1.OrderID,
+		Token:   m.certAuthToken,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal ready request: %w", err)
 	}

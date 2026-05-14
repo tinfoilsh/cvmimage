@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
@@ -99,7 +102,12 @@ func obtainCertificate(id *NodeIdentity, att *verifier.Document, shimCfg *shimco
 		var listenPort int
 		if shimCfg.TLSChallengeMode == "http" {
 			httpChallengeDomains = []string{id.Domain}
-			listenPort = boot.ShimListenPort
+			listenPort = boot.HTTPChallengePort
+			closeFW, err := openHTTP01Firewall(listenPort)
+			if err != nil {
+				return fmt.Errorf("opening HTTP-01 firewall: %w", err)
+			}
+			defer closeFW()
 		}
 		mgr, err := tlsutil.NewCertProxyManager(
 			domains, boot.CacheDir, shimCfg.ControlPlane, id.TLSKey,
@@ -171,4 +179,26 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 
 	log.Println("TLS certificate and key written to ramdisk")
 	return nil
+}
+
+var nftHandleRE = regexp.MustCompile(`# handle (\d+)`)
+
+func openHTTP01Firewall(port int) (func(), error) {
+	// nft delete rule wants a handle, not a match expression.
+	args := []string{"--echo", "--handle", "add", "rule", "inet", "tinfoil", "input", "tcp", "dport", strconv.Itoa(port), "accept"}
+	out, err := exec.Command("nft", args...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("nft %v: %w (%s)", args, err, out)
+	}
+	m := nftHandleRE.FindSubmatch(out)
+	if m == nil {
+		return nil, fmt.Errorf("nft add rule returned no handle: %s", out)
+	}
+	handle := string(m[1])
+	return func() {
+		del := []string{"delete", "rule", "inet", "tinfoil", "input", "handle", handle}
+		if out, err := exec.Command("nft", del...).CombinedOutput(); err != nil {
+			log.Printf("warning: nft delete HTTP-01 rule (handle %s) failed: %v (%s)", handle, err, out)
+		}
+	}, nil
 }

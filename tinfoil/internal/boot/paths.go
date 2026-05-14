@@ -26,4 +26,8 @@ const (
 
 	// ShimListenPort is the public TLS port served by tinfoil-shim.
 	ShimListenPort = 443
+
+	// HTTPChallengePort is the plaintext-HTTP port served by tinfoil-boot
+	// during cert-proxy + tls-challenge.
+	HTTPChallengePort = 80
 )

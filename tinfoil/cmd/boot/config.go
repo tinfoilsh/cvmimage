@@ -158,10 +158,6 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, err
 	}
 
-	if err := validateNetwork(&config); err != nil {
-		return nil, fmt.Errorf("network config: %w", err)
-	}
-
 	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
@@ -172,6 +168,10 @@ func loadAndVerifyConfig() (*Config, error) {
 		shimCfg.UpstreamContainer = config.Containers[0].Name
 	}
 
+	if err := validateNetwork(&config); err != nil {
+		return nil, fmt.Errorf("network config: %w", err)
+	}
+
 	shimYAML, err := yaml.Marshal(shimCfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling shim config: %w", err)
@@ -180,11 +180,31 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, fmt.Errorf("writing shim config: %w", err)
 	}
 
+	if err := writeEgressConfig(&config); err != nil {
+		return nil, fmt.Errorf("writing egress config: %w", err)
+	}
+
 	if err := loadExternalConfig(); err != nil {
 		log.Printf("Warning: external config not loaded: %v", err)
 	}
 
 	return &config, nil
+}
+
+// writeEgressConfig persists just the trusted-domains list to the private
+// ramdisk so tinfoil-egress can load it once at startup. No-op when
+// trusted-domains is empty (the egress service isn't started in that case).
+func writeEgressConfig(cfg *Config) error {
+	if len(cfg.Network.TrustedDomains) == 0 {
+		return nil
+	}
+	data, err := yaml.Marshal(struct {
+		TrustedDomains []string `yaml:"trusted-domains"`
+	}{TrustedDomains: cfg.Network.TrustedDomains})
+	if err != nil {
+		return fmt.Errorf("marshaling: %w", err)
+	}
+	return os.WriteFile(boot.EgressConfigPath, data, 0600)
 }
 
 // loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)
@@ -199,15 +219,15 @@ func loadConfigFromRamdisk() (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	if err := validateNetwork(&config); err != nil {
-		return nil, fmt.Errorf("network config: %w", err)
-	}
-
 	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
 	}
 	config.ShimCfg = shimCfg
+
+	if err := validateNetwork(&config); err != nil {
+		return nil, fmt.Errorf("network config: %w", err)
+	}
 
 	return &config, nil
 }

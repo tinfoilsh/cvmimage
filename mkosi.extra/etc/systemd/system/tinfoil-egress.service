@@ -4,10 +4,13 @@ After=nftables.service
 Requires=nftables.service tinfoil-boot.service
 
 [Service]
-# Use oneshot as `systemctl start` blocks until the process exits, so any
-# resolution or nftables errors will propogate.
-Type=oneshot
+# Type=notify so `systemctl start` blocks until the daemon signals READY=1
+# after the first successful DNS resolution and nftables update. Any failure
+# in the initial population surfaces as a boot error in tinfoil-boot.
+Type=notify
 ExecStart=/usr/bin/tinfoil-egress
+Restart=on-failure
+RestartSec=5s
 User=root
 Group=root
 StandardOutput=journal+console

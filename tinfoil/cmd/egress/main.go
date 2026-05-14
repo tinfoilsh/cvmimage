@@ -1,64 +1,103 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"tinfoil/internal/boot"
 
 	"gopkg.in/yaml.v3"
 )
 
+const refreshInterval = 60 * time.Second
+
 func init() {
 	log.SetFlags(0)
 }
 
-type networkConfig struct {
+type egressConfig struct {
 	TrustedDomains []string `yaml:"trusted-domains"`
-}
-
-type config struct {
-	Network networkConfig `yaml:"network"`
 }
 
 func main() {
 	if err := run(); err != nil {
-		log.Printf("tinfoil-egress refresh failed: %v", err)
+		log.Printf("tinfoil-egress: %v", err)
 		os.Exit(1)
 	}
 }
 
 func run() error {
-	data, err := os.ReadFile(boot.ConfigPath)
-	if err != nil {
-		return fmt.Errorf("config not found: %v", err)
-	}
-
-	var cfg config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parsing config: %w", err)
-	}
-
-	if len(cfg.Network.TrustedDomains) == 0 {
-		return nil
-	}
-
-	return refresh(cfg.Network.TrustedDomains)
-}
-
-func refresh(domains []string) error {
-	current, err := resolve(domains)
+	domains, err := loadDomains()
 	if err != nil {
 		return err
+	}
+	if len(domains) == 0 {
+		log.Println("no trusted domains configured, exiting")
+		return nil
 	}
 
 	prev := readState()
 
-	// Create the set if it doesn't exist yet.
+	// Initial population must succeed before notifying systemd; tinfoil-boot
+	// blocks on `systemctl start` until READY=1 so any failure here surfaces
+	// as a boot error.
+	next, err := refresh(domains, prev)
+	if err != nil {
+		return fmt.Errorf("initial population: %w", err)
+	}
+	prev = next
+	notifyReady()
+	log.Printf("initial population: %d IP(s) resolved", len(prev))
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	ticker := time.NewTicker(refreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("shutting down")
+			return nil
+		case <-ticker.C:
+			next, err := refresh(domains, prev)
+			if err != nil {
+				log.Printf("refresh failed: %v", err)
+				continue
+			}
+			prev = next
+		}
+	}
+}
+
+func loadDomains() ([]string, error) {
+	data, err := os.ReadFile(boot.EgressConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading egress config: %w", err)
+	}
+	var cfg egressConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing egress config: %w", err)
+	}
+	return cfg.TrustedDomains, nil
+}
+
+func refresh(domains, prev []string) ([]string, error) {
+	current, err := resolve(domains)
+	if err != nil {
+		return nil, err
+	}
+
+	// Defensive: ensure the set exists. Normally created by tinfoil-boot.
 	exec.Command("nft", "add", "set", "inet", "tinfoil", "container-outgoing-allow",
 		"{ type ipv4_addr; }").Run()
 
@@ -69,7 +108,7 @@ func refresh(domains []string) error {
 	toRemove := difference(prev, current)
 
 	if len(toAdd) == 0 && len(toRemove) == 0 {
-		return writeState(current)
+		return current, nil
 	}
 
 	// Commit add+remove in one transaction so the set never appears with only
@@ -87,10 +126,13 @@ func refresh(domains []string) error {
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(script.String())
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("updating container-outgoing-allow set: %w (%s)", err, out)
+		return nil, fmt.Errorf("updating container-outgoing-allow set: %w (%s)", err, out)
 	}
 
-	return writeState(current)
+	if err := writeState(current); err != nil {
+		return nil, fmt.Errorf("persisting state: %w", err)
+	}
+	return current, nil
 }
 
 func resolve(domains []string) ([]string, error) {
@@ -149,4 +191,23 @@ func difference(a, b []string) []string {
 		}
 	}
 	return result
+}
+
+// notifyReady sends READY=1 over the systemd NOTIFY_SOCKET so the unit
+// transitions to active only after the first successful resolution. No-op
+// when not running under systemd Type=notify (NOTIFY_SOCKET unset).
+func notifyReady() {
+	addr := os.Getenv("NOTIFY_SOCKET")
+	if addr == "" {
+		return
+	}
+	conn, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: addr, Net: "unixgram"})
+	if err != nil {
+		log.Printf("sd_notify dial: %v", err)
+		return
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("READY=1")); err != nil {
+		log.Printf("sd_notify write: %v", err)
+	}
 }

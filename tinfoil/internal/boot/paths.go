@@ -17,6 +17,7 @@ const (
 	TLSKeyPath         = TLSDir + "/key.pem"
 	HPKEKeyPath        = PrivateDir + "/hpke_key.json"
 	ShimConfigPath     = PrivateDir + "/shim.yml"
+	EgressConfigPath   = PrivateDir + "/egress.yml"
 	ExternalConfigPath = PrivateDir + "/external-config.yml"
 	DockerConfigDir    = PrivateDir + "/docker-config"
 	DockerConfigPath   = DockerConfigDir + "/config.json"

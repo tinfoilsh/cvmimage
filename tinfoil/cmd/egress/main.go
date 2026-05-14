@@ -58,30 +58,36 @@ func refresh(domains []string) error {
 
 	prev := readState()
 
-	// Create the set if it doesn't exist yet
+	// Create the set if it doesn't exist yet.
 	exec.Command("nft", "add", "set", "inet", "tinfoil", "container-outgoing-allow",
 		"{ type ipv4_addr; }").Run()
 
 	// Flushing and reloading could lead to a race condition where new outgoing
 	// connections that should be allowed are not, so instead we calculate the
-	// IPs to add and the set of IPs to remove from the set
+	// IPs to add and the set of IPs to remove from the set.
 	toAdd := difference(current, prev)
 	toRemove := difference(prev, current)
 
-	if len(toAdd) > 0 {
-		if out, err := exec.Command("nft", "add", "element", "inet", "tinfoil",
-			"container-outgoing-allow",
-			"{ "+strings.Join(toAdd, ", ")+" }").CombinedOutput(); err != nil {
-			return fmt.Errorf("nft add element: %w (%s)", err, out)
-		}
+	if len(toAdd) == 0 && len(toRemove) == 0 {
+		return writeState(current)
 	}
 
+	// Commit add+remove in one transaction so the set never appears with only
+	// one half of the delta applied.
+	var script strings.Builder
+	if len(toAdd) > 0 {
+		fmt.Fprintf(&script, "add element inet tinfoil container-outgoing-allow { %s }\n",
+			strings.Join(toAdd, ", "))
+	}
 	if len(toRemove) > 0 {
-		if out, err := exec.Command("nft", "delete", "element", "inet", "tinfoil",
-			"container-outgoing-allow",
-			"{ "+strings.Join(toRemove, ", ")+" }").CombinedOutput(); err != nil {
-			return fmt.Errorf("nft delete element: %w (%s)", err, out)
-		}
+		fmt.Fprintf(&script, "delete element inet tinfoil container-outgoing-allow { %s }\n",
+			strings.Join(toRemove, ", "))
+	}
+
+	cmd := exec.Command("nft", "-f", "-")
+	cmd.Stdin = strings.NewReader(script.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("updating container-outgoing-allow set: %w (%s)", err, out)
 	}
 
 	return writeState(current)

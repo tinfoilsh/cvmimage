@@ -6,6 +6,8 @@ import (
 	"math"
 	"os/exec"
 	"strings"
+
+	"tinfoil/internal/containernet"
 )
 
 // setupContainerNetworkFirewall adds forward rules for the container-net bridge.
@@ -22,11 +24,11 @@ func setupContainerNetworkFirewall(trustedDomains []string, trustAllDomains bool
 	// also traverse this L3 forward hook and would otherwise be dropped
 	// (both endpoints sit in the bridge's RFC1918 subnet).
 	fmt.Fprintf(&script, "add rule inet tinfoil forward iif %q oif %q accept\n",
-		containerBridgeName, containerBridgeName)
+		containernet.BridgeName, containernet.BridgeName)
 
 	// Allow return traffic into containers for connections they initiated.
 	fmt.Fprintf(&script, "add rule inet tinfoil forward oif %q ct state established,related accept\n",
-		containerBridgeName)
+		containernet.BridgeName)
 
 	// Block new connections from container-net to the host (the shim's :443,
 	// admin endpoints, etc.). Inserted first so it fires before the static
@@ -34,26 +36,26 @@ func setupContainerNetworkFirewall(trustedDomains []string, trustAllDomains bool
 	// host→container connections (the shim's responses from the upstream)
 	// still matches the static `ct state established,related accept` rule.
 	fmt.Fprintf(&script, "insert rule inet tinfoil input iif %q ct state new drop\n",
-		containerBridgeName)
+		containernet.BridgeName)
 
 	switch {
 	case trustAllDomains:
 		// One rule per address family: nft rejects multiple verdicts in a
 		// single rule (`accept` is terminal).
 		fmt.Fprintf(&script, "add rule inet tinfoil forward iif %q ip daddr != %s accept\n",
-			containerBridgeName, privateIPv4Ranges)
+			containernet.BridgeName, privateIPv4Ranges)
 		fmt.Fprintf(&script, "add rule inet tinfoil forward iif %q ip6 daddr != %s accept\n",
-			containerBridgeName, privateIPv6Ranges)
+			containernet.BridgeName, privateIPv6Ranges)
 
 	case len(trustedDomains) > 0:
 		fmt.Fprintf(&script, "add set inet tinfoil container-outgoing-allow { type ipv4_addr; }\n")
 		fmt.Fprintf(&script, "add rule inet tinfoil forward iif %q ip daddr %s drop\n",
-			containerBridgeName, privateIPv4Ranges)
+			containernet.BridgeName, privateIPv4Ranges)
 		fmt.Fprintf(&script, "add rule inet tinfoil forward iif %q ip6 daddr %s drop\n",
-			containerBridgeName, privateIPv6Ranges)
+			containernet.BridgeName, privateIPv6Ranges)
 		// Allow only trusted IPs; chain policy drops everything else.
 		fmt.Fprintf(&script, "add rule inet tinfoil forward iif %q ip daddr @container-outgoing-allow accept\n",
-			containerBridgeName)
+			containernet.BridgeName)
 	}
 
 	if err := runNft(script.String()); err != nil {

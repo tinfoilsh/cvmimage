@@ -6,13 +6,12 @@ import (
 	"time"
 
 	"github.com/docker/docker/client"
+
+	"tinfoil/internal/containernet"
 )
 
-// Kept in sync with cmd/boot/containers.go.
-const containerNetworkName = "container-net"
-
-// resolveUpstreamHost returns the named container's IP on container-net,
-// retrying briefly so a slow Docker daemon doesn't fail the shim.
+// resolveUpstreamHost returns the named container's IP on the container
+// network, retrying briefly so a slow Docker daemon doesn't fail the shim.
 func resolveUpstreamHost(ctx context.Context, name string) (string, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -28,10 +27,10 @@ func resolveUpstreamHost(ctx context.Context, name string) (string, error) {
 	for {
 		info, err := cli.ContainerInspect(ctx, name)
 		if err == nil && info.NetworkSettings != nil {
-			if ep, ok := info.NetworkSettings.Networks[containerNetworkName]; ok && ep != nil && ep.IPAddress != "" {
+			if ep, ok := info.NetworkSettings.Networks[containernet.NetworkName]; ok && ep != nil && ep.IPAddress != "" {
 				return ep.IPAddress, nil
 			}
-			err = fmt.Errorf("container %q has no IP on %q", name, containerNetworkName)
+			err = fmt.Errorf("container %q has no IP on %q", name, containernet.NetworkName)
 		}
 		if time.Now().After(deadline) {
 			return "", fmt.Errorf("resolving upstream container %q: %w", name, err)

@@ -21,27 +21,25 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/containernet"
 )
 
 const healthPollInterval = 5 * time.Second
 
-const containerNetworkName = "container-net" // Docker network name
-const containerBridgeName = "container-net"  // Linux interface name (<=15 chars)
-
 func setupContainerNetwork(cli *client.Client, cfg *Config) error {
-	_, err := cli.NetworkInspect(context.Background(), containerNetworkName, dockernetwork.InspectOptions{})
+	_, err := cli.NetworkInspect(context.Background(), containernet.NetworkName, dockernetwork.InspectOptions{})
 	if cerrdefs.IsNotFound(err) {
-		_, err = cli.NetworkCreate(context.Background(), containerNetworkName, dockernetwork.CreateOptions{
+		_, err = cli.NetworkCreate(context.Background(), containernet.NetworkName, dockernetwork.CreateOptions{
 			Driver: "bridge",
 			Options: map[string]string{
-				"com.docker.network.bridge.name": containerBridgeName,
+				"com.docker.network.bridge.name": containernet.BridgeName,
 			},
 		})
 		if err != nil {
-			return fmt.Errorf("creating docker network %q: %w", containerNetworkName, err)
+			return fmt.Errorf("creating docker network %q: %w", containernet.NetworkName, err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("checking whether docker network %q exists: %w", containerNetworkName, err)
+		return fmt.Errorf("checking whether docker network %q exists: %w", containernet.NetworkName, err)
 	}
 	return setupContainerNetworkFirewall(cfg.Network.TrustedDomains, cfg.Network.TrustAllDomains)
 }
@@ -310,7 +308,7 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 
 	// Host configuration
 	hostConfig := &container.HostConfig{
-		NetworkMode:    container.NetworkMode(containerNetworkName),
+		NetworkMode:    container.NetworkMode(containernet.NetworkName),
 		Runtime:        c.Runtime,
 		IpcMode:        container.IpcMode(c.IPC),
 		PidMode:        container.PidMode(c.PidMode),
@@ -363,7 +361,7 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 
 	networkingConfig := &dockernetwork.NetworkingConfig{
 		EndpointsConfig: map[string]*dockernetwork.EndpointSettings{
-			containerNetworkName: {},
+			containernet.NetworkName: {},
 		},
 	}
 

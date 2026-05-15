@@ -71,6 +71,22 @@ func TestValidateNetwork(t *testing.T) {
 			wantErrSub: "IP literals",
 		},
 		{
+			name: "overlong hostname (>253 bytes) → reject",
+			cfg: Config{Network: NetworkConfig{
+				// 5 × 63-char labels joined by dots is 319 chars, comfortably
+				// over the 253-byte DNS cap while keeping each label legal.
+				TrustedDomains: []string{
+					strings.Repeat("a", 63) + "." +
+						strings.Repeat("b", 63) + "." +
+						strings.Repeat("c", 63) + "." +
+						strings.Repeat("d", 63) + "." +
+						strings.Repeat("e", 63),
+				},
+			}},
+			wantErr:    true,
+			wantErrSub: "253-byte DNS limit",
+		},
+		{
 			name: "container.network_mode → reject with migration pointer",
 			cfg: Config{Containers: []Container{
 				{Name: "doc-upload", NetworkMode: "host"},

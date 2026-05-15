@@ -10,6 +10,7 @@ import (
 var rfc1123HostnamePattern = regexp.MustCompile(
 	`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`,
 )
+const maxHostnameLength = 253
 
 func validateNetwork(cfg *Config) error {
 	for i, c := range cfg.Containers {
@@ -69,6 +70,9 @@ func validateTrustedDomain(host string) error {
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		return fmt.Errorf("IP literals are not allowed; use a hostname so tinfoil-egress can refresh it")
+	}
+	if len(host) > maxHostnameLength {
+		return fmt.Errorf("hostname exceeds %d-byte DNS limit", maxHostnameLength)
 	}
 	if !rfc1123HostnamePattern.MatchString(host) {
 		return fmt.Errorf("not a valid DNS hostname")

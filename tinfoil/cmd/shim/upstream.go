@@ -23,18 +23,28 @@ func resolveUpstreamHost(ctx context.Context, name string) (string, error) {
 		retryInterval = 1 * time.Second
 		retryTimeout  = 60 * time.Second
 	)
-	deadline := time.Now().Add(retryTimeout)
+	deadlineCtx, cancel := context.WithTimeout(ctx, retryTimeout)
+	defer cancel()
+
+	var lastErr error
 	for {
-		info, err := cli.ContainerInspect(ctx, name)
-		if err == nil && info.NetworkSettings != nil {
+		info, err := cli.ContainerInspect(deadlineCtx, name)
+		switch {
+		case err != nil:
+			lastErr = err
+		case info.NetworkSettings == nil:
+			lastErr = fmt.Errorf("container %q has no network settings yet", name)
+		default:
 			if ep, ok := info.NetworkSettings.Networks[containernet.NetworkName]; ok && ep != nil && ep.IPAddress != "" {
 				return ep.IPAddress, nil
 			}
-			err = fmt.Errorf("container %q has no IP on %q", name, containernet.NetworkName)
+			lastErr = fmt.Errorf("container %q has no IP on %q", name, containernet.NetworkName)
 		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("resolving upstream container %q: %w", name, err)
+
+		select {
+		case <-deadlineCtx.Done():
+			return "", fmt.Errorf("resolving upstream container %q: %w", name, lastErr)
+		case <-time.After(retryInterval):
 		}
-		time.Sleep(retryInterval)
 	}
 }

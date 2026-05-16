@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -306,19 +307,30 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 		}
 	}
 
-	// Host configuration
+	// Security defaults per container-security-defaults.md.
+	secOpts := c.SecurityOpt
+	if !slices.Contains(secOpts, "no-new-privileges:true") {
+		secOpts = append(append([]string(nil), c.SecurityOpt...), "no-new-privileges:true")
+	}
+	pidsLimit := c.PidsLimit
+	if pidsLimit == nil {
+		n := int64(256)
+		pidsLimit = &n
+	}
+
 	hostConfig := &container.HostConfig{
 		NetworkMode:    container.NetworkMode(containernet.NetworkName),
 		Runtime:        c.Runtime,
 		IpcMode:        container.IpcMode(c.IPC),
 		PidMode:        container.PidMode(c.PidMode),
 		CapAdd:         c.CapAdd,
-		CapDrop:        c.CapDrop,
-		SecurityOpt:    c.SecurityOpt,
-		ReadonlyRootfs: c.ReadOnly,
+		CapDrop:        []string{"ALL"},
+		SecurityOpt:    secOpts,
+		ReadonlyRootfs: c.ReadOnly == nil || *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
+	hostConfig.Resources.PidsLimit = pidsLimit
 
 	// Restart policy
 	if c.Restart != "" {

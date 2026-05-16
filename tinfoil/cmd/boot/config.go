@@ -64,7 +64,6 @@ type Container struct {
 	Volumes     []string    `yaml:"volumes,omitempty"` // "source:target[:opts]"
 	Devices     []string    `yaml:"devices,omitempty"`
 	CapAdd      []string    `yaml:"cap_add,omitempty"`
-	CapDrop     []string    `yaml:"cap_drop,omitempty"`
 	SecurityOpt []string    `yaml:"security_opt,omitempty"`
 	Runtime     string      `yaml:"runtime,omitempty"`      // e.g., "nvidia"
 	NetworkMode string      `yaml:"network_mode,omitempty"` // no longer honoured; flagged at parse time so legacy configs fail loud
@@ -73,11 +72,14 @@ type Container struct {
 	GPUs        interface{} `yaml:"gpus,omitempty"`         // "all", "0,1,2,3", or count (int)
 
 	// Resource limits
-	ShmSize  string            `yaml:"shm_size,omitempty"`  // "2g"
-	Memory   string            `yaml:"memory,omitempty"`    // "512m", "2g"
-	CPUs     float64           `yaml:"cpus,omitempty"`      // 0.5, 2.0
-	Tmpfs    map[string]string `yaml:"tmpfs,omitempty"`     // {"/tmp": "size=100m"}
-	ReadOnly bool              `yaml:"read_only,omitempty"` // read-only rootfs
+	ShmSize string            `yaml:"shm_size,omitempty"` // "2g"
+	Memory  string            `yaml:"memory,omitempty"`   // "512m", "2g"
+	CPUs    float64           `yaml:"cpus,omitempty"`     // 0.5, 2.0
+	Tmpfs   map[string]string `yaml:"tmpfs,omitempty"`    // {"/tmp": "size=100m"}
+	// ReadOnly and PidsLimit are pointers so we can tell "operator left it
+	// unset" (apply the hardened default) from "operator wrote false / 0".
+	ReadOnly  *bool  `yaml:"read_only,omitempty"`
+	PidsLimit *int64 `yaml:"pids_limit,omitempty"`
 
 	// Lifecycle
 	Restart     string       `yaml:"restart,omitempty"`      // "no", "always", "on-failure", "unless-stopped"

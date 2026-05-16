@@ -10,8 +10,8 @@ import (
 	"tinfoil/internal/containernet"
 )
 
-// resolveUpstreamHost returns the named container's IP on the container
-// network, retrying briefly so a slow Docker daemon doesn't fail the shim.
+// resolveUpstreamHost returns the named container's IP on shim-net,
+// retrying briefly so a slow Docker daemon doesn't fail the shim.
 func resolveUpstreamHost(ctx context.Context, name string) (string, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -35,10 +35,10 @@ func resolveUpstreamHost(ctx context.Context, name string) (string, error) {
 		case info.NetworkSettings == nil:
 			lastErr = fmt.Errorf("container %q has no network settings yet", name)
 		default:
-			if ep, ok := info.NetworkSettings.Networks[containernet.NetworkName]; ok && ep != nil && ep.IPAddress != "" {
+			if ep, ok := info.NetworkSettings.Networks[containernet.ShimNetName]; ok && ep != nil && ep.IPAddress != "" {
 				return ep.IPAddress, nil
 			}
-			lastErr = fmt.Errorf("container %q has no IP on %q", name, containernet.NetworkName)
+			lastErr = fmt.Errorf("container %q has no IP on %q", name, containernet.ShimNetName)
 		}
 
 		select {

@@ -15,28 +15,49 @@ import (
 
 // Config represents the main configuration file
 type Config struct {
-	ShimRaw    yaml.Node          `yaml:"shim"`
-	ShimCfg    *shimconfig.Config `yaml:"-"`
-	Network    NetworkConfig      `yaml:"network"`
-	CPUs       int                `yaml:"cpus"`
-	Memory     int                `yaml:"memory"`
-	GPUs       int                `yaml:"gpus"`
-	Models     []ModelSpec        `yaml:"models"`
-	Containers []Container        `yaml:"containers"`
+	ShimRaw    yaml.Node               `yaml:"shim"`
+	ShimCfg    *shimconfig.Config      `yaml:"-"`
+	CVMNetwork CVMNetworkConfig        `yaml:"cvm-network"`
+	Networks   map[string]*NetworkSpec `yaml:"networks"`
+	CPUs       int                     `yaml:"cpus"`
+	Memory     int                     `yaml:"memory"`
+	GPUs       int                     `yaml:"gpus"`
+	Models     []ModelSpec             `yaml:"models"`
+	Containers []Container             `yaml:"containers"`
 }
 
-// NetworkConfig defines network-level firewall rules enforced via nftables.
-// The shim's listen-port is always allowed implicitly.
-type NetworkConfig struct {
-	AllowedInboundPorts []int `yaml:"allowed-inbound-ports"`
-	// TrustedDomains is an allowlist of hostnames containers may reach over the
-	// public internet. tinfoil-egress resolves each name to one or more IPs at
-	// boot and refreshes every 60s. Cannot be combined with TrustAllDomains.
-	TrustedDomains []string `yaml:"trusted-domains"`
-	// TrustAllDomains opts the enclave into unrestricted public Internet egress.
-	// RFC1918 / link-local destinations remain blocked; only public addresses
-	// are reachable. Cannot be combined with a non-empty TrustedDomains.
-	TrustAllDomains bool `yaml:"trust-all-domains"`
+// CVMNetworkConfig scopes host-firewall knobs that affect the CVM as a
+// whole, distinct from per-bridge `networks:`.
+type CVMNetworkConfig struct {
+	// InboundPorts is the TCP-port allowlist on the CVM's external
+	// interface beyond the shim's :443 (which is always open).
+	InboundPorts []int `yaml:"inbound-ports"`
+}
+
+// NetworkSpec is one entry in the top-level `networks:` map. Egress
+// defaults to "closed" via UnmarshalYAML so `name: {}` is a one-line
+// closed bridge.
+type NetworkSpec struct {
+	Egress string   `yaml:"egress"`
+	Allow  []string `yaml:"allow"`
+}
+
+func (n *NetworkSpec) UnmarshalYAML(node *yaml.Node) error {
+	// `name:` with a null scalar body decodes to a ScalarNode here.
+	if node.Kind == yaml.ScalarNode {
+		n.Egress = "closed"
+		return nil
+	}
+	type alias NetworkSpec
+	var raw alias
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	*n = NetworkSpec(raw)
+	if n.Egress == "" {
+		n.Egress = "closed"
+	}
+	return nil
 }
 
 // ModelSpec represents a model pack specification
@@ -65,11 +86,11 @@ type Container struct {
 	Devices     []string    `yaml:"devices,omitempty"`
 	CapAdd      []string    `yaml:"cap_add,omitempty"`
 	SecurityOpt []string    `yaml:"security_opt,omitempty"`
-	Runtime     string      `yaml:"runtime,omitempty"`      // e.g., "nvidia"
-	NetworkMode string      `yaml:"network_mode,omitempty"` // no longer honoured; flagged at parse time so legacy configs fail loud
-	IPC         string      `yaml:"ipc,omitempty"`          // e.g., "host"
-	PidMode     string      `yaml:"pid,omitempty"`          // "host" for host PID namespace
-	GPUs        interface{} `yaml:"gpus,omitempty"`         // "all", "0,1,2,3", or count (int)
+	Runtime     string      `yaml:"runtime,omitempty"`  // e.g., "nvidia"
+	Networks    []string    `yaml:"networks,omitempty"` // names of entries in top-level `networks:`
+	IPC         string      `yaml:"ipc,omitempty"`      // e.g., "host"
+	PidMode     string      `yaml:"pid,omitempty"`      // "host" for host PID namespace
+	GPUs        interface{} `yaml:"gpus,omitempty"`     // "all", "0,1,2,3", or count (int)
 
 	// Resource limits
 	ShmSize string            `yaml:"shm_size,omitempty"` // "2g"
@@ -193,20 +214,32 @@ func loadAndVerifyConfig() (*Config, error) {
 	return &config, nil
 }
 
-// writeEgressConfig persists just the trusted-domains list to the private
-// ramdisk so tinfoil-egress can load it once at startup. No-op when
-// trusted-domains is empty (the egress service isn't started in that case).
+// writeEgressConfig persists the per-allowlist-network FQDN map to the
+// private ramdisk so tinfoil-egress can load it once at startup. No-op
+// when no network has `egress: allowlist` (the daemon isn't started).
 func writeEgressConfig(cfg *Config) error {
-	if len(cfg.Network.TrustedDomains) == 0 {
+	out := egressFile{Networks: map[string]egressFileEntry{}}
+	for name, spec := range cfg.Networks {
+		if spec.Egress != "allowlist" {
+			continue
+		}
+		out.Networks[name] = egressFileEntry{Allow: spec.Allow}
+	}
+	if len(out.Networks) == 0 {
 		return nil
 	}
-	data, err := yaml.Marshal(struct {
-		TrustedDomains []string `yaml:"trusted-domains"`
-	}{TrustedDomains: cfg.Network.TrustedDomains})
+	data, err := yaml.Marshal(out)
 	if err != nil {
 		return fmt.Errorf("marshaling: %w", err)
 	}
 	return os.WriteFile(boot.EgressConfigPath, data, 0600)
+}
+
+type egressFile struct {
+	Networks map[string]egressFileEntry `yaml:"networks"`
+}
+type egressFileEntry struct {
+	Allow []string `yaml:"allow"`
 }
 
 // loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)

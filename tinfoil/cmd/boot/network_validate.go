@@ -4,37 +4,66 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
+
+	"tinfoil/internal/containernet"
 )
 
 var rfc1123HostnamePattern = regexp.MustCompile(
 	`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`,
 )
-const maxHostnameLength = 253
+
+const (
+	maxHostnameLength = 253
+	maxBridgeNameLen = 15
+)
+
+var validEgressModes = []string{"closed", "allowlist", "open"}
+
+var networkNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 func validateNetwork(cfg *Config) error {
-	for i, c := range cfg.Containers {
-		if c.NetworkMode != "" {
-			return fmt.Errorf(
-				"containers[%d] %q: network_mode is removed in v0.9.0; "+
-					"see network.trusted-domains and network.trust-all-domains "+
-					"for the supported egress controls",
-				i, c.Name,
-			)
+	for _, port := range cfg.CVMNetwork.InboundPorts {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("cvm-network.inbound-ports: %d is not in 1..65535", port)
 		}
 	}
 
-	n := cfg.Network
-	if n.TrustAllDomains && len(n.TrustedDomains) > 0 {
-		return fmt.Errorf(
-			"network.trust-all-domains: true and a non-empty network.trusted-domains " +
-				"are mutually exclusive; pick one",
-		)
+	// Materialize nil entries (from `name:` with no body) as default-closed.
+	for name, spec := range cfg.Networks {
+		if spec == nil {
+			cfg.Networks[name] = &NetworkSpec{Egress: "closed"}
+		}
 	}
 
-	for i, host := range n.TrustedDomains {
-		if err := validateTrustedDomain(host); err != nil {
-			return fmt.Errorf("network.trusted-domains[%d] %q: %w", i, host, err)
+	for name, spec := range cfg.Networks {
+		if err := validateNetworkEntry(name, spec); err != nil {
+			return fmt.Errorf("networks.%s: %w", name, err)
+		}
+	}
+
+	for i, c := range cfg.Containers {
+		seen := map[string]bool{}
+		egressCount := 0
+		for _, n := range c.Networks {
+			if seen[n] {
+				return fmt.Errorf("containers[%d] %q: network %q listed twice", i, c.Name, n)
+			}
+			seen[n] = true
+			if n == containernet.ShimNetName {
+				return fmt.Errorf("containers[%d] %q: %q is reserved", i, c.Name, containernet.ShimNetName)
+			}
+			spec, ok := cfg.Networks[n]
+			if !ok {
+				return fmt.Errorf("containers[%d] %q: network %q not declared", i, c.Name, n)
+			}
+			if spec.Egress != "closed" {
+				egressCount++
+			}
+		}
+		if egressCount > 1 {
+			return fmt.Errorf("containers[%d] %q: at most one attached network may have egress != closed", i, c.Name)
 		}
 	}
 
@@ -47,29 +76,48 @@ func validateNetwork(cfg *Config) error {
 			}
 		}
 		if !found {
-			return fmt.Errorf(
-				"shim.upstream-container %q does not match any containers[].name",
-				cfg.ShimCfg.UpstreamContainer,
-			)
+			return fmt.Errorf("shim.upstream-container %q does not match any containers[].name", cfg.ShimCfg.UpstreamContainer)
 		}
 	}
 	return nil
 }
 
-func validateTrustedDomain(host string) error {
+func validateNetworkEntry(name string, spec *NetworkSpec) error {
+	if name == "" {
+		return fmt.Errorf("empty network name")
+	}
+	if name == containernet.ShimNetName {
+		return fmt.Errorf("name %q is reserved", containernet.ShimNetName)
+	}
+	if len(name) > maxBridgeNameLen {
+		return fmt.Errorf("name exceeds %d-char interface-name limit", maxBridgeNameLen)
+	}
+	if !networkNamePattern.MatchString(name) {
+		return fmt.Errorf("name must be lowercase alphanumeric + hyphens (got %q)", name)
+	}
+	if !slices.Contains(validEgressModes, spec.Egress) {
+		return fmt.Errorf("egress: %q is not one of closed | allowlist | open", spec.Egress)
+	}
+	if spec.Egress != "allowlist" && len(spec.Allow) > 0 {
+		return fmt.Errorf("allow: only valid when egress: allowlist (got egress: %s)", spec.Egress)
+	}
+	for i, host := range spec.Allow {
+		if err := validateAllowEntry(host); err != nil {
+			return fmt.Errorf("allow[%d] %q: %w", i, host, err)
+		}
+	}
+	return nil
+}
+
+func validateAllowEntry(host string) error {
 	if host == "" {
 		return fmt.Errorf("empty entry")
 	}
-	if host == "*" {
-		return fmt.Errorf(`bare "*" is not a hostname; use network.trust-all-domains: true`)
-	}
 	if strings.Contains(host, "*") {
-		// Accept wildcard syntax so v0.9.0 configs forward-port; reject until
-		// the in-enclave resolver that resolves them ships.
-		return fmt.Errorf("wildcard hostnames are not yet supported; enumerate hosts explicitly")
+		return fmt.Errorf("wildcards are reserved for future tinfoil-dns support")
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return fmt.Errorf("IP literals are not allowed; use a hostname so tinfoil-egress can refresh it")
+		return fmt.Errorf("IP literals are not allowed; use a hostname")
 	}
 	if len(host) > maxHostnameLength {
 		return fmt.Errorf("hostname exceeds %d-byte DNS limit", maxHostnameLength)

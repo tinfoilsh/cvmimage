@@ -28,21 +28,37 @@ import (
 const healthPollInterval = 5 * time.Second
 
 func setupContainerNetwork(cli *client.Client, cfg *Config) error {
-	_, err := cli.NetworkInspect(context.Background(), containernet.NetworkName, dockernetwork.InspectOptions{})
-	if cerrdefs.IsNotFound(err) {
-		_, err = cli.NetworkCreate(context.Background(), containernet.NetworkName, dockernetwork.CreateOptions{
-			Driver: "bridge",
-			Options: map[string]string{
-				"com.docker.network.bridge.name": containernet.BridgeName,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("creating docker network %q: %w", containernet.NetworkName, err)
+	for name := range cfg.Networks {
+		if err := ensureNetwork(cli, name); err != nil {
+			return err
 		}
-	} else if err != nil {
-		return fmt.Errorf("checking whether docker network %q exists: %w", containernet.NetworkName, err)
 	}
-	return setupContainerNetworkFirewall(cfg.Network.TrustedDomains, cfg.Network.TrustAllDomains)
+	if shimUpstreamSet(cfg) {
+		if err := ensureNetwork(cli, containernet.ShimNetName); err != nil {
+			return err
+		}
+	}
+	return setupContainerNetworkFirewall(cfg)
+}
+
+func ensureNetwork(cli *client.Client, name string) error {
+	_, err := cli.NetworkInspect(context.Background(), name, dockernetwork.InspectOptions{})
+	if err == nil {
+		return nil
+	}
+	if !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("checking whether docker network %q exists: %w", name, err)
+	}
+	_, err = cli.NetworkCreate(context.Background(), name, dockernetwork.CreateOptions{
+		Driver: "bridge",
+		Options: map[string]string{
+			"com.docker.network.bridge.name": name,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("creating docker network %q: %w", name, err)
+	}
+	return nil
 }
 
 // launchContainers starts all containers from the config
@@ -73,7 +89,7 @@ func launchContainers(config *Config) error {
 			errors = append(errors, fmt.Sprintf("%s: pulling image: %v", c.Name, err))
 			continue
 		}
-		if err := createAndStartContainer(cli, c, extConfig); err != nil {
+		if err := createAndStartContainer(cli, c, config, extConfig); err != nil {
 			log.Printf("Error starting container %s: %v", c.Name, err)
 			errors = append(errors, fmt.Sprintf("%s: %v", c.Name, err))
 		}
@@ -138,7 +154,7 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 		wg.Add(1)
 		go func(i int, c Container) {
 			defer wg.Done()
-			errs[i] = runContainer(cli, c, extConfig, &substages, &mu, flush)
+			errs[i] = runContainer(cli, c, config, extConfig, &substages, &mu, flush)
 		}(i, c)
 	}
 	wg.Wait()
@@ -164,6 +180,7 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 func runContainer(
 	cli *client.Client,
 	c Container,
+	cfg *Config,
 	extConfig *shimconfig.ExternalConfig,
 	substages *[]boot.Stage,
 	mu *sync.Mutex,
@@ -197,7 +214,7 @@ func runContainer(
 
 	// Create + start
 	startPhase := time.Now()
-	if err := createAndStartContainer(cli, c, extConfig); err != nil {
+	if err := createAndStartContainer(cli, c, cfg, extConfig); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
 		record("start", boot.StatusFailed, time.Since(startPhase), detail)
 		finish(boot.StatusFailed, detail)
@@ -275,8 +292,39 @@ func lastHealthLog(h *container.Health) string {
 	return fmt.Sprintf("exit %d", last.ExitCode)
 }
 
+// attachOrder returns the bridges to connect to a container. Docker needs
+// the first network at ContainerCreate time, so it's returned separately.
+// The egress-capable network (if any) goes first; shim-net is appended
+// last for the shim's upstream.
+func attachOrder(c Container, cfg *Config) (first string, rest []string) {
+	var egress string
+	var closed []string
+	for _, n := range c.Networks {
+		if cfg.Networks[n].Egress != "closed" {
+			egress = n
+			continue
+		}
+		closed = append(closed, n)
+	}
+	if egress != "" {
+		first = egress
+		rest = append(rest, closed...)
+	} else if len(closed) > 0 {
+		first = closed[0]
+		rest = append(rest, closed[1:]...)
+	}
+	if shimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
+		if first == "" {
+			first = containernet.ShimNetName
+		} else {
+			rest = append(rest, containernet.ShimNetName)
+		}
+	}
+	return first, rest
+}
+
 // createAndStartContainer creates and starts a container (image must already be pulled).
-func createAndStartContainer(cli *client.Client, c Container, extConfig *shimconfig.ExternalConfig) error {
+func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig) error {
 	if c.Image == "" {
 		return fmt.Errorf("no image specified for container %s", c.Name)
 	}
@@ -318,8 +366,10 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 		pidsLimit = &n
 	}
 
+	first, rest := attachOrder(c, cfg)
+
+	// Host configuration
 	hostConfig := &container.HostConfig{
-		NetworkMode:    container.NetworkMode(containernet.NetworkName),
 		Runtime:        c.Runtime,
 		IpcMode:        container.IpcMode(c.IPC),
 		PidMode:        container.PidMode(c.PidMode),
@@ -331,6 +381,11 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit
+	if first == "" {
+		hostConfig.NetworkMode = "none"
+	} else {
+		hostConfig.NetworkMode = container.NetworkMode(first)
+	}
 
 	// Restart policy
 	if c.Restart != "" {
@@ -371,15 +426,34 @@ func createAndStartContainer(cli *client.Client, c Container, extConfig *shimcon
 
 	log.Printf("Creating container %s", c.Name)
 
-	networkingConfig := &dockernetwork.NetworkingConfig{
-		EndpointsConfig: map[string]*dockernetwork.EndpointSettings{
-			containernet.NetworkName: {},
-		},
+	// Pin the egress-capable network's GwPriority so Docker installs the
+	// default route through it; equal priorities are non-deterministic.
+	gwPriority := func(name string) int {
+		if cfg.Networks[name] != nil && cfg.Networks[name].Egress != "closed" {
+			return 100
+		}
+		return 0
+	}
+
+	var networkingConfig *dockernetwork.NetworkingConfig
+	if first != "" {
+		networkingConfig = &dockernetwork.NetworkingConfig{
+			EndpointsConfig: map[string]*dockernetwork.EndpointSettings{
+				first: {GwPriority: gwPriority(first)},
+			},
+		}
 	}
 
 	resp, err := cli.ContainerCreate(context.Background(), containerConfig, hostConfig, networkingConfig, nil, c.Name)
 	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
+	}
+
+	for _, n := range rest {
+		ep := &dockernetwork.EndpointSettings{GwPriority: gwPriority(n)}
+		if err := cli.NetworkConnect(context.Background(), n, resp.ID, ep); err != nil {
+			return fmt.Errorf("connecting container %s to %s: %w", c.Name, n, err)
+		}
 	}
 
 	if err := cli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {

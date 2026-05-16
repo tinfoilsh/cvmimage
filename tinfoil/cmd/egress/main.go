@@ -110,7 +110,6 @@ func refresh(cfg *egressConfig, state map[string][]string) error {
 		prev := state[name]
 		toAdd := difference(current, prev)
 		toRemove := difference(prev, current)
-		state[name] = current
 		if len(toAdd) == 0 && len(toRemove) == 0 {
 			continue
 		}
@@ -132,6 +131,8 @@ func refresh(cfg *egressConfig, state map[string][]string) error {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("updating %s: %w (%s)", setName, err, out)
 		}
+		// Only record the new state after the kernel accepts the delta;
+		state[name] = current
 	}
 	return writeState(state)
 }

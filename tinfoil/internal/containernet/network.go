@@ -12,3 +12,12 @@ const NetworkName = "container-net"
 // BridgeName is the Linux bridge interface backing NetworkName. Linux caps
 // interface names at 15 characters, which is why this matches NetworkName.
 const BridgeName = "container-net"
+
+// ShimNetName is the implicit Docker network connecting the shim (host
+// netns) to its upstream container. Always closed; never declarable by
+// the operator.
+const ShimNetName = "shim-net"
+
+// AllowSetPrefix is the nftables-set name prefix for an `egress:
+// allowlist` network's resolved IPs: allow-<network-name>.
+const AllowSetPrefix = "allow-"

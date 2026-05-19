@@ -380,6 +380,9 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
+	if cfg.ShimCfg != nil && cfg.ShimCfg.EnableAppSigning && shimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
+		hostConfig.Binds = append(hostConfig.Binds, boot.TLSKeyPath+":/tinfoil/tls.key:ro")
+	}
 	hostConfig.Resources.PidsLimit = pidsLimit
 	if first == "" {
 		hostConfig.NetworkMode = "none"

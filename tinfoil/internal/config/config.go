@@ -40,6 +40,11 @@ type Config struct {
 
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
 	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
+
+	// When true, the per-boot TLS private key is bind-mounted read-only into
+	// the upstream container at /tinfoil/tls.key. The container can use it
+	// to sign application output.
+	EnableAppSigning bool `yaml:"enable-app-signing" default:"false"`
 }
 
 const (

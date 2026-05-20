@@ -382,10 +382,8 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
 	if cfg.ShimCfg != nil && cfg.ShimCfg.EnableAppSigning && shimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
-		// Widen the TLS-key file mode so the non-root container UID (Tinfoil
-		// policy) can read it through the bind-mount below. The containing
-		// directory stays 0700 root-only, so other host processes still
-		// can't reach the file by path.
+		// widening the file lets non-root users in the upstream container read it,
+		// while the directory hardening still keeps everyone else out.
 		if err := os.Chmod(boot.TLSKeyPath, 0o644); err != nil {
 			return fmt.Errorf("widening %s for app-signing: %w", boot.TLSKeyPath, err)
 		}

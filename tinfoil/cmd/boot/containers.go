@@ -405,7 +405,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		// already widened the file mode to 0644 so the bind-mount view is
 		// readable. The containing dir is 0700 root-only, so other host
 		// processes still cannot reach the file by path.
-		hostConfig.Binds = append(hostConfig.Binds, boot.TLSKeyPath+":/tinfoil/tls.key:ro")
+		hostConfig.Binds = append(hostConfig.Binds, boot.TLSKeyPath+":/tinfoil-app/tls.key:ro")
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit
 	if first == "" {

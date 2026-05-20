@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -101,6 +102,21 @@ func launchContainers(config *Config) error {
 	return nil
 }
 
+// prepareAppSigningKey widens the TLS-key file mode to 0644 when the operator
+// opted in to app-signing. The containing directory remains 0700, so only the
+// targeted bind-mount surfaces the key — other host users still can't reach
+// the path. No-op when EnableAppSigning is false.
+func prepareAppSigningKey(cfg *Config) error {
+	if cfg.ShimCfg == nil || !cfg.ShimCfg.EnableAppSigning {
+		return nil
+	}
+	if err := os.Chmod(boot.TLSKeyPath, 0o644); err != nil {
+		return fmt.Errorf("chmod %s: %w", boot.TLSKeyPath, err)
+	}
+	log.Printf("App-signing: %s mode widened to 0644 for upstream-container bind-mount", boot.TLSKeyPath)
+	return nil
+}
+
 // launchContainersAndWaitHealthy launches all containers in parallel with
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
@@ -121,6 +137,10 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error
 
 	if err := setupContainerNetwork(cli, config); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
+	}
+
+	if err := prepareAppSigningKey(config); err != nil {
+		return fmt.Errorf("preparing app-signing key: %w", err)
 	}
 
 	start := time.Now()
@@ -381,6 +401,10 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
 	if cfg.ShimCfg != nil && cfg.ShimCfg.EnableAppSigning && shimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
+		// Container is non-root (Tinfoil policy); prepareAppSigningKey has
+		// already widened the file mode to 0644 so the bind-mount view is
+		// readable. The containing dir is 0700 root-only, so other host
+		// processes still cannot reach the file by path.
 		hostConfig.Binds = append(hostConfig.Binds, boot.TLSKeyPath+":/tinfoil/tls.key:ro")
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit

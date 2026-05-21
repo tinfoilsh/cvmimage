@@ -466,8 +466,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 
 // pullImage pulls an image using the Docker SDK with auth from Docker config
 func pullImage(cli *client.Client, imageName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 
 	opts := image.PullOptions{}
 

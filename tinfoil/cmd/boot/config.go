@@ -123,18 +123,11 @@ const (
 	externalDiskPath = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-ext-config"
 )
 
-var supportedGPUCounts = map[int]bool{
-	0: true,
-	1: true,
-	2: true,
-	4: true,
-	6: true,
-	8: true,
-}
+const maxGPUCount = 8
 
 func validateGPUCount(count int) error {
-	if !supportedGPUCounts[count] {
-		return fmt.Errorf("gpus must be one of 0, 1, 2, 4, 6, or 8 (got %d)", count)
+	if count < 0 || count > maxGPUCount {
+		return fmt.Errorf("gpus must be between 0 and %d (got %d)", maxGPUCount, count)
 	}
 	return nil
 }

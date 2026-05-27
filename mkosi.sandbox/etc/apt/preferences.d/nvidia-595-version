@@ -1,0 +1,10 @@
+# Live NVIDIA CUDA repo now publishes 610.x alongside 595.x. Without version
+# pins, apt prefers 610 for unpinned libnvidia-* deps and the 595.71.05 driver
+# stack becomes unsatisfiable.
+Package: libnvidia-* nvidia-* cuda-* nvattest
+Pin: version 595.71.05*
+Pin-Priority: 1002
+
+Package: libnvidia-* nvidia-* cuda-* nvattest
+Pin: version 610.*
+Pin-Priority: -1

@@ -8,7 +8,7 @@ set -Eeuo pipefail
 UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
 UPSTREAM_TAG=2026.03.02
 UPSTREAM_SHA=0c1be386a8fbb8f2766a6a556d10df86f5fed9d3
-APT_SNAPSHOT_DATE=20260424T000000Z
+APT_SNAPSHOT_DATE=20260525T000000Z
 
 # Transitive CMake FetchContent deps. We pre-fetch each at the expected SHA
 # *before* cmake runs and pass FETCHCONTENT_SOURCE_DIR_<NAME>, so a moved

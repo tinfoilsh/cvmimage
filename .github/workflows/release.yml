@@ -37,7 +37,7 @@ jobs:
       - name: Install build dependencies
         run: |
           # Use Ubuntu snapshot to pin packages
-          SNAPSHOT_DATE="20260424T000000Z"
+          SNAPSHOT_DATE="20260525T000000Z"
           echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute main restricted universe multiverse" | sudo tee /etc/apt/sources.list
           echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list

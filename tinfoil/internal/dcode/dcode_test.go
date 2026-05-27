@@ -44,3 +44,17 @@ func TestDcode(t *testing.T) {
 	}
 	assert.Equal(t, att, *decoded)
 }
+
+func TestEncodeRejectsTooManyChunks(t *testing.T) {
+	// Force >100 chunks: each chunk is one base32 char + index prefix + suffix.
+	domain := "x.example.com"
+	maxLength := 63 - len(".x.example.com") - 2
+	if maxLength <= 0 {
+		t.Fatal("test domain too long")
+	}
+	content := make([]byte, maxLength*101)
+	_, err := Encode(content, domain)
+	if err == nil {
+		t.Fatal("expected error when chunk count exceeds 100")
+	}
+}

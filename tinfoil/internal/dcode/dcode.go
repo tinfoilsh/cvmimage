@@ -41,6 +41,9 @@ func Encode(content []byte, domain string) ([]string, error) {
 		end := min(i+maxLength, len(encoded))
 		chunk := encoded[i:end]
 		index := len(domains)
+		if index > 99 {
+			return nil, fmt.Errorf("payload requires %d+ chunks; 2-digit prefix supports at most 100", index+1)
+		}
 		domains = append(domains, fmt.Sprintf("%02d%s%s", index, chunk, domainSuffix))
 	}
 

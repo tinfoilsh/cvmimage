@@ -3,7 +3,6 @@ package online
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -28,11 +27,10 @@ func NewValidator(server string) (*Validator, error) {
 
 type ValidationError struct {
 	StatusCode int
-	Message    string
 }
 
 func (e *ValidationError) Error() string {
-	return e.Message
+	return http.StatusText(e.StatusCode)
 }
 
 func (v *Validator) Validate(apiKey string) error {
@@ -46,13 +44,7 @@ func (v *Validator) Validate(apiKey string) error {
 		return nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-
 	return &ValidationError{
 		StatusCode: resp.StatusCode,
-		Message:    string(body),
 	}
 }

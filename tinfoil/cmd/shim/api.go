@@ -84,6 +84,8 @@ const (
 // where applicable. See https://platform.openai.com/docs/guides/error-codes
 const (
 	errMsgAPIKeyRequired = "API key is required."
+	errMsgInvalidAPIKey  = "Incorrect API key provided."
+	errMsgQuotaExceeded  = "Insufficient quota."
 	errMsgRateLimited    = "Rate limit reached for requests."
 	errMsgServerError    = "The server had an error while processing your request."
 )
@@ -98,6 +100,25 @@ func writeJSONError(w http.ResponseWriter, message string, errorType string, sta
 			"type":    errorType,
 		},
 	})
+}
+
+func writeValidationFailure(w http.ResponseWriter, err error) {
+	var validationErr *online.ValidationError
+	if !errors.As(err, &validationErr) {
+		writeJSONError(w, errMsgServerError, errTypeServer, http.StatusInternalServerError)
+		return
+	}
+
+	switch validationErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		writeJSONError(w, errMsgInvalidAPIKey, errTypeInvalidRequest, validationErr.StatusCode)
+	case http.StatusPaymentRequired:
+		writeJSONError(w, errMsgQuotaExceeded, errTypeInsufficientQuota, validationErr.StatusCode)
+	case http.StatusTooManyRequests:
+		writeJSONError(w, errMsgRateLimited, errTypeInsufficientQuota, validationErr.StatusCode)
+	default:
+		writeJSONError(w, errMsgServerError, errTypeServer, http.StatusInternalServerError)
+	}
 }
 
 func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
@@ -201,15 +222,7 @@ func NewShimServer(
 
 			if err := validator.Validate(apiKey); err != nil {
 				log.Printf("Warning: failed to validate API key: %v", err)
-				var validationErr *online.ValidationError
-				if errors.As(err, &validationErr) {
-					// Pass through the JSON error body from the control plane
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(validationErr.StatusCode)
-					fmt.Fprint(w, validationErr.Message)
-				} else {
-					writeJSONError(w, errMsgServerError, errTypeServer, http.StatusInternalServerError)
-				}
+				writeValidationFailure(w, err)
 				return
 			}
 		}

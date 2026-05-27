@@ -27,16 +27,19 @@ import (
 )
 
 // pathMatchesPattern checks if a request path matches a pattern.
-// Patterns can be exact matches or use a trailing * for prefix matching.
+// Patterns can be exact matches or use a trailing * for segment-boundary prefix matching.
 // Examples:
 //   - "/v1/models" matches only "/v1/models"
 //   - "/v1/user/*" matches "/v1/user/123", "/v1/user/abc/settings", etc.
 func pathMatchesPattern(pattern, path string) bool {
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
+	prefix, wildcard := strings.CutSuffix(pattern, "*")
+	if !wildcard {
+		return pattern == path
+	}
+	if strings.HasSuffix(prefix, "/") {
 		return strings.HasPrefix(path, prefix)
 	}
-	return pattern == path
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
 // pathAllowed checks if the request path matches any of the allowed patterns.

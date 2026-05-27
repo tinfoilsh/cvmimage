@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	healthPollInterval = 5 * time.Second
+	healthPollInterval       = 5 * time.Second
 	defaultPidsLimit   int64 = 65536
 )
 
@@ -52,16 +52,29 @@ func ensureNetwork(cli *client.Client, name string) error {
 	if !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("checking whether docker network %q exists: %w", name, err)
 	}
-	_, err = cli.NetworkCreate(context.Background(), name, dockernetwork.CreateOptions{
-		Driver: "bridge",
-		Options: map[string]string{
-			"com.docker.network.bridge.name": name,
-		},
-	})
+	_, err = cli.NetworkCreate(context.Background(), name, networkCreateOptions(name))
 	if err != nil {
 		return fmt.Errorf("creating docker network %q: %w", name, err)
 	}
 	return nil
+}
+
+func networkCreateOptions(name string) dockernetwork.CreateOptions {
+	opts := dockernetwork.CreateOptions{
+		Driver: "bridge",
+		Options: map[string]string{
+			"com.docker.network.bridge.name": name,
+		},
+	}
+	if name == containernet.ShimNetName {
+		opts.IPAM = &dockernetwork.IPAM{
+			Config: []dockernetwork.IPAMConfig{{
+				Subnet:  containernet.ShimNetSubnetCIDR,
+				Gateway: containernet.ShimNetGatewayIP,
+			}},
+		}
+	}
+	return opts
 }
 
 // launchContainers starts all containers from the config
@@ -442,7 +455,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 	if first != "" {
 		networkingConfig = &dockernetwork.NetworkingConfig{
 			EndpointsConfig: map[string]*dockernetwork.EndpointSettings{
-				first: {GwPriority: gwPriority(first)},
+				first: endpointSettings(first, gwPriority(first)),
 			},
 		}
 	}
@@ -453,7 +466,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 	}
 
 	for _, n := range rest {
-		ep := &dockernetwork.EndpointSettings{GwPriority: gwPriority(n)}
+		ep := endpointSettings(n, gwPriority(n))
 		if err := cli.NetworkConnect(context.Background(), n, resp.ID, ep); err != nil {
 			return fmt.Errorf("connecting container %s to %s: %w", c.Name, n, err)
 		}
@@ -465,6 +478,16 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 
 	log.Printf("Started container %s (%s)", c.Name, resp.ID[:12])
 	return nil
+}
+
+func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettings {
+	ep := &dockernetwork.EndpointSettings{GwPriority: gwPriority}
+	if name == containernet.ShimNetName {
+		ep.IPAMConfig = &dockernetwork.EndpointIPAMConfig{
+			IPv4Address: containernet.ShimUpstreamIP,
+		}
+	}
+	return ep
 }
 
 // pullImage pulls an image using the Docker SDK with auth from Docker config

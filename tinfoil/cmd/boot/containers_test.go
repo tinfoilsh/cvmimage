@@ -5,6 +5,7 @@ import (
 	"time"
 
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/containernet"
 )
 
 func TestParseGPUs(t *testing.T) {
@@ -108,5 +109,36 @@ func TestParseDuration(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("parseDuration(%q) = %v, want %v", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestNetworkCreateOptionsStaticShimNet(t *testing.T) {
+	opts := networkCreateOptions(containernet.ShimNetName)
+	if opts.IPAM == nil || len(opts.IPAM.Config) != 1 {
+		t.Fatalf("expected static shim-net IPAM config, got %+v", opts.IPAM)
+	}
+	if got := opts.IPAM.Config[0].Subnet; got != containernet.ShimNetSubnetCIDR {
+		t.Errorf("subnet: got %q, want %q", got, containernet.ShimNetSubnetCIDR)
+	}
+	if got := opts.IPAM.Config[0].Gateway; got != containernet.ShimNetGatewayIP {
+		t.Errorf("gateway: got %q, want %q", got, containernet.ShimNetGatewayIP)
+	}
+}
+
+func TestEndpointSettingsPinsShimUpstreamIP(t *testing.T) {
+	ep := endpointSettings(containernet.ShimNetName, 0)
+	if ep.IPAMConfig == nil {
+		t.Fatal("expected shim-net endpoint IPAM config")
+	}
+	if got := ep.IPAMConfig.IPv4Address; got != containernet.ShimUpstreamIP {
+		t.Errorf("upstream IP: got %q, want %q", got, containernet.ShimUpstreamIP)
+	}
+
+	regular := endpointSettings("web", 100)
+	if regular.IPAMConfig != nil {
+		t.Fatalf("regular networks should not pin IPAM, got %+v", regular.IPAMConfig)
+	}
+	if regular.GwPriority != 100 {
+		t.Errorf("GwPriority: got %d, want 100", regular.GwPriority)
 	}
 }

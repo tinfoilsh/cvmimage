@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -204,10 +203,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		gpuCount := tinfoilattestation.DetectGPUCount()
 		log.Printf("Detected %d GPU(s) for attestation", gpuCount)
 
-		upstreamHost, err := resolveUpstreamHost(context.Background(), config.UpstreamContainer)
-		if err != nil {
-			return fmt.Errorf("resolving upstream container: %w", err)
-		}
+		upstreamHost := resolveUpstreamHost(config.UpstreamContainer)
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 

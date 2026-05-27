@@ -9,6 +9,18 @@ ExecStart=/usr/bin/tinfoil-shim
 Restart=always
 RestartSec=5
 User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/mnt/ramdisk /run/docker.sock
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=default.target

@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 )
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
@@ -116,6 +116,26 @@ func TestRequiresAuth(t *testing.T) {
 				t.Errorf("requiresAuth(%v, %q) = %v, want %v", tt.authenticatedEndpoints, tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractBearerToken(t *testing.T) {
+	tests := []struct {
+		header string
+		want   string
+	}{
+		{"Bearer sk-test", "sk-test"},
+		{"bearer sk-test", "sk-test"},
+		{"BEARER   sk-test  ", "sk-test"},
+		{"Token sk-test", ""},
+		{"Bearer", ""},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		if got := extractBearerToken(tt.header); got != tt.want {
+			t.Errorf("extractBearerToken(%q) = %q, want %q", tt.header, got, tt.want)
+		}
 	}
 }
 

@@ -63,6 +63,16 @@ func requiresAuth(authenticatedEndpoints *[]string, path string) bool {
 	return pathAllowed(*authenticatedEndpoints, path)
 }
 
+// extractBearerToken returns the token portion of an Authorization header,
+// accepting any capitalization of the "Bearer" scheme.
+func extractBearerToken(header string) string {
+	const scheme = "bearer "
+	if len(header) < len(scheme) || !strings.EqualFold(header[:len(scheme)], scheme) {
+		return ""
+	}
+	return strings.TrimSpace(header[len(scheme):])
+}
+
 // OpenAI-compatible error type strings returned in API error responses.
 const (
 	errTypeInvalidRequest    = "invalid_request_error"
@@ -182,7 +192,7 @@ func NewShimServer(
 	}
 
 	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		apiKey := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		apiKey := extractBearerToken(r.Header.Get("Authorization"))
 		if validator != nil && requiresAuth(config.AuthenticatedEndpoints, r.URL.Path) {
 			if len(apiKey) == 0 {
 				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)

@@ -1,4 +1,8 @@
-all: clean build
+all: build
+
+MKOSI = sudo env PATH="/root/.local/bin:$$PATH" mkosi
+
+.PHONY: all build rebuild clean deepclean hash nvattest go-binaries
 
 # tinfoilcvm.hash is written as an artifact of `build`; read it from there if
 # present, otherwise extract the dm-verity roothash from the UKI's .cmdline
@@ -17,18 +21,25 @@ clean:
 	sudo rm -rf initrd.cpio.zst
 
 deepclean:
-	mkosi clean
+	$(MKOSI) clean
+	sudo rm -rf mkosi.cache/*
 	sudo rm -f packages/nvattest_*.deb packages/libnvat_*.deb
 
-build: nvattest
-	mkdir -p packages mkosi.extra/usr/bin
+go-binaries:
+	mkdir -p mkosi.extra/usr/bin
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
-	mkosi --force
+
+# First build populates mkosi.cache; later builds reuse it for fast iteration.
+rebuild: go-binaries
+	mkdir -p mkosi.cache packages
+	$(MKOSI) --force
 	rm -f tinfoilcvm
 	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -aoE 'roothash=[a-f0-9]+' | cut -d= -f2 > tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
+
+build: nvattest rebuild
 
 # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. See build-nvattest.sh.
 nvattest: packages/nvattest_1.2.0.1772475102-1_amd64.deb

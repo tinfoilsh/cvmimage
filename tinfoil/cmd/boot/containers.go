@@ -37,7 +37,7 @@ func setupContainerNetwork(cli *client.Client, cfg *Config) error {
 		}
 	}
 	if shimUpstreamSet(cfg) {
-		if err := ensureNetwork(cli, containernet.ShimNetName); err != nil {
+		if err := ensureShimNetwork(cli, cfg.ShimCfg.UpstreamContainer); err != nil {
 			return err
 		}
 	}
@@ -55,6 +55,36 @@ func ensureNetwork(cli *client.Client, name string) error {
 	_, err = cli.NetworkCreate(context.Background(), name, networkCreateOptions(name))
 	if err != nil {
 		return fmt.Errorf("creating docker network %q: %w", name, err)
+	}
+	return nil
+}
+
+func ensureShimNetwork(cli *client.Client, upstreamContainer string) error {
+	ctx := context.Background()
+	existing, err := cli.NetworkInspect(ctx, containernet.ShimNetName, dockernetwork.InspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		_, err = cli.NetworkCreate(ctx, containernet.ShimNetName, networkCreateOptions(containernet.ShimNetName))
+		if err != nil {
+			return fmt.Errorf("creating docker network %q: %w", containernet.ShimNetName, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking whether docker network %q exists: %w", containernet.ShimNetName, err)
+	}
+
+	if len(existing.IPAM.Config) != 1 ||
+		existing.IPAM.Config[0].Subnet != containernet.ShimNetSubnetCIDR ||
+		existing.IPAM.Config[0].Gateway != containernet.ShimNetGatewayIP {
+		return fmt.Errorf("docker network %q must use subnet %s", containernet.ShimNetName, containernet.ShimNetSubnetCIDR)
+	}
+	if len(existing.Containers) > 1 {
+		return fmt.Errorf("docker network %q must have at most one attached container, found %d", containernet.ShimNetName, len(existing.Containers))
+	}
+	for _, c := range existing.Containers {
+		if c.Name != upstreamContainer {
+			return fmt.Errorf("docker network %q is attached to %q, want upstream container %q", containernet.ShimNetName, c.Name, upstreamContainer)
+		}
 	}
 	return nil
 }

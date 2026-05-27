@@ -30,20 +30,6 @@ var archNames = map[nvml.DeviceArchitecture]string{
 	nvml.DEVICE_ARCH_BLACKWELL: "BLACKWELL",
 }
 
-// DetectGPUCount returns the number of NVIDIA GPUs, or 0 if NVML is unavailable.
-func DetectGPUCount() int {
-	ret := nvml.Init()
-	if ret != nvml.SUCCESS {
-		return 0
-	}
-	defer nvml.Shutdown()
-	count, ret := nvml.DeviceGetCount()
-	if ret != nvml.SUCCESS {
-		return 0
-	}
-	return count
-}
-
 // CollectGPUEvidence collects fresh attestation evidence from all GPUs using
 // NVML directly (no nvattest CLI). The nonce must be exactly 32 bytes.
 func CollectGPUEvidence(nonce [32]byte) (*GPUEvidenceCollection, error) {

@@ -25,7 +25,10 @@ import (
 	"tinfoil/internal/containernet"
 )
 
-const healthPollInterval = 5 * time.Second
+const (
+	healthPollInterval = 5 * time.Second
+	defaultPidsLimit   int64 = 65536
+)
 
 func setupContainerNetwork(cli *client.Client, cfg *Config) error {
 	for name := range cfg.Networks {
@@ -362,7 +365,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 	}
 	pidsLimit := c.PidsLimit
 	if pidsLimit == nil {
-		n := int64(256)
+		n := defaultPidsLimit
 		pidsLimit = &n
 	}
 

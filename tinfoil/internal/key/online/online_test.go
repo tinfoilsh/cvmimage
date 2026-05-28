@@ -40,8 +40,14 @@ func TestVerifyOnline(t *testing.T) {
 	v, err := NewValidator("https://localhost:8080/validate")
 	assert.Nil(t, err)
 
-	assert.Nil(t, v.Validate(key.Request{APIKey: "good-key", Model: "llama-3", Path: "/v1/chat/completions"}))
-	assert.Equal(t, "llama-3", lastReq.Model)
+	assert.Nil(t, v.Validate(key.Request{
+		APIKey:        "good-key",
+		Domain:        "model.example.com",
+		RequestedHost: "realtime-model.model.example.com",
+		Path:          "/v1/chat/completions",
+	}))
+	assert.Equal(t, "model.example.com", lastReq.Domain)
+	assert.Equal(t, "realtime-model.model.example.com", lastReq.RequestedHost)
 	assert.Equal(t, "/v1/chat/completions", lastReq.Path)
 
 	assert.NotNil(t, v.Validate(key.Request{APIKey: "bad-key"}))

@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"slices"
@@ -27,13 +26,6 @@ import (
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 )
-
-// maxValidationBodyPeek caps how many bytes of an upstream request body the
-// shim will buffer in order to extract policy fields (e.g. "model") before
-// validation. Bodies up to this size are fully buffered; larger bodies are
-// buffered up to this cap and the rest is streamed straight through, so the
-// model field is still found if it appears within the cap window.
-const maxValidationBodyPeek = 1 << 20 // 1 MiB
 
 // pathMatchesPattern checks if a request path matches a pattern.
 // Patterns can be exact matches or use a trailing * for segment-boundary prefix matching.
@@ -61,38 +53,12 @@ func pathAllowed(allowedPaths []string, path string) bool {
 	return false
 }
 
-// readCloser pairs a Reader with a Closer to satisfy io.ReadCloser. Used to
-// splice a buffered prefix back in front of an already-opened request body
-// without taking ownership of its lifecycle.
-type readCloser struct {
-	io.Reader
-	io.Closer
-}
-
-// extractModel reads up to maxValidationBodyPeek bytes from r.Body, attempts
-// to decode a top-level JSON object, and returns the value of its "model"
-// field if present. The original body is restored on r so the upstream
-// request continues to see the full payload unchanged. A best-effort parse
-// is used: any error (non-JSON, missing field, oversized body) yields "".
-func extractModel(r *http.Request) string {
-	if r.Body == nil {
-		return ""
+func requestedHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = r.Host
 	}
-
-	peek, readErr := io.ReadAll(io.LimitReader(r.Body, maxValidationBodyPeek))
-	r.Body = readCloser{
-		Reader: io.MultiReader(bytes.NewReader(peek), r.Body),
-		Closer: r.Body,
-	}
-	if readErr != nil {
-		return ""
-	}
-
-	var probe struct {
-		Model string `json:"model"`
-	}
-	_ = json.Unmarshal(peek, &probe)
-	return probe.Model
+	return strings.ToLower(host)
 }
 
 // requiresAuth reports whether path requires API key authentication.
@@ -264,9 +230,10 @@ func NewShimServer(
 			}
 
 			validationReq := key.Request{
-				APIKey: apiKey,
-				Model:  extractModel(r),
-				Path:   r.URL.Path,
+				APIKey:        apiKey,
+				Domain:        strings.ToLower(externalConfig.Env["DOMAIN"]),
+				RequestedHost: requestedHost(r),
+				Path:          r.URL.Path,
 			}
 
 			if err := validator.Validate(validationReq); err != nil {

@@ -266,6 +266,7 @@ func NewShimServer(
 			validationReq := key.Request{
 				APIKey: apiKey,
 				Model:  extractModel(r),
+				Path:   r.URL.Path,
 			}
 
 			if err := validator.Validate(validationReq); err != nil {

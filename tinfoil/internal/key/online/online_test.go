@@ -16,7 +16,7 @@ func TestVerifyOnline(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
-	var lastModel string
+	var lastReq key.Request
 	httpmock.RegisterResponder("POST", "https://localhost:8080/validate",
 		func(req *http.Request) (*http.Response, error) {
 			body, err := io.ReadAll(req.Body)
@@ -28,7 +28,7 @@ func TestVerifyOnline(t *testing.T) {
 			if err := json.Unmarshal(body, &parsed); err != nil {
 				return httpmock.NewStringResponse(http.StatusBadRequest, "bad json"), nil
 			}
-			lastModel = parsed.Model
+			lastReq = parsed
 
 			if parsed.APIKey == "good-key" {
 				return httpmock.NewStringResponse(http.StatusOK, "OK"), nil
@@ -40,8 +40,9 @@ func TestVerifyOnline(t *testing.T) {
 	v, err := NewValidator("https://localhost:8080/validate")
 	assert.Nil(t, err)
 
-	assert.Nil(t, v.Validate(key.Request{APIKey: "good-key", Model: "llama-3"}))
-	assert.Equal(t, "llama-3", lastModel)
+	assert.Nil(t, v.Validate(key.Request{APIKey: "good-key", Model: "llama-3", Path: "/v1/chat/completions"}))
+	assert.Equal(t, "llama-3", lastReq.Model)
+	assert.Equal(t, "/v1/chat/completions", lastReq.Path)
 
 	assert.NotNil(t, v.Validate(key.Request{APIKey: "bad-key"}))
 }

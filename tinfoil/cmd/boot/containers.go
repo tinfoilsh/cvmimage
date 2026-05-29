@@ -443,6 +443,9 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		if size, err := units.RAMInBytes(c.ShmSize); err == nil {
 			hostConfig.ShmSize = size
 		}
+	} else if avail := containerMemoryBytes(&c, cfg); avail > 0 {
+		// Matching the kernel's default tmpfs sizing (50% of RAM).
+		hostConfig.ShmSize = avail / 2
 	}
 	if c.Memory != "" {
 		if mem, err := units.RAMInBytes(c.Memory); err == nil {
@@ -563,6 +566,18 @@ func pullImage(cli *client.Client, imageName string) error {
 		}
 	}
 	return nil
+}
+
+func containerMemoryBytes(c *Container, cfg *Config) int64 {
+	if c.Memory != "" {
+		if mem, err := units.RAMInBytes(c.Memory); err == nil {
+			return mem
+		}
+	}
+	if cfg != nil && cfg.Memory > 0 {
+		return int64(cfg.Memory) * 1024 * 1024
+	}
+	return 0
 }
 
 // buildEnv parses env entries and secrets from external config

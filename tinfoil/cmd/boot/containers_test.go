@@ -94,6 +94,29 @@ func TestBuildEnvNilConfig(t *testing.T) {
 	}
 }
 
+func TestContainerMemoryBytes(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	tests := []struct {
+		name string
+		c    Container
+		cfg  *Config
+		want int64
+	}{
+		{"explicit container limit", Container{Memory: "2g"}, &Config{Memory: 8192}, 2 * 1024 * mib},
+		{"falls back to enclave memory", Container{}, &Config{Memory: 8192}, 8192 * mib},
+		{"explicit overrides enclave", Container{Memory: "512m"}, &Config{Memory: 8192}, 512 * mib},
+		{"unparseable container limit falls back", Container{Memory: "lots"}, &Config{Memory: 4096}, 4096 * mib},
+		{"nothing known", Container{}, &Config{}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containerMemoryBytes(&tt.c, tt.cfg); got != tt.want {
+				t.Errorf("containerMemoryBytes() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseDuration(t *testing.T) {
 	tests := []struct {
 		input string

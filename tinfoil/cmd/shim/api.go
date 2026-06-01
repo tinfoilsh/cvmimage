@@ -172,7 +172,7 @@ func NewShimServer(
 	rateLimiter *RateLimiter,
 	att *attestation.Document,
 	identityBody tinfoilattestation.BodyV2,
-	gpuCount int,
+	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	config *config.Config,
@@ -212,13 +212,6 @@ func NewShimServer(
 			log.Printf("proxy error: %v", err)
 			writeJSONError(w, errMsgServerError, errTypeServer, http.StatusBadGateway)
 		},
-	}
-
-	globalMiddleware := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Tinfoil-Pt", string(att.Format))
-			next.ServeHTTP(w, r)
-		})
 	}
 
 	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -266,6 +259,50 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, config, externalConfig)
+
+	return wrapShimMux(config, att, mux)
+}
+
+func NewObservabilityServer(
+	att *attestation.Document,
+	identityBody tinfoilattestation.BodyV2,
+	expectedGPUs int,
+	ehbpIdentity *identity.Identity,
+	tlsCert *tls.Certificate,
+	config *config.Config,
+	externalConfig *config.ExternalConfig,
+) http.Handler {
+	ehbpMiddleware := ehbpIdentity.Middleware()
+	mux := http.NewServeMux()
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, config, externalConfig)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		writeWorkloadUnavailable(w)
+	})
+	return wrapShimMux(config, att, mux)
+}
+
+func wrapShimMux(config *config.Config, att *attestation.Document, mux *http.ServeMux) http.Handler {
+	globalMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Tinfoil-Pt", string(att.Format))
+			next.ServeHTTP(w, r)
+		})
+	}
+	return corsMiddleware(config, globalMiddleware(mux))
+}
+
+func registerObservabilityHandlers(
+	mux *http.ServeMux,
+	ehbpMiddleware func(http.Handler) http.Handler,
+	att *attestation.Document,
+	identityBody tinfoilattestation.BodyV2,
+	expectedGPUs int,
+	ehbpIdentity *identity.Identity,
+	tlsCert *tls.Certificate,
+	config *config.Config,
+	externalConfig *config.ExternalConfig,
+) {
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -280,18 +317,25 @@ func NewShimServer(
 			var gpuJSON, nvswitchJSON json.RawMessage
 			var nonce32 [32]byte
 			copy(nonce32[:], nonce)
-			if gpuCount > 0 {
+			if expectedGPUs > 0 {
 				gpuEvidence, err := tinfoilattestation.CollectGPUEvidence(nonce32)
 				if err != nil {
-					log.Printf("GPU evidence collection failed (non-fatal): %v", err)
-				} else if len(gpuEvidence.Evidences) > 0 {
-					gpuJSON, _ = json.Marshal(gpuEvidence)
+					log.Printf("GPU evidence collection failed for %d expected GPU(s): %v", expectedGPUs, err)
+					writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+					return
 				}
-				if gpuCount >= 8 {
+				if got := len(gpuEvidence.Evidences); got != expectedGPUs {
+					log.Printf("GPU evidence count mismatch: expected %d, got %d", expectedGPUs, got)
+					writeJSONError(w, "GPU attestation evidence incomplete", errTypeServer, http.StatusInternalServerError)
+					return
+				}
+				gpuJSON, _ = json.Marshal(gpuEvidence)
+				if expectedGPUs >= 8 {
 					nvswitchJSON, err = tinfoilattestation.CollectNVSwitchEvidence(nonce32)
 					if err != nil {
-						log.Printf("NVSwitch evidence collection failed (non-fatal): %v", err)
-						nvswitchJSON = nil
+						log.Printf("NVSwitch evidence collection failed: %v", err)
+						writeJSONError(w, "NVSwitch attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+						return
 					}
 				}
 			}
@@ -349,7 +393,31 @@ func NewShimServer(
 	mux.HandleFunc("/.well-known/tinfoil-metrics", metrics.HandleMetrics(externalConfig))
 	mux.HandleFunc("/.well-known/tinfoil-acpi", acpi.HandleQemuACPI(config, externalConfig))
 	mux.HandleFunc("/.well-known/metrics", metrics.HandlePrometheusMetrics(&externalConfig.Metadata, externalConfig.MetricsAPIKey))
+	mux.HandleFunc("/.well-known/tinfoil-containers", containersHandler())
 	mux.HandleFunc(ehbpProtocol.KeysPath, ehbpIdentity.ConfigHandler)
+}
 
-	return corsMiddleware(config, globalMiddleware(mux))
+func writeWorkloadUnavailable(w http.ResponseWriter) {
+	status := "pending"
+	var state any
+	if s, err := boot.Load(); err == nil {
+		state = s
+		if s.HasFailed() {
+			status = "failed"
+		}
+	}
+	body := map[string]any{
+		"error": map[string]any{
+			"message": "Workload proxy is not ready.",
+			"type":    errTypeServer,
+			"status":  status,
+		},
+	}
+	if state != nil {
+		body["boot"] = state
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	json.NewEncoder(w).Encode(body)
 }

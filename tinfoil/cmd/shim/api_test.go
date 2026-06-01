@@ -18,6 +18,11 @@ import (
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
 	t.Helper()
+	return testFullServer(t, paths, upstreamPort)
+}
+
+func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
+	t.Helper()
 
 	id, err := identity.NewIdentity()
 	if err != nil {
@@ -36,6 +41,24 @@ func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
 
 	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, upstreamAddr)
+}
+
+func testObservabilityServer(t *testing.T, paths []string) http.Handler {
+	t.Helper()
+
+	id, err := identity.NewIdentity()
+	if err != nil {
+		t.Fatalf("creating identity: %v", err)
+	}
+
+	cfg := &config.Config{Paths: paths}
+	extCfg := &config.ExternalConfig{}
+	att := &attestation.Document{
+		Format: "https://tinfoil.sh/predicate/dummy/v2",
+		Body:   "deadbeef",
+	}
+
+	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg)
 }
 
 func TestPathNotAllowed_Returns404(t *testing.T) {
@@ -177,5 +200,44 @@ func TestNoPathsConfigured_AllPathsAllowed(t *testing.T) {
 	// It will hit the EHBP middleware, which is fine — just verify it's not 404.
 	if rec.Code == http.StatusNotFound {
 		t.Fatalf("with no paths configured, should not return 404, got: %s", rec.Body.String())
+	}
+}
+
+func TestObservabilityServer_WorkloadReturns503BeforeReady(t *testing.T) {
+	handler := testObservabilityServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 before proxy ready, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Workload proxy is not ready.") {
+		t.Fatalf("expected proxy readiness error, got: %s", rec.Body.String())
+	}
+}
+
+func TestObservabilityServer_WellKnownEndpointsBypassProxyReadiness(t *testing.T) {
+	handler := testObservabilityServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/tinfoil-certificate", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), "Workload proxy is not ready.") {
+		t.Fatalf("well-known endpoint should bypass proxy readiness gate: %s", rec.Body.String())
+	}
+}
+
+func TestFullServer_WorkloadReachesProxyPath(t *testing.T) {
+	handler := testFullServer(t, nil, 9999)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), "Workload proxy is not ready.") {
+		t.Fatalf("ready proxy gate should not block workload path: %s", rec.Body.String())
 	}
 }

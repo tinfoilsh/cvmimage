@@ -44,11 +44,30 @@ func TestFirewall_OpenBridgeEmitsPublicAccept(t *testing.T) {
 		"web": {Egress: "open"},
 	}}
 	script := renderFirewallScript(cfg)
-	if !strings.Contains(script, `iif "web" ip daddr != { 10.0.0.0/8`) {
+	if !strings.Contains(script, `iif "web" ip daddr != {`) {
 		t.Errorf("open bridge should accept public v4; got:\n%s", script)
 	}
 	if !strings.Contains(script, `iif "web" ip6 daddr != {`) {
 		t.Error("open bridge should accept public v6")
+	}
+}
+
+func TestFirewall_OpenBridgeBlocksNonPublicIPv4Ranges(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"web": {Egress: "open"},
+	}}
+	script := renderFirewallScript(cfg)
+	for _, cidr := range []string{
+		"100.64.0.0/10",   // RFC 6598 shared address space.
+		"198.18.0.0/15",   // RFC 6890 benchmarking.
+		"198.51.100.0/24", // RFC 5737 documentation.
+		"224.0.0.0/4",     // RFC 6890 multicast.
+		"240.0.0.0/4",     // RFC 6890 reserved.
+		"255.255.255.255/32",
+	} {
+		if !strings.Contains(script, cidr) {
+			t.Errorf("open bridge should exclude %s from public egress; got:\n%s", cidr, script)
+		}
 	}
 }
 
@@ -65,6 +84,27 @@ func TestFirewall_AllowlistEmitsSetAndAcceptRule(t *testing.T) {
 	}
 	if !strings.Contains(script, `iif "control" ip daddr {`) {
 		t.Error("allowlist must drop private destinations")
+	}
+}
+
+func TestFirewall_AllowlistDropsNonPublicBeforeAllowSet(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	script := renderFirewallScript(cfg)
+	dropRule := `iif "control" ip daddr {`
+	dropIdx := strings.Index(script, dropRule)
+	allowIdx := strings.Index(script, `iif "control" ip daddr @allow-control accept`)
+	if dropIdx == -1 || allowIdx == -1 {
+		t.Fatalf("expected non-public drop before allow set; got:\n%s", script)
+	}
+	if dropIdx > allowIdx {
+		t.Fatalf("non-public drop must precede allow set; got:\n%s", script)
+	}
+	for _, cidr := range []string{"100.64.0.0/10", "198.18.0.0/15"} {
+		if !strings.Contains(script, cidr) {
+			t.Errorf("allowlist bridge should drop %s before allow set; got:\n%s", cidr, script)
+		}
 	}
 }
 

@@ -40,6 +40,10 @@ type Config struct {
 
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
 	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
+
+	// ExpectedGPUs is copied from the attested top-level boot config so the
+	// shim does not need to probe hardware on its public request path.
+	ExpectedGPUs int `yaml:"expected-gpus" default:"0"`
 }
 
 const (

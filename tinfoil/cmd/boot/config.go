@@ -178,6 +178,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
 	}
+	shimCfg.ExpectedGPUs = config.GPUs
 	config.ShimCfg = shimCfg
 
 	if shimCfg.UpstreamContainer == "" && len(config.Containers) > 0 {
@@ -251,6 +252,7 @@ func loadConfigFromRamdisk() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing shim config: %w", err)
 	}
+	shimCfg.ExpectedGPUs = config.GPUs
 	config.ShimCfg = shimCfg
 
 	if err := validateNetwork(&config); err != nil {

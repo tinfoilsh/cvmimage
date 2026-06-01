@@ -6,9 +6,10 @@ const (
 	PrivateDir = RamdiskDir + "/private"
 
 	// Public — mounted read-only into containers as /tinfoil.
-	ConfigPath      = PublicDir + "/config.yml"
-	AttestationPath = PublicDir + "/attestation.json"
-	MPKDir          = PublicDir + "/mpk"
+	ConfigPath          = PublicDir + "/config.yml"
+	AttestationPath     = PublicDir + "/attestation.json"
+	ContainerStatusPath = PublicDir + "/container-status.json"
+	MPKDir              = PublicDir + "/mpk"
 
 	// Private — only accessible to boot, egress, and shim processes (mode 0700).
 	// Holds CVM-level secrets and material that must never reach a container.

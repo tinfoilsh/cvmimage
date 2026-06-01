@@ -106,9 +106,8 @@ func bootStagesHandler() http.Handler {
 
 const artifactPollInterval = 1 * time.Second
 
-// upgradeWhenReady polls for boot artifacts on the ramdisk, waits for all
-// boot stages to complete, then builds the full shim handler and swaps it in.
-// On failure the shim stays in boot-stages-only mode.
+// upgradeWhenReady advances the public handler through three explicit phases:
+// boot stages only, observability only, and finally workload proxying.
 func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) {
 	start := time.Now()
 
@@ -150,7 +149,28 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 
-		// Wait for all boot stages (except shim) to resolve
+		// Build identity body for fresh attestation (binds TLS key + HPKE key to hardware)
+		realCertParsed := cert.Load()
+		tlsPub, ok := realCertParsed.PrivateKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("TLS key is not ECDSA")
+		}
+		identityBody := tinfoilattestation.BodyV2{
+			TLSKeyFP: tlsutil.KeyFPBytes(&tlsPub.PublicKey),
+		}
+		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
+
+		expectedGPUs := config.ExpectedGPUs
+		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
+
+		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig)
+		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
+
+		log.Println("Shim observability ready")
+
+		// Wait for all boot stages (except shim) to resolve before proxying
+		// workload traffic. Well-known observability endpoints stay live while
+		// containers load, restart, or fail.
 		waitUntil(func() bool {
 			state, err := boot.Load()
 			if err != nil {
@@ -164,12 +184,9 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return true
 		})
 
-		// Abort if any boot stage failed
 		if state, err := boot.Load(); err == nil && state.HasFailed() {
-			return fmt.Errorf("boot stage failed, not upgrading shim")
+			return fmt.Errorf("boot stage failed, not enabling proxy")
 		}
-
-		start = time.Now()
 
 		// API key validator
 		var validator key.Validator
@@ -196,25 +213,11 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
 		}
 
-		// Build identity body for fresh attestation (binds TLS key + HPKE key to hardware)
-		realCertParsed := cert.Load()
-		tlsPub, ok := realCertParsed.PrivateKey.(*ecdsa.PrivateKey)
-		if !ok {
-			return fmt.Errorf("TLS key is not ECDSA")
-		}
-		identityBody := tinfoilattestation.BodyV2{
-			TLSKeyFP: tlsutil.KeyFPBytes(&tlsPub.PublicKey),
-		}
-		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
-
-		gpuCount := tinfoilattestation.DetectGPUCount()
-		log.Printf("Detected %d GPU(s) for attestation", gpuCount)
-
 		upstreamHost := resolveUpstreamHost(config.UpstreamContainer)
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, gpuCount, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr)
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

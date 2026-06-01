@@ -35,6 +35,11 @@ var (
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
 )
 
+const (
+	shimReadHeaderTimeout = 10 * time.Second
+	shimIdleTimeout       = 2 * time.Minute
+)
+
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
@@ -60,7 +65,9 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr: fmt.Sprintf(":%d", boot.ShimListenPort),
+		Addr:              fmt.Sprintf(":%d", boot.ShimListenPort),
+		ReadHeaderTimeout: shimReadHeaderTimeout,
+		IdleTimeout:       shimIdleTimeout,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if h, ok := handler.Load().(http.Handler); ok {
 				h.ServeHTTP(w, r)

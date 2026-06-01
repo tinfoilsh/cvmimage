@@ -11,10 +11,21 @@ import (
 	"tinfoil/internal/containernet"
 )
 
-// Private destination ranges blocked even on `egress: open` networks.
+// Non-public destination ranges blocked even on `egress: open` and
+// `egress: allowlist` networks. This keeps broad/public egress from reaching
+// host/provider/internal address space while preserving same-bridge IPC, which
+// is accepted before these routed-egress rules.
+//
+// References:
+//   - RFC 1918: private-use networks.
+//   - RFC 3927: IPv4 link-local.
+//   - RFC 5737: documentation/test networks.
+//   - RFC 6598: shared address space for carrier-grade NAT.
+//   - RFC 6890 / IANA IPv4 Special-Purpose Address Registry: loopback,
+//     "this network", benchmarking, multicast, reserved, and broadcast space.
 const (
-	privateIPv4Ranges = "{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8 }"
-	privateIPv6Ranges = "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
+	nonPublicIPv4Ranges = "{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4, 255.255.255.255/32 }"
+	nonPublicIPv6Ranges = "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
 )
 
 // setupContainerNetworkFirewall installs one bridge's worth of nftables
@@ -81,16 +92,16 @@ func writeBridgeRules(script *strings.Builder, bridge string, spec *NetworkSpec)
 	switch spec.Egress {
 	case "open":
 		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip daddr != %s accept\n",
-			bridge, privateIPv4Ranges)
+			bridge, nonPublicIPv4Ranges)
 		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip6 daddr != %s accept\n",
-			bridge, privateIPv6Ranges)
+			bridge, nonPublicIPv6Ranges)
 	case "allowlist":
 		setName := containernet.AllowSetPrefix + bridge
 		fmt.Fprintf(script, "add set inet tinfoil %s { type ipv4_addr; }\n", setName)
 		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip daddr %s drop\n",
-			bridge, privateIPv4Ranges)
+			bridge, nonPublicIPv4Ranges)
 		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip6 daddr %s drop\n",
-			bridge, privateIPv6Ranges)
+			bridge, nonPublicIPv6Ranges)
 		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip daddr @%s accept\n",
 			bridge, setName)
 	}

@@ -115,7 +115,7 @@ func (s *signingKeys) lookup(kid string) (jose.JSONWebKey, bool) {
 // fetch attempts.
 func (s *signingKeys) refreshIfStale() {
 	s.mu.Lock()
-	if time.Since(s.lastRefresh) < minRefreshInterval || time.Since(s.lastAttempt) < minRefreshInterval {
+	if time.Since(s.lastAttempt) < minRefreshInterval {
 		s.mu.Unlock()
 		return
 	}
@@ -147,6 +147,11 @@ type Validator struct {
 	issuer   string
 	audience string
 	scope    string
+}
+
+type accessTokenClaims struct {
+	Scope    string `json:"scope"`
+	ClientID string `json:"client_id"`
 }
 
 // NewValidator builds a Validator over a best-effort JWKS cache and starts
@@ -193,10 +198,11 @@ func (v *Validator) Validate(req key.Request) error {
 	}
 
 	var claims josejwt.Claims
-	var ext struct {
-		Scope string `json:"scope"`
-	}
+	var ext accessTokenClaims
 	if err := token.Claims(signingKey, &claims, &ext); err != nil {
+		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+	}
+	if claims.Subject == "" || claims.Expiry == nil || claims.IssuedAt == nil || claims.ID == "" || ext.ClientID == "" {
 		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 

@@ -34,7 +34,7 @@ func mintToken(t *testing.T, priv ed25519.PrivateKey, kid, typ string, claims jo
 	}
 	token, err := josejwt.Signed(signer).
 		Claims(claims).
-		Claims(map[string]interface{}{"scope": scope}).
+		Claims(map[string]interface{}{"scope": scope, "client_id": "tinfoil-chat"}).
 		Serialize()
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
@@ -130,6 +130,18 @@ func TestValidateRejectsExpired(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now().Add(-time.Hour)), RequiredScope)
+	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+}
+
+func TestValidateRejectsMissingExpiration(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	srv := jwksServer(t, pub, testKID)
+	defer srv.Close()
+	v := newTestValidator(t, srv.URL)
+
+	claims := validClaims(time.Now())
+	claims.Expiry = nil
+	token := mintToken(t, priv, testKID, "at+jwt", claims, RequiredScope)
 	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
 }
 
@@ -234,6 +246,40 @@ func TestRefreshIfStaleThrottlesFailedAttempts(t *testing.T) {
 
 	if got := atomic.LoadInt32(&fetches); got != 2 {
 		t.Fatalf("expected 1 boot + 1 throttled on-demand fetch, got %d", got)
+	}
+}
+
+func TestValidateRefreshesUnknownKidAfterRecentSuccess(t *testing.T) {
+	firstPub, _, _ := ed25519.GenerateKey(nil)
+	secondPub, secondPriv, _ := ed25519.GenerateKey(nil)
+
+	var useSecond atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pub := firstPub
+		kid := testKID
+		if useSecond.Load() {
+			pub = secondPub
+			kid = "test-key-2"
+		}
+		set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+			Key:       pub,
+			KeyID:     kid,
+			Algorithm: string(jose.EdDSA),
+			Use:       "sig",
+		}}}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(set); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	v := newTestValidator(t, srv.URL)
+	useSecond.Store(true)
+
+	token := mintToken(t, secondPriv, "test-key-2", "at+jwt", validClaims(time.Now()), RequiredScope)
+	if err := v.Validate(key.Request{APIKey: token}); err != nil {
+		t.Fatalf("expected unknown kid to refresh immediately, got %v", err)
 	}
 }
 

@@ -87,6 +87,10 @@ func expectStatus(t *testing.T, err error, want int) {
 	}
 }
 
+func chatRequest(token string) key.Request {
+	return key.Request{APIKey: token, Path: chatCompletionsPath}
+}
+
 func TestValidateAcceptsValidToken(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	srv := jwksServer(t, pub, testKID)
@@ -94,7 +98,7 @@ func TestValidateAcceptsValidToken(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := v.Validate(key.Request{APIKey: token}); err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected valid token, got %v", err)
 	}
 }
@@ -111,6 +115,18 @@ func TestValidateFallsThroughForOpaqueKey(t *testing.T) {
 	}
 }
 
+func TestValidateFallsThroughForDottedOpaqueKey(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	srv := jwksServer(t, pub, testKID)
+	defer srv.Close()
+	v := newTestValidator(t, srv.URL)
+
+	err := v.Validate(key.Request{APIKey: "opaque.with.dots"})
+	if !errors.Is(err, key.ErrUnsupportedToken) {
+		t.Fatalf("expected ErrUnsupportedToken, got %v", err)
+	}
+}
+
 func TestValidateRejectsWrongAudience(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	srv := jwksServer(t, pub, testKID)
@@ -120,7 +136,7 @@ func TestValidateRejectsWrongAudience(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Audience = josejwt.Audience{"https://example.com"}
 	token := mintToken(t, priv, testKID, "at+jwt", claims, RequiredScope)
-	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateRejectsExpired(t *testing.T) {
@@ -130,7 +146,7 @@ func TestValidateRejectsExpired(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now().Add(-time.Hour)), RequiredScope)
-	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateRejectsMissingExpiration(t *testing.T) {
@@ -142,7 +158,7 @@ func TestValidateRejectsMissingExpiration(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Expiry = nil
 	token := mintToken(t, priv, testKID, "at+jwt", claims, RequiredScope)
-	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateRejectsMissingScope(t *testing.T) {
@@ -152,7 +168,7 @@ func TestValidateRejectsMissingScope(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), "models:read")
-	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusForbidden)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusForbidden)
 }
 
 func TestValidateRejectsWrongIssuer(t *testing.T) {
@@ -164,17 +180,20 @@ func TestValidateRejectsWrongIssuer(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Issuer = "https://evil.example.com"
 	token := mintToken(t, priv, testKID, "at+jwt", claims, RequiredScope)
-	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
-func TestValidateRejectsWrongType(t *testing.T) {
+func TestValidateFallsThroughForWrongType(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	srv := jwksServer(t, pub, testKID)
 	defer srv.Close()
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "JWT", validClaims(time.Now()), RequiredScope)
-	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+	err := v.Validate(chatRequest(token))
+	if !errors.Is(err, key.ErrUnsupportedToken) {
+		t.Fatalf("expected ErrUnsupportedToken, got %v", err)
+	}
 }
 
 func TestValidateRejectsForeignSignature(t *testing.T) {
@@ -187,7 +206,7 @@ func TestValidateRejectsForeignSignature(t *testing.T) {
 	// verification against the published key must fail.
 	_, foreignPriv, _ := ed25519.GenerateKey(nil)
 	token := mintToken(t, foreignPriv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateAcceptsApplicationPrefixType(t *testing.T) {
@@ -198,12 +217,22 @@ func TestValidateAcceptsApplicationPrefixType(t *testing.T) {
 
 	// RFC 9068 / RFC 7515 permit the media type with an "application/" prefix.
 	token := mintToken(t, priv, testKID, "application/at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := v.Validate(key.Request{APIKey: token}); err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected application/at+jwt to be accepted, got %v", err)
 	}
 }
 
-func TestRefreshIfStaleThrottlesFailedAttempts(t *testing.T) {
+func TestValidateRejectsChatTokenOnNonChatPath(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	srv := jwksServer(t, pub, testKID)
+	defer srv.Close()
+	v := newTestValidator(t, srv.URL)
+
+	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
+	expectStatus(t, v.Validate(key.Request{APIKey: token, Path: "/v1/embeddings"}), http.StatusForbidden)
+}
+
+func TestRefreshIfAllowedThrottlesFailedAttempts(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(nil)
 	set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
 		Key:       pub,
@@ -232,16 +261,15 @@ func TestRefreshIfStaleThrottlesFailedAttempts(t *testing.T) {
 	s := newSigningKeys(srv.URL) // successful boot fetch (#1)
 	failing.Store(true)
 
-	// Make the cache look stale so on-demand refresh is eligible to run.
+	// Make on-demand refresh eligible to run.
 	s.mu.Lock()
-	s.lastRefresh = time.Now().Add(-2 * minRefreshInterval)
 	s.lastAttempt = time.Now().Add(-2 * minRefreshInterval)
 	s.mu.Unlock()
 
 	// A burst of unknown-kid lookups during an outage must trigger at most one
 	// on-demand fetch within the throttle window, not one per call.
 	for i := 0; i < 5; i++ {
-		s.refreshIfStale()
+		s.refreshIfAllowed()
 	}
 
 	if got := atomic.LoadInt32(&fetches); got != 2 {
@@ -278,7 +306,7 @@ func TestValidateRefreshesUnknownKidAfterRecentSuccess(t *testing.T) {
 	useSecond.Store(true)
 
 	token := mintToken(t, secondPriv, "test-key-2", "at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := v.Validate(key.Request{APIKey: token}); err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected unknown kid to refresh immediately, got %v", err)
 	}
 }
@@ -312,7 +340,7 @@ func TestNewValidatorRecoversWhenJWKSStartsUnavailable(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := v.Validate(key.Request{APIKey: token}); err == nil {
+	if err := v.Validate(chatRequest(token)); err == nil {
 		t.Fatal("expected rejection while no signing keys are cached")
 	}
 
@@ -320,11 +348,10 @@ func TestNewValidatorRecoversWhenJWKSStartsUnavailable(t *testing.T) {
 	// refresh and the same token validates without a restart.
 	serving.Store(true)
 	v.keys.mu.Lock()
-	v.keys.lastRefresh = time.Now().Add(-2 * minRefreshInterval)
 	v.keys.lastAttempt = time.Now().Add(-2 * minRefreshInterval)
 	v.keys.mu.Unlock()
 
-	if err := v.Validate(key.Request{APIKey: token}); err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected token to validate after JWKS became available, got %v", err)
 	}
 }

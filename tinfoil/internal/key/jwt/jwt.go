@@ -6,6 +6,7 @@ package jwt
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -34,6 +35,10 @@ const (
 	// access token from other JWTs signed by the same key.
 	accessTokenType = "at+jwt"
 
+	// chatCompletionsPath is the only OpenAI-compatible path authorized by the
+	// inference:chat scope.
+	chatCompletionsPath = "/v1/chat/completions"
+
 	// refreshInterval is how often the cached JWKS is refreshed to follow
 	// signing-key rotation.
 	refreshInterval = 15 * time.Minute
@@ -53,7 +58,6 @@ type signingKeys struct {
 
 	mu          sync.RWMutex
 	set         jose.JSONWebKeySet
-	lastRefresh time.Time
 	lastAttempt time.Time
 }
 
@@ -92,7 +96,6 @@ func (s *signingKeys) refresh(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	s.set = set
-	s.lastRefresh = time.Now()
 	s.mu.Unlock()
 	return nil
 }
@@ -108,12 +111,12 @@ func (s *signingKeys) lookup(kid string) (jose.JSONWebKey, bool) {
 	return matches[0], true
 }
 
-// refreshIfStale triggers an on-demand JWKS refresh when a token carries an
+// refreshIfAllowed triggers an on-demand JWKS refresh when a token carries an
 // unknown key id, so a rotated key can be picked up without a restart. It is
 // throttled on the last attempt time rather than the last success, so that a
 // JWKS outage combined with unknown-kid traffic cannot fan out into unbounded
 // fetch attempts.
-func (s *signingKeys) refreshIfStale() {
+func (s *signingKeys) refreshIfAllowed() {
 	s.mu.Lock()
 	if time.Since(s.lastAttempt) < minRefreshInterval {
 		s.mu.Unlock()
@@ -170,7 +173,7 @@ func NewValidator(jwksURL, issuer, audience, requiredScope string) *Validator {
 }
 
 func (v *Validator) Validate(req key.Request) error {
-	if !looksLikeJWT(req.APIKey) {
+	if !isAccessTokenJWT(req.APIKey) {
 		return key.ErrUnsupportedToken
 	}
 
@@ -183,14 +186,13 @@ func (v *Validator) Validate(req key.Request) error {
 	// permits the equivalent media type carrying an "application/" prefix, so
 	// accept both forms case-insensitively.
 	typ, _ := token.Headers[0].ExtraHeaders[jose.HeaderType].(string)
-	typ = strings.TrimPrefix(strings.ToLower(typ), "application/")
-	if typ != accessTokenType {
+	if normalizeType(typ) != accessTokenType {
 		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 
 	signingKey, ok := v.keys.lookup(token.Headers[0].KeyID)
 	if !ok {
-		v.keys.refreshIfStale()
+		v.keys.refreshIfAllowed()
 		signingKey, ok = v.keys.lookup(token.Headers[0].KeyID)
 		if !ok {
 			return &key.ValidationError{StatusCode: http.StatusUnauthorized}
@@ -217,16 +219,16 @@ func (v *Validator) Validate(req key.Request) error {
 	if !scopeContains(ext.Scope, v.scope) {
 		return &key.ValidationError{StatusCode: http.StatusForbidden}
 	}
+	if req.Path != chatCompletionsPath {
+		return &key.ValidationError{StatusCode: http.StatusForbidden}
+	}
 
 	return nil
 }
 
-// looksLikeJWT reports whether s has the three-segment compact JWS shape, so
-// opaque API keys (which contain no dots) are routed to the online validator.
-func looksLikeJWT(s string) bool {
-	if s == "" {
-		return false
-	}
+// isAccessTokenJWT reports whether s is explicitly typed as an access-token
+// JWT. Opaque credentials that happen to contain dots stay on the online path.
+func isAccessTokenJWT(s string) bool {
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {
 		return false
@@ -236,7 +238,21 @@ func looksLikeJWT(s string) bool {
 			return false
 		}
 	}
-	return true
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+	var header struct {
+		Type string `json:"typ"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return false
+	}
+	return normalizeType(header.Type) == accessTokenType
+}
+
+func normalizeType(typ string) string {
+	return strings.TrimPrefix(strings.ToLower(typ), "application/")
 }
 
 // scopeContains reports whether the space-delimited scope string includes want.

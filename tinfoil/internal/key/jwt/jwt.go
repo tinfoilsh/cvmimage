@@ -55,12 +55,17 @@ type signingKeys struct {
 	lastAttempt time.Time
 }
 
-func newSigningKeys(jwksURL string) (*signingKeys, error) {
+// newSigningKeys builds a JWKS cache and makes a best-effort initial load so
+// the first request need not pay for an inline fetch. Failure is not fatal: the
+// cache starts empty and the on-demand and background refresh paths populate it
+// once the control plane is reachable, so a control-plane blip at boot never
+// disables local verification.
+func newSigningKeys(jwksURL string) *signingKeys {
 	s := &signingKeys{url: jwksURL, client: &http.Client{Timeout: fetchTimeout}}
 	if err := s.refresh(context.Background()); err != nil {
-		return nil, err
+		log.Printf("Warning: initial JWKS fetch failed; local verification will recover once the control plane is reachable: %v", err)
 	}
-	return s, nil
+	return s
 }
 
 func (s *signingKeys) refresh(ctx context.Context) error {
@@ -142,21 +147,19 @@ type Validator struct {
 	scope    string
 }
 
-// NewValidator fetches the issuer's JWKS, starts periodic refresh, and returns
-// a Validator. It returns an error if the initial JWKS fetch fails so the
-// caller can fall back to online-only validation.
-func NewValidator(jwksURL, issuer, audience, requiredScope string) (*Validator, error) {
-	keys, err := newSigningKeys(jwksURL)
-	if err != nil {
-		return nil, err
-	}
+// NewValidator builds a Validator over a best-effort JWKS cache and starts
+// periodic refresh. It does not fail when the control plane is briefly
+// unreachable at boot: local verification recovers automatically once the
+// JWKS can be fetched (see newSigningKeys).
+func NewValidator(jwksURL, issuer, audience, requiredScope string) *Validator {
+	keys := newSigningKeys(jwksURL)
 	keys.startBackgroundRefresh()
 	return &Validator{
 		keys:     keys,
 		issuer:   strings.TrimRight(issuer, "/"),
 		audience: audience,
 		scope:    requiredScope,
-	}, nil
+	}
 }
 
 func (v *Validator) Validate(req key.Request) error {

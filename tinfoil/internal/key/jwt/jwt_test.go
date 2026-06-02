@@ -73,11 +73,7 @@ func validClaims(now time.Time) josejwt.Claims {
 
 func newTestValidator(t *testing.T, jwksURL string) *Validator {
 	t.Helper()
-	v, err := NewValidator(jwksURL, testIssuer, AccessTokenAudience, RequiredScope)
-	if err != nil {
-		t.Fatalf("new validator: %v", err)
-	}
-	return v
+	return NewValidator(jwksURL, testIssuer, AccessTokenAudience, RequiredScope)
 }
 
 func expectStatus(t *testing.T, err error, want int) {
@@ -221,10 +217,7 @@ func TestRefreshIfStaleThrottlesFailedAttempts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s, err := newSigningKeys(srv.URL) // successful boot fetch (#1)
-	if err != nil {
-		t.Fatalf("boot: %v", err)
-	}
+	s := newSigningKeys(srv.URL) // successful boot fetch (#1)
 	failing.Store(true)
 
 	// Make the cache look stale so on-demand refresh is eligible to run.
@@ -241,5 +234,51 @@ func TestRefreshIfStaleThrottlesFailedAttempts(t *testing.T) {
 
 	if got := atomic.LoadInt32(&fetches); got != 2 {
 		t.Fatalf("expected 1 boot + 1 throttled on-demand fetch, got %d", got)
+	}
+}
+
+func TestNewValidatorRecoversWhenJWKSStartsUnavailable(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+		Key:       pub,
+		KeyID:     testKID,
+		Algorithm: string(jose.EdDSA),
+		Use:       "sig",
+	}}}
+	body, err := json.Marshal(set)
+	if err != nil {
+		t.Fatalf("marshal jwks: %v", err)
+	}
+
+	var serving atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !serving.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	// Boot while the JWKS endpoint is unavailable: the validator must come up
+	// with an empty key set instead of failing.
+	v := newTestValidator(t, srv.URL)
+
+	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
+	if err := v.Validate(key.Request{APIKey: token}); err == nil {
+		t.Fatal("expected rejection while no signing keys are cached")
+	}
+
+	// Once the JWKS is reachable, the unknown-kid path triggers an on-demand
+	// refresh and the same token validates without a restart.
+	serving.Store(true)
+	v.keys.mu.Lock()
+	v.keys.lastRefresh = time.Now().Add(-2 * minRefreshInterval)
+	v.keys.lastAttempt = time.Now().Add(-2 * minRefreshInterval)
+	v.keys.mu.Unlock()
+
+	if err := v.Validate(key.Request{APIKey: token}); err != nil {
+		t.Fatalf("expected token to validate after JWKS became available, got %v", err)
 	}
 }

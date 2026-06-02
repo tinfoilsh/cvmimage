@@ -10,6 +10,7 @@ require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-units v0.5.0
 	github.com/go-acme/lego/v4 v4.30.1
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/go-sev-guest v0.14.1
 	github.com/google/go-tdx-guest v0.3.1
 	github.com/jarcoal/httpmock v1.3.1
@@ -35,7 +36,6 @@ require (
 	github.com/docker/docker-credential-helpers v0.9.5 // indirect
 	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-configfs-tsm v0.2.2 // indirect

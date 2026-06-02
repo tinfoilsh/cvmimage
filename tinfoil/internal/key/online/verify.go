@@ -28,14 +28,6 @@ func NewValidator(server string) (*Validator, error) {
 	}, nil
 }
 
-type ValidationError struct {
-	StatusCode int
-}
-
-func (e *ValidationError) Error() string {
-	return http.StatusText(e.StatusCode)
-}
-
 func (v *Validator) Validate(req key.Request) error {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -52,7 +44,7 @@ func (v *Validator) Validate(req key.Request) error {
 		return nil
 	}
 
-	return &ValidationError{
+	return &key.ValidationError{
 		StatusCode: resp.StatusCode,
 	}
 }

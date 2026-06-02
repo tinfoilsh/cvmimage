@@ -19,7 +19,6 @@ import (
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
-	"tinfoil/internal/key/online"
 	"tinfoil/internal/metrics"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
@@ -112,7 +111,7 @@ func writeJSONError(w http.ResponseWriter, message string, errorType string, sta
 }
 
 func writeValidationFailure(w http.ResponseWriter, err error) {
-	var validationErr *online.ValidationError
+	var validationErr *key.ValidationError
 	if !errors.As(err, &validationErr) {
 		writeJSONError(w, errMsgServerError, errTypeServer, http.StatusInternalServerError)
 		return

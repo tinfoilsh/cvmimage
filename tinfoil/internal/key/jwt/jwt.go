@@ -21,9 +21,11 @@ import (
 )
 
 const (
-	// AccessTokenAudience must match the control plane's OAuthAccessTokenAudience
-	// (the aud claim stamped on inference access tokens).
-	AccessTokenAudience = "https://inference.tinfoil.sh"
+	// AccessTokenAudience is the logical, endpoint-agnostic identifier for the
+	// Tinfoil inference API in the aud claim. Every inference endpoint shares
+	// it because the control plane mints a token without knowing which endpoint
+	// will serve it. Must match the control plane's OAuthAccessTokenAudience.
+	AccessTokenAudience = "tinfoil-inference"
 
 	// RequiredScope is the OAuth scope a token must carry to call chat inference.
 	RequiredScope = "inference:chat"

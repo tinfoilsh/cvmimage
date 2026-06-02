@@ -52,6 +52,7 @@ type signingKeys struct {
 	mu          sync.RWMutex
 	set         jose.JSONWebKeySet
 	lastRefresh time.Time
+	lastAttempt time.Time
 }
 
 func newSigningKeys(jwksURL string) (*signingKeys, error) {
@@ -100,16 +101,20 @@ func (s *signingKeys) lookup(kid string) (jose.JSONWebKey, bool) {
 	return matches[0], true
 }
 
-// refreshIfStale refreshes the JWKS when it has not been refreshed within
-// minRefreshInterval, so a rotated key can be picked up on demand without
-// letting unknown-kid tokens trigger unbounded fetches.
+// refreshIfStale triggers an on-demand JWKS refresh when a token carries an
+// unknown key id, so a rotated key can be picked up without a restart. It is
+// throttled on the last attempt time rather than the last success, so that a
+// JWKS outage combined with unknown-kid traffic cannot fan out into unbounded
+// fetch attempts.
 func (s *signingKeys) refreshIfStale() {
-	s.mu.RLock()
-	fresh := time.Since(s.lastRefresh) < minRefreshInterval
-	s.mu.RUnlock()
-	if fresh {
+	s.mu.Lock()
+	if time.Since(s.lastRefresh) < minRefreshInterval || time.Since(s.lastAttempt) < minRefreshInterval {
+		s.mu.Unlock()
 		return
 	}
+	s.lastAttempt = time.Now()
+	s.mu.Unlock()
+
 	if err := s.refresh(context.Background()); err != nil {
 		log.Printf("Warning: on-demand JWKS refresh failed: %v", err)
 	}
@@ -164,7 +169,12 @@ func (v *Validator) Validate(req key.Request) error {
 		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 
-	if typ, _ := token.Headers[0].ExtraHeaders[jose.HeaderType].(string); !strings.EqualFold(typ, accessTokenType) {
+	// RFC 9068 registers the access-token type as "at+jwt"; RFC 7515 also
+	// permits the equivalent media type carrying an "application/" prefix, so
+	// accept both forms case-insensitively.
+	typ, _ := token.Headers[0].ExtraHeaders[jose.HeaderType].(string)
+	typ = strings.TrimPrefix(strings.ToLower(typ), "application/")
+	if typ != accessTokenType {
 		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 

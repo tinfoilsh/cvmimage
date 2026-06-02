@@ -70,7 +70,7 @@ func TestValidationErrorCarriesOnlyStatus(t *testing.T) {
 
 	err = v.Validate(key.Request{APIKey: "bad-key"})
 	if assert.NotNil(t, err) {
-		validationErr, ok := err.(*ValidationError)
+		validationErr, ok := err.(*key.ValidationError)
 		if assert.True(t, ok) {
 			assert.Equal(t, http.StatusUnauthorized, validationErr.StatusCode)
 			assert.NotContains(t, validationErr.Error(), "internal validator details")

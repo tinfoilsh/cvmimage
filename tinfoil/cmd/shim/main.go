@@ -26,6 +26,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
+	localjwt "tinfoil/internal/key/jwt"
 	"tinfoil/internal/key/online"
 	tlsutil "tinfoil/internal/tls"
 )
@@ -197,9 +198,23 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			}
 
 			if config.Authenticated {
-				validator, err = online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate-key").String())
+				onlineValidator, err := online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate-key").String())
 				if err != nil {
 					return fmt.Errorf("initializing API key verifier: %w", err)
+				}
+
+				// Verify OAuth JWT access tokens locally against the control
+				// plane's JWKS so they need no per-request round trip; opaque
+				// keys still fall through to the online validator. If the JWKS
+				// cannot be fetched at boot, fall back to online-only.
+				jwksURL := controlPlaneURL.JoinPath(".well-known", "jwks.json").String()
+				jwtValidator, err := localjwt.NewValidator(jwksURL, config.ControlPlane, localjwt.AccessTokenAudience, localjwt.RequiredScope)
+				if err != nil {
+					log.Printf("Warning: local JWT validation unavailable, using online-only: %v", err)
+					validator = onlineValidator
+				} else {
+					log.Println("Local JWT validation enabled (OAuth access tokens verified in-enclave)")
+					validator = key.NewChain(jwtValidator, onlineValidator)
 				}
 			} else {
 				log.Println("Warning: API key verification disabled (unauthenticated endpoint)")

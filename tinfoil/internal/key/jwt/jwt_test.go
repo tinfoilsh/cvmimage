@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -179,4 +180,66 @@ func TestValidateRejectsForeignSignature(t *testing.T) {
 	_, foreignPriv, _ := ed25519.GenerateKey(nil)
 	token := mintToken(t, foreignPriv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
 	expectStatus(t, v.Validate(key.Request{APIKey: token}), http.StatusUnauthorized)
+}
+
+func TestValidateAcceptsApplicationPrefixType(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	srv := jwksServer(t, pub, testKID)
+	defer srv.Close()
+	v := newTestValidator(t, srv.URL)
+
+	// RFC 9068 / RFC 7515 permit the media type with an "application/" prefix.
+	token := mintToken(t, priv, testKID, "application/at+jwt", validClaims(time.Now()), RequiredScope)
+	if err := v.Validate(key.Request{APIKey: token}); err != nil {
+		t.Fatalf("expected application/at+jwt to be accepted, got %v", err)
+	}
+}
+
+func TestRefreshIfStaleThrottlesFailedAttempts(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+		Key:       pub,
+		KeyID:     testKID,
+		Algorithm: string(jose.EdDSA),
+		Use:       "sig",
+	}}}
+	body, err := json.Marshal(set)
+	if err != nil {
+		t.Fatalf("marshal jwks: %v", err)
+	}
+
+	var fetches int32
+	var failing atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&fetches, 1)
+		if failing.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	s, err := newSigningKeys(srv.URL) // successful boot fetch (#1)
+	if err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	failing.Store(true)
+
+	// Make the cache look stale so on-demand refresh is eligible to run.
+	s.mu.Lock()
+	s.lastRefresh = time.Now().Add(-2 * minRefreshInterval)
+	s.lastAttempt = time.Now().Add(-2 * minRefreshInterval)
+	s.mu.Unlock()
+
+	// A burst of unknown-kid lookups during an outage must trigger at most one
+	// on-demand fetch within the throttle window, not one per call.
+	for i := 0; i < 5; i++ {
+		s.refreshIfStale()
+	}
+
+	if got := atomic.LoadInt32(&fetches); got != 2 {
+		t.Fatalf("expected 1 boot + 1 throttled on-demand fetch, got %d", got)
+	}
 }

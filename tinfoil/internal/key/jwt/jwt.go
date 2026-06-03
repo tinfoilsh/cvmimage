@@ -171,14 +171,14 @@ func NewValidator(jwksURL, issuer, audience, requiredScope string) *Validator {
 	}
 }
 
-func (v *Validator) Validate(req key.Request) error {
+func (v *Validator) Validate(req key.Request) (key.Result, error) {
 	if !isAccessTokenJWT(req.APIKey) {
-		return key.ErrUnsupportedToken
+		return key.Result{}, key.ErrUnsupportedToken
 	}
 
 	token, err := josejwt.ParseSigned(req.APIKey, []jose.SignatureAlgorithm{jose.EdDSA})
 	if err != nil || len(token.Headers) == 0 {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return key.Result{}, &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 
 	// RFC 9068 registers the access-token type as "at+jwt"; RFC 7515 also
@@ -186,7 +186,7 @@ func (v *Validator) Validate(req key.Request) error {
 	// accept both forms case-insensitively.
 	typ, _ := token.Headers[0].ExtraHeaders[jose.HeaderType].(string)
 	if normalizeType(typ) != accessTokenType {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return key.Result{}, &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 
 	signingKey, ok := v.keys.lookup(token.Headers[0].KeyID)
@@ -194,17 +194,17 @@ func (v *Validator) Validate(req key.Request) error {
 		v.keys.refreshIfAllowed()
 		signingKey, ok = v.keys.lookup(token.Headers[0].KeyID)
 		if !ok {
-			return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+			return key.Result{}, &key.ValidationError{StatusCode: http.StatusUnauthorized}
 		}
 	}
 
 	var claims josejwt.Claims
 	var ext accessTokenClaims
 	if err := token.Claims(signingKey, &claims, &ext); err != nil {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return key.Result{}, &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 	if claims.Subject == "" || claims.Expiry == nil || claims.IssuedAt == nil || claims.ID == "" || ext.ClientID == "" {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return key.Result{}, &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 
 	if err := claims.Validate(josejwt.Expected{
@@ -212,14 +212,16 @@ func (v *Validator) Validate(req key.Request) error {
 		AnyAudience: josejwt.Audience{v.audience},
 		Time:        time.Now(),
 	}); err != nil {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return key.Result{}, &key.ValidationError{StatusCode: http.StatusUnauthorized}
 	}
 
 	if !scopeContains(ext.Scope, v.scope) {
-		return &key.ValidationError{StatusCode: http.StatusForbidden}
+		return key.Result{}, &key.ValidationError{StatusCode: http.StatusForbidden}
 	}
 
-	return nil
+	// The verified subject lets the shim forward a stable identity to the
+	// upstream so usage/rate limits attach to the user, not the rotating token.
+	return key.Result{Subject: claims.Subject}, nil
 }
 
 // isAccessTokenJWT reports whether s is explicitly typed as an access-token

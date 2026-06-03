@@ -7,15 +7,16 @@ import (
 )
 
 type stubValidator struct {
+	result Result
 	err    error
 	called *int
 }
 
-func (s stubValidator) Validate(Request) error {
+func (s stubValidator) Validate(Request) (Result, error) {
 	if s.called != nil {
 		*s.called++
 	}
-	return s.err
+	return s.result, s.err
 }
 
 func TestChainFallsThroughOnUnsupported(t *testing.T) {
@@ -24,7 +25,7 @@ func TestChainFallsThroughOnUnsupported(t *testing.T) {
 		stubValidator{err: ErrUnsupportedToken, called: &firstCalls},
 		stubValidator{err: nil, called: &secondCalls},
 	)
-	if err := chain.Validate(Request{APIKey: "x"}); err != nil {
+	if _, err := chain.Validate(Request{APIKey: "x"}); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 	if firstCalls != 1 || secondCalls != 1 {
@@ -38,7 +39,7 @@ func TestChainReturnsValidationErrorImmediately(t *testing.T) {
 		stubValidator{err: &ValidationError{StatusCode: http.StatusUnauthorized}},
 		stubValidator{err: nil, called: &secondCalls},
 	)
-	err := chain.Validate(Request{APIKey: "x"})
+	_, err := chain.Validate(Request{APIKey: "x"})
 	var ve *ValidationError
 	if !errors.As(err, &ve) || ve.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 ValidationError, got %v", err)
@@ -54,10 +55,27 @@ func TestChainShortCircuitsOnSuccess(t *testing.T) {
 		stubValidator{err: nil},
 		stubValidator{err: ErrUnsupportedToken, called: &secondCalls},
 	)
-	if err := chain.Validate(Request{APIKey: "x"}); err != nil {
+	if _, err := chain.Validate(Request{APIKey: "x"}); err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
 	if secondCalls != 0 {
 		t.Fatalf("second validator should not be consulted, calls=%d", secondCalls)
+	}
+}
+
+// TestChainPropagatesSubject verifies the Result from the validator that
+// handled the request (here the second, after the first falls through) is
+// returned to the caller, so the shim can forward the verified subject.
+func TestChainPropagatesSubject(t *testing.T) {
+	chain := NewChain(
+		stubValidator{err: ErrUnsupportedToken},
+		stubValidator{result: Result{Subject: "user_42"}, err: nil},
+	)
+	res, err := chain.Validate(Request{APIKey: "x"})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if res.Subject != "user_42" {
+		t.Fatalf("Subject = %q, want user_42", res.Subject)
 	}
 }

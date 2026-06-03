@@ -40,17 +40,19 @@ func TestVerifyOnline(t *testing.T) {
 	v, err := NewValidator("https://localhost:8080/validate")
 	assert.Nil(t, err)
 
-	assert.Nil(t, v.Validate(key.Request{
+	_, err = v.Validate(key.Request{
 		APIKey:        "good-key",
 		Domain:        "model.example.com",
 		RequestedHost: "realtime-model.model.example.com",
 		Path:          "/v1/chat/completions",
-	}))
+	})
+	assert.Nil(t, err)
 	assert.Equal(t, "model.example.com", lastReq.Domain)
 	assert.Equal(t, "realtime-model.model.example.com", lastReq.RequestedHost)
 	assert.Equal(t, "/v1/chat/completions", lastReq.Path)
 
-	assert.NotNil(t, v.Validate(key.Request{APIKey: "bad-key"}))
+	_, badErr := v.Validate(key.Request{APIKey: "bad-key"})
+	assert.NotNil(t, badErr)
 }
 
 func TestRejectHTTP(t *testing.T) {
@@ -68,7 +70,7 @@ func TestValidationErrorCarriesOnlyStatus(t *testing.T) {
 	v, err := NewValidator("https://localhost:8080/validate")
 	assert.Nil(t, err)
 
-	err = v.Validate(key.Request{APIKey: "bad-key"})
+	_, err = v.Validate(key.Request{APIKey: "bad-key"})
 	if assert.NotNil(t, err) {
 		validationErr, ok := err.(*key.ValidationError)
 		if assert.True(t, ok) {

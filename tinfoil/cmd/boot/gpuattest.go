@@ -60,7 +60,7 @@ func detectGPUCount() (int, error) {
 	return count, nil
 }
 
-// detectGPUArch returns "h100", "h200", "b200", or "" from the first GPU.
+// detectGPUArch returns "h100", "h200", "b200", "b300", or "" from the first GPU.
 func detectGPUArch() (string, error) {
 	const pciPath = "/sys/bus/pci/devices"
 	var arch string

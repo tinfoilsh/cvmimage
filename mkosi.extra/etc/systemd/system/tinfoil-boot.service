@@ -14,7 +14,6 @@ StandardOutput=journal+console
 StandardError=journal+console
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
-ProtectHome=yes
 LockPersonality=yes
 RestrictRealtime=yes
 SystemCallArchitectures=native

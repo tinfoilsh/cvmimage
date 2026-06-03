@@ -28,25 +28,23 @@ func NewValidator(server string) (*Validator, error) {
 	}, nil
 }
 
-func (v *Validator) Validate(req key.Request) (key.Result, error) {
+func (v *Validator) Validate(req key.Request) error {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return key.Result{}, fmt.Errorf("marshalling validation request: %w", err)
+		return fmt.Errorf("marshalling validation request: %w", err)
 	}
 
 	resp, err := v.client.Post(v.server, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return key.Result{}, fmt.Errorf("validation request failed: %w", err)
+		return fmt.Errorf("validation request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// The control plane knows the subject for opaque keys but does not return
-	// it here; the upstream attributes opaque-key usage by the key itself.
 	if resp.StatusCode == http.StatusOK {
-		return key.Result{}, nil
+		return nil
 	}
 
-	return key.Result{}, &key.ValidationError{
+	return &key.ValidationError{
 		StatusCode: resp.StatusCode,
 	}
 }

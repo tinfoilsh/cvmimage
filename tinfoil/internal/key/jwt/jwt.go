@@ -28,16 +28,15 @@ const (
 	// will serve it. Must match the control plane's OAuthAccessTokenAudience.
 	AccessTokenAudience = "tinfoil-inference"
 
-	// RequiredScope is the OAuth scope a token must carry to call chat inference.
-	RequiredScope = "inference:chat"
+	// RequiredScope is the OAuth scope a token must carry to call the inference
+	// API. It is intentionally broad: it authorizes every inference endpoint
+	// rather than a single route, so access can be narrowed later by minting
+	// more specific scopes without re-issuing existing tokens.
+	RequiredScope = "inference:api"
 
 	// accessTokenType is the RFC 9068 "typ" header that distinguishes an OAuth
 	// access token from other JWTs signed by the same key.
 	accessTokenType = "at+jwt"
-
-	// chatCompletionsPath is the only OpenAI-compatible path authorized by the
-	// inference:chat scope.
-	chatCompletionsPath = "/v1/chat/completions"
 
 	// refreshInterval is how often the cached JWKS is refreshed to follow
 	// signing-key rotation.
@@ -217,9 +216,6 @@ func (v *Validator) Validate(req key.Request) error {
 	}
 
 	if !scopeContains(ext.Scope, v.scope) {
-		return &key.ValidationError{StatusCode: http.StatusForbidden}
-	}
-	if req.Path != chatCompletionsPath {
 		return &key.ValidationError{StatusCode: http.StatusForbidden}
 	}
 

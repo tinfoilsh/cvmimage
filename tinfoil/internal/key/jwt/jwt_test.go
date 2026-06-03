@@ -88,7 +88,7 @@ func expectStatus(t *testing.T, err error, want int) {
 }
 
 func chatRequest(token string) key.Request {
-	return key.Request{APIKey: token, Path: chatCompletionsPath}
+	return key.Request{APIKey: token, Path: "/v1/chat/completions"}
 }
 
 func TestValidateAcceptsValidToken(t *testing.T) {
@@ -222,14 +222,18 @@ func TestValidateAcceptsApplicationPrefixType(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsChatTokenOnNonChatPath(t *testing.T) {
+func TestValidateAcceptsNonChatPath(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	srv := jwksServer(t, pub, testKID)
 	defer srv.Close()
 	v := newTestValidator(t, srv.URL)
 
+	// The inference:api scope authorizes every inference endpoint, not just
+	// chat completions, so a non-chat path must validate.
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	expectStatus(t, v.Validate(key.Request{APIKey: token, Path: "/v1/embeddings"}), http.StatusForbidden)
+	if err := v.Validate(key.Request{APIKey: token, Path: "/v1/embeddings"}); err != nil {
+		t.Fatalf("expected non-chat path to be accepted, got %v", err)
+	}
 }
 
 func TestRefreshIfAllowedThrottlesFailedAttempts(t *testing.T) {

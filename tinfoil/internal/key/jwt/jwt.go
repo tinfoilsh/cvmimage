@@ -22,11 +22,11 @@ import (
 )
 
 const (
-	// AccessTokenAudience is the logical, endpoint-agnostic identifier for the
-	// Tinfoil inference API in the aud claim. Every inference endpoint shares
-	// it because the control plane mints a token without knowing which endpoint
-	// will serve it. Must match the control plane's OAuthAccessTokenAudience.
-	AccessTokenAudience = "tinfoil-inference"
+	// AccessTokenAudience is the resource indicator (RFC 8707) for the Tinfoil
+	// inference API in the aud claim. Every inference endpoint shares it because
+	// the control plane mints a token without knowing which endpoint will serve
+	// it. Must match the control plane's OAuthAccessTokenAudience.
+	AccessTokenAudience = "https://inference.tinfoil.sh"
 
 	// RequiredScope is the OAuth scope a token must carry to call the inference
 	// API. It is intentionally broad: it authorizes every inference endpoint

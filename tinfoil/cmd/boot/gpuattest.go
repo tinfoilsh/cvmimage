@@ -22,6 +22,7 @@ const (
 	gpuDeviceIDH100 = "0x2331"
 	gpuDeviceIDH200 = "0x2335"
 	gpuDeviceIDB200 = "0x2901"
+	gpuDeviceIDB300 = "0x3182"
 )
 
 // forEachNVIDIAGPU iterates over PCI devices that are NVIDIA GPUs
@@ -75,6 +76,8 @@ func detectGPUArch() (string, error) {
 			arch = "h200"
 		case gpuDeviceIDB200:
 			arch = "b200"
+		case gpuDeviceIDB300:
+			arch = "b300"
 		default:
 			return true
 		}
@@ -235,9 +238,9 @@ func verifyGPUAttestation(expectedGPUs int) (*GPURawEvidence, error) {
 			return nil, fmt.Errorf("detecting GPU arch: %w", err)
 		}
 		switch arch {
-		case "b200":
-			// B200 MPT: NVSwitches are not exposed to the guest.
-			log.Printf("HGX B200 MPT: no in-guest NVSwitch evidence")
+		case "b200", "b300":
+			// Blackwell MPT: NVSwitches are not exposed to the guest.
+			log.Printf("HGX Blackwell MPT: no in-guest NVSwitch evidence")
 
 		case "h100", "h200", "":
 			if err := runNvattest("nvswitch"); err != nil {

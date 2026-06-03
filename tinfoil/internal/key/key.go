@@ -14,19 +14,8 @@ type Request struct {
 	Path          string `json:"path,omitempty"`
 }
 
-// Result is the non-secret outcome of a successful validation. It lets the shim
-// forward the authenticated principal to the upstream workload so the workload
-// can attribute usage and rate limits to a stable identity instead of the
-// (rotating) bearer credential.
-type Result struct {
-	// Subject is the authenticated principal — the JWT `sub` — when the
-	// credential is a locally-verified JWT access token. It is empty for opaque
-	// API keys, whose subject is known only to the control plane.
-	Subject string
-}
-
 type Validator interface {
-	Validate(req Request) (Result, error)
+	Validate(req Request) error
 }
 
 // ErrUnsupportedToken signals that a Validator cannot handle the presented
@@ -55,14 +44,13 @@ func NewChain(validators ...Validator) *Chain {
 	return &Chain{validators: validators}
 }
 
-func (c *Chain) Validate(req Request) (Result, error) {
-	var res Result
+func (c *Chain) Validate(req Request) error {
 	var err error
 	for _, v := range c.validators {
-		res, err = v.Validate(req)
+		err = v.Validate(req)
 		if !errors.Is(err, ErrUnsupportedToken) {
-			return res, err
+			return err
 		}
 	}
-	return res, err
+	return err
 }

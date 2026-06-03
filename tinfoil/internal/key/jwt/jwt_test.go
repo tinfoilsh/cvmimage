@@ -91,14 +91,6 @@ func chatRequest(token string) key.Request {
 	return key.Request{APIKey: token, Path: "/v1/chat/completions"}
 }
 
-// validateErr runs the validator and returns only the error, for the many
-// rejection cases that do not care about the Result. The accepted-token tests
-// call Validate directly to assert the surfaced subject.
-func validateErr(val *Validator, req key.Request) error {
-	_, err := val.Validate(req)
-	return err
-}
-
 func TestValidateAcceptsValidToken(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	srv := jwksServer(t, pub, testKID)
@@ -106,12 +98,8 @@ func TestValidateAcceptsValidToken(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	res, err := v.Validate(chatRequest(token))
-	if err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected valid token, got %v", err)
-	}
-	if res.Subject != "user_1" {
-		t.Fatalf("Subject = %q, want user_1", res.Subject)
 	}
 }
 
@@ -121,7 +109,7 @@ func TestValidateFallsThroughForOpaqueKey(t *testing.T) {
 	defer srv.Close()
 	v := newTestValidator(t, srv.URL)
 
-	err := validateErr(v, key.Request{APIKey: "chat_abcdef"})
+	err := v.Validate(key.Request{APIKey: "chat_abcdef"})
 	if !errors.Is(err, key.ErrUnsupportedToken) {
 		t.Fatalf("expected ErrUnsupportedToken, got %v", err)
 	}
@@ -133,7 +121,7 @@ func TestValidateFallsThroughForDottedOpaqueKey(t *testing.T) {
 	defer srv.Close()
 	v := newTestValidator(t, srv.URL)
 
-	err := validateErr(v, key.Request{APIKey: "opaque.with.dots"})
+	err := v.Validate(key.Request{APIKey: "opaque.with.dots"})
 	if !errors.Is(err, key.ErrUnsupportedToken) {
 		t.Fatalf("expected ErrUnsupportedToken, got %v", err)
 	}
@@ -148,7 +136,7 @@ func TestValidateRejectsWrongAudience(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Audience = josejwt.Audience{"https://example.com"}
 	token := mintToken(t, priv, testKID, "at+jwt", claims, RequiredScope)
-	expectStatus(t, validateErr(v, chatRequest(token)), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateRejectsExpired(t *testing.T) {
@@ -158,7 +146,7 @@ func TestValidateRejectsExpired(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now().Add(-time.Hour)), RequiredScope)
-	expectStatus(t, validateErr(v, chatRequest(token)), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateRejectsMissingExpiration(t *testing.T) {
@@ -170,7 +158,7 @@ func TestValidateRejectsMissingExpiration(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Expiry = nil
 	token := mintToken(t, priv, testKID, "at+jwt", claims, RequiredScope)
-	expectStatus(t, validateErr(v, chatRequest(token)), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateRejectsMissingScope(t *testing.T) {
@@ -180,7 +168,7 @@ func TestValidateRejectsMissingScope(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), "models:read")
-	expectStatus(t, validateErr(v, chatRequest(token)), http.StatusForbidden)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusForbidden)
 }
 
 func TestValidateRejectsWrongIssuer(t *testing.T) {
@@ -192,7 +180,7 @@ func TestValidateRejectsWrongIssuer(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Issuer = "https://evil.example.com"
 	token := mintToken(t, priv, testKID, "at+jwt", claims, RequiredScope)
-	expectStatus(t, validateErr(v, chatRequest(token)), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateFallsThroughForWrongType(t *testing.T) {
@@ -202,7 +190,7 @@ func TestValidateFallsThroughForWrongType(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "JWT", validClaims(time.Now()), RequiredScope)
-	err := validateErr(v, chatRequest(token))
+	err := v.Validate(chatRequest(token))
 	if !errors.Is(err, key.ErrUnsupportedToken) {
 		t.Fatalf("expected ErrUnsupportedToken, got %v", err)
 	}
@@ -218,7 +206,7 @@ func TestValidateRejectsForeignSignature(t *testing.T) {
 	// verification against the published key must fail.
 	_, foreignPriv, _ := ed25519.GenerateKey(nil)
 	token := mintToken(t, foreignPriv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	expectStatus(t, validateErr(v, chatRequest(token)), http.StatusUnauthorized)
+	expectStatus(t, v.Validate(chatRequest(token)), http.StatusUnauthorized)
 }
 
 func TestValidateAcceptsApplicationPrefixType(t *testing.T) {
@@ -229,7 +217,7 @@ func TestValidateAcceptsApplicationPrefixType(t *testing.T) {
 
 	// RFC 9068 / RFC 7515 permit the media type with an "application/" prefix.
 	token := mintToken(t, priv, testKID, "application/at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := validateErr(v, chatRequest(token)); err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected application/at+jwt to be accepted, got %v", err)
 	}
 }
@@ -243,7 +231,7 @@ func TestValidateAcceptsNonChatPath(t *testing.T) {
 	// The inference:api scope authorizes every inference endpoint, not just
 	// chat completions, so a non-chat path must validate.
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := validateErr(v, key.Request{APIKey: token, Path: "/v1/embeddings"}); err != nil {
+	if err := v.Validate(key.Request{APIKey: token, Path: "/v1/embeddings"}); err != nil {
 		t.Fatalf("expected non-chat path to be accepted, got %v", err)
 	}
 }
@@ -322,7 +310,7 @@ func TestValidateRefreshesUnknownKidAfterRecentSuccess(t *testing.T) {
 	useSecond.Store(true)
 
 	token := mintToken(t, secondPriv, "test-key-2", "at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := validateErr(v, chatRequest(token)); err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected unknown kid to refresh immediately, got %v", err)
 	}
 }
@@ -356,7 +344,7 @@ func TestNewValidatorRecoversWhenJWKSStartsUnavailable(t *testing.T) {
 	v := newTestValidator(t, srv.URL)
 
 	token := mintToken(t, priv, testKID, "at+jwt", validClaims(time.Now()), RequiredScope)
-	if err := validateErr(v, chatRequest(token)); err == nil {
+	if err := v.Validate(chatRequest(token)); err == nil {
 		t.Fatal("expected rejection while no signing keys are cached")
 	}
 
@@ -367,7 +355,7 @@ func TestNewValidatorRecoversWhenJWKSStartsUnavailable(t *testing.T) {
 	v.keys.lastAttempt = time.Now().Add(-2 * minRefreshInterval)
 	v.keys.mu.Unlock()
 
-	if err := validateErr(v, chatRequest(token)); err != nil {
+	if err := v.Validate(chatRequest(token)); err != nil {
 		t.Fatalf("expected token to validate after JWKS became available, got %v", err)
 	}
 }

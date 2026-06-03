@@ -88,13 +88,6 @@ const (
 	errTypeServer            = "server_error"
 )
 
-// subjectHeader carries the authenticated principal (JWT `sub`) from the shim to
-// the upstream workload after a JWT access token is verified in-enclave. The
-// upstream trusts it because the shim is the only path to it and unconditionally
-// strips any client-supplied value before setting its own. Must match the header
-// the upstream (confidential-model-router) reads.
-const subjectHeader = "X-Tinfoil-Subject"
-
 // Client-facing error messages, aligned with OpenAI's standard error messages
 // where applicable. See https://platform.openai.com/docs/guides/error-codes
 const (
@@ -221,20 +214,7 @@ func NewShimServer(
 	}
 
 	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Never trust a client-supplied identity header: the shim is the sole
-		// authority for subjectHeader and (re)sets it only after verifying a
-		// JWT below. Strip it unconditionally, including on unauthenticated
-		// paths, so a forged value can never reach the upstream.
-		r.Header.Del(subjectHeader)
-
 		apiKey := extractBearerToken(r.Header.Get("Authorization"))
-
-		// rateLimitID identifies the caller for the shim's local rate limiter.
-		// It defaults to the bearer credential and is replaced with the verified
-		// JWT subject when available, so a user's bucket is stable across the
-		// short-lived token's refreshes (and across multiple tokens).
-		rateLimitID := apiKey
-
 		if validator != nil && requiresAuth(config.AuthenticatedEndpoints, r.URL.Path) {
 			if len(apiKey) == 0 {
 				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
@@ -248,19 +228,10 @@ func NewShimServer(
 				Path:          r.URL.Path,
 			}
 
-			res, err := validator.Validate(validationReq)
-			if err != nil {
+			if err := validator.Validate(validationReq); err != nil {
 				log.Printf("Warning: failed to validate API key: %v", err)
 				writeValidationFailure(w, err)
 				return
-			}
-
-			// Forward the verified principal to the upstream so it can attribute
-			// usage and rate limits to a stable identity rather than the
-			// rotating bearer token. Empty for opaque keys (online validator).
-			if res.Subject != "" {
-				r.Header.Set(subjectHeader, res.Subject)
-				rateLimitID = res.Subject
 			}
 		}
 
@@ -269,7 +240,7 @@ func NewShimServer(
 				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
 				return
 			}
-			limiter := rateLimiter.Limit(rateLimitID)
+			limiter := rateLimiter.Limit(apiKey)
 			if !limiter.Allow() {
 				writeJSONError(w, errMsgRateLimited, errTypeInvalidRequest, http.StatusTooManyRequests)
 				return

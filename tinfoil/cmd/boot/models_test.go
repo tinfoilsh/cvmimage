@@ -8,82 +8,41 @@ import (
 	shimconfig "tinfoil/internal/config"
 )
 
-func TestValidateEncryptedModelPack(t *testing.T) {
-	valid := &EncryptedModelPackSpec{
-		Device:          "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-private-model1",
-		RootHash:        strings.Repeat("a", 64),
-		HashOffset:      "4096",
-		UUID:            "0eefa619-50b7-588f-a072-d405fb439d36",
-		KeySecret:       "PRIVATE_MODEL_KEY",
-		EncryptedSHA256: strings.Repeat("b", 64),
-		DataBlockSize:   4096,
-		HashBlockSize:   4096,
-		DataBlocks:      "123",
+func TestParseModelPackRef(t *testing.T) {
+	ref := strings.Repeat("a", 64) + "_4096_0eefa619-50b7-588f-a072-d405fb439d36"
+	got, err := parseModelPackRef(ref)
+	if err != nil {
+		t.Fatalf("expected valid model pack ref: %v", err)
 	}
-	if err := validateEncryptedModelPack(valid); err != nil {
-		t.Fatalf("expected valid encrypted model pack: %v", err)
+	if got.RootHash != strings.Repeat("a", 64) || got.HashOffset != "4096" || got.UUID != "0eefa619-50b7-588f-a072-d405fb439d36" {
+		t.Fatalf("parsed ref mismatch: %+v", got)
 	}
 
 	tests := []struct {
-		name   string
-		mutate func(*EncryptedModelPackSpec)
+		name string
+		ref  string
 	}{
 		{
-			name: "device outside by-id",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.Device = "/tmp/model.img"
-			},
+			name: "missing parts",
+			ref:  strings.Repeat("a", 64) + "_4096",
+		},
+		{
+			name: "bad UUID",
+			ref:  strings.Repeat("a", 64) + "_4096_not-a-uuid",
 		},
 		{
 			name: "bad root hash",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.RootHash = "not-a-root"
-			},
+			ref:  "not-a-root_4096_0eefa619-50b7-588f-a072-d405fb439d36",
 		},
 		{
-			name: "bad key secret",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.KeySecret = "PRIVATE-MODEL-KEY"
-			},
-		},
-		{
-			name: "unsupported cipher",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.Cipher = "aes-cbc-plain"
-			},
-		},
-		{
-			name: "unsupported key size",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.KeySize = 256
-			},
-		},
-		{
-			name: "unsupported sector size",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.SectorSize = 512
-			},
-		},
-		{
-			name: "verify requires sha",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.EncryptedSHA256 = ""
-				s.VerifyEncryptedSHA256 = true
-			},
-		},
-		{
-			name: "unsupported data block size",
-			mutate: func(s *EncryptedModelPackSpec) {
-				s.DataBlockSize = 8192
-			},
+			name: "bad offset",
+			ref:  strings.Repeat("a", 64) + "_not-an-offset_0eefa619-50b7-588f-a072-d405fb439d36",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spec := *valid
-			tt.mutate(&spec)
-			if err := validateEncryptedModelPack(&spec); err == nil {
+			if _, err := parseModelPackRef(tt.ref); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
@@ -97,9 +56,7 @@ func TestEncryptedModelKey(t *testing.T) {
 			"PRIVATE_MODEL_KEY": base64.StdEncoding.EncodeToString([]byte(key)),
 		},
 	}
-	spec := &EncryptedModelPackSpec{KeySecret: "PRIVATE_MODEL_KEY"}
-
-	got, err := encryptedModelKey(spec, ext)
+	got, err := encryptedModelKey("PRIVATE_MODEL_KEY", ext)
 	if err != nil {
 		t.Fatalf("expected decoded key: %v", err)
 	}
@@ -117,7 +74,7 @@ func TestEncryptedModelKey(t *testing.T) {
 		{name: "short key", ext: &shimconfig.ExternalConfig{Secrets: map[string]string{"PRIVATE_MODEL_KEY": base64.StdEncoding.EncodeToString([]byte("short"))}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := encryptedModelKey(spec, tc.ext); err == nil {
+			if _, err := encryptedModelKey("PRIVATE_MODEL_KEY", tc.ext); err == nil {
 				t.Fatal("expected key decode error")
 			}
 		})

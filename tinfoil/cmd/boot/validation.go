@@ -10,8 +10,7 @@ import (
 var (
 	hexHashPattern    = regexp.MustCompile(`^[a-f0-9]{64}$`) // SHA256 hex strings
 	uuidPattern       = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
-	offsetPattern     = regexp.MustCompile(`^[0-9]+$`) // Numeric offset
-	devicePathPattern = regexp.MustCompile(`^/dev/disk/by-id/[A-Za-z0-9._:+-]+$`)
+	offsetPattern     = regexp.MustCompile(`^[0-9]+$`)                         // Numeric offset
 	registryPattern   = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`) // Registry hostnames
 	secretNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )

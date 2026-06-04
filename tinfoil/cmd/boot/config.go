@@ -60,9 +60,37 @@ func (n *NetworkSpec) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// ModelSpec represents a model pack specification
+// ModelSpec represents a model pack specification.
 type ModelSpec struct {
-	MPK string `yaml:"mpk"`
+	Name string                  `yaml:"name,omitempty"`
+	MPK  string                  `yaml:"mpk,omitempty"`
+	EMPK *EncryptedModelPackSpec `yaml:"empk,omitempty"`
+}
+
+// EncryptedModelPackSpec represents an encrypted model pack.
+//
+// The encrypted block device is opened with raw dm-crypt first. dm-verity is
+// then opened over the decrypted mapper and mounted read-only, matching the
+// public MPK mount contract exposed to containers under /tinfoil/mpk.
+type EncryptedModelPackSpec struct {
+	Device string `yaml:"device"`
+
+	RootHash   string `yaml:"root-hash"`
+	HashOffset string `yaml:"hash-offset"`
+	UUID       string `yaml:"uuid,omitempty"`
+
+	KeySecret string `yaml:"key-secret"`
+
+	Cipher     string `yaml:"cipher,omitempty"`
+	KeySize    int    `yaml:"key-size,omitempty"`
+	SectorSize int    `yaml:"sector-size,omitempty"`
+
+	EncryptedSHA256       string `yaml:"encrypted-sha256,omitempty"`
+	VerifyEncryptedSHA256 bool   `yaml:"verify-encrypted-sha256,omitempty"`
+
+	DataBlockSize int    `yaml:"data-block-size,omitempty"`
+	HashBlockSize int    `yaml:"hash-block-size,omitempty"`
+	DataBlocks    string `yaml:"data-blocks,omitempty"`
 }
 
 // Container represents a container to run (Docker Compose-compatible subset)

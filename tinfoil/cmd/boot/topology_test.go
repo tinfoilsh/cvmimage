@@ -260,6 +260,26 @@ func TestValidateTopologySwitchPDINotInGPUSet(t *testing.T) {
 	}
 }
 
+func TestValidateTopologyDuplicateSwitchPDI(t *testing.T) {
+	gpuReports := make([][]byte, 8)
+	for i := range gpuReports {
+		gpuReports[i] = buildSPDMReport([]tlvEntry{
+			{typ: fieldPDI, val: switchPDIsForGPU()},
+		})
+	}
+	// switch[2] reuses switchDevA's PDI: each PDI is in the GPU-reported set,
+	// but the four reports do not cover four distinct devices.
+	switchReports := [][]byte{
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevA}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevB}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevA}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+		buildSPDMReport([]tlvEntry{{typ: fieldPDI, val: switchDevD}, {typ: fieldGPUPDIs, val: allGPUPDIs()}}),
+	}
+	if err := validateTopology(gpuReports, switchReports, hopperGPUCount, hopperSwitchCount); err == nil {
+		t.Fatal("expected topology error for duplicate switch device PDI")
+	}
+}
+
 // Verify our hex encoding of the reference PDIs matches expectations.
 func TestReferencePDIHexEncoding(t *testing.T) {
 	// switchA raw bytes: b'@\xb9\xc6\xb3\xd7H\xfd\x90'

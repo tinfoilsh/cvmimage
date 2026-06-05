@@ -189,6 +189,38 @@ func TestWriteValidationFailureDoesNotLeakInternalError(t *testing.T) {
 	}
 }
 
+func TestRequiresNVSwitchEvidence(t *testing.T) {
+	evidence := func(arches ...string) *tinfoilattestation.GPUEvidenceCollection {
+		collection := &tinfoilattestation.GPUEvidenceCollection{}
+		for _, arch := range arches {
+			collection.Evidences = append(collection.Evidences, tinfoilattestation.GPUEvidence{Arch: arch})
+		}
+		return collection
+	}
+
+	tests := []struct {
+		name         string
+		expectedGPUs int
+		evidence     *tinfoilattestation.GPUEvidenceCollection
+		want         bool
+	}{
+		{"single GPU never requires switch evidence", 1, evidence(tinfoilattestation.GPUArchHopper), false},
+		{"nil evidence does not require switch evidence", 8, nil, false},
+		{"blackwell 8 GPU skips switch evidence", 8, evidence(tinfoilattestation.GPUArchBlackwell), false},
+		{"hopper 8 GPU requires switch evidence", 8, evidence(tinfoilattestation.GPUArchHopper), true},
+		{"hopper non-8 GPU skips switch evidence", 4, evidence(tinfoilattestation.GPUArchHopper), false},
+		{"unknown 8 GPU skips switch evidence", 8, evidence("UNKNOWN_123"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiresNVSwitchEvidence(tt.expectedGPUs, tt.evidence); got != tt.want {
+				t.Fatalf("requiresNVSwitchEvidence(%d, %+v) = %v, want %v", tt.expectedGPUs, tt.evidence, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNoPathsConfigured_AllPathsAllowed(t *testing.T) {
 	handler := testServer(t, nil, 9999)
 

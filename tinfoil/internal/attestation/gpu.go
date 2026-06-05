@@ -25,9 +25,26 @@ type GPUEvidenceCollection struct {
 	Evidences []GPUEvidence `json:"evidences"`
 }
 
+const (
+	GPUArchHopper    = "HOPPER"
+	GPUArchBlackwell = "BLACKWELL"
+)
+
 var archNames = map[nvml.DeviceArchitecture]string{
-	nvml.DEVICE_ARCH_HOPPER:    "HOPPER",
-	nvml.DEVICE_ARCH_BLACKWELL: "BLACKWELL",
+	nvml.DEVICE_ARCH_HOPPER:    GPUArchHopper,
+	nvml.DEVICE_ARCH_BLACKWELL: GPUArchBlackwell,
+}
+
+func (c *GPUEvidenceCollection) HasArch(arch string) bool {
+	if c == nil {
+		return false
+	}
+	for _, evidence := range c.Evidences {
+		if evidence.Arch == arch {
+			return true
+		}
+	}
+	return false
 }
 
 // CollectGPUEvidence collects fresh attestation evidence from all GPUs using

@@ -135,6 +135,46 @@ func DummyReport(userData [64]byte) *legacy.Document {
 	}
 }
 
+const (
+	// TLSExporterLabel is the RFC 9266 channel-binding exporter label.
+	TLSExporterLabel = "EXPORTER-Channel-Binding"
+	// TLSExporterSize is the channel-binding value size emitted in v3 documents.
+	TLSExporterSize = 32
+
+	tlsExporterCryptoMaterialID       = "tls-exporter"
+	tlsExporterCryptoMaterialV1Format = "https://tinfoil.sh/format/tls-exporter/v1"
+)
+
+func buildCryptoMaterialSection(tlsKeyFP, hpkeKey [32]byte, tlsExporter []byte) (envelope.CryptoMaterialSection, error) {
+	items := []envelope.CryptoMaterialItem{
+		{
+			ID:     envelope.CryptoMaterialIDTLS,
+			Format: envelope.KeySPKIFPSHA256V1Format,
+			Data:   hex.EncodeToString(tlsKeyFP[:]),
+		},
+		{
+			ID:     envelope.CryptoMaterialIDHPKE,
+			Format: envelope.KeyX25519HPKEV1Format,
+			Data:   hex.EncodeToString(hpkeKey[:]),
+		},
+	}
+	if len(tlsExporter) != 0 {
+		if len(tlsExporter) != TLSExporterSize {
+			return envelope.CryptoMaterialSection{}, fmt.Errorf("tls exporter must be %d bytes, got %d", TLSExporterSize, len(tlsExporter))
+		}
+		items = append(items, envelope.CryptoMaterialItem{
+			ID:     tlsExporterCryptoMaterialID,
+			Format: tlsExporterCryptoMaterialV1Format,
+			Data:   hex.EncodeToString(tlsExporter),
+		})
+	}
+
+	return envelope.CryptoMaterialSection{
+		Format: envelope.CryptoMaterialV1Format,
+		Items:  items,
+	}, nil
+}
+
 // BuildAttestation assembles a fresh v3 attestation document: it serializes
 // the two endorsed sections exactly once, derives REPORT_DATA from their
 // hashes and the nonce, obtains a hardware quote over that REPORT_DATA, and
@@ -145,6 +185,7 @@ func BuildAttestation(
 	tlsKeyFP [32]byte,
 	hpkeKey [32]byte,
 	nonce []byte,
+	tlsExporter []byte,
 	deviceEvidence []envelope.DeviceEvidenceItem,
 	collateral []envelope.CollateralEntry,
 ) (*envelope.Document, error) {
@@ -158,20 +199,12 @@ func BuildAttestation(
 		collateral = []envelope.CollateralEntry{}
 	}
 
-	cryptoMaterial := envelope.CryptoMaterialSection{
-		Format: envelope.CryptoMaterialV1Format,
-		Items: []envelope.CryptoMaterialItem{
-			{
-				ID:     envelope.CryptoMaterialIDTLS,
-				Format: envelope.KeySPKIFPSHA256V1Format,
-				Data:   hex.EncodeToString(tlsKeyFP[:]),
-			},
-			{
-				ID:     envelope.CryptoMaterialIDHPKE,
-				Format: envelope.KeyX25519HPKEV1Format,
-				Data:   hex.EncodeToString(hpkeKey[:]),
-			},
-		},
+	// The TLS exporter is carried in the endorsed crypto-material section, so
+	// report-data/v1 binds it through that section's hash without changing the
+	// verifier's REPORT_DATA derivation.
+	cryptoMaterial, err := buildCryptoMaterialSection(tlsKeyFP, hpkeKey, tlsExporter)
+	if err != nil {
+		return nil, err
 	}
 	deviceSection := envelope.DeviceEvidenceSection{
 		Format: envelope.DeviceEvidenceV1Format,

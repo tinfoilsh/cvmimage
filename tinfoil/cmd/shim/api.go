@@ -291,6 +291,10 @@ func wrapShimMux(config *config.Config, att *attestation.Document, mux *http.Ser
 	return corsMiddleware(config, globalMiddleware(mux))
 }
 
+func requiresNVSwitchEvidence(expectedGPUs int, gpuEvidence *tinfoilattestation.GPUEvidenceCollection) bool {
+	return expectedGPUs == 8 && gpuEvidence.HasArch(tinfoilattestation.GPUArchHopper)
+}
+
 func registerObservabilityHandlers(
 	mux *http.ServeMux,
 	ehbpMiddleware func(http.Handler) http.Handler,
@@ -329,7 +333,7 @@ func registerObservabilityHandlers(
 					return
 				}
 				gpuJSON, _ = json.Marshal(gpuEvidence)
-				if expectedGPUs >= 8 {
+				if requiresNVSwitchEvidence(expectedGPUs, gpuEvidence) {
 					nvswitchJSON, err = tinfoilattestation.CollectNVSwitchEvidence(nonce32)
 					if err != nil {
 						log.Printf("NVSwitch evidence collection failed: %v", err)

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/hkdf"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -14,9 +16,12 @@ import (
 )
 
 const (
-	defaultEMPKCipher     = "aes-xts-plain64"
-	defaultEMPKKeySize    = 512
-	defaultEMPKSectorSize = 4096
+	defaultEMWPCipher     = "aes-xts-plain64"
+	defaultEMWPKeySize    = 512
+	defaultEMWPSectorSize = 4096
+	modelMountOptions     = "ro,nodev,nosuid,noexec"
+	modelFilesystemType   = "erofs"
+	emwpKeyDeriveInfo     = "tinfoil/emwp/dm-crypt-key/v1"
 )
 
 // mountModels mounts all model packs from the config
@@ -27,39 +32,43 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 	}
 
 	log.Printf("Mounting %d model packs", len(config.Models))
+	seen := map[string]struct{}{}
 	for _, model := range config.Models {
-		switch {
-		case model.MPK != "" && model.EMPK != "":
-			return fmt.Errorf("model %q specifies both mpk and empk", model.Name)
-		case model.MPK != "":
-			if err := mountModelPack(model.MPK); err != nil {
-				return fmt.Errorf("mounting model pack %s: %w", model.MPK, err)
+		ref, kind, err := modelPackRefForModel(model)
+		if err != nil {
+			return err
+		}
+		if _, ok := seen[ref.mapperName()]; ok {
+			return fmt.Errorf("duplicate model pack root hash: %s", ref.RootHash)
+		}
+		seen[ref.mapperName()] = struct{}{}
+
+		switch kind {
+		case modelKindPlaintext:
+			if err := mountModelPack(ref); err != nil {
+				return fmt.Errorf("mounting model pack %s: %w", ref.raw, err)
 			}
-		case model.EMPK != "":
+		case modelKindEncrypted:
 			if err := mountEncryptedModelPack(model, externalConfig); err != nil {
 				return fmt.Errorf("mounting encrypted model pack %q: %w", model.Name, err)
 			}
-		default:
-			return fmt.Errorf("model %q specifies neither mpk nor empk", model.Name)
 		}
 	}
 
 	return nil
 }
 
-// mountModelPack mounts a model pack using dm-verity
-// MPK format: rootHash_hashOffset_uuid
-func mountModelPack(mpk string) error {
-	spec, err := parseModelPackRef(mpk)
-	if err != nil {
-		return fmt.Errorf("invalid MPK format: %s: %w", mpk, err)
-	}
-
-	deviceName := fmt.Sprintf("mpk-%s", spec.RootHash)
-	mountPoint := fmt.Sprintf("%s/%s", boot.MPKDir, deviceName)
+// mountModelPack mounts a plaintext model wrap using dm-verity.
+func mountModelPack(spec *modelPackRef) error {
+	deviceName := spec.mapperName()
+	mountPoint := spec.mountPoint()
 
 	log.Printf("Opening verity device %s (uuid=%s)", deviceName, spec.UUID)
+	if err := createLegacyModelPackAlias(spec); err != nil {
+		return err
+	}
 	if err := openAndMountVerity(diskByUUID(spec.UUID), deviceName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
+		removeLegacyModelPackAlias(spec)
 		return err
 	}
 
@@ -67,39 +76,39 @@ func mountModelPack(mpk string) error {
 	return nil
 }
 
-// mountEncryptedModelPack mounts an encrypted model pack using dm-crypt below
-// dm-verity. The decrypted mapper contains the same plaintext layout as an MPK:
+// mountEncryptedModelPack mounts an encrypted model wrap using dm-crypt below
+// dm-verity. The decrypted mapper contains the same plaintext layout as an MWP:
 // a read-only filesystem followed by its dm-verity hash tree.
 func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.ExternalConfig) error {
-	spec, err := parseModelPackRef(model.EMPK)
+	spec, err := parseModelPackRef(model.EMWP)
 	if err != nil {
-		return fmt.Errorf("invalid EMPK format: %s: %w", model.EMPK, err)
+		return fmt.Errorf("invalid EMWP format: %s: %w", model.EMWP, err)
 	}
 
-	key, err := encryptedModelKey(model.KeySecret, externalConfig)
+	key, err := encryptedModelKey(model.KeySecret, spec, externalConfig)
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(boot.ModelKeyDir, 0700); err != nil {
-		return fmt.Errorf("creating model key directory: %w", err)
-	}
-	keyFile := fmt.Sprintf("%s/%s.key", boot.ModelKeyDir, spec.RootHash)
-	if err := os.WriteFile(keyFile, key, 0600); err != nil {
-		return fmt.Errorf("writing model key file: %w", err)
+	keyFile, err := writePersistentModelKey(spec, key)
+	if err != nil {
+		return err
 	}
 
-	cryptName := fmt.Sprintf("empk-%s-crypt", spec.RootHash)
-	verityName := fmt.Sprintf("mpk-%s", spec.RootHash)
-	mountPoint := fmt.Sprintf("%s/%s", boot.MPKDir, verityName)
+	cryptName := fmt.Sprintf("emwp-%s-crypt", spec.RootHash)
+	verityName := spec.mapperName()
+	mountPoint := spec.mountPoint()
 
 	log.Printf("Opening encrypted model pack %s (uuid=%s)", modelLogName(model.Name, spec.RootHash), spec.UUID)
+	if err := createLegacyModelPackAlias(spec); err != nil {
+		return err
+	}
 	cryptCmd := exec.Command(
 		"cryptsetup", "open",
 		"--type", "plain",
-		"--cipher", defaultEMPKCipher,
-		"--key-size", strconv.Itoa(defaultEMPKKeySize),
-		"--sector-size", strconv.Itoa(defaultEMPKSectorSize),
+		"--cipher", defaultEMWPCipher,
+		"--key-size", strconv.Itoa(defaultEMWPKeySize),
+		"--sector-size", strconv.Itoa(defaultEMWPSectorSize),
 		"--key-file", keyFile,
 		diskByUUID(spec.UUID),
 		cryptName,
@@ -107,11 +116,13 @@ func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.Externa
 	cryptCmd.Stdout = os.Stdout
 	cryptCmd.Stderr = os.Stderr
 	if err := cryptCmd.Run(); err != nil {
+		removeLegacyModelPackAlias(spec)
 		return fmt.Errorf("cryptsetup open: %w", err)
 	}
 
 	cryptDevice := "/dev/mapper/" + cryptName
 	if err := openAndMountVerity(cryptDevice, verityName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
+		removeLegacyModelPackAlias(spec)
 		closeCryptMapper(cryptName)
 		return err
 	}
@@ -120,10 +131,113 @@ func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.Externa
 	return nil
 }
 
+func createLegacyModelPackAlias(spec *modelPackRef) error {
+	if err := os.MkdirAll(boot.MPKDir, 0755); err != nil {
+		return fmt.Errorf("creating legacy model pack alias directory: %w", err)
+	}
+	aliasPath := spec.legacyMountPoint()
+	if fi, err := os.Lstat(aliasPath); err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("legacy model pack alias path exists and is not a symlink: %s", aliasPath)
+		}
+		if err := os.Remove(aliasPath); err != nil {
+			return fmt.Errorf("removing stale legacy model pack alias: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking legacy model pack alias: %w", err)
+	}
+	if err := os.Symlink("../mwp/"+spec.mapperName(), aliasPath); err != nil {
+		return fmt.Errorf("creating legacy model pack alias: %w", err)
+	}
+	return nil
+}
+
+func removeLegacyModelPackAlias(spec *modelPackRef) {
+	_ = os.Remove(spec.legacyMountPoint())
+}
+
+func writePersistentModelKey(spec *modelPackRef, key []byte) (string, error) {
+	if err := os.MkdirAll(boot.ModelKeyDir, 0700); err != nil {
+		return "", fmt.Errorf("creating model key directory: %w", err)
+	}
+	if err := os.Chmod(boot.ModelKeyDir, 0700); err != nil {
+		return "", fmt.Errorf("setting model key directory permissions: %w", err)
+	}
+	keyFile := fmt.Sprintf("%s/%s.key", boot.ModelKeyDir, spec.artifactID())
+	if err := os.WriteFile(keyFile, key, 0600); err != nil {
+		return "", fmt.Errorf("writing model key file: %w", err)
+	}
+	if err := os.Chmod(keyFile, 0600); err != nil {
+		return "", fmt.Errorf("setting model key file permissions: %w", err)
+	}
+	return keyFile, nil
+}
+
+type modelKind string
+
+const (
+	modelKindPlaintext modelKind = "plaintext"
+	modelKindEncrypted modelKind = "encrypted"
+)
+
+func modelPackRefForModel(model ModelSpec) (*modelPackRef, modelKind, error) {
+	refs := 0
+	if model.MPK != "" {
+		refs++
+	}
+	if model.MWP != "" {
+		refs++
+	}
+	if model.EMWP != "" {
+		refs++
+	}
+	if refs != 1 {
+		return nil, "", fmt.Errorf("model %q must specify exactly one of mpk, mwp, or emwp", model.Name)
+	}
+
+	if model.MPK != "" {
+		spec, err := parseModelPackRef(model.MPK)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid legacy MPK format: %s: %w", model.MPK, err)
+		}
+		return spec, modelKindPlaintext, nil
+	}
+	if model.MWP != "" {
+		spec, err := parseModelPackRef(model.MWP)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid MWP format: %s: %w", model.MWP, err)
+		}
+		return spec, modelKindPlaintext, nil
+	}
+
+	spec, err := parseModelPackRef(model.EMWP)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid EMWP format: %s: %w", model.EMWP, err)
+	}
+	return spec, modelKindEncrypted, nil
+}
+
 type modelPackRef struct {
+	raw        string
 	RootHash   string
 	HashOffset string
 	UUID       string
+}
+
+func (r *modelPackRef) mapperName() string {
+	return "mwp-" + r.RootHash
+}
+
+func (r *modelPackRef) mountPoint() string {
+	return boot.MWPDir + "/" + r.mapperName()
+}
+
+func (r *modelPackRef) legacyMountPoint() string {
+	return boot.MPKDir + "/mpk-" + r.RootHash
+}
+
+func (r *modelPackRef) artifactID() string {
+	return r.RootHash + "_" + r.UUID
 }
 
 func parseModelPackRef(ref string) (*modelPackRef, error) {
@@ -133,6 +247,7 @@ func parseModelPackRef(ref string) (*modelPackRef, error) {
 	}
 
 	spec := &modelPackRef{
+		raw:        ref,
 		RootHash:   parts[0],
 		HashOffset: parts[1],
 		UUID:       parts[2],
@@ -149,7 +264,7 @@ func parseModelPackRef(ref string) (*modelPackRef, error) {
 	return spec, nil
 }
 
-func encryptedModelKey(keySecret string, externalConfig *shimconfig.ExternalConfig) ([]byte, error) {
+func encryptedModelKey(keySecret string, spec *modelPackRef, externalConfig *shimconfig.ExternalConfig) ([]byte, error) {
 	if !secretNamePattern.MatchString(keySecret) {
 		return nil, fmt.Errorf("invalid key secret name: %s", keySecret)
 	}
@@ -164,10 +279,10 @@ func encryptedModelKey(keySecret string, externalConfig *shimconfig.ExternalConf
 	if err != nil {
 		return nil, fmt.Errorf("decoding encrypted model key secret %q as base64: %w", keySecret, err)
 	}
-	if len(key) != defaultEMPKKeySize/8 {
-		return nil, fmt.Errorf("encrypted model key secret %q decoded to %d bytes, want %d", keySecret, len(key), defaultEMPKKeySize/8)
+	if len(key) != defaultEMWPKeySize/8 {
+		return nil, fmt.Errorf("encrypted model key secret %q decoded to %d bytes, want %d", keySecret, len(key), defaultEMWPKeySize/8)
 	}
-	return key, nil
+	return hkdf.Key(sha256.New, key, []byte(spec.artifactID()), emwpKeyDeriveInfo, defaultEMWPKeySize/8)
 }
 
 func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset, mountPoint string) error {
@@ -192,7 +307,9 @@ func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset, mountPoi
 	}
 
 	mountCmd := exec.Command(
-		"mount", "-o", "ro",
+		"mount",
+		"-t", modelFilesystemType,
+		"-o", modelMountOptions,
 		"/dev/mapper/"+deviceName,
 		mountPoint,
 	)
@@ -222,5 +339,5 @@ func modelLogName(name, rootHash string) string {
 	if name != "" {
 		return name
 	}
-	return "mpk-" + rootHash
+	return "mwp-" + rootHash
 }

@@ -68,13 +68,13 @@ type ExternalConfig struct {
 	Vault    *VaultConfig      `yaml:"vault,omitempty"`
 }
 
-// VaultConfig points a deployment at a confidential secrets vault. All of it is
-// non-secret (a URL, a repo name, secret names), so it rides in external-config.
+// VaultConfig points a deployment at a confidential secrets vault. The server
+// is one-workload (knows which secrets it serves), so the workload doesn't
+// need to enumerate names — the server returns everything for this repo.
 type VaultConfig struct {
-	URL     string   `yaml:"url"`
-	Repo    string   `yaml:"repo"`
-	Secrets []string `yaml:"secrets"`
-	Digest  string   `yaml:"digest"`
+	URL    string `yaml:"url"`
+	Repo   string `yaml:"repo"`
+	Digest string `yaml:"digest,omitempty"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {

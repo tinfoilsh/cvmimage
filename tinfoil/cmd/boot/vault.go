@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
@@ -41,7 +42,11 @@ type vaultFetchResponse struct {
 // into the containers that declare them. It reuses the per-boot HPKE identity
 // and the CPU quote from the preceding stages; the released values never pass
 // through the host-authored external config.
-func fetchVaultSecrets(cpuAtt *CPUAttestation, ext *shimconfig.ExternalConfig) error {
+//
+// The requested secret names are the union of every container's `secrets:`
+// list in the measured tinfoil-config.yml — so the request is bound to the
+// workload's attested identity, not to a per-deployment file.
+func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.ExternalConfig) error {
 	v := ext.Vault
 	id, err := identity.FromFile(boot.HPKEKeyPath)
 	if err != nil {
@@ -50,7 +55,7 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, ext *shimconfig.ExternalConfig) e
 
 	req := vaultFetchRequest{
 		Repo:       v.Repo,
-		SecretRefs: v.Secrets,
+		SecretRefs: declaredSecretNames(config),
 		Bundle: &verifier.Bundle{
 			EnclaveAttestationReport: cpuAtt.V2Doc,
 			Digest:                   v.Digest,
@@ -79,6 +84,24 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, ext *shimconfig.ExternalConfig) e
 	}
 	log.Printf("Vault released %d secret(s) for %s", len(secrets), v.Repo)
 	return nil
+}
+
+// declaredSecretNames returns the deduplicated, sorted union of every
+// container's `secrets:` declarations in the measured config.
+func declaredSecretNames(config *Config) []string {
+	seen := map[string]struct{}{}
+	var names []string
+	for _, c := range config.Containers {
+		for _, n := range c.Secrets {
+			if _, ok := seen[n]; ok {
+				continue
+			}
+			seen[n] = struct{}{}
+			names = append(names, n)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // vaultOpen opens the vault's HPKE-sealed release with sk_W. The identity uses

@@ -2,15 +2,12 @@ package main
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
@@ -26,9 +23,7 @@ const vaultFetchInfo = "tinfoil-secrets-vault/fetch/v1"
 type vaultFetchRequest struct {
 	Repo       string           `json:"repo"`
 	SecretRefs []string         `json:"secret_refs"`
-	Nonce      string           `json:"nonce"`
-	Bundle     *verifier.Bundle `json:"bundle,omitempty"` // real mode: quote + provenance
-	PKW        string           `json:"pk_w,omitempty"`   // dev mode only (claimed key, no quote)
+	Bundle     *verifier.Bundle `json:"bundle"`
 }
 
 type vaultFetchResponse struct {
@@ -42,7 +37,7 @@ type vaultFetchResponse struct {
 // into the containers that declare them. It reuses the per-boot HPKE identity
 // and the CPU quote from the preceding stages; the released values never pass
 // through the host-authored external config.
-func fetchVaultSecrets(nodeID *NodeIdentity, cpuAtt *CPUAttestation, ext *shimconfig.ExternalConfig) error {
+func fetchVaultSecrets(cpuAtt *CPUAttestation, ext *shimconfig.ExternalConfig) error {
 	v := ext.Vault
 	id, err := identity.FromFile(boot.HPKEKeyPath)
 	if err != nil {
@@ -52,16 +47,10 @@ func fetchVaultSecrets(nodeID *NodeIdentity, cpuAtt *CPUAttestation, ext *shimco
 	req := vaultFetchRequest{
 		Repo:       v.Repo,
 		SecretRefs: v.Secrets,
-		Nonce:      strconv.FormatInt(time.Now().UnixNano(), 10),
-	}
-	if v.Dev {
-		log.Println("WARNING: vault dev mode — sending claimed pk_w without attestation")
-		req.PKW = hex.EncodeToString(nodeID.HPKEKeyBytes)
-	} else {
-		req.Bundle = &verifier.Bundle{
+		Bundle: &verifier.Bundle{
 			EnclaveAttestationReport: cpuAtt.V2Doc,
 			Digest:                   v.Digest,
-		}
+		},
 	}
 
 	resp, err := vaultFetch(v.URL, req)
@@ -102,29 +91,13 @@ func vaultOpen(id *identity.Identity, enc, ct []byte) ([]byte, error) {
 	return opener.Open(ct, nil)
 }
 
-// vaultFetch POSTs to the vault's /fetch with bounded retry — the release is a
-// hard boot dependency, so we fail the boot rather than launch a secret-less
-// container.
+// vaultFetch POSTs to /fetch and decodes the sealed response. Fails fast.
 func vaultFetch(base string, req vaultFetchRequest) (*vaultFetchResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 	url := strings.TrimRight(base, "/") + "/fetch"
-	var lastErr error
-	for attempt := 1; attempt <= 6; attempt++ {
-		fr, err := vaultTryFetch(url, body)
-		if err == nil {
-			return fr, nil
-		}
-		lastErr = err
-		log.Printf("vault /fetch attempt %d/6 failed: %v", attempt, err)
-		time.Sleep(10 * time.Second)
-	}
-	return nil, fmt.Errorf("vault fetch failed after retries: %w", lastErr)
-}
-
-func vaultTryFetch(url string, body []byte) (*vaultFetchResponse, error) {
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err

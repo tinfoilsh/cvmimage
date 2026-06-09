@@ -110,7 +110,8 @@ func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.Externa
 		"--key-size", strconv.Itoa(defaultEMWPKeySize),
 		"--sector-size", strconv.Itoa(defaultEMWPSectorSize),
 		"--key-file", keyFile,
-		diskByUUID(spec.UUID),
+		"--readonly",
+		diskByPARTUUID(spec.UUID),
 		cryptName,
 	)
 	cryptCmd.Stdout = os.Stdout
@@ -325,6 +326,10 @@ func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset, mountPoi
 
 func diskByUUID(uuid string) string {
 	return fmt.Sprintf("/dev/disk/by-uuid/%s", uuid)
+}
+
+func diskByPARTUUID(uuid string) string {
+	return fmt.Sprintf("/dev/disk/by-partuuid/%s", uuid)
 }
 
 func closeVerityMapper(name string) {

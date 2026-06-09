@@ -150,14 +150,12 @@ func launchContainers(config *Config) error {
 // launchContainersAndWaitHealthy launches all containers in parallel with
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
-func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config) error {
+func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
 		return nil
 	}
-
-	extConfig, _ := getExternalConfig()
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {

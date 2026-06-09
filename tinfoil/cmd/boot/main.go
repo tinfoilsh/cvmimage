@@ -98,6 +98,20 @@ func run() error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
+	// 3b. Vault secrets (fetch from the confidential secrets vault, decrypt with
+	// sk_W, merge into the external config for buildEnv) — only if configured.
+	start = time.Now()
+	if externalConfig.Vault == nil || externalConfig.Vault.URL == "" {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
+	} else {
+		log.Println("Fetching vault secrets")
+		if err := fetchVaultSecrets(nodeID, cpuAtt, externalConfig); err != nil {
+			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+			return fmt.Errorf("vault secret fetch failed: %w", err)
+		}
+		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), "")
+	}
+
 	// 4. GPU attestation
 	start = time.Now()
 	gpuCount := config.GPUs
@@ -172,7 +186,7 @@ func run() error {
 
 	// 9. Containers + health checks
 	log.Println("Launching containers")
-	if err := launchContainersAndWaitHealthy(tracker, config); err != nil {
+	if err := launchContainersAndWaitHealthy(tracker, config, externalConfig); err != nil {
 		return err
 	}
 

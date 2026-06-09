@@ -65,6 +65,17 @@ type ExternalConfig struct {
 	Env      map[string]string `yaml:"env"`
 	Secrets  map[string]string `yaml:"secrets"`
 	Metadata Metadata          `yaml:"metadata"`
+	Vault    *VaultConfig      `yaml:"vault,omitempty"`
+}
+
+// VaultConfig points a deployment at a confidential secrets vault. All of it is
+// non-secret (a URL, a repo name, secret names), so it rides in external-config.
+type VaultConfig struct {
+	URL     string   `yaml:"url"`
+	Repo    string   `yaml:"repo"`
+	Secrets []string `yaml:"secrets"`
+	Digest  string   `yaml:"digest"`
+	Dev     bool     `yaml:"dev"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {

@@ -75,7 +75,6 @@ type VaultConfig struct {
 	Repo    string   `yaml:"repo"`
 	Secrets []string `yaml:"secrets"`
 	Digest  string   `yaml:"digest"`
-	Dev     bool     `yaml:"dev"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {

@@ -21,9 +21,6 @@ import (
 // (confidential-secrets-vault/fetch.go).
 const vaultFetchInfo = "tinfoil-secrets-vault/fetch/v1"
 
-// TODO: put this in Tinfoil backend.
-const pocPassword = "poc-shared-secret-do-not-use"
-
 type vaultFetchRequest struct {
 	Repo       string           `json:"repo"`
 	SecretRefs []string         `json:"secret_refs"`
@@ -54,13 +51,13 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.E
 	}
 
 	req := vaultFetchRequest{
-		Repo:       v.Repo,
+		Repo:       ext.Repo,
 		SecretRefs: declaredSecretNames(config),
 		Bundle: &verifier.Bundle{
 			EnclaveAttestationReport: cpuAtt.V2Doc,
 			Digest:                   v.Digest,
 		},
-		Password: pocPassword,
+		Password: v.Password,
 	}
 
 	resp, err := vaultFetch(v.URL, req)
@@ -82,7 +79,7 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.E
 	for name, value := range secrets {
 		ext.Secrets[name] = value
 	}
-	log.Printf("Vault released %d secret(s) for %s", len(secrets), v.Repo)
+	log.Printf("Vault released %d secret(s) for %s", len(secrets), ext.Repo)
 	return nil
 }
 

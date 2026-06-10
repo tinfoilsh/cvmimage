@@ -61,7 +61,8 @@ type Metadata struct {
 type ExternalConfig struct {
 	MetricsAPIKey string
 	ACPIAPIKey    string
-
+	// Workload's source repo
+	Repo     string            `yaml:"repo,omitempty"`
 	Env      map[string]string `yaml:"env"`
 	Secrets  map[string]string `yaml:"secrets"`
 	Metadata Metadata          `yaml:"metadata"`
@@ -72,9 +73,9 @@ type ExternalConfig struct {
 // is one-workload (knows which secrets it serves), so the workload doesn't
 // need to enumerate names — the server returns everything for this repo.
 type VaultConfig struct {
-	URL    string `yaml:"url"`
-	Repo   string `yaml:"repo"`
-	Digest string `yaml:"digest,omitempty"`
+	URL      string `yaml:"url"`
+	Password string `yaml:"password"`
+	Digest   string `yaml:"digest,omitempty"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {

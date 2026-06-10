@@ -114,7 +114,7 @@ func run() error {
 			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
 			return fmt.Errorf("vault secret fetch failed: %w", err)
 		}
-		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), "")
+		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), externalConfig.Vault.URL)
 	}
 
 	// 4. GPU attestation

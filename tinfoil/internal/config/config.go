@@ -71,9 +71,9 @@ type ExternalConfig struct {
 
 // VaultConfig points a deployment at a confidential secrets vault.
 type VaultConfig struct {
-	URL      string `yaml:"url"`
-	Password string `yaml:"password"`
-	Digest   string `yaml:"digest,omitempty"`
+	URL    string `yaml:"url"`
+	Token  string `yaml:"token"`
+	Digest string `yaml:"digest,omitempty"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {

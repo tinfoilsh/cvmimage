@@ -60,9 +60,13 @@ func (n *NetworkSpec) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// ModelSpec represents a model pack specification
+// ModelSpec represents a model pack specification.
 type ModelSpec struct {
-	MPK string `yaml:"mpk"`
+	Name      string `yaml:"name,omitempty"`
+	MPK       string `yaml:"mpk,omitempty"` // Legacy alias for mwp.
+	MWP       string `yaml:"mwp,omitempty"`
+	EMWP      string `yaml:"emwp,omitempty"`
+	KeySecret string `yaml:"key-secret,omitempty"`
 }
 
 // Container represents a container to run (Docker Compose-compatible subset)

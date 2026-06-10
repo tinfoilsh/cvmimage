@@ -54,8 +54,13 @@ func runSubcommand(cmd string) error {
 		log.Println("Launching containers")
 		return launchContainers(config)
 	case "models":
+		externalConfig, err := getExternalConfig()
+		if err != nil {
+			log.Printf("Warning: external config not available, using defaults: %v", err)
+			externalConfig = &shimconfig.ExternalConfig{}
+		}
 		log.Println("Mounting models")
-		return mountModels(config)
+		return mountModels(config, externalConfig)
 	}
 	return nil
 }
@@ -163,12 +168,11 @@ func run() error {
 	// 8. Models
 	start = time.Now()
 	log.Println("Mounting models")
-	if err := mountModels(config); err != nil {
-		log.Printf("Warning: model mount failed: %v", err)
-		tracker.Record("models", boot.StatusWarning, time.Since(start), err.Error())
-	} else {
-		tracker.Record("models", boot.StatusOK, time.Since(start), "")
+	if err := mountModels(config, externalConfig); err != nil {
+		tracker.Record("models", boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("model mount failed: %w", err)
 	}
+	tracker.Record("models", boot.StatusOK, time.Since(start), "")
 
 	// 9. Containers + health checks
 	log.Println("Launching containers")

@@ -9,7 +9,8 @@ const (
 	ConfigPath          = PublicDir + "/config.yml"
 	AttestationPath     = PublicDir + "/attestation.json"
 	ContainerStatusPath = PublicDir + "/container-status.json"
-	MPKDir              = PublicDir + "/mpk"
+	MWPDir              = PublicDir + "/mwp"
+	MPKDir              = PublicDir + "/mpk" // Legacy alias directory for MWP mounts.
 
 	// Private — only accessible to boot, egress, and shim processes (mode 0700).
 	// Holds CVM-level secrets and material that must never reach a container.
@@ -22,6 +23,7 @@ const (
 	ExternalConfigPath = PrivateDir + "/external-config.yml"
 	DockerConfigDir    = PrivateDir + "/docker-config"
 	DockerConfigPath   = DockerConfigDir + "/config.json"
+	ModelKeyDir        = PrivateDir + "/model-keys"
 	GCloudKeyPath      = PrivateDir + "/gcloud_key.json"
 	CacheDir           = PrivateDir + "/tfshim-cache"
 	StatePath          = PrivateDir + "/boot-state.json"

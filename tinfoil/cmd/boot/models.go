@@ -1,27 +1,15 @@
 package main
 
 import (
-	"crypto/hkdf"
-	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"strconv"
-	"strings"
+
+	"github.com/tinfoilsh/modelwrap"
+	"github.com/tinfoilsh/modelwrap/unwrap"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
-)
-
-const (
-	defaultEMWPCipher     = "aes-xts-plain64"
-	defaultEMWPKeySize    = 512
-	defaultEMWPSectorSize = 4096
-	modelMountOptions     = "ro,nodev,nosuid,noexec"
-	modelFilesystemType   = "erofs"
-	emwpKeyDeriveInfo     = "tinfoil/emwp/dm-crypt-key/v1"
 )
 
 // mountModels mounts all model packs from the config
@@ -103,28 +91,15 @@ func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.Externa
 	if err := createLegacyModelPackAlias(spec); err != nil {
 		return err
 	}
-	cryptCmd := exec.Command(
-		"cryptsetup", "open",
-		"--type", "plain",
-		"--cipher", defaultEMWPCipher,
-		"--key-size", strconv.Itoa(defaultEMWPKeySize),
-		"--sector-size", strconv.Itoa(defaultEMWPSectorSize),
-		"--key-file", keyFile,
-		"--readonly",
-		diskByPARTUUID(spec.UUID),
-		cryptName,
-	)
-	cryptCmd.Stdout = os.Stdout
-	cryptCmd.Stderr = os.Stderr
-	if err := cryptCmd.Run(); err != nil {
+	if err := unwrap.OpenCrypt(diskByPARTUUID(spec.UUID), cryptName, keyFile); err != nil {
 		removeLegacyModelPackAlias(spec)
-		return fmt.Errorf("cryptsetup open: %w", err)
+		return err
 	}
 
 	cryptDevice := "/dev/mapper/" + cryptName
 	if err := openAndMountVerity(cryptDevice, verityName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
 		removeLegacyModelPackAlias(spec)
-		closeCryptMapper(cryptName)
+		unwrap.CloseCrypt(cryptName)
 		return err
 	}
 
@@ -164,7 +139,7 @@ func writePersistentModelKey(spec *modelPackRef, key []byte) (string, error) {
 	if err := os.Chmod(boot.ModelKeyDir, 0700); err != nil {
 		return "", fmt.Errorf("setting model key directory permissions: %w", err)
 	}
-	keyFile := fmt.Sprintf("%s/%s.key", boot.ModelKeyDir, spec.artifactID())
+	keyFile := fmt.Sprintf("%s/%s.key", boot.ModelKeyDir, spec.ArtifactID())
 	if err := os.WriteFile(keyFile, key, 0600); err != nil {
 		return "", fmt.Errorf("writing model key file: %w", err)
 	}
@@ -218,11 +193,11 @@ func modelPackRefForModel(model ModelSpec) (*modelPackRef, modelKind, error) {
 	return spec, modelKindEncrypted, nil
 }
 
+// modelPackRef wraps the shared artifact reference with cvmimage mount
+// layout policy (mapper names, mount points, legacy aliases).
 type modelPackRef struct {
-	raw        string
-	RootHash   string
-	HashOffset string
-	UUID       string
+	*modelwrap.ArtifactRef
+	raw string
 }
 
 func (r *modelPackRef) mapperName() string {
@@ -237,32 +212,12 @@ func (r *modelPackRef) legacyMountPoint() string {
 	return boot.MPKDir + "/mpk-" + r.RootHash
 }
 
-func (r *modelPackRef) artifactID() string {
-	return r.RootHash + "_" + r.UUID
-}
-
 func parseModelPackRef(ref string) (*modelPackRef, error) {
-	parts := strings.Split(ref, "_")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("expected rootHash_hashOffset_uuid")
+	parsed, err := modelwrap.ParseRef(ref)
+	if err != nil {
+		return nil, err
 	}
-
-	spec := &modelPackRef{
-		raw:        ref,
-		RootHash:   parts[0],
-		HashOffset: parts[1],
-		UUID:       parts[2],
-	}
-	if !hexHashPattern.MatchString(spec.RootHash) {
-		return nil, fmt.Errorf("invalid root hash format: %s", spec.RootHash)
-	}
-	if !offsetPattern.MatchString(spec.HashOffset) {
-		return nil, fmt.Errorf("invalid hash offset format: %s", spec.HashOffset)
-	}
-	if !uuidPattern.MatchString(spec.UUID) {
-		return nil, fmt.Errorf("invalid UUID format: %s", spec.UUID)
-	}
-	return spec, nil
+	return &modelPackRef{ArtifactRef: parsed, raw: ref}, nil
 }
 
 func encryptedModelKey(keySecret string, spec *modelPackRef, externalConfig *shimconfig.ExternalConfig) ([]byte, error) {
@@ -276,51 +231,21 @@ func encryptedModelKey(keySecret string, spec *modelPackRef, externalConfig *shi
 	if secret == "" {
 		return nil, fmt.Errorf("encrypted model key secret %q not found", keySecret)
 	}
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(secret))
+	key, err := modelwrap.ParseMasterKey(secret)
 	if err != nil {
-		return nil, fmt.Errorf("decoding encrypted model key secret %q as base64: %w", keySecret, err)
+		return nil, fmt.Errorf("encrypted model key secret %q: %w", keySecret, err)
 	}
-	if len(key) != defaultEMWPKeySize/8 {
-		return nil, fmt.Errorf("encrypted model key secret %q decoded to %d bytes, want %d", keySecret, len(key), defaultEMWPKeySize/8)
-	}
-	return hkdf.Key(sha256.New, key, []byte(spec.artifactID()), emwpKeyDeriveInfo, defaultEMWPKeySize/8)
+	return modelwrap.DeriveKey(key, spec.ArtifactRef)
 }
 
 func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset, mountPoint string) error {
-	// Using veritysetup as there's no good pure-Go dm-verity library.
-	cmd := exec.Command(
-		"veritysetup", "open",
-		sourceDevice,
-		deviceName,
-		sourceDevice,
-		rootHash,
-		"--hash-offset="+hashOffset,
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("veritysetup open: %w", err)
+	if err := unwrap.OpenVerity(sourceDevice, deviceName, rootHash, hashOffset); err != nil {
+		return err
 	}
-
-	if err := os.MkdirAll(mountPoint, 0755); err != nil {
-		closeVerityMapper(deviceName)
-		return fmt.Errorf("creating mount point: %w", err)
+	if err := unwrap.Mount("/dev/mapper/"+deviceName, mountPoint); err != nil {
+		unwrap.CloseVerity(deviceName)
+		return err
 	}
-
-	mountCmd := exec.Command(
-		"mount",
-		"-t", modelFilesystemType,
-		"-o", modelMountOptions,
-		"/dev/mapper/"+deviceName,
-		mountPoint,
-	)
-	mountCmd.Stdout = os.Stdout
-	mountCmd.Stderr = os.Stderr
-	if err := mountCmd.Run(); err != nil {
-		closeVerityMapper(deviceName)
-		return fmt.Errorf("mounting verity device: %w", err)
-	}
-
 	return nil
 }
 
@@ -330,14 +255,6 @@ func diskByUUID(uuid string) string {
 
 func diskByPARTUUID(uuid string) string {
 	return fmt.Sprintf("/dev/disk/by-partuuid/%s", uuid)
-}
-
-func closeVerityMapper(name string) {
-	_ = exec.Command("veritysetup", "close", name).Run()
-}
-
-func closeCryptMapper(name string) {
-	_ = exec.Command("cryptsetup", "close", name).Run()
 }
 
 func modelLogName(name, rootHash string) string {

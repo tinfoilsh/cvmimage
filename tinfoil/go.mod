@@ -18,6 +18,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.1.7
+	github.com/tinfoilsh/modelwrap v0.2.0
 	github.com/tinfoilsh/tinfoil-go/verifier v0.12.0
 	golang.org/x/net v0.48.0
 	golang.org/x/time v0.14.0

@@ -25,7 +25,7 @@ type vaultFetchRequest struct {
 	Repo       string           `json:"repo"`
 	SecretRefs []string         `json:"secret_refs"`
 	Bundle     *verifier.Bundle `json:"bundle"`
-	Password   string           `json:"password"`
+	Token      string           `json:"token"`
 }
 
 type vaultFetchResponse struct {
@@ -57,7 +57,7 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.E
 			EnclaveAttestationReport: cpuAtt.V2Doc,
 			Digest:                   v.Digest,
 		},
-		Password: v.Password,
+		Token: v.Token,
 	}
 
 	resp, err := vaultFetch(v.URL, req)

@@ -65,21 +65,6 @@ jobs:
                     ../mkosi.extra/usr/bin/tinfoil-egress \
                     ../mkosi.extra/usr/bin/tinfoil-shim
 
-      # TEMPORARY: drop once cuda-ubuntu2604 ships nvattest. The image
-      # digest is also pinned in Makefile; rotate both together via
-      # `docker buildx imagetools inspect ubuntu:26.04`.
-      - name: Build nvattest from source (in resolute container)
-        run: |
-          docker run --rm \
-            -v "$PWD":/workspace -w /workspace \
-            -v nvattest-apt-cache:/var/cache/apt \
-            -e DEBIAN_FRONTEND=noninteractive \
-            -e HOST_UID="$(id -u)" \
-            -e HOST_GID="$(id -g)" \
-            ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4 \
-            bash -c './build-nvattest.sh'
-          ls -la packages/
-
       - name: Build image
         env:
           REF_NAME: ${{ github.ref_name }}

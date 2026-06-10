@@ -98,7 +98,7 @@ func run() error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
-	// 3b. Fetch any external vault secrets
+	// 4. Fetch any external vault secrets
 	start = time.Now()
 	if externalConfig.Vault == nil || externalConfig.Vault.URL == "" {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
@@ -111,7 +111,7 @@ func run() error {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), externalConfig.Vault.URL)
 	}
 
-	// 4. GPU attestation
+	// 5. GPU attestation
 	start = time.Now()
 	gpuCount := config.GPUs
 	if gpuCount == 0 {
@@ -145,7 +145,7 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
 	}
 
-	// 5. Certificate
+	// 6. Certificate
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
 	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
@@ -154,7 +154,7 @@ func run() error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 6. Registry auth
+	// 7. Registry auth
 	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(); err != nil {
@@ -164,7 +164,7 @@ func run() error {
 		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 	}
 
-	// 7. Firewall
+	// 8. Firewall
 	start = time.Now()
 	log.Println("Configuring firewall")
 	if err := setupFirewall(config); err != nil {
@@ -173,7 +173,7 @@ func run() error {
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
 
-	// 8. Models
+	// 9. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config); err != nil {
@@ -183,7 +183,7 @@ func run() error {
 		tracker.Record("models", boot.StatusOK, time.Since(start), "")
 	}
 
-	// 9. Containers + health checks
+	// 10. Containers + health checks
 	log.Println("Launching containers")
 	if err := launchContainersAndWaitHealthy(tracker, config, externalConfig); err != nil {
 		return err

@@ -34,10 +34,9 @@ type vaultFetchResponse struct {
 
 // fetchVaultSecrets is boot stage 4: it asks the confidential secrets vault for
 // this workload's secrets, decrypts them in-enclave with sk_W, and merges them
-// into the (private, host-invisible) external config so buildEnv injects them
-// into the containers that declare them. It reuses the per-boot HPKE identity
+// into the external config so buildEnv injects them
+// into the container. It reuses the per-boot HPKE identity
 // and the CPU quote from the preceding stages.
-//
 // The requested secret names are the union of every container's `secrets:`
 func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.ExternalConfig) error {
 	v := ext.Vault

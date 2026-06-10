@@ -61,15 +61,14 @@ type Metadata struct {
 type ExternalConfig struct {
 	MetricsAPIKey string
 	ACPIAPIKey    string
-	// Workload's source repo
-	Repo     string            `yaml:"repo,omitempty"`
-	Env      map[string]string `yaml:"env"`
-	Secrets  map[string]string `yaml:"secrets"`
-	Metadata Metadata          `yaml:"metadata"`
-	Vault    *VaultConfig      `yaml:"vault,omitempty"`
+	Repo          string            `yaml:"repo,omitempty"`
+	Env           map[string]string `yaml:"env"`
+	Secrets       map[string]string `yaml:"secrets"`
+	Metadata      Metadata          `yaml:"metadata"`
+	Vault         *VaultConfig      `yaml:"vault,omitempty"`
 }
 
-// VaultConfig points a deployment at a confidential secrets vault.
+// VaultConfig points a deployment at a user-managed secrets vault
 type VaultConfig struct {
 	URL    string `yaml:"url"`
 	Token  string `yaml:"token"`

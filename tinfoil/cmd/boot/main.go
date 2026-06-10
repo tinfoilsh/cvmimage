@@ -103,8 +103,7 @@ func run() error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
-	// 3b. Vault secrets (fetch from the confidential secrets vault, decrypt with
-	// sk_W, merge into the external config for buildEnv) — only if configured.
+	// 3b. Fetch any external vault secrets
 	start = time.Now()
 	if externalConfig.Vault == nil || externalConfig.Vault.URL == "" {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")

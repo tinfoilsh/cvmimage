@@ -18,7 +18,6 @@ import (
 )
 
 // vaultFetchInfo must match the vault's HPKE info string
-// (confidential-secrets-vault/fetch.go).
 const vaultFetchInfo = "tinfoil-secrets-vault/fetch/v1"
 
 type vaultFetchRequest struct {
@@ -37,12 +36,9 @@ type vaultFetchResponse struct {
 // this workload's secrets, decrypts them in-enclave with sk_W, and merges them
 // into the (private, host-invisible) external config so buildEnv injects them
 // into the containers that declare them. It reuses the per-boot HPKE identity
-// and the CPU quote from the preceding stages; the released values never pass
-// through the host-authored external config.
+// and the CPU quote from the preceding stages.
 //
 // The requested secret names are the union of every container's `secrets:`
-// list in the measured tinfoil-config.yml — so the request is bound to the
-// workload's attested identity, not to a per-deployment file.
 func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.ExternalConfig) error {
 	v := ext.Vault
 	id, err := identity.FromFile(boot.HPKEKeyPath)
@@ -83,8 +79,7 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.E
 	return nil
 }
 
-// declaredSecretNames returns the deduplicated, sorted union of every
-// container's `secrets:` declarations in the measured config.
+// declaredSecretNames returns the deduplicated, sorted union of a containers secrets
 func declaredSecretNames(config *Config) []string {
 	seen := map[string]struct{}{}
 	var names []string

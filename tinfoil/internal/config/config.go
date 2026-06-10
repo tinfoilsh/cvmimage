@@ -69,9 +69,7 @@ type ExternalConfig struct {
 	Vault    *VaultConfig      `yaml:"vault,omitempty"`
 }
 
-// VaultConfig points a deployment at a confidential secrets vault. The server
-// is one-workload (knows which secrets it serves), so the workload doesn't
-// need to enumerate names — the server returns everything for this repo.
+// VaultConfig points a deployment at a confidential secrets vault.
 type VaultConfig struct {
 	URL      string `yaml:"url"`
 	Password string `yaml:"password"`

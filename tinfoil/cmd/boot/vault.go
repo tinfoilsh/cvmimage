@@ -2,18 +2,26 @@ package main
 
 import (
 	"bytes"
-	"encoding/hex"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
+	"time"
 
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 
-	"tinfoil/internal/attestation"
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -22,13 +30,16 @@ type vaultFetchRequest struct {
 	SecretRefs []string         `json:"secret_refs"`
 	Bundle     *verifier.Bundle `json:"bundle"`
 	Token      string           `json:"token"`
-	Nonce      string           `json:"nonce"`
 }
 
-// The exchange follows the KBS RCAR shape (request, challenge, attest,
-// respond): the vault issues a single-use nonce, the enclave binds it into a
-// fresh quote's REPORTDATA, and the vault releases secrets.
-func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
+// fetchVaultSecrets asks the vault for the declared secrets the external
+// config did not populate. The requester is authenticated by mutual TLS
+// pinned to the attestation: the request carries the boot attestation
+// document, whose REPORTDATA binds the enclave's TLS public key, and the
+// connection presents a client certificate over that same key. The handshake
+// proves live possession of the key, so the (public) document and a leaked
+// token are not enough — only the measured enclave holding the key can fetch.
+func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig, tlsKey *ecdsa.PrivateKey, attDoc *verifier.Document) error {
 	names := missingSecretValues(config, ext)
 	if len(names) == 0 {
 		log.Println("All declared secrets populated by external config, nothing to fetch")
@@ -38,34 +49,22 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 		return fmt.Errorf("%d secret(s) need the vault but external config has no vault-token", len(names))
 	}
 
-	nonce, err := vaultChallenge(config.VaultURL)
+	client, err := vaultClient(tlsKey)
 	if err != nil {
-		return fmt.Errorf("fetching vault challenge: %w", err)
-	}
-
-	var reportData [64]byte
-	copy(reportData[:32], nonce)
-	rawReport, platform, err := attestation.Report(reportData)
-	if err != nil {
-		return fmt.Errorf("fetching quote for vault challenge: %w", err)
-	}
-	doc, err := attestation.V2Document(rawReport, platform)
-	if err != nil {
-		return fmt.Errorf("wrapping quote: %w", err)
+		return fmt.Errorf("building vault client: %w", err)
 	}
 
 	req := vaultFetchRequest{
 		Repo:       ext.Metadata.Repo,
 		SecretRefs: names,
 		Bundle: &verifier.Bundle{
-			EnclaveAttestationReport: doc,
+			EnclaveAttestationReport: attDoc,
 			Digest:                   ext.Metadata.Digest,
 		},
 		Token: ext.VaultToken,
-		Nonce: hex.EncodeToString(nonce),
 	}
 
-	secrets, err := vaultFetch(config.VaultURL, req)
+	secrets, err := vaultFetch(client, config.VaultURL, req)
 	if err != nil {
 		return err
 	}
@@ -101,43 +100,73 @@ func missingSecretValues(config *Config, ext *shimconfig.ExternalConfig) []strin
 	return names
 }
 
-// vaultChallenge fetches a single-use nonce from the vault to bind into the
-// quote's REPORTDATA.
-func vaultChallenge(base string) ([]byte, error) {
-	url := strings.TrimRight(base, "/") + "/challenge"
-	resp, err := http.Get(url)
+// vaultClient returns an HTTP client presenting a client certificate over the
+// enclave's attested TLS key. The certificate wrapper carries no trust of its
+// own — the vault pins the key fingerprint against the attested REPORTDATA —
+// so a fresh self-signed one is enough.
+func vaultClient(tlsKey *ecdsa.PrivateKey) (*http.Client, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generating serial number: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "tinfoil-enclave"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	var challenge struct {
-		Nonce string `json:"nonce"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&challenge); err != nil {
-		return nil, fmt.Errorf("decoding challenge: %w", err)
-	}
-	nonce, err := hex.DecodeString(challenge.Nonce)
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &tlsKey.PublicKey, tlsKey)
 	if err != nil {
-		return nil, fmt.Errorf("decoding nonce: %w", err)
+		return nil, fmt.Errorf("creating client certificate: %w", err)
 	}
-	if len(nonce) != 32 {
-		return nil, fmt.Errorf("nonce must be 32 bytes, got %d", len(nonce))
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: tlsKey}},
+				MinVersion:   tls.VersionTLS12,
+			},
+		},
+	}, nil
+}
+
+// loadVaultIdentity reads the TLS key and boot attestation document persisted
+// by boot, for vault fetches re-run after boot (the boot path passes both
+// from memory).
+func loadVaultIdentity() (*ecdsa.PrivateKey, *verifier.Document, error) {
+	keyPEM, err := os.ReadFile(boot.TLSKeyPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading TLS key: %w", err)
 	}
-	return nonce, nil
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, nil, fmt.Errorf("no PEM block in %s", boot.TLSKeyPath)
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing TLS key: %w", err)
+	}
+
+	data, err := os.ReadFile(boot.AttestationPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading attestation document: %w", err)
+	}
+	var doc verifier.Document
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, nil, fmt.Errorf("parsing attestation document: %w", err)
+	}
+	return key, &doc, nil
 }
 
 // vaultFetch POSTs to /fetch and decodes the released secrets. Fails fast.
-func vaultFetch(base string, req vaultFetchRequest) (map[string]string, error) {
+func vaultFetch(client *http.Client, base string, req vaultFetchRequest) (map[string]string, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 	url := strings.TrimRight(base, "/") + "/fetch"
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

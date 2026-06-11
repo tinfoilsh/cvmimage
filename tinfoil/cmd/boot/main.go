@@ -55,7 +55,11 @@ func runSubcommand(cmd string) error {
 		// Manual re-run must fetch vault secrets, they're not persisted on disk
 		if config.VaultURL != "" {
 			log.Println("Fetching vault secrets")
-			if err := fetchVaultSecrets(config, externalConfig); err != nil {
+			tlsKey, attDoc, err := loadVaultIdentity()
+			if err != nil {
+				return fmt.Errorf("loading TLS identity for vault fetch: %w", err)
+			}
+			if err := fetchVaultSecrets(config, externalConfig, tlsKey, attDoc); err != nil {
 				return fmt.Errorf("vault secret fetch failed: %w", err)
 			}
 		}
@@ -155,7 +159,7 @@ func run() error {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
 	} else {
 		log.Println("Fetching vault secrets")
-		if err := fetchVaultSecrets(config, externalConfig); err != nil {
+		if err := fetchVaultSecrets(config, externalConfig, nodeID.TLSKey, cpuAtt.V2Doc); err != nil {
 			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
 			return fmt.Errorf("vault secret fetch failed: %w", err)
 		}

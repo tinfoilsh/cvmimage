@@ -34,6 +34,9 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.E
 		log.Println("All declared secrets populated by external config, nothing to fetch")
 		return nil
 	}
+	if ext.VaultToken == "" {
+		return fmt.Errorf("%d secret(s) need the vault but external config has no vault-token", len(names))
+	}
 
 	req := vaultFetchRequest{
 		Repo:       ext.Metadata.Repo,

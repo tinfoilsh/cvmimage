@@ -25,16 +25,9 @@ type vaultFetchRequest struct {
 	Nonce      string           `json:"nonce"`
 }
 
-// fetchVaultSecrets is the vault boot stage: it asks the confidential secrets
-// vault for this workload's secrets and merges them into the external config
-// so buildEnv injects them into the container. Only container-declared
-// secrets whose values the external config did not populate are requested.
-//
 // The exchange follows the KBS RCAR shape (request, challenge, attest,
 // respond): the vault issues a single-use nonce, the enclave binds it into a
-// fresh quote's REPORTDATA, and the vault releases secrets over the TLS
-// channel only against that quote — proof the requester is a live measured
-// enclave, not a replayed quote and a leaked token.
+// fresh quote's REPORTDATA, and the vault releases secrets.
 func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 	names := missingSecretValues(config, ext)
 	if len(names) == 0 {

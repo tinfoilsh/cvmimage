@@ -47,12 +47,24 @@ func runSubcommand(cmd string) error {
 
 	switch cmd {
 	case "containers":
+		externalConfig, err := getExternalConfig()
+		if err != nil {
+			log.Printf("Warning: external config not available, using defaults: %v", err)
+			externalConfig = &shimconfig.ExternalConfig{}
+		}
+		// Manual re-run must fetch vault secrets, they're not persisted on disk
+		if config.VaultURL != "" {
+			log.Println("Fetching vault secrets")
+			if err := fetchVaultSecrets(config, externalConfig); err != nil {
+				return fmt.Errorf("vault secret fetch failed: %w", err)
+			}
+		}
 		log.Println("Setting up registry authentication")
 		if err := setupRegistryAuth(); err != nil {
 			log.Printf("Warning: registry auth setup failed: %v", err)
 		}
 		log.Println("Launching containers")
-		return launchContainers(config)
+		return launchContainers(config, externalConfig)
 	case "models":
 		externalConfig, err := getExternalConfig()
 		if err != nil {

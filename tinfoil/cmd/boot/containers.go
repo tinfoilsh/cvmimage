@@ -108,13 +108,11 @@ func networkCreateOptions(name string) dockernetwork.CreateOptions {
 }
 
 // launchContainers starts all containers from the config
-func launchContainers(config *Config) error {
+func launchContainers(config *Config, extConfig *shimconfig.ExternalConfig) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		return nil
 	}
-
-	extConfig, _ := getExternalConfig()
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {

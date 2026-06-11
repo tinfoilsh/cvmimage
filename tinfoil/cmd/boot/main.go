@@ -143,7 +143,7 @@ func run() error {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
 	} else {
 		log.Println("Fetching vault secrets")
-		if err := fetchVaultSecrets(cpuAtt, config, externalConfig); err != nil {
+		if err := fetchVaultSecrets(config, externalConfig); err != nil {
 			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
 			return fmt.Errorf("vault secret fetch failed: %w", err)
 		}

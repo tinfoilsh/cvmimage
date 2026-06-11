@@ -103,20 +103,7 @@ func run() error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
-	// 4. Fetch any external vault secrets
-	start = time.Now()
-	if externalConfig.Vault == nil || externalConfig.Vault.URL == "" {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
-	} else {
-		log.Println("Fetching vault secrets")
-		if err := fetchVaultSecrets(cpuAtt, config, externalConfig); err != nil {
-			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-			return fmt.Errorf("vault secret fetch failed: %w", err)
-		}
-		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), externalConfig.Vault.URL)
-	}
-
-	// 5. GPU attestation
+	// 4. GPU attestation
 	start = time.Now()
 	gpuCount := config.GPUs
 	if gpuCount == 0 {
@@ -148,6 +135,19 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusOK, time.Since(start), fmt.Sprintf("%d GPUs", gpuCount))
 	} else {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
+	}
+
+	// 5. Fetch any external vault secrets
+	start = time.Now()
+	if config.VaultURL == "" {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
+	} else {
+		log.Println("Fetching vault secrets")
+		if err := fetchVaultSecrets(cpuAtt, config, externalConfig); err != nil {
+			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+			return fmt.Errorf("vault secret fetch failed: %w", err)
+		}
+		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
 	}
 
 	// 6. Certificate

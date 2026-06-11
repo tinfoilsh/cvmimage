@@ -10,15 +10,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 
-	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
-
-// vaultFetchInfo must match the vault's HPKE info string
-const vaultFetchInfo = "tinfoil-secrets-vault/fetch/v1"
 
 type vaultFetchRequest struct {
 	Repo       string           `json:"repo"`
@@ -27,45 +22,32 @@ type vaultFetchRequest struct {
 	Token      string           `json:"token"`
 }
 
-type vaultFetchResponse struct {
-	Enc        []byte `json:"enc"`
-	Ciphertext []byte `json:"ciphertext"`
-}
-
-// fetchVaultSecrets is boot stage 4: it asks the confidential secrets vault for
-// this workload's secrets, decrypts them in-enclave with sk_W, and merges them
-// into the external config so buildEnv injects them
-// into the container. It reuses the per-boot HPKE identity
-// and the CPU quote from the preceding stages.
-// The requested secret names are the union of every container's `secrets:`
+// fetchVaultSecrets is the vault boot stage: it asks the confidential secrets
+// vault for this workload's secrets and merges them into the external config
+// so buildEnv injects them into the container. The vault verifies the CPU
+// quote from the preceding stages and releases secrets over the TLS channel.
+// Only container-declared secrets whose values the external config did not
+// populate are requested.
 func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.ExternalConfig) error {
-	v := ext.Vault
-	id, err := identity.FromFile(boot.HPKEKeyPath)
-	if err != nil {
-		return fmt.Errorf("loading HPKE identity: %w", err)
+	names := missingSecretValues(config, ext)
+	if len(names) == 0 {
+		log.Println("All declared secrets populated by external config, nothing to fetch")
+		return nil
 	}
 
 	req := vaultFetchRequest{
-		Repo:       ext.Repo,
-		SecretRefs: declaredSecretNames(config),
+		Repo:       ext.Metadata.Repo,
+		SecretRefs: names,
 		Bundle: &verifier.Bundle{
 			EnclaveAttestationReport: cpuAtt.V2Doc,
-			Digest:                   v.Digest,
+			Digest:                   ext.Metadata.Digest,
 		},
-		Token: v.Token,
+		Token: ext.VaultToken,
 	}
 
-	resp, err := vaultFetch(v.URL, req)
+	secrets, err := vaultFetch(config.VaultURL, req)
 	if err != nil {
 		return err
-	}
-	plaintext, err := vaultOpen(id, resp.Enc, resp.Ciphertext)
-	if err != nil {
-		return fmt.Errorf("decrypting release: %w", err)
-	}
-	var secrets map[string]string
-	if err := json.Unmarshal(plaintext, &secrets); err != nil {
-		return fmt.Errorf("parsing released secrets: %w", err)
 	}
 
 	if ext.Secrets == nil {
@@ -74,12 +56,13 @@ func fetchVaultSecrets(cpuAtt *CPUAttestation, config *Config, ext *shimconfig.E
 	for name, value := range secrets {
 		ext.Secrets[name] = value
 	}
-	log.Printf("Vault released %d secret(s) for %s", len(secrets), ext.Repo)
+	log.Printf("Vault released %d secret(s) for %s", len(secrets), ext.Metadata.Repo)
 	return nil
 }
 
-// declaredSecretNames returns the deduplicated, sorted union of a containers secrets
-func declaredSecretNames(config *Config) []string {
+// missingSecretValues returns the deduplicated, sorted names of the
+// containers' secrets whose values the external config did not populate
+func missingSecretValues(config *Config, ext *shimconfig.ExternalConfig) []string {
 	seen := map[string]struct{}{}
 	var names []string
 	for _, c := range config.Containers {
@@ -88,6 +71,9 @@ func declaredSecretNames(config *Config) []string {
 				continue
 			}
 			seen[n] = struct{}{}
+			if ext.GetSecret(n) != "" {
+				continue
+			}
 			names = append(names, n)
 		}
 	}
@@ -95,23 +81,8 @@ func declaredSecretNames(config *Config) []string {
 	return names
 }
 
-// vaultOpen opens the vault's HPKE-sealed release with sk_W. The identity uses
-// circl HPKE; the vault seals with go's crypto/hpke — both are RFC 9180
-// X25519/HKDF-SHA256/AES-256-GCM, so they interoperate on the wire.
-func vaultOpen(id *identity.Identity, enc, ct []byte) ([]byte, error) {
-	receiver, err := id.Suite().NewReceiver(id.PrivateKey(), []byte(vaultFetchInfo))
-	if err != nil {
-		return nil, fmt.Errorf("hpke receiver: %w", err)
-	}
-	opener, err := receiver.Setup(enc)
-	if err != nil {
-		return nil, fmt.Errorf("hpke setup: %w", err)
-	}
-	return opener.Open(ct, nil)
-}
-
-// vaultFetch POSTs to /fetch and decodes the sealed response. Fails fast.
-func vaultFetch(base string, req vaultFetchRequest) (*vaultFetchResponse, error) {
+// vaultFetch POSTs to /fetch and decodes the released secrets. Fails fast.
+func vaultFetch(base string, req vaultFetchRequest) (map[string]string, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -126,9 +97,9 @@ func vaultFetch(base string, req vaultFetchRequest) (*vaultFetchResponse, error)
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
-	var fr vaultFetchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&fr); err != nil {
+	var secrets map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&secrets); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
-	return &fr, nil
+	return secrets, nil
 }

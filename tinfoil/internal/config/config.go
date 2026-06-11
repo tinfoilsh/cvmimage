@@ -56,23 +56,17 @@ type Metadata struct {
 	Domain string `yaml:"domain"`
 	Image  string `yaml:"image"`
 	GPU    string `yaml:"gpu"`
+	Repo   string `yaml:"repo,omitempty"`
+	Digest string `yaml:"digest,omitempty"`
 }
 
 type ExternalConfig struct {
 	MetricsAPIKey string
 	ACPIAPIKey    string
-	Repo          string            `yaml:"repo,omitempty"`
 	Env           map[string]string `yaml:"env"`
 	Secrets       map[string]string `yaml:"secrets"`
 	Metadata      Metadata          `yaml:"metadata"`
-	Vault         *VaultConfig      `yaml:"vault,omitempty"`
-}
-
-// VaultConfig points a deployment at a user-managed secrets vault
-type VaultConfig struct {
-	URL    string `yaml:"url"`
-	Token  string `yaml:"token"`
-	Digest string `yaml:"digest,omitempty"`
+	VaultToken    string            `yaml:"vault-token,omitempty"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {

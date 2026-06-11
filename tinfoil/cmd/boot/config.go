@@ -24,6 +24,7 @@ type Config struct {
 	GPUs       int                     `yaml:"gpus"`
 	Models     []ModelSpec             `yaml:"models"`
 	Containers []Container             `yaml:"containers"`
+	VaultURL   string                  `yaml:"vault-url,omitempty"`
 }
 
 // CVMNetworkConfig scopes host-firewall knobs that affect the CVM as a

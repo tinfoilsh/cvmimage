@@ -52,14 +52,10 @@ func runSubcommand(cmd string) error {
 			log.Printf("Warning: external config not available, using defaults: %v", err)
 			externalConfig = &shimconfig.ExternalConfig{}
 		}
-		// Manual re-run must fetch vault secrets, they're not persisted on disk
+		// Manual re-run must fetch vault secrets, they're not persisted on disk.
 		if config.VaultURL != "" {
 			log.Println("Fetching vault secrets")
-			tlsKey, attDoc, err := loadVaultIdentity()
-			if err != nil {
-				return fmt.Errorf("loading TLS identity for vault fetch: %w", err)
-			}
-			if err := fetchVaultSecrets(config, externalConfig, tlsKey, attDoc); err != nil {
+			if err := fetchVaultSecrets(config, externalConfig); err != nil {
 				return fmt.Errorf("vault secret fetch failed: %w", err)
 			}
 		}
@@ -153,20 +149,7 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
 	}
 
-	// 5. Fetch any external vault secrets
-	start = time.Now()
-	if config.VaultURL == "" {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
-	} else {
-		log.Println("Fetching vault secrets")
-		if err := fetchVaultSecrets(config, externalConfig, nodeID.TLSKey, cpuAtt.V2Doc); err != nil {
-			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-			return fmt.Errorf("vault secret fetch failed: %w", err)
-		}
-		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
-	}
-
-	// 6. Certificate
+	// 5. Certificate
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
 	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
@@ -174,6 +157,19 @@ func run() error {
 		return fmt.Errorf("certificate acquisition failed: %w", err)
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
+
+	// 6. Fetch any external vault secrets.
+	start = time.Now()
+	if config.VaultURL == "" {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
+	} else {
+		log.Println("Fetching vault secrets")
+		if err := fetchVaultSecrets(config, externalConfig); err != nil {
+			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+			return fmt.Errorf("vault secret fetch failed: %w", err)
+		}
+		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
+	}
 
 	// 7. Registry auth
 	start = time.Now()

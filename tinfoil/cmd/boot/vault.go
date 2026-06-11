@@ -2,22 +2,14 @@ package main
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
-	"time"
 
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 
@@ -33,13 +25,8 @@ type vaultFetchRequest struct {
 }
 
 // fetchVaultSecrets asks the vault for the declared secrets the external
-// config did not populate. The requester is authenticated by mutual TLS
-// pinned to the attestation: the request carries the boot attestation
-// document, whose REPORTDATA binds the enclave's TLS public key, and the
-// connection presents a client certificate over that same key. The handshake
-// proves live possession of the key, so the (public) document and a leaked
-// token are not enough — only the measured enclave holding the key can fetch.
-func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig, tlsKey *ecdsa.PrivateKey, attDoc *verifier.Document) error {
+// config did not populate.
+func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 	names := missingSecretValues(config, ext)
 	if len(names) == 0 {
 		log.Println("All declared secrets populated by external config, nothing to fetch")
@@ -49,9 +36,13 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig, tlsKey *e
 		return fmt.Errorf("%d secret(s) need the vault but external config has no vault-token", len(names))
 	}
 
-	client, err := vaultClient(tlsKey)
+	cert, err := tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
 	if err != nil {
-		return fmt.Errorf("building vault client: %w", err)
+		return fmt.Errorf("loading enclave TLS certificate: %w", err)
+	}
+	attDoc, err := verifier.FromFile(boot.AttestationPath)
+	if err != nil {
+		return fmt.Errorf("loading boot attestation document: %w", err)
 	}
 
 	req := vaultFetchRequest{
@@ -64,7 +55,7 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig, tlsKey *e
 		Token: ext.VaultToken,
 	}
 
-	secrets, err := vaultFetch(client, config.VaultURL, req)
+	secrets, err := vaultFetch(vaultClient(cert), config.VaultURL, req)
 	if err != nil {
 		return err
 	}
@@ -100,63 +91,20 @@ func missingSecretValues(config *Config, ext *shimconfig.ExternalConfig) []strin
 	return names
 }
 
-// vaultClient returns an HTTP client presenting a client certificate over the
-// enclave's attested TLS key. The certificate wrapper carries no trust of its
-// own — the vault pins the key fingerprint against the attested REPORTDATA —
-// so a fresh self-signed one is enough.
-func vaultClient(tlsKey *ecdsa.PrivateKey) (*http.Client, error) {
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, fmt.Errorf("generating serial number: %w", err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "tinfoil-enclave"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &tlsKey.PublicKey, tlsKey)
-	if err != nil {
-		return nil, fmt.Errorf("creating client certificate: %w", err)
-	}
+// vaultClient returns an HTTP client that presents the enclave's TLS
+// certificate for mutual TLS. The vault authenticates the connection by
+// pinning the certificate's key fingerprint to the attested REPORTDATA, so no
+// separate client credential is needed. The vault's own server certificate is
+// verified against the system roots (its host is fixed in the measured config).
+func vaultClient(cert tls.Certificate) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: tlsKey}},
+				Certificates: []tls.Certificate{cert},
 				MinVersion:   tls.VersionTLS12,
 			},
 		},
-	}, nil
-}
-
-// loadVaultIdentity reads the TLS key and boot attestation document persisted
-// by boot, for vault fetches re-run after boot (the boot path passes both
-// from memory).
-func loadVaultIdentity() (*ecdsa.PrivateKey, *verifier.Document, error) {
-	keyPEM, err := os.ReadFile(boot.TLSKeyPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading TLS key: %w", err)
 	}
-	block, _ := pem.Decode(keyPEM)
-	if block == nil {
-		return nil, nil, fmt.Errorf("no PEM block in %s", boot.TLSKeyPath)
-	}
-	key, err := x509.ParseECPrivateKey(block.Bytes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parsing TLS key: %w", err)
-	}
-
-	data, err := os.ReadFile(boot.AttestationPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading attestation document: %w", err)
-	}
-	var doc verifier.Document
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, nil, fmt.Errorf("parsing attestation document: %w", err)
-	}
-	return key, &doc, nil
 }
 
 // vaultFetch POSTs to /fetch and decodes the released secrets. Fails fast.

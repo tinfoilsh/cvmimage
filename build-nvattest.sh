@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Builds nvattest + libnvat into ./packages/ for mkosi. Always runs inside an
 # ubuntu:26.04 container as root (see Makefile / release.yml).
-# TEMPORARY: drop once nvattest lands in cuda-ubuntu2604 — see Makefile.
+# The cuda-ubuntu2604 repo now ships nvattest, but its libnvat links
+# libxml2.so.2 while Ubuntu resolute ships only libxml2.so.16 (libxml2 2.14
+# bumped the SONAME). So we keep building from source against system libxml2-16.
 
 set -Eeuo pipefail
 
 UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
-UPSTREAM_TAG=2026.03.02
-UPSTREAM_SHA=0c1be386a8fbb8f2766a6a556d10df86f5fed9d3
+UPSTREAM_TAG=2026.06.09
+UPSTREAM_SHA=9d12801cea8a198ea0f29640dfaf8a4017c841c5
 APT_SNAPSHOT_DATE=20260525T000000Z
 
 # Transitive CMake FetchContent deps. We pre-fetch each at the expected SHA
@@ -32,8 +34,8 @@ declare -rA DEP_SHAS=(
 JSON_URL=https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
 JSON_SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
 
-PKG_VERSION=1.2.0.1772475102-1
-SO_VERSION=1.2.0
+PKG_VERSION=1.2.2.1780962352-1
+SO_VERSION=1.2.2
 ARCH=amd64
 
 OUT_DIR="$(cd "$(dirname "$0")" && pwd)/packages"
@@ -66,10 +68,6 @@ apt-get install -y --no-install-recommends \
 # Clone upstream and verify SHA.
 git clone --depth=1 --branch "${UPSTREAM_TAG}" "${UPSTREAM_URL}" "${SRC}"
 [[ "$(git -C "${SRC}" rev-parse HEAD)" = "${UPSTREAM_SHA}" ]]
-
-# libxml2 v2.14 changed xmlGetLastError() to return const xmlError*.
-sed -i 's/xmlErrorPtr xml_error = xmlGetLastError();/const xmlError* xml_error = xmlGetLastError();/' \
-    "${SRC}/nv-attestation-sdk-cpp/src/rim.cpp"
 
 # Pre-fetch transitive deps at their expected SHA before cmake configures.
 fetchcontent_overrides=()

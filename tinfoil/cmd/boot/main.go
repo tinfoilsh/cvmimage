@@ -47,12 +47,24 @@ func runSubcommand(cmd string) error {
 
 	switch cmd {
 	case "containers":
+		externalConfig, err := getExternalConfig()
+		if err != nil {
+			log.Printf("Warning: external config not available, using defaults: %v", err)
+			externalConfig = &shimconfig.ExternalConfig{}
+		}
+		// Manual re-run must fetch vault secrets, they're not persisted on disk.
+		if config.VaultURL != "" {
+			log.Println("Fetching vault secrets")
+			if err := fetchVaultSecrets(config, externalConfig); err != nil {
+				return fmt.Errorf("vault secret fetch failed: %w", err)
+			}
+		}
 		log.Println("Setting up registry authentication")
 		if err := setupRegistryAuth(); err != nil {
 			log.Printf("Warning: registry auth setup failed: %v", err)
 		}
 		log.Println("Launching containers")
-		return launchContainers(config)
+		return launchContainers(config, externalConfig)
 	case "models":
 		externalConfig, err := getExternalConfig()
 		if err != nil {
@@ -146,7 +158,20 @@ func run() error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 6. Registry auth
+	// 6. Fetch any external vault secrets.
+	start = time.Now()
+	if config.VaultURL == "" {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
+	} else {
+		log.Println("Fetching vault secrets")
+		if err := fetchVaultSecrets(config, externalConfig); err != nil {
+			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+			return fmt.Errorf("vault secret fetch failed: %w", err)
+		}
+		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
+	}
+
+	// 7. Registry auth
 	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(); err != nil {
@@ -156,7 +181,7 @@ func run() error {
 		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 	}
 
-	// 7. Firewall
+	// 8. Firewall
 	start = time.Now()
 	log.Println("Configuring firewall")
 	if err := setupFirewall(config); err != nil {
@@ -165,7 +190,7 @@ func run() error {
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
 
-	// 8. Models
+	// 9. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config, externalConfig); err != nil {
@@ -174,9 +199,9 @@ func run() error {
 	}
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
 
-	// 9. Containers + health checks
+	// 10. Containers + health checks
 	log.Println("Launching containers")
-	if err := launchContainersAndWaitHealthy(tracker, config); err != nil {
+	if err := launchContainersAndWaitHealthy(tracker, config, externalConfig); err != nil {
 		return err
 	}
 

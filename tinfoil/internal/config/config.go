@@ -56,15 +56,17 @@ type Metadata struct {
 	Domain string `yaml:"domain"`
 	Image  string `yaml:"image"`
 	GPU    string `yaml:"gpu"`
+	Repo   string `yaml:"repo,omitempty"`
+	Digest string `yaml:"digest,omitempty"`
 }
 
 type ExternalConfig struct {
 	MetricsAPIKey string
 	ACPIAPIKey    string
-
-	Env      map[string]string `yaml:"env"`
-	Secrets  map[string]string `yaml:"secrets"`
-	Metadata Metadata          `yaml:"metadata"`
+	Env           map[string]string `yaml:"env"`
+	Secrets       map[string]string `yaml:"secrets"`
+	Metadata      Metadata          `yaml:"metadata"`
+	VaultToken    string            `yaml:"vault-token,omitempty"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {

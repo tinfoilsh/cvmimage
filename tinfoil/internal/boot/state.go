@@ -36,6 +36,7 @@ const (
 	StageIdentity       = "identity"
 	StageCPUAttestation = "cpu-attestation"
 	StageGPUAttestation = "gpu-attestation"
+	StageVaultSecrets   = "vault-secrets"
 	StageCertificate    = "certificate"
 	StageRegistryAuth   = "registry-auth"
 	StageModels         = "models"
@@ -47,8 +48,8 @@ const (
 // InitialStages is the ordered list of stages known at boot time.
 // Both boot and shim use this as the starting point.
 var InitialStages = []string{
-	StageConfig, StageIdentity, StageCPUAttestation, StageGPUAttestation,
-	StageCertificate, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
+	StageConfig, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
+	StageVaultSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
 }
 
 // Tracker records boot stages as they complete.

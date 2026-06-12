@@ -8,14 +8,18 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
+
+const vaultFetchTimeout = 60 * time.Second
 
 type vaultFetchRequest struct {
 	Repo       string           `json:"repo"`
@@ -34,6 +38,10 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 	}
 	if ext.VaultToken == "" {
 		return fmt.Errorf("%d secret(s) need the vault but external config has no vault-token", len(names))
+	}
+	// TLS required
+	if u, err := url.Parse(config.VaultURL); err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("vault-url must be an https URL, got %q", config.VaultURL)
 	}
 
 	cert, err := tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
@@ -98,6 +106,7 @@ func missingSecretValues(config *Config, ext *shimconfig.ExternalConfig) []strin
 // verified against the system roots (its host is fixed in the measured config).
 func vaultClient(cert tls.Certificate) *http.Client {
 	return &http.Client{
+		Timeout: vaultFetchTimeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},

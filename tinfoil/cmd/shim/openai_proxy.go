@@ -2,17 +2,33 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"math/big"
+	"mime"
 	"net/http"
 	"strings"
+	"sync"
 
 	"log"
 )
+
+const (
+	initialSSEBufferSize = 64 * 1024
+	maxSSELineBytes      = 4 * 1024 * 1024
+)
+
+// isEventStreamContentType reports whether the Content-Type header identifies
+// an SSE response, ignoring parameters such as charset.
+func isEventStreamContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	return mediaType == "text/event-stream"
+}
 
 // addPaddingToStreamChunk adds a random padding field to the delta object in a streaming chunk
 // without parsing the entire response structure
@@ -62,17 +78,30 @@ func addPaddingToStreamChunk(data string) (string, error) {
 	return string(modified), nil
 }
 
-type chatRequest struct {
-	Model    string `json:"model"`
-	Stream   bool   `json:"stream"`
-	Messages []struct {
-		Role    string `json:"role"`
-		Content any    `json:"content"` // String or array of content parts
-	} `json:"messages"`
-}
-
 type streamTransport struct {
 	base http.RoundTripper
+}
+
+type closeOnceReadCloser struct {
+	io.ReadCloser
+	once sync.Once
+	err  error
+}
+
+func (c *closeOnceReadCloser) Close() error {
+	c.once.Do(func() {
+		c.err = c.ReadCloser.Close()
+	})
+	return c.err
+}
+
+type streamResponseBody struct {
+	*io.PipeReader
+	upstream io.Closer
+}
+
+func (b *streamResponseBody) Close() error {
+	return errors.Join(b.PipeReader.Close(), b.upstream.Close())
 }
 
 func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -80,32 +109,13 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return t.base.RoundTrip(req)
 	}
 
-	var cr chatRequest
-
-	if req.Body == nil {
-		resp := &http.Response{
-			StatusCode: http.StatusBadRequest,
-			Body:       io.NopCloser(bytes.NewReader([]byte("chat completions request body is empty"))),
-		}
-		return resp, nil
-	}
-
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read request body: %w", err)
-	}
-	if err := json.Unmarshal(body, &cr); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal request body: %w", err)
-	}
-	req.Body = io.NopCloser(bytes.NewReader(body))
-
 	// Make the actual request
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
 
-	if !cr.Stream {
+	if !isEventStreamContentType(resp.Header.Get("Content-Type")) {
 		return resp, nil
 	}
 
@@ -113,34 +123,40 @@ func (t *streamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp.Header.Set("Cache-Control", "no-cache")
 	resp.Header.Set("Connection", "keep-alive")
 	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
 
 	// Create a pipe to modify the response stream
 	pr, pw := io.Pipe()
-	originalBody := resp.Body
-	resp.Body = pr
+	originalBody := &closeOnceReadCloser{ReadCloser: resp.Body}
+	resp.Body = &streamResponseBody{PipeReader: pr, upstream: originalBody}
 
 	go func() {
 		defer originalBody.Close()
-		defer pw.Close()
 
 		scanner := bufio.NewScanner(originalBody)
-		scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), 1024*1024)
+		scanner.Buffer(make([]byte, 0, initialSSEBufferSize), maxSSELineBytes)
 		for scanner.Scan() {
 			line := scanner.Text()
+			out := line + "\n"
 			if strings.HasPrefix(line, "data: ") && line != "data: [DONE]" {
 				data := strings.TrimPrefix(line, "data: ")
 				modifiedData, err := addPaddingToStreamChunk(data)
 				if err != nil {
 					log.Printf("Warning: failed to add padding to chunk: %v", err)
-					pw.Write([]byte(line + "\n"))
-					continue
+				} else {
+					out = "data: " + modifiedData + "\n"
 				}
-				pw.Write([]byte("data: " + modifiedData + "\n"))
-			} else {
-				pw.Write([]byte(line + "\n"))
+			}
+			if _, err := io.WriteString(pw, out); err != nil {
+				pw.CloseWithError(err)
+				return
 			}
 		}
-
+		if err := scanner.Err(); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		pw.Close()
 	}()
 
 	return resp, nil

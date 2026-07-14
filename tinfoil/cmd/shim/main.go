@@ -211,7 +211,10 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 				jwksURL := controlPlaneURL.JoinPath(".well-known", "jwks.json").String()
 				jwtValidator := localjwt.NewValidator(jwksURL, config.ControlPlane, localjwt.AccessTokenAudience, localjwt.RequiredScope)
 				log.Println("Local JWT validation enabled (OAuth access tokens verified in-enclave)")
-				validator = key.NewChain(jwtValidator, onlineValidator)
+				validator = &metricsValidator{
+					online: onlineValidator,
+					chain:  key.NewChain(jwtValidator, onlineValidator),
+				}
 			} else {
 				log.Println("Warning: API key verification disabled (unauthenticated endpoint)")
 			}

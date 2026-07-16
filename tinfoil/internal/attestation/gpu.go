@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"time"
 
+	envelope "github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+
 	"tinfoil/internal/nvml"
 )
 
@@ -35,16 +37,39 @@ var archNames = map[nvml.DeviceArchitecture]string{
 	nvml.DEVICE_ARCH_BLACKWELL: GPUArchBlackwell,
 }
 
-func (c *GPUEvidenceCollection) HasArch(arch string) bool {
-	if c == nil {
-		return false
+// Arch returns the architecture of the collected GPUs (shapes are always
+// homogeneous), or "" when no evidence was collected.
+func (c *GPUEvidenceCollection) Arch() string {
+	if c == nil || len(c.Evidences) == 0 {
+		return ""
 	}
-	for _, evidence := range c.Evidences {
-		if evidence.Arch == arch {
-			return true
+	return c.Evidences[0].Arch
+}
+
+// RequiresNVSwitchEvidence reports whether a GPU shape must carry NVSwitch
+// evidence, rejecting shapes the fleet cannot produce. Hopper ships only in
+// 1-GPU and 8-GPU shapes; the 8-GPU HGX baseboard routes GPU traffic through
+// NVSwitches that must be attested. Blackwell (MPT) shapes never expose
+// NVSwitches to the guest, at any GPU count.
+func RequiresNVSwitchEvidence(arch string, gpuCount int) (bool, error) {
+	switch arch {
+	case GPUArchHopper:
+		switch gpuCount {
+		case 1:
+			return false, nil
+		case 8:
+			return true, nil
+		default:
+			return false, fmt.Errorf("hopper shapes have 1 or 8 GPUs, got %d", gpuCount)
 		}
+	case GPUArchBlackwell:
+		return false, nil
+	default:
+		if gpuCount <= 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("unsupported multi-GPU architecture %q", arch)
 	}
-	return false
 }
 
 // CollectGPUEvidence collects fresh attestation evidence from all GPUs using
@@ -132,4 +157,48 @@ func CollectNVSwitchEvidence(nonce [32]byte) (json.RawMessage, error) {
 	}
 
 	return json.RawMessage(out), nil
+}
+
+// nvswitchEvidenceV1Format identifies the raw nvattest NVSwitch evidence
+// payload. Not yet in the verifier registry: v3 verifiers accept unknown
+// device evidence item formats as long as the appraisal policy does not
+// require verifying that device.
+const nvswitchEvidenceV1Format = "https://tinfoil.sh/format/nvidia-nvswitch-evidence/v1"
+
+// DeviceEvidenceFromGPUCollection converts collected GPU evidence into v3
+// device_evidence items (one per GPU, ids gpu0..gpuN-1).
+func DeviceEvidenceFromGPUCollection(collection *GPUEvidenceCollection) ([]envelope.DeviceEvidenceItem, error) {
+	if collection == nil {
+		return nil, nil
+	}
+	items := make([]envelope.DeviceEvidenceItem, 0, len(collection.Evidences))
+	for i, evidence := range collection.Evidences {
+		payload, err := json.Marshal(evidence)
+		if err != nil {
+			return nil, fmt.Errorf("serializing GPU %d evidence: %w", i, err)
+		}
+		items = append(items, envelope.DeviceEvidenceItem{
+			ID:       fmt.Sprintf("gpu%d", i),
+			Kind:     "gpu",
+			Vendor:   "nvidia",
+			Format:   envelope.NvidiaGPUEvidenceV1Format,
+			Evidence: payload,
+		})
+	}
+	return items, nil
+}
+
+// DeviceEvidenceFromNVSwitch wraps raw nvattest NVSwitch output as a v3
+// device_evidence item.
+func DeviceEvidenceFromNVSwitch(raw json.RawMessage) []envelope.DeviceEvidenceItem {
+	if len(raw) == 0 {
+		return nil
+	}
+	return []envelope.DeviceEvidenceItem{{
+		ID:       "nvswitch0",
+		Kind:     "nvswitch",
+		Vendor:   "nvidia",
+		Format:   nvswitchEvidenceV1Format,
+		Evidence: raw,
+	}}
 }

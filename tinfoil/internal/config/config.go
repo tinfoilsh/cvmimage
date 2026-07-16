@@ -26,6 +26,9 @@ type Config struct {
 	TLSOwnSANDomain  bool   `yaml:"tls-own-san-domain" default:"false"` // use own domain for encoded SANs instead of tinfoil.sh
 
 	ControlPlane string `yaml:"control-plane" default:"https://api.tinfoil.sh"`
+	// ATC is the attestation collaterals service the enclave fetches its v3
+	// collateral bundle from at boot.
+	ATC string `yaml:"atc" default:"https://atc.tinfoil.sh"`
 	// Authenticated enables API key validation against the control plane.
 	// When false, no API key checks are performed regardless of AuthenticatedEndpoints.
 	Authenticated bool `yaml:"authenticated" default:"false"`
@@ -56,6 +59,7 @@ type Metadata struct {
 	CPU    string `yaml:"cpu"`
 	GPU    string `yaml:"gpu"`
 	Repo   string `yaml:"repo,omitempty"`
+	Tag    string `yaml:"tag,omitempty"`
 	Digest string `yaml:"digest,omitempty"`
 	// Extra preserves operator metadata that tinfoild merges into this
 	// unmeasured document. Only the security-sensitive network block is closed.

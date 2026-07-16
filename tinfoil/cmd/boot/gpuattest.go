@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"tinfoil/internal/attestation"
 	"tinfoil/internal/nvml"
 )
 
@@ -48,6 +49,30 @@ func forEachNVIDIAGPU(fn func(entryName string) bool) error {
 		}
 	}
 	return nil
+}
+
+// detectGPUCount returns the number of NVIDIA 3D-controller PCI devices
+// in the guest. The caller validates against the config-declared count.
+func detectGPUCount() (int, error) {
+	count := 0
+	if err := forEachNVIDIAGPU(func(string) bool { count++; return true }); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// archFamily maps a detected GPU product to its architecture family label.
+// Unknown products (including "") map to "", which the shape rule rejects
+// for multi-GPU configurations.
+func archFamily(arch string) string {
+	switch arch {
+	case "h100", "h200":
+		return attestation.GPUArchHopper
+	case "b200", "b300":
+		return attestation.GPUArchBlackwell
+	default:
+		return ""
+	}
 }
 
 // detectGPUArch returns "h100", "h200", "b200", "b300", or "" from the first GPU.
@@ -161,39 +186,6 @@ type GPURawEvidence struct {
 	Switch json.RawMessage `json:"nvswitch,omitempty"`
 }
 
-type dummyEvidenceEntry struct {
-	Arch        string `json:"arch"`
-	Certificate string `json:"certificate"`
-	Evidence    string `json:"evidence"`
-	Nonce       string `json:"nonce"`
-}
-
-type dummyEvidenceOutput struct {
-	Evidences     []dummyEvidenceEntry `json:"evidences"`
-	ResultCode    int                  `json:"result_code"`
-	ResultMessage string               `json:"result_message"`
-}
-
-// dummyGPUEvidence returns mock GPU evidence matching the nvattest JSON format.
-func dummyGPUEvidence(gpuCount int) *GPURawEvidence {
-	gpuOut := dummyEvidenceOutput{ResultCode: 0, ResultMessage: "dummy-attestation"}
-	for range gpuCount {
-		gpuOut.Evidences = append(gpuOut.Evidences, dummyEvidenceEntry{Arch: "DUMMY"})
-	}
-	gpuRaw, _ := json.Marshal(gpuOut)
-	evidence := &GPURawEvidence{GPU: json.RawMessage(gpuRaw)}
-
-	if gpuCount > 1 {
-		switchOut := dummyEvidenceOutput{ResultCode: 0, ResultMessage: "dummy-attestation"}
-		for range 4 {
-			switchOut.Evidences = append(switchOut.Evidences, dummyEvidenceEntry{Arch: "DUMMY"})
-		}
-		switchRaw, _ := json.Marshal(switchOut)
-		evidence.Switch = json.RawMessage(switchRaw)
-	}
-	return evidence
-}
-
 // verifyGPUAttestation runs attestation for the expected number of GPUs (1 or 8).
 // Returns the raw evidence for inclusion in the attestation envelope.
 func verifyGPUAttestation(expectedGPUs int) (*GPURawEvidence, error) {
@@ -222,34 +214,30 @@ func verifyGPUAttestation(expectedGPUs int) (*GPURawEvidence, error) {
 	}
 	evidence.GPU = gpuRaw
 
-	if expectedGPUs > 1 {
-		arch, err := detectGPUArch()
+	arch, err := detectGPUArch()
+	if err != nil {
+		return nil, fmt.Errorf("detecting GPU arch: %w", err)
+	}
+	needSwitch, err := attestation.RequiresNVSwitchEvidence(archFamily(arch), expectedGPUs)
+	if err != nil {
+		return nil, fmt.Errorf("GPU shape validation: %w", err)
+	}
+	if needSwitch {
+		if err := runNvattest("nvswitch"); err != nil {
+			return nil, err
+		}
+		log.Println("Collecting NVSwitch evidence for topology validation")
+		switchReports, switchRaw, err := collectEvidence("nvswitch")
 		if err != nil {
-			return nil, fmt.Errorf("detecting GPU arch: %w", err)
+			return nil, fmt.Errorf("collecting switch evidence: %w", err)
 		}
-		switch arch {
-		case "b200", "b300":
-			// Blackwell MPT: NVSwitches are not exposed to the guest.
-			log.Printf("HGX Blackwell MPT: no in-guest NVSwitch evidence")
-
-		case "h100", "h200", "":
-			if err := runNvattest("nvswitch"); err != nil {
-				return nil, err
-			}
-			log.Println("Collecting NVSwitch evidence for topology validation")
-			switchReports, switchRaw, err := collectEvidence("nvswitch")
-			if err != nil {
-				return nil, fmt.Errorf("collecting switch evidence: %w", err)
-			}
-			evidence.Switch = switchRaw
-			log.Printf("Validating Hopper PPCIe topology (%d GPUs, %d switches)", expectedGPUs, hopperSwitchCount)
-			if err := validateTopology(gpuReports, switchReports, expectedGPUs, hopperSwitchCount); err != nil {
-				return nil, fmt.Errorf("topology validation failed: %w", err)
-			}
-
-		default:
-			return nil, fmt.Errorf("unsupported multi-GPU arch %q for in-guest attestation", arch)
+		evidence.Switch = switchRaw
+		log.Printf("Validating Hopper PPCIe topology (%d GPUs, %d switches)", expectedGPUs, hopperSwitchCount)
+		if err := validateTopology(gpuReports, switchReports, expectedGPUs, hopperSwitchCount); err != nil {
+			return nil, fmt.Errorf("topology validation failed: %w", err)
 		}
+	} else if expectedGPUs > 1 {
+		log.Printf("No in-guest NVSwitch evidence for %d %s GPUs", expectedGPUs, arch)
 	}
 
 	if err := setGPUReadyState(true); err != nil {

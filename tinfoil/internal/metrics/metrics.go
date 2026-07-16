@@ -97,10 +97,15 @@ func gpuMetrics() (string, int, int, int, error) {
 
 // collectMetrics gathers system metrics from CPU, memory, and GPU
 func collectMetrics(metadata *config.Metadata) (*Metrics, error) {
+	// The image label is "repo@tag"; empty when the metadata carries no repo.
+	var image string
+	if metadata.Repo != "" && metadata.Tag != "" {
+		image = metadata.Repo + "@" + metadata.Tag
+	}
 	metrics := Metrics{
 		ID:      metadata.ID,
 		Domain:  metadata.Domain,
-		Image:   metadata.Image,
+		Image:   image,
 		CPUType: cpuVendor(),
 	}
 

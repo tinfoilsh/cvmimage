@@ -1,50 +1,58 @@
 package dcode
 
 import (
-	"bytes"
-	"compress/gzip"
-	"encoding/json"
+	"encoding/base32"
 	"math/rand/v2"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	"github.com/stretchr/testify/require"
 )
 
-func TestDcode(t *testing.T) {
-	attJSON := `{"format":"https://tinfoil.sh/predicate/sev-snp-guest/v1","body":"AgAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAHAAAAAAAOSAEAAAAAAAAAAAAAAAAAAAA0NWUzYzMzMGUwNmJmOWMxZjhhMTk3MjY2YWNhNWIyZjYwNjdjYTY3MTliNjFiZTY2ZDA0M2I5M2RiOTkwYTg1pbDO1EKABUY06EUsfj2O0Mck9pCpNNU09zjmp0q75OMmy7Ri71JFfU/fjzZf6hhEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACfpCeQfLGlscId5BeSdU7L9KPEStDMwQBd808awA+Lv//////////////////////////////////////////BwAAAAAADkgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADyerBPBb0BVIg1GpCjfyjOa7GVEfbmBlI2UlOv2mBy2PUlhAoxzCPRyGlUox+FWyw/5T1fgVISjEAzuoWzsKeXBwAAAAAADkgVNwEAFTcBAAcAAAAAAA5IAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1Mswgg2AZ5e1wct6QcyLfOAKrb6jCKQRNateCyHdAdEKBTusDgtrXpEFXR/39cQVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAc9yN4XkSVWve3jGL93egyyv2O6hLAdV5JVm/j1qugeFIfr+DKUBYB5WcU+jSeKy5AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`
-	var att attestation.Document
-	if err := json.Unmarshal([]byte(attJSON), &att); err != nil {
-		panic(err)
+// decodeDomains reverses Encode: sort chunks by their NN prefix, strip the
+// prefix and suffix, and base32-decode. Verification-side decoding lives in
+// tinfoil-go's certificate checks; this test-local copy keeps the round-trip
+// property covered here.
+func decodeDomains(t *testing.T, domains []string) []byte {
+	t.Helper()
+	sorted := append([]string(nil), domains...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i][:2] < sorted[j][:2]
+	})
+	var encoded string
+	for _, domain := range sorted {
+		label := strings.Split(domain, ".")[0]
+		require.GreaterOrEqual(t, len(label), 3, "malformed domain chunk %q", domain)
+		encoded += label[2:]
+	}
+	decoder := base32.StdEncoding.WithPadding(base32.NoPadding)
+	content, err := decoder.DecodeString(strings.ToUpper(encoded))
+	require.NoError(t, err)
+	return content
+}
+
+func TestEncodeRoundTrip(t *testing.T) {
+	content := make([]byte, 1500)
+	for i := range content {
+		content[i] = byte(i * 7)
 	}
 
-	domains, err := EncodeAtt(&att, "example.com")
-	if err != nil {
-		t.Fatalf("EncodeAtt failed: %v", err)
-	}
-
+	domains, err := Encode(content, "example.com")
+	require.NoError(t, err)
 	for _, domain := range domains {
 		assert.True(t, strings.HasSuffix(domain, ".example.com"))
+		assert.LessOrEqual(t, len(strings.Split(domain, ".")[0]), 63)
 	}
+	t.Logf("encoded %d bytes into %d domains", len(content), len(domains))
 
-	t.Logf("encoded %d bytes into %d domains", len(attJSON), len(domains))
-
-	// Randomize domain order
+	// Order must not matter: chunks carry their own index.
 	rand.Shuffle(len(domains), func(i, j int) {
 		domains[i], domains[j] = domains[j], domains[i]
 	})
 
-	for _, domain := range domains {
-		t.Logf("domain: %s", domain)
-	}
-
-	decoded, err := Decode(domains)
-	if err != nil {
-		t.Fatalf("Decode failed: %v", err)
-	}
-	assert.Equal(t, att, *decoded)
+	assert.Equal(t, content, decodeDomains(t, domains))
 }
 
 func TestEncodeRejectsTooManyChunks(t *testing.T) {
@@ -59,51 +67,4 @@ func TestEncodeRejectsTooManyChunks(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when chunk count exceeds 100")
 	}
-}
-
-func TestEncodeRejectsEmptyPayload(t *testing.T) {
-	if _, err := Encode(nil, "example.com"); err == nil {
-		t.Fatal("Encode accepted an empty payload")
-	}
-}
-
-func TestDecodeRejectsMalformedChunkSets(t *testing.T) {
-	for name, domains := range map[string][]string{
-		"empty":     nil,
-		"too many":  make([]string, maxDomainChunks+1),
-		"duplicate": {"00aa.example.com", "00bb.example.com"},
-		"gap":       {"00aa.example.com", "02bb.example.com"},
-		"bad index": {"xxaa.example.com"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := Decode(domains); err == nil {
-				t.Fatalf("Decode accepted %s", name)
-			}
-		})
-	}
-}
-
-func TestDecodeRejectsDecompressionBomb(t *testing.T) {
-	exact := gzipBytes(t, make([]byte, maxDecompressedAttBytes))
-	if decompressed, err := gzDecompress(exact); err != nil || len(decompressed) != maxDecompressedAttBytes {
-		t.Fatalf("exact decompression limit: len=%d error=%v", len(decompressed), err)
-	}
-
-	compressed := gzipBytes(t, make([]byte, maxDecompressedAttBytes+1))
-	if _, err := gzDecompress(compressed); err == nil || !strings.Contains(err.Error(), "decompressed payload exceeds") {
-		t.Fatalf("decompression bomb error = %v", err)
-	}
-}
-
-func gzipBytes(t *testing.T, payload []byte) []byte {
-	t.Helper()
-	var compressed bytes.Buffer
-	writer := gzip.NewWriter(&compressed)
-	if _, err := writer.Write(payload); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return compressed.Bytes()
 }

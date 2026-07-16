@@ -39,24 +39,25 @@ const (
 )
 
 const (
-	StageConfig         = "config"
-	StageNetwork        = "network"
-	StageIdentity       = "identity"
-	StageCPUAttestation = "cpu-attestation"
-	StageGPUAttestation = "gpu-attestation"
-	StageVaultSecrets   = "vault-secrets"
-	StageCertificate    = "certificate"
-	StageRegistryAuth   = "registry-auth"
-	StageModels         = "models"
-	StageFirewall       = "firewall"
-	StageContainers     = "containers"
-	StageShim           = "shim"
+	StageConfig              = "config"
+	StageNetwork             = "network"
+	StageIdentity            = "identity"
+	StageCPUAttestation      = "cpu-attestation"
+	StageAttestationMaterial = "attestation-material"
+	StageGPUAttestation      = "gpu-attestation"
+	StageVaultSecrets        = "vault-secrets"
+	StageCertificate         = "certificate"
+	StageRegistryAuth        = "registry-auth"
+	StageModels              = "models"
+	StageFirewall            = "firewall"
+	StageContainers          = "containers"
+	StageShim                = "shim"
 )
 
 // InitialStages is the ordered list of stages known at boot time.
 // Both boot and shim use this as the starting point.
 var InitialStages = []string{
-	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
+	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageAttestationMaterial, StageGPUAttestation, StageCertificate,
 	StageVaultSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
 }
 
@@ -154,13 +155,6 @@ func (t *Tracker) RecordSubstages(name string, substages []Stage) {
 	if err := t.flushLocked(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to flush boot state: %v\n", err)
 	}
-}
-
-// Flush writes the current boot state to disk without setting CompletedAt.
-func (t *Tracker) Flush() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.flushLocked()
 }
 
 func (t *Tracker) flushLocked() error {

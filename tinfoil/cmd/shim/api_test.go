@@ -11,10 +11,11 @@ import (
 	"testing"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
+	"tinfoil/internal/legacy"
 )
 
 type fakeValidator struct {
@@ -40,12 +41,12 @@ func testAuthServer(t *testing.T, validator key.Validator, authenticatedEndpoint
 		AuthenticatedEndpoints: &authenticatedEndpoints,
 	}
 	extCfg := &config.ExternalConfig{}
-	att := &attestation.Document{
+	att := &legacy.Document{
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
 
-	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, "127.0.0.1:9999")
+	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, extCfg, "127.0.0.1:9999")
 }
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
@@ -66,13 +67,14 @@ func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler
 		Paths:        paths,
 	}
 	extCfg := &config.ExternalConfig{}
-	att := &attestation.Document{
+	att := &legacy.Document{
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
+	material := json.RawMessage(`{"format":"https://tinfoil.sh/predicate/attestation-collaterals/v2","expires_at":"2026-01-01T00:00:00Z","collateral":[]}`)
 
-	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, upstreamAddr)
+	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, material, cfg, extCfg, upstreamAddr)
 }
 
 func testObservabilityServer(t *testing.T, paths []string) http.Handler {
@@ -85,12 +87,13 @@ func testObservabilityServer(t *testing.T, paths []string) http.Handler {
 
 	cfg := &config.Config{Paths: paths}
 	extCfg := &config.ExternalConfig{}
-	att := &attestation.Document{
+	att := &legacy.Document{
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
+	material := json.RawMessage(`{"format":"https://tinfoil.sh/predicate/attestation-collaterals/v2","expires_at":"2026-01-01T00:00:00Z","collateral":[]}`)
 
-	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg)
+	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, material, cfg, extCfg)
 }
 
 func TestPathNotAllowed_Returns404(t *testing.T) {
@@ -289,38 +292,6 @@ func TestWriteValidationFailureDoesNotLeakInternalError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), errMsgServerError) {
 		t.Fatalf("expected generic server error, got: %q", rec.Body.String())
-	}
-}
-
-func TestRequiresNVSwitchEvidence(t *testing.T) {
-	evidence := func(arches ...string) *tinfoilattestation.GPUEvidenceCollection {
-		collection := &tinfoilattestation.GPUEvidenceCollection{}
-		for _, arch := range arches {
-			collection.Evidences = append(collection.Evidences, tinfoilattestation.GPUEvidence{Arch: arch})
-		}
-		return collection
-	}
-
-	tests := []struct {
-		name         string
-		expectedGPUs int
-		evidence     *tinfoilattestation.GPUEvidenceCollection
-		want         bool
-	}{
-		{"single GPU never requires switch evidence", 1, evidence(tinfoilattestation.GPUArchHopper), false},
-		{"nil evidence does not require switch evidence", 8, nil, false},
-		{"blackwell 8 GPU skips switch evidence", 8, evidence(tinfoilattestation.GPUArchBlackwell), false},
-		{"hopper 8 GPU requires switch evidence", 8, evidence(tinfoilattestation.GPUArchHopper), true},
-		{"hopper non-8 GPU skips switch evidence", 4, evidence(tinfoilattestation.GPUArchHopper), false},
-		{"unknown 8 GPU skips switch evidence", 8, evidence("UNKNOWN_123"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := requiresNVSwitchEvidence(tt.expectedGPUs, tt.evidence); got != tt.want {
-				t.Fatalf("requiresNVSwitchEvidence(%d, %+v) = %v, want %v", tt.expectedGPUs, tt.evidence, got, tt.want)
-			}
-		})
 	}
 }
 

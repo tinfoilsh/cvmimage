@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/boot"

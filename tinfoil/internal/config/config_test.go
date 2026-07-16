@@ -2,7 +2,37 @@ package config
 
 import (
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+func TestDecodeServiceURLDefaults(t *testing.T) {
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte("upstream-port: 8080\n"), &node); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Decode(node.Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ControlPlane != "https://api.tinfoil.sh" {
+		t.Errorf("ControlPlane default = %q", cfg.ControlPlane)
+	}
+	if cfg.ATC != "https://atc.tinfoil.sh" {
+		t.Errorf("ATC default = %q", cfg.ATC)
+	}
+
+	if err := yaml.Unmarshal([]byte("upstream-port: 8080\natc: http://100.64.0.1:8085\n"), &node); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Decode(node.Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ATC != "http://100.64.0.1:8085" {
+		t.Errorf("ATC override = %q", cfg.ATC)
+	}
+}
 
 func TestGetSecret(t *testing.T) {
 	tests := []struct {

@@ -150,6 +150,17 @@ func loadExternalConfig() error {
 	return nil
 }
 
+// externalConfigOrEmpty loads the external config, or returns an empty one
+// when the disk is absent (bare dev launches without tinfoild metadata).
+func externalConfigOrEmpty() *shimconfig.ExternalConfig {
+	config, err := getExternalConfig()
+	if err != nil {
+		log.Printf("Warning: external config not available, using defaults: %v", err)
+		return &shimconfig.ExternalConfig{}
+	}
+	return config
+}
+
 func getExternalConfig() (*shimconfig.ExternalConfig, error) {
 	data, err := os.ReadFile(boot.ExternalConfigPath)
 	if err != nil {

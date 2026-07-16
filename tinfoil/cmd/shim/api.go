@@ -18,11 +18,13 @@ import (
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
+	"tinfoil/internal/legacy"
 	"tinfoil/internal/metrics"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	"github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 )
 
 // pathMatchesPattern checks if a request path matches a pattern.
@@ -184,11 +186,12 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 func NewShimServer(
 	validator key.Validator,
 	rateLimiter *RateLimiter,
-	att *attestation.Document,
+	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
+	attestationMaterial json.RawMessage,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
@@ -273,30 +276,31 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, attestationMaterial, externalConfig)
 
 	return wrapShimMux(config, att, mux)
 }
 
 func NewObservabilityServer(
-	att *attestation.Document,
+	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
+	attestationMaterial json.RawMessage,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, attestationMaterial, externalConfig)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
 	return wrapShimMux(config, att, mux)
 }
 
-func wrapShimMux(config *config.Config, att *attestation.Document, mux *http.ServeMux) http.Handler {
+func wrapShimMux(config *config.Config, att *legacy.Document, mux *http.ServeMux) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Tinfoil-Pt", string(att.Format))
@@ -306,32 +310,45 @@ func wrapShimMux(config *config.Config, att *attestation.Document, mux *http.Ser
 	return corsMiddleware(config, globalMiddleware(mux))
 }
 
-func requiresNVSwitchEvidence(expectedGPUs int, gpuEvidence *tinfoilattestation.GPUEvidenceCollection) bool {
-	return expectedGPUs == 8 && gpuEvidence.HasArch(tinfoilattestation.GPUArchHopper)
-}
-
 func registerObservabilityHandlers(
 	mux *http.ServeMux,
 	ehbpMiddleware func(http.Handler) http.Handler,
-	att *attestation.Document,
+	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
+	attestationMaterial json.RawMessage,
 	externalConfig *config.ExternalConfig,
 ) {
+	// The v3 collateral entries are static for the CVM's lifetime; parse the
+	// boot-fetched material once. A parse failure only disables the v3
+	// (nonce) path — the legacy document is unaffected.
+	var material collaterals.Response
+	collateralErr := json.Unmarshal(attestationMaterial, &material)
+	if collateralErr == nil && material.Format != collaterals.FormatV2 {
+		collateralErr = fmt.Errorf("unexpected attestation material format %q", material.Format)
+	}
+	if collateralErr != nil {
+		log.Printf("Attestation collateral unavailable for v3 documents: %v", collateralErr)
+	}
+
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		// Fresh attestation with nonce: ?nonce=<64 hex chars>
+		// Fresh v3 attestation with nonce: ?nonce=<64 hex chars>
 		if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
 			nonce, err := hex.DecodeString(nonceHex)
 			if err != nil || len(nonce) != 32 {
 				writeJSONError(w, "Invalid nonce: must be exactly 32 bytes (64 hex chars)", errTypeInvalidRequest, http.StatusBadRequest)
 				return
 			}
+			if collateralErr != nil {
+				writeJSONError(w, "Attestation collateral unavailable", errTypeServer, http.StatusInternalServerError)
+				return
+			}
 
-			var gpuJSON, nvswitchJSON json.RawMessage
+			var deviceEvidence []envelope.DeviceEvidenceItem
 			var nonce32 [32]byte
 			copy(nonce32[:], nonce)
 			if expectedGPUs > 0 {
@@ -346,14 +363,27 @@ func registerObservabilityHandlers(
 					writeJSONError(w, "GPU attestation evidence incomplete", errTypeServer, http.StatusInternalServerError)
 					return
 				}
-				gpuJSON, _ = json.Marshal(gpuEvidence)
-				if requiresNVSwitchEvidence(expectedGPUs, gpuEvidence) {
-					nvswitchJSON, err = tinfoilattestation.CollectNVSwitchEvidence(nonce32)
+				gpuItems, err := tinfoilattestation.DeviceEvidenceFromGPUCollection(gpuEvidence)
+				if err != nil {
+					log.Printf("GPU evidence encoding failed: %v", err)
+					writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+					return
+				}
+				deviceEvidence = append(deviceEvidence, gpuItems...)
+				needSwitch, err := tinfoilattestation.RequiresNVSwitchEvidence(gpuEvidence.Arch(), expectedGPUs)
+				if err != nil {
+					log.Printf("GPU shape validation failed: %v", err)
+					writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+					return
+				}
+				if needSwitch {
+					nvswitchJSON, err := tinfoilattestation.CollectNVSwitchEvidence(nonce32)
 					if err != nil {
 						log.Printf("NVSwitch evidence collection failed: %v", err)
 						writeJSONError(w, "NVSwitch attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
 						return
 					}
+					deviceEvidence = append(deviceEvidence, tinfoilattestation.DeviceEvidenceFromNVSwitch(nvswitchJSON)...)
 				}
 			}
 
@@ -361,9 +391,8 @@ func registerObservabilityHandlers(
 				identityBody.TLSKeyFP,
 				identityBody.HPKEKey,
 				nonce,
-				gpuJSON,
-				nvswitchJSON,
-				tlsCert,
+				deviceEvidence,
+				material.Collateral,
 			)
 			if err != nil {
 				log.Printf("Fresh attestation failed: %v", err)

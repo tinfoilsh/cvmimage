@@ -177,7 +177,7 @@ func BuildAttestation(
 		Format: envelope.DeviceEvidenceV1Format,
 		Items:  deviceEvidence,
 	}
-	if err := rejectDuplicateItemIDs(deviceSection.Items); err != nil {
+	if err := rejectInvalidItemIDs(deviceSection.Items); err != nil {
 		return nil, err
 	}
 
@@ -227,11 +227,14 @@ func BuildAttestation(
 	}, nil
 }
 
-// rejectDuplicateItemIDs enforces the builder-side rule that item ids within
-// an endorsed section are unique (verifiers reject such documents).
-func rejectDuplicateItemIDs(items []envelope.DeviceEvidenceItem) error {
+// rejectInvalidItemIDs enforces the builder-side rules verifiers hold item
+// ids to: non-empty and unique within the section.
+func rejectInvalidItemIDs(items []envelope.DeviceEvidenceItem) error {
 	seen := make(map[string]bool, len(items))
 	for _, item := range items {
+		if item.ID == "" {
+			return fmt.Errorf("device_evidence item has an empty id")
+		}
 		if seen[item.ID] {
 			return fmt.Errorf("duplicate device_evidence item id %q", item.ID)
 		}

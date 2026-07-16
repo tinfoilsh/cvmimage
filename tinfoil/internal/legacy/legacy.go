@@ -53,5 +53,8 @@ func FromFile(path string) (*Document, error) {
 	if err := json.NewDecoder(f).Decode(&doc); err != nil {
 		return nil, err
 	}
+	if doc.Format == "" || doc.Body == "" {
+		return nil, fmt.Errorf("attestation document %s is missing format or body", path)
+	}
 	return &doc, nil
 }

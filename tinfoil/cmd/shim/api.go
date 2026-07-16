@@ -21,6 +21,8 @@ import (
 	"tinfoil/internal/legacy"
 	"tinfoil/internal/metrics"
 
+	"tinfoil/internal/legacy"
+
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
@@ -322,15 +324,16 @@ func registerObservabilityHandlers(
 	externalConfig *config.ExternalConfig,
 ) {
 	// The v3 collateral entries are static for the CVM's lifetime; parse the
-	// boot-fetched material once. A parse failure only disables the v3
-	// (nonce) path — the legacy document is unaffected.
+	// boot-fetched material once. If it is missing or malformed, v3
+	// documents are still served, just with no collateral.
 	var material collaterals.Response
 	collateralErr := json.Unmarshal(attestationMaterial, &material)
 	if collateralErr == nil && material.Format != collaterals.FormatV2 {
 		collateralErr = fmt.Errorf("unexpected attestation material format %q", material.Format)
 	}
 	if collateralErr != nil {
-		log.Printf("Attestation collateral unavailable for v3 documents: %v", collateralErr)
+		log.Printf("Attestation collateral unavailable; serving v3 documents without collateral: %v", collateralErr)
+		material.Collateral = nil
 	}
 
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -343,11 +346,6 @@ func registerObservabilityHandlers(
 				writeJSONError(w, "Invalid nonce: must be exactly 32 bytes (64 hex chars)", errTypeInvalidRequest, http.StatusBadRequest)
 				return
 			}
-			if collateralErr != nil {
-				writeJSONError(w, "Attestation collateral unavailable", errTypeServer, http.StatusInternalServerError)
-				return
-			}
-
 			var deviceEvidence []envelope.DeviceEvidenceItem
 			var nonce32 [32]byte
 			copy(nonce32[:], nonce)

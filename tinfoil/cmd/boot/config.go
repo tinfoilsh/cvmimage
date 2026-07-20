@@ -11,6 +11,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/device"
 )
 
 // Config represents the main configuration file
@@ -123,12 +124,9 @@ type Healthcheck struct {
 	StartPeriod string   `yaml:"start_period,omitempty"` // "60s"
 }
 
-const (
-	configDiskPath   = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-config"
-	externalDiskPath = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-ext-config"
-)
-
 const maxGPUCount = 8
+
+var procCmdlinePath = "/proc/cmdline"
 
 func validateGPUCount(count int) error {
 	if count < 0 || count > maxGPUCount {
@@ -139,8 +137,9 @@ func validateGPUCount(count int) error {
 
 // loadAndVerifyConfig reads the config from disk and verifies its hash
 func loadAndVerifyConfig() (*Config, error) {
-	if _, err := os.Stat(configDiskPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config disk not found at %s", configDiskPath)
+	configDiskPath, err := device.DiskBySCSISerial(device.ConfigDiskSerial)
+	if err != nil {
+		return nil, fmt.Errorf("finding config disk: %w", err)
 	}
 
 	// Read config from disk device (strip null bytes)
@@ -268,8 +267,9 @@ func loadConfigFromRamdisk() (*Config, error) {
 }
 
 func loadExternalConfig() error {
-	if _, err := os.Stat(externalDiskPath); os.IsNotExist(err) {
-		return fmt.Errorf("external config disk not found at %s", externalDiskPath)
+	externalDiskPath, err := device.DiskBySCSISerial(device.ExternalConfigDiskSerial)
+	if err != nil {
+		return fmt.Errorf("finding external config disk: %w", err)
 	}
 
 	data, err := readDiskAndStripNulls(externalDiskPath)
@@ -310,9 +310,9 @@ func readDiskAndStripNulls(path string) ([]byte, error) {
 
 // getCmdlineParam extracts a parameter value from /proc/cmdline
 func getCmdlineParam(param string) (string, error) {
-	data, err := os.ReadFile("/proc/cmdline")
+	data, err := os.ReadFile(procCmdlinePath)
 	if err != nil {
-		return "", fmt.Errorf("reading /proc/cmdline: %w", err)
+		return "", fmt.Errorf("reading %s: %w", procCmdlinePath, err)
 	}
 
 	prefix := param + "="

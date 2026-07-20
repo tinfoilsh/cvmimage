@@ -1,30 +1,31 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Disable login management.
-systemctl mask systemd-logind.service
-systemctl mask systemd-logind.socket
-systemctl mask systemd-logind-varlink.socket
+install -d -m 0755 /etc/profile.d
+cat > /etc/profile.d/tinfoil-docker.sh <<'EOF'
+export DOCKER_CONFIG=/mnt/ramdisk/private/docker-config
+EOF
+chmod 0644 /etc/profile.d/tinfoil-docker.sh
 
-# Disable all console access
-systemctl mask getty@.service
-systemctl mask serial-getty@.service
-systemctl mask console-getty.service
+rm -f /usr/lib/x86_64-linux-gnu/libsystemd.so.0 \
+      /usr/lib/x86_64-linux-gnu/libsystemd.so.0.* \
+      /usr/lib/x86_64-linux-gnu/libsystemd-tinfoil-journal-shim.so.0
 
-# Disable first boot wizard
-systemctl mask systemd-firstboot.service
-
-# Mask emergency/rescue shells
-systemctl mask emergency.service
-systemctl mask emergency.target
-systemctl mask rescue.service
-systemctl mask rescue.target
-
-systemctl mask nvidia-powerd.service
-
-systemctl mask systemd-networkd-persistent-storage.service
-
-echo "export DOCKER_CONFIG=/mnt/ramdisk/private/docker-config" >> /root/.bashrc
+libdevmapper=/usr/lib/x86_64-linux-gnu/libdevmapper.so.1.02.1
+if ! grep -aq 'tinfoil-libdevmapper-noudev-v1' "$libdevmapper"; then
+    echo "ERROR: libdevmapper is missing Tinfoil no-udev marker" >&2
+    exit 1
+fi
+libdevmapper_deps="$(readelf -d "$libdevmapper")"
+if grep -Eq 'lib(udev|systemd|selinux)\.so' <<<"$libdevmapper_deps"; then
+    echo "ERROR: libdevmapper still links udev/systemd/selinux" >&2
+    printf '%s\n' "$libdevmapper_deps" >&2
+    exit 1
+fi
+rm -f /usr/lib/x86_64-linux-gnu/libudev.so.1 \
+      /usr/lib/x86_64-linux-gnu/libudev.so.1.* \
+      /usr/lib/x86_64-linux-gnu/libudev-tinfoil-inactive-shim.so.1
+echo "validated Tinfoil no-udev libdevmapper and removed libudev"
 
 # Build patched tdx-guest.ko. The audit surface is the small
 # /opt/tdx-fast-quote/fast-quote.patch; the accompanying tdx-guest.c is the

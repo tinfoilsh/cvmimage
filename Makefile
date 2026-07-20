@@ -9,7 +9,7 @@ NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
 # truth for the digest; rotate via `docker buildx imagetools inspect ubuntu:26.04`.
 NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4
 
-.PHONY: all build rebuild clean deepclean hash nvattest go-binaries
+.PHONY: all build rebuild clean deepclean hash nvattest go-binaries shims docker-static initrd-no-modules initrd-modules legacy-initrd-modules nvidia-rm-trace custom-kernel-builtins custom-nvidia-open-modules
 
 # tinfoilcvm.hash is written as an artifact of `build`; read it from there if
 # present, otherwise extract the dm-verity roothash from the UKI's .cmdline
@@ -26,6 +26,19 @@ clean:
 	sudo rm -rf tinfoilcvm.*
 	sudo rm -rf initrd
 	sudo rm -rf initrd.cpio.zst
+	rm -f mkosi.images/initrd/mkosi.extra/init
+	rm -f mkosi.images/initrd/mkosi.extra/usr/bin/tinfoil-initrd
+	rm -rf mkosi.images/initrd/mkosi.extra/usr/lib/modules
+	rm -f mkosi.images/initrd/mkosi.extra/usr/lib/tinfoil/initrd-modules
+	rm -f mkosi.extra/usr/lib/x86_64-linux-gnu/libdevmapper.so.1.02.1
+	rm -f mkosi.images/initrd/mkosi.extra/usr/lib/x86_64-linux-gnu/libdevmapper.so.1.02.1
+	rm -f mkosi.extra/usr/lib/x86_64-linux-gnu/libudev.so.1
+	rm -f mkosi.extra/usr/lib/x86_64-linux-gnu/libudev-tinfoil-inactive-shim.so.1
+	rm -f mkosi.images/initrd/mkosi.extra/usr/lib/x86_64-linux-gnu/libudev.so.1
+	rm -f mkosi.images/initrd/mkosi.extra/usr/lib/x86_64-linux-gnu/libudev-tinfoil-inactive-shim.so.1
+	rm -f mkosi.extra/usr/lib/tinfoil/nvidia-rm-trace.so
+	rm -rf mkosi.extra/usr/lib/tinfoil/custom-kernel
+	rm -rf mkosi.extra/usr/lib/modules
 
 deepclean:
 	$(MKOSI) clean
@@ -34,13 +47,51 @@ deepclean:
 
 go-binaries:
 	mkdir -p mkosi.extra/usr/bin
+	mkdir -p mkosi.images/initrd/mkosi.extra/usr/bin
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-container-status ./cmd/container-status
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
+	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-init ./cmd/init
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
+	cd tinfoil && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../mkosi.images/initrd/mkosi.extra/usr/bin/tinfoil-initrd ./cmd/initrd
+	rm -f mkosi.images/initrd/mkosi.extra/init
+	ln -s usr/bin/tinfoil-initrd mkosi.images/initrd/mkosi.extra/init
+
+shims:
+	./build-libdevmapper-noudev.sh
+
+docker-static:
+	./install-static-docker.sh
+
+initrd-no-modules:
+	rm -rf mkosi.images/initrd/mkosi.extra/usr/lib/modules
+	rm -f mkosi.images/initrd/mkosi.extra/usr/lib/tinfoil/initrd-modules
+
+initrd-modules:
+	./install-initrd-modules.sh
+
+legacy-initrd-modules: initrd-modules
+
+nvidia-rm-trace:
+	mkdir -p mkosi.extra/usr/lib/tinfoil
+	$(CC) -shared -fPIC -O2 -Wall -Wextra -s -o mkosi.extra/usr/lib/tinfoil/nvidia-rm-trace.so debug/nvidia-rm-trace.c -ldl
+
+custom-kernel-builtins:
+	rm -rf mkosi.extra/usr/lib/tinfoil/custom-kernel
+	@if [ -s kernel/out/modules.builtin ] && [ -s kernel/out/kernel.release ]; then \
+	    install -d -m 0755 mkosi.extra/usr/lib/tinfoil/custom-kernel; \
+	    install -m 0644 kernel/out/modules.builtin mkosi.extra/usr/lib/tinfoil/custom-kernel/modules.builtin; \
+	    install -m 0644 kernel/out/kernel.release mkosi.extra/usr/lib/tinfoil/custom-kernel/kernel.release; \
+	    echo "staged custom kernel built-in manifest for $$(cat kernel/out/kernel.release)"; \
+	else \
+	    echo "no custom kernel built-in manifest staged"; \
+	fi
+
+custom-nvidia-open-modules:
+	./kernel/build-nvidia-open-local.sh
 
 # First build populates mkosi.cache; later builds reuse it for fast iteration.
-rebuild: go-binaries
+rebuild: go-binaries shims docker-static initrd-no-modules nvidia-rm-trace custom-kernel-builtins
 	mkdir -p mkosi.cache packages
 	$(MKOSI) --force
 	rm -f tinfoilcvm

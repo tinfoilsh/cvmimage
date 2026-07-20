@@ -1,0 +1,401 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+shopt -s nullglob
+
+rm -f "$BUILDROOT/usr/lib/x86_64-linux-gnu/libdevmapper.so.1.02.1" \
+      "$BUILDROOT/usr/lib/x86_64-linux-gnu/libcrypto.so.3" \
+      "$BUILDROOT/usr/lib/x86_64-linux-gnu/libkmod.so.2" \
+      "$BUILDROOT"/usr/lib/x86_64-linux-gnu/libkmod.so.2.* \
+      "$BUILDROOT/usr/lib/x86_64-linux-gnu/libudev.so.1" \
+      "$BUILDROOT"/usr/lib/x86_64-linux-gnu/libudev.so.1.* \
+      "$BUILDROOT/usr/lib/x86_64-linux-gnu/libudev-tinfoil-inactive-shim.so.1"
+
+debloat_paths=(
+    "/etc/apt"
+    "/etc/binfmt.d"
+    "/etc/cron.daily"
+    "/etc/dbus-1"
+    "/etc/default/dbus"
+    "/etc/dpkg"
+    "/etc/init.d"
+    "/etc/logrotate.d"
+    "/etc/modprobe.d"
+    "/etc/modules"
+    "/etc/modules-load.d"
+    "/etc/pam.d"
+    "/etc/rc*.d"
+    "/etc/security"
+    "/etc/skel"
+    "/etc/shells"
+    "/etc/bash.bashrc"
+    "/etc/udev"
+    "/etc/systemd/network"
+    "/etc/systemd/networkd.conf"
+    "/etc/systemd/system/factory-reset.target.wants"
+    "/etc/systemd/system/dbus-org.freedesktop.*.service"
+    "/etc/systemd/system/dbus-org.freedesktop.network1.service"
+    "/etc/systemd/system/emergency.service"
+    "/etc/systemd/system/emergency.target"
+    "/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+    "/etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service"
+    "/etc/systemd/system/network-online.target.wants"
+    "/etc/systemd/system/sockets.target.wants/systemd-factory-reset.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-journald-audit.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-journald-dev-log.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-networkd.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-networkd-resolve-hook.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-networkd-varlink.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-pcrextend.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-pcrlock.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-sysext.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-udevd-control.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-udevd-kernel.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-udevd-varlink.socket"
+    "/etc/systemd/system/sockets.target.wants/dbus.socket"
+    "/etc/systemd/system/systemd-journald.service.wants/systemd-journald-audit.socket"
+    "/etc/systemd/system/systemd-journald.service.wants/systemd-journald-dev-log.socket"
+    "/etc/systemd/system/rescue.service"
+    "/etc/systemd/system/rescue.target"
+    "/etc/systemd/system/sysinit.target.wants/systemd-confext.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-network-generator.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-pcrphase*.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-pcrlock-*.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-random-seed.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-sysusers.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-sysext.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-udev-load-credentials.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-udev-trigger.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-udevd.service"
+    "/etc/systemd/user"
+    "/etc/sysctl.conf"
+    "/etc/sysctl.d"
+    "/etc/update-motd.d"
+    "/opt/tinfoil-shims"
+    "/usr/include"
+    "/usr/lib/udev"
+    "/usr/bin/bash"
+    "/usr/bin/rbash"
+    "/usr/bin/systemd-confext"
+    "/usr/bin/systemd-sysext"
+    "/usr/bin/dbus-daemon"
+    "/usr/bin/hostnamectl"
+    "/usr/lib/pcrlock.d"
+    "/etc/systemd/network/*.link"
+    "/usr/lib/systemd/network/*.link"
+    "/usr/bin/networkctl"
+    "/usr/bin/systemd-mute-console"
+    "/usr/bin/systemd-creds"
+    "/usr/sbin/agetty"
+    "/usr/sbin/getty"
+    "/usr/lib/binfmt.d"
+    "/usr/lib/cryptsetup"
+    "/usr/lib/cargo/bin/coreutils"
+    "/usr/lib/dbus-1.0"
+    "/usr/lib/modprobe.d"
+    "/usr/lib/modules-load.d"
+    "/usr/lib/systemd/catalog"
+    "/usr/lib/systemd/network"
+    "/usr/lib/systemd/networkd.conf"
+    "/usr/lib/systemd/system-generators/systemd-factory-reset-generator"
+    "/usr/lib/systemd/system-generators/systemd-hibernate-resume-generator"
+    "/usr/lib/systemd/system-generators/systemd-rc-local-generator"
+    "/usr/lib/systemd/systemd-factory-reset"
+    "/usr/lib/systemd/systemd-hibernate-resume"
+    "/usr/lib/systemd/systemd-network-generator"
+    "/usr/lib/systemd/systemd-networkd"
+    "/usr/lib/systemd/systemd-networkd-wait-online"
+    "/usr/lib/systemd/systemd-bsod"
+    "/usr/lib/systemd/systemd-mute-console"
+    "/usr/lib/systemd/systemd-pcrextend"
+    "/usr/lib/systemd/systemd-pcrlock"
+    "/usr/lib/systemd/systemd-quotacheck"
+    "/usr/lib/systemd/systemd-random-seed"
+    "/usr/lib/systemd/systemd-rfkill"
+    "/usr/lib/systemd/systemd-storagetm"
+    "/usr/lib/systemd/systemd-sysctl"
+    "/usr/lib/systemd/systemd-tpm2-clear"
+    "/usr/lib/systemd/systemd-udevd"
+    "/usr/lib/systemd/systemd-update-done"
+    "/usr/lib/systemd/systemd-user-runtime-dir"
+    "/usr/lib/systemd/systemd-validatefs"
+    "/usr/lib/systemd/user"
+    "/usr/lib/systemd/user-generators"
+    "/usr/lib/systemd/system/factory-reset-now.target"
+    "/usr/lib/systemd/system/factory-reset.target"
+    "/usr/lib/systemd/system/factory-reset.target.wants"
+    "/usr/lib/systemd/system/first-boot-complete.target"
+    "/usr/lib/systemd/system/dbus.service"
+    "/usr/lib/systemd/system/dbus.socket"
+    "/usr/lib/systemd/system/dbus-org.freedesktop.*.service"
+    "/usr/lib/systemd/system/autovt@.service"
+    "/usr/lib/systemd/system/bluetooth.target"
+    "/usr/lib/systemd/system/breakpoint-pre-*.service"
+    "/usr/lib/systemd/system/capsule@.service"
+    "/usr/lib/systemd/system/capsule.slice"
+    "/usr/lib/systemd/system/console-getty.service"
+    "/usr/lib/systemd/system/container-getty@.service"
+    "/usr/lib/systemd/system/debug-shell.service"
+    "/usr/lib/systemd/system/emergency.*"
+    "/usr/lib/systemd/system/getty*.service"
+    "/usr/lib/systemd/system/getty*.target"
+    "/usr/lib/systemd/system/getty.target.wants"
+    "/usr/lib/systemd/system/hibernate.target"
+    "/usr/lib/systemd/system/hybrid-sleep.target"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-confext-initrd.service"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-pcrphase-initrd.service"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-sysext-initrd.service"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-bsod.service"
+    "/usr/lib/systemd/system/ldconfig.service"
+    "/usr/lib/systemd/system/kmod-static-nodes.service"
+    "/usr/lib/systemd/system/kmod.service"
+    "/usr/lib/systemd/system/modprobe@.service"
+    "/usr/lib/systemd/system/multi-user.target.wants/getty.target"
+    "/usr/lib/systemd/system/multi-user.target.wants/dbus.service"
+    "/usr/lib/systemd/system/pam_namespace.service"
+    "/usr/lib/systemd/system/printer.target"
+    "/usr/lib/systemd/system/quotaon*"
+    "/usr/lib/systemd/system/network-online.target"
+    "/usr/lib/systemd/system/network-online.target.wants"
+    "/usr/lib/systemd/system/network-pre.target"
+    "/usr/lib/systemd/system/network.target"
+    "/usr/lib/systemd/system/systemd-network-generator.service"
+    "/usr/lib/systemd/system/systemd-networkd-persistent-storage.service"
+    "/usr/lib/systemd/system/systemd-networkd-resolve-hook.socket"
+    "/usr/lib/systemd/system/systemd-networkd-varlink.socket"
+    "/usr/lib/systemd/system/systemd-networkd-wait-online.service"
+    "/usr/lib/systemd/system/systemd-networkd-wait-online@.service"
+    "/usr/lib/systemd/system/systemd-networkd.service"
+    "/usr/lib/systemd/system/systemd-networkd.socket"
+    "/usr/lib/systemd/system/rescue.*"
+    "/usr/lib/systemd/system/rpcbind.target"
+    "/usr/lib/systemd/system/serial-getty@.service"
+    "/usr/lib/systemd/system/smartcard.target"
+    "/usr/lib/systemd/system/sleep.target"
+    "/usr/lib/systemd/system/sound.target"
+    "/usr/lib/systemd/system/storage-target-mode.target"
+    "/usr/lib/systemd/system/storage-target-mode.target.wants"
+    "/usr/lib/systemd/system/suspend.target"
+    "/usr/lib/systemd/system/suspend-then-hibernate.target"
+    "/usr/lib/systemd/system/sys-fs-fuse-connections.mount"
+    "/usr/lib/systemd/system/sys-kernel-debug.mount"
+    "/usr/lib/systemd/system/sys-kernel-tracing.mount"
+    "/usr/lib/systemd/system/systemd-bsod.service"
+    "/usr/lib/systemd/system/systemd-bootctl*"
+    "/usr/lib/systemd/system/systemd-creds*"
+    "/usr/lib/systemd/system/systemd-hibernate-clear.service"
+    "/usr/lib/systemd/system/systemd-hibernate-resume.service"
+    "/usr/lib/systemd/system/systemd-hibernate.service"
+    "/usr/lib/systemd/system/systemd-hybrid-sleep.service"
+    "/usr/lib/systemd/system/systemd-journal-catalog-update.service"
+    "/usr/lib/systemd/system/systemd-journal-flush.service"
+    "/usr/lib/systemd/system/systemd-journald-audit.socket"
+    "/usr/lib/systemd/system/systemd-journald-dev-log.socket"
+    "/usr/lib/systemd/system/systemd-journald-varlink@.socket"
+    "/usr/lib/systemd/system/systemd-logind-varlink.socket"
+    "/usr/lib/systemd/system/systemd-loop@.service"
+    "/usr/lib/systemd/system/systemd-machine-id-commit.service"
+    "/usr/lib/systemd/system/systemd-mute-console*"
+    "/usr/lib/systemd/system/systemd-quotacheck*"
+    "/usr/lib/systemd/system/systemd-random-seed.service"
+    "/usr/lib/systemd/system/systemd-rfkill.*"
+    "/usr/lib/systemd/system/systemd-storagetm.service"
+    "/usr/lib/systemd/system/systemd-suspend.service"
+    "/usr/lib/systemd/system/systemd-suspend-then-hibernate.service"
+    "/usr/lib/systemd/system/systemd-sysctl.service"
+    "/usr/lib/systemd/system/systemd-confext*"
+    "/usr/lib/systemd/system/systemd-factory-reset*"
+    "/usr/lib/systemd/system/systemd-pcrextend*"
+    "/usr/lib/systemd/system/systemd-pcrlock*"
+    "/usr/lib/systemd/system/systemd-pcrphase*"
+    "/usr/lib/systemd/system/systemd-sysext*"
+    "/usr/lib/systemd/system/systemd-tpm2-*"
+    "/usr/lib/systemd/system/systemd-tmpfiles-clean.service"
+    "/usr/lib/systemd/system/systemd-tmpfiles-clean.timer"
+    "/usr/lib/systemd/system/systemd-tmpfiles-setup-dev-early.service"
+    "/usr/lib/systemd/system/systemd-tmpfiles-setup-dev.service"
+    "/usr/lib/systemd/system/systemd-udev-load-credentials.service"
+    "/usr/lib/systemd/system/systemd-udev-settle.service"
+    "/usr/lib/systemd/system/systemd-udev-trigger.service"
+    "/usr/lib/systemd/system/systemd-udevd-control.socket"
+    "/usr/lib/systemd/system/systemd-udevd-kernel.socket"
+    "/usr/lib/systemd/system/systemd-udevd.service"
+    "/usr/lib/systemd/system/systemd-udevd.service.d"
+    "/usr/lib/systemd/system/systemd-udevd-varlink.socket"
+    "/usr/lib/systemd/system/systemd-sysusers.service"
+    "/usr/lib/systemd/system/systemd-update-done.service"
+    "/usr/lib/systemd/system/systemd-validatefs@.service"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-factory-reset.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-bootctl.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/dbus.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-creds.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-journald-audit.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-journald-dev-log.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-journald-varlink@.socket"
+    "/usr/lib/systemd/system/systemd-journald.service.wants/systemd-journald-audit.socket"
+    "/usr/lib/systemd/system/systemd-journald.service.wants/systemd-journald-dev-log.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-logind-varlink.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-mute-console.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-rfkill.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-networkd.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-networkd-varlink.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-pcrextend.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-pcrlock.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-sysext.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-udevd-control.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-udevd-kernel.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-udevd-varlink.socket"
+    "/usr/lib/systemd/system/storage-target-mode.target.wants/systemd-pcrphase-storage-target-mode.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/ldconfig.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/kmod-static-nodes.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/sys-fs-fuse-connections.mount"
+    "/usr/lib/systemd/system/sysinit.target.wants/sys-kernel-debug.mount"
+    "/usr/lib/systemd/system/sysinit.target.wants/sys-kernel-tracing.mount"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-hibernate-clear.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-journal-catalog-update.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-journal-flush.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-machine-id-commit.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-pcrphase*.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-random-seed.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-sysctl.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-sysusers.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup-dev-early.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup-dev.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-udev-trigger.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-udevd.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-update-done.service"
+    "/usr/lib/systemd/system/timers.target.wants/systemd-tmpfiles-clean.timer"
+    "/usr/lib/systemd/system/tpm2.target"
+    "/usr/lib/systemd/system/usb-gadget.target"
+    "/usr/lib/systemd/system/user@.service"
+    "/usr/lib/systemd/system/user@.service.d"
+    "/usr/lib/systemd/system/user@0.service.d"
+    "/usr/lib/systemd/system/user-.slice.d"
+    "/usr/lib/systemd/system/user-runtime-dir@.service"
+    "/usr/lib/systemd/system/user.slice"
+    "/usr/lib/systemd/system/rc-local.service"
+    "/usr/lib/systemd/system/rc-local.service.d"
+    "/usr/lib/systemd/system/syslog.socket"
+    "/usr/lib/x86_64-linux-gnu/security/pam_*.so"
+    "/usr/lib/x86_64-linux-gnu/security/pam_namespace.so"
+    "/usr/sbin/pam_namespace_helper"
+    "/usr/lib/sysusers.d/dbus.conf"
+    "/usr/lib/sysctl.d"
+    "/usr/lib/tmpfiles.d"
+    "/usr/bin/systemd-sysusers"
+    "/usr/lib/sysusers.d"
+    "/usr/share/apport"
+    "/usr/share/base-files/dot.bashrc"
+    "/usr/share/bash-completion"
+    "/usr/share/bug"
+    "/usr/share/dbus-1"
+    "/usr/share/debianutils/shells.d/bash"
+    "/usr/share/debconf"
+    "/usr/share/doc"
+    "/usr/share/doc-base"
+    "/usr/share/dpkg"
+    "/usr/share/info"
+    "/usr/share/initramfs-tools"
+    "/usr/share/polkit-1/rules.d/systemd-networkd.rules"
+    "/usr/share/lintian"
+    "/usr/share/locale"
+    "/usr/share/man"
+    "/usr/share/menu"
+    "/usr/share/perl"
+    "/usr/share/perl5"
+    "/usr/share/dot.bashrc"
+    "/usr/share/zsh"
+    "/usr/sbin/sysctl"
+    "/usr/lib/systemd/system/procps.service"
+    "/usr/share/initramfs-tools/hooks/kmod"
+    "/usr/share/initramfs-tools/hooks/udev"
+    "/usr/share/initramfs-tools/scripts/init-bottom/udev"
+    "/usr/share/initramfs-tools/scripts/init-top/udev"
+    "/var/lib/systemd/deb-systemd-helper-enabled/*networkd*"
+    "/var/lib/systemd/deb-systemd-helper-enabled/*udev-load-credentials*"
+    "/var/lib/systemd/deb-systemd-helper-enabled/*/systemd-networkd*"
+    "/var/lib/systemd/deb-systemd-helper-enabled/*/systemd-udev-load-credentials*"
+    "/var/lib/systemd/network"
+    "/var/lib/systemd/random-seed"
+    "/var/lib/dbus"
+    "/root/.bash_logout"
+    "/root/.bashrc"
+)
+
+for p in "${debloat_paths[@]}"; do
+    rm -rf "$BUILDROOT"$p
+done
+
+rm -f "$BUILDROOT/usr/lib/x86_64-linux-gnu/libsystemd.so.0" \
+      "$BUILDROOT"/usr/lib/x86_64-linux-gnu/libsystemd.so.0.*
+
+keep_initrd_program() {
+    case "$1" in
+        /usr/bin/tinfoil-initrd)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+for dir in "$BUILDROOT/usr/bin" "$BUILDROOT/usr/sbin" "$BUILDROOT/bin" "$BUILDROOT/sbin"; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' program; do
+        rel="${program#"$BUILDROOT"}"
+        keep_initrd_program "$rel" || rm -f "$program"
+    done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) -print0)
+done
+
+for dir in "$BUILDROOT/usr/bin" "$BUILDROOT/usr/sbin" "$BUILDROOT/bin" "$BUILDROOT/sbin"; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' symlink; do
+        target="$(readlink "$symlink")"
+        case "$target" in
+            /*) resolved="$BUILDROOT$target" ;;
+            *) resolved="$(dirname "$symlink")/$target" ;;
+        esac
+        [ -e "$resolved" ] || rm -f "$symlink"
+    done < <(find "$dir" -maxdepth 1 -type l -print0)
+done
+
+ln -sfn ../proc/self/mounts "$BUILDROOT/etc/mtab"
+
+install -d -m 0755 "$BUILDROOT/usr/lib/tmpfiles.d"
+cat > "$BUILDROOT/usr/lib/tmpfiles.d/tinfoil-runtime.conf" <<'EOF'
+# Tinfoil CVM minimal tmpfiles policy.
+d /run/cryptsetup 0700 root root -
+d /run/lock 1777 root root -
+L /run/shm - - - - /dev/shm
+d /run/log 0755 root root -
+d /run/log/journal 2755 root systemd-journal -
+d /var/log/journal 2755 root systemd-journal -
+EOF
+
+tmpfiles_setup_unit="$BUILDROOT/usr/lib/systemd/system/systemd-tmpfiles-setup.service"
+if [ -f "$tmpfiles_setup_unit" ]; then
+    sed -i -E '
+        /^After=/ s/[[:space:]]*systemd-sysusers\.service//g
+        /^ImportCredential=/d
+        /^RestrictSUIDSGID=no$/d
+        /^After=$/d
+    ' "$tmpfiles_setup_unit"
+fi
+
+for tmpfiles_unit in "$BUILDROOT"/usr/lib/systemd/system/systemd-tmpfiles-*.service; do
+    [ -e "$tmpfiles_unit" ] || continue
+    sed -i -E '
+        /^ImportCredential=/d
+        /^RestrictSUIDSGID=no$/d
+    ' "$tmpfiles_unit"
+done
+
+journald_unit="$BUILDROOT/usr/lib/systemd/system/systemd-journald.service"
+if [ -f "$journald_unit" ]; then
+    sed -i -E '
+        /^(After|Sockets)=/ s/[[:space:]]*systemd-journald-audit\.socket//g
+        /^(After|Sockets)=/ s/[[:space:]]*systemd-journald-dev-log\.socket//g
+        /^After=/ s/[[:space:]]*syslog\.socket//g
+        /^CapabilityBoundingSet=/ s/[[:space:]]*CAP_AUDIT_CONTROL//g
+        /^CapabilityBoundingSet=/ s/[[:space:]]*CAP_AUDIT_READ//g
+        /^(After|Sockets)=$/d
+    ' "$journald_unit"
+fi

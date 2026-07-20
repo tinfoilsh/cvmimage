@@ -62,12 +62,10 @@ func setupContainerNetworkFirewall(cfg *Config) error {
 		if spec.Egress != "allowlist" {
 			continue
 		}
-		// Type=notify; `systemctl start` blocks until the daemon resolves
-		// the first set of IPs and signals READY=1, so failures here
-		// surface as a boot error.
 		log.Println("Firewall: starting tinfoil-egress for initial IP population")
-		if out, err := exec.Command("systemctl", "start", "tinfoil-egress.service").CombinedOutput(); err != nil {
-			return fmt.Errorf("tinfoil-egress.service failed on initial run: %w (%s)", err, out)
+		cmd := exec.Command("/usr/bin/tinfoil-init", "--exec-service", "tinfoil-egress", "--", "/usr/bin/tinfoil-egress", "--once")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("tinfoil-egress --once failed: %w (%s)", err, out)
 		}
 		break
 	}

@@ -6,6 +6,24 @@ import (
 	"testing"
 )
 
+func TestInitialStagesNetworkBeforeGPUAttestation(t *testing.T) {
+	positions := map[string]int{}
+	for i, stage := range InitialStages {
+		positions[stage] = i
+	}
+	networkPos, ok := positions[StageNetwork]
+	if !ok {
+		t.Fatalf("%s missing from InitialStages", StageNetwork)
+	}
+	gpuPos, ok := positions[StageGPUAttestation]
+	if !ok {
+		t.Fatalf("%s missing from InitialStages", StageGPUAttestation)
+	}
+	if networkPos > gpuPos {
+		t.Fatalf("network stage must run before GPU attestation: network=%d gpu=%d", networkPos, gpuPos)
+	}
+}
+
 func TestWriteStateAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "boot-state.json")

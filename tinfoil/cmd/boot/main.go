@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -8,6 +9,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/device"
 )
 
 func init() {
@@ -23,14 +25,15 @@ func main() {
 		return
 	}
 
-	log.Println("Tinfoil boot starting")
+	bootLogf("Tinfoil boot starting")
 
 	if err := run(); err != nil {
-		log.Printf("Boot failed: %v", err)
+		bootLogf("Boot failed: %v", err)
+		maybeDropToDebugFailureShell(err)
 		os.Exit(1)
 	}
 
-	log.Println("Tinfoil boot complete")
+	bootLogf("Tinfoil boot complete")
 }
 
 func runSubcommand(cmd string) error {
@@ -95,7 +98,21 @@ func run() error {
 	}
 	tracker.Record("config", boot.StatusOK, time.Since(start), "")
 
-	// 2. Identity
+	// 2. Device permissions
+	start = time.Now()
+	log.Println("Setting required device permissions")
+	if err := device.SetupRequiredPermissions(); err != nil {
+		if config.GPUs > 0 {
+			tracker.Record(boot.StageDeviceSetup, boot.StatusFailed, time.Since(start), err.Error())
+			return fmt.Errorf("device setup failed: %w", err)
+		}
+		log.Printf("Warning: device permission setup incomplete: %v", err)
+		tracker.Record(boot.StageDeviceSetup, boot.StatusWarning, time.Since(start), err.Error())
+	} else {
+		tracker.Record(boot.StageDeviceSetup, boot.StatusOK, time.Since(start), "")
+	}
+
+	// 3. Identity
 	start = time.Now()
 	log.Println("Generating node identity")
 	nodeID, err := generateIdentity(config.ShimCfg, externalConfig)
@@ -105,7 +122,7 @@ func run() error {
 	}
 	tracker.Record("identity", boot.StatusOK, time.Since(start), nodeID.Domain)
 
-	// 3. CPU attestation
+	// 4. CPU attestation
 	start = time.Now()
 	log.Println("Fetching CPU attestation")
 	cpuAtt, err := fetchCPUAttestation(nodeID, config.ShimCfg)
@@ -115,7 +132,18 @@ func run() error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
-	// 4. GPU attestation
+	// 5. Network readiness
+	start = time.Now()
+	bootLogf("Waiting for guest network")
+	networkDetail, err := waitForNetworkReady(context.Background())
+	if err != nil {
+		tracker.Record(boot.StageNetwork, boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("network readiness failed: %w", err)
+	}
+	bootLogf("Guest network ready: %s", networkDetail)
+	tracker.Record(boot.StageNetwork, boot.StatusOK, time.Since(start), networkDetail)
+
+	// 6. GPU attestation
 	start = time.Now()
 	gpuCount := config.GPUs
 	if gpuCount == 0 {
@@ -149,7 +177,7 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
 	}
 
-	// 5. Certificate
+	// 7. Certificate
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
 	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
@@ -158,7 +186,7 @@ func run() error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 6. Fetch any external vault secrets.
+	// 8. Fetch any external vault secrets.
 	start = time.Now()
 	if config.VaultURL == "" {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
@@ -171,7 +199,7 @@ func run() error {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
 	}
 
-	// 7. Registry auth
+	// 9. Registry auth
 	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(); err != nil {
@@ -181,7 +209,7 @@ func run() error {
 		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 	}
 
-	// 8. Firewall
+	// 10. Firewall
 	start = time.Now()
 	log.Println("Configuring firewall")
 	if err := setupFirewall(config); err != nil {
@@ -190,7 +218,7 @@ func run() error {
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
 
-	// 9. Models
+	// 11. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config, externalConfig); err != nil {
@@ -199,7 +227,7 @@ func run() error {
 	}
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
 
-	// 10. Containers + health checks
+	// 12. Containers + health checks
 	log.Println("Launching containers")
 	if err := launchContainersAndWaitHealthy(tracker, config, externalConfig); err != nil {
 		return err

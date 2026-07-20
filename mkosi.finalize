@@ -1,0 +1,1293 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+shopt -s nullglob
+
+# Keep generated account files deterministic when the helper is available.
+if command -v mkosi-chroot >/dev/null 2>&1; then
+    mkosi-chroot pwck --sort >/dev/null 2>&1 || true
+    mkosi-chroot grpck --sort >/dev/null 2>&1 || true
+fi
+
+# Remove runtime logs and caches while preserving their parent directories.
+find "$BUILDROOT/var/log" -type f -delete 2>/dev/null || true
+find "$BUILDROOT/var/cache" -mindepth 1 -delete 2>/dev/null || true
+rm -rf "$BUILDROOT"/var/lib/apt/lists/* \
+       "$BUILDROOT"/var/cache/apt/* \
+       "$BUILDROOT"/var/cache/debconf/*-old
+
+debloat_paths=(
+    "/etc/apt"
+    "/etc/cron.daily"
+    "/etc/dkms"
+    "/etc/dpkg"
+    "/etc/init.d"
+    "/etc/initramfs"
+    "/etc/kernel"
+    "/etc/logrotate.d"
+    "/etc/modules"
+    "/etc/modules-load.d"
+    "/etc/rc*.d"
+    "/etc/skel"
+    "/etc/systemd"
+    "/etc/update-motd.d"
+    "/etc/*-"
+    "/etc/bash.bashrc"
+    "/etc/binfmt.d"
+    "/etc/dbus-1"
+    "/etc/default/dbus"
+    "/etc/sysctl.conf"
+    "/etc/sysctl.d"
+    "/etc/udev"
+    "/usr/include"
+    "/usr/lib/bfd-plugins"
+    "/usr/lib/compat-ld"
+    "/usr/lib/cryptsetup"
+    "/usr/share/bash-completion"
+    "/usr/share/bug"
+    "/usr/share/apport"
+    "/usr/share/build-essential"
+    "/usr/share/debconf"
+    "/usr/share/dpkg"
+    "/usr/share/doc"
+    "/usr/share/doc-base"
+    "/usr/share/dwarves"
+    "/usr/share/fish"
+    "/usr/share/gcc"
+    "/usr/share/gdb"
+    "/usr/share/info"
+    "/usr/share/initramfs-tools"
+    "/usr/share/kernel"
+    "/usr/share/lintian"
+    "/usr/share/locale"
+    "/usr/share/lto-disabled-list"
+    "/usr/share/man"
+    "/usr/share/menu"
+    "/usr/share/mime"
+    "/usr/share/perl"
+    "/usr/share/perl5"
+    "/usr/share/perl5/debconf"
+    "/usr/share/polkit-1"
+    "/usr/share/systemd"
+    "/usr/share/zsh"
+    "/usr/share/base-files/dot.bashrc"
+    "/usr/share/debianutils/shells.d/bash"
+    "/usr/share/dot.bashrc"
+    "/opt/tinfoil-shims"
+    "/var/lib/systemd"
+    "/usr/lib/init"
+    "/usr/lib/kernel"
+    "/usr/lib/pcrlock.d"
+    "/usr/lib/ssl/misc"
+    "/usr/lib/dbus-1.0"
+    "/usr/lib/dbus-1.0/dbus-daemon-launch-helper"
+    "/usr/lib/binfmt.d"
+    "/usr/lib/systemd/catalog"
+    "/usr/lib/systemd/system-generators/systemd-bless-boot-generator"
+    "/usr/lib/systemd/system-generators/systemd-cryptsetup-generator"
+    "/usr/lib/systemd/system-generators/systemd-debug-generator"
+    "/usr/lib/systemd/system-generators/systemd-factory-reset-generator"
+    "/usr/lib/systemd/system-generators/systemd-fstab-generator"
+    "/usr/lib/systemd/system-generators/systemd-getty-generator"
+    "/usr/lib/systemd/system-generators/systemd-gpt-auto-generator"
+    "/usr/lib/systemd/system-generators/systemd-hibernate-resume-generator"
+    "/usr/lib/systemd/system-generators/systemd-integritysetup-generator"
+    "/usr/lib/systemd/system-generators/systemd-rc-local-generator"
+    "/usr/lib/systemd/system-generators/systemd-run-generator"
+    "/usr/lib/systemd/system-generators/systemd-ssh-generator"
+    "/usr/lib/systemd/system-generators/systemd-system-update-generator"
+    "/usr/lib/systemd/system-generators/systemd-sysv-generator"
+    "/usr/lib/systemd/system-generators/systemd-tpm2-generator"
+    "/usr/lib/systemd/system-generators/systemd-veritysetup-generator"
+    "/usr/lib/modules-load.d"
+    "/usr/lib/systemd/systemd-backlight"
+    "/usr/lib/systemd/systemd-battery-check"
+    "/usr/lib/systemd/systemd-binfmt"
+    "/usr/lib/systemd/systemd-bless-boot"
+    "/usr/lib/systemd/systemd"
+    "/usr/lib/systemd/systemd-boot-check-no-failures"
+    "/usr/lib/systemd/systemd-bsod"
+    "/usr/lib/systemd/systemd-cryptsetup"
+    "/usr/lib/systemd/systemd-factory-reset"
+    "/usr/lib/systemd/systemd-growfs"
+    "/usr/lib/systemd/systemd-hibernate-resume"
+    "/usr/lib/systemd/systemd-hostnamed"
+    "/usr/lib/systemd/systemd-integritysetup"
+    "/usr/lib/systemd/systemd-localed"
+    "/usr/lib/systemd/systemd-logind"
+    "/usr/lib/systemd/systemd-modules-load"
+    "/usr/lib/systemd/systemd-mute-console"
+    "/usr/lib/systemd/systemd-network-generator"
+    "/usr/lib/systemd/systemd-networkd"
+    "/usr/lib/systemd/systemd-networkd-wait-online"
+    "/usr/lib/systemd/systemd-pcrextend"
+    "/usr/lib/systemd/systemd-pcrlock"
+    "/usr/lib/systemd/systemd-pstore"
+    "/usr/lib/systemd/systemd-random-seed"
+    "/usr/lib/systemd/systemd-resolved"
+    "/usr/lib/systemd/resolv.conf"
+    "/usr/lib/systemd/systemd-rfkill"
+    "/usr/lib/systemd/systemd-sleep"
+    "/usr/lib/systemd/systemd-ssh-issue"
+    "/usr/lib/systemd/systemd-ssh-proxy"
+    "/usr/lib/systemd/systemd-storagetm"
+    "/usr/lib/systemd/systemd-sulogin-shell"
+    "/usr/lib/systemd/systemd-sysv-install"
+    "/usr/lib/systemd/systemd-timedated"
+    "/usr/lib/systemd/systemd-tpm2-clear"
+    "/usr/lib/systemd/systemd-tpm2-setup"
+    "/usr/lib/systemd/systemd-quotacheck"
+    "/usr/lib/systemd/systemd-udevd"
+    "/usr/lib/systemd/systemd-update-done"
+    "/usr/lib/systemd/systemd-user-runtime-dir"
+    "/usr/lib/systemd/systemd-user-sessions"
+    "/usr/lib/systemd/systemd-veritysetup"
+    "/usr/lib/systemd/systemd-volatile-root"
+    "/usr/lib/systemd/systemd-xdg-autostart-condition"
+    "/usr/lib/systemd/boot/efi/addon*.efi.stub"
+    "/usr/lib/systemd/boot/efi/systemd-boot*.efi"
+    "/usr/lib/systemd/system"
+    "/usr/lib/systemd/system-preset"
+    "/usr/lib/systemd/system-sleep"
+    "/usr/lib/systemd/user"
+    "/usr/lib/systemd/user-generators"
+    "/usr/lib/systemd/system/autovt@.service"
+    "/usr/lib/systemd/system/bluetooth.target"
+    "/usr/lib/systemd/system/breakpoint-pre-*.service"
+    "/usr/lib/systemd/system/capsule@.service"
+    "/usr/lib/systemd/system/capsule.slice"
+    "/usr/lib/systemd/system/console-getty.service"
+    "/usr/lib/systemd/system/container-getty@.service"
+    "/usr/lib/systemd/system/debug-shell.service"
+    "/usr/lib/systemd/system/emergency.*"
+    "/usr/lib/systemd/system/getty*.service"
+    "/usr/lib/systemd/system/getty*.target"
+    "/usr/lib/systemd/system/getty.target.wants"
+    "/usr/lib/systemd/system/kmod-static-nodes.service"
+    "/usr/lib/systemd/system/kmod.service"
+    "/usr/lib/systemd/system/pam_namespace.service"
+    "/usr/lib/systemd/system/printer.target"
+    "/usr/lib/systemd/system/proc-sys-fs-binfmt_misc.*"
+    "/usr/lib/systemd/system/quotaon*"
+    "/usr/lib/systemd/system/rescue.*"
+    "/usr/lib/systemd/system/rpcbind.target"
+    "/usr/lib/systemd/system/serial-getty@.service"
+    "/usr/lib/systemd/system/smartcard.target"
+    "/usr/lib/systemd/system/sleep.target"
+    "/usr/lib/systemd/system/sound.target"
+    "/usr/lib/systemd/system/hibernate.target"
+    "/usr/lib/systemd/system/hybrid-sleep.target"
+    "/usr/lib/systemd/system/initrd-*"
+    "/usr/lib/systemd/system/initrd.target"
+    "/usr/lib/systemd/system/initrd.target.wants"
+    "/usr/lib/systemd/system/suspend.target"
+    "/usr/lib/systemd/system/suspend-then-hibernate.target"
+    "/usr/lib/systemd/system/storage-target-mode.target"
+    "/usr/lib/systemd/system/storage-target-mode.target.wants"
+    "/usr/lib/systemd/system/sys-fs-fuse-connections.mount"
+    "/usr/lib/systemd/system/sys-kernel-debug.mount"
+    "/usr/lib/systemd/system/sys-kernel-tracing.mount"
+    "/usr/lib/systemd/system/systemd-ask-password*"
+    "/usr/lib/systemd/system/systemd-backlight*"
+    "/usr/lib/systemd/system/systemd-binfmt.*"
+    "/usr/lib/systemd/system/systemd-bsod.service"
+    "/usr/lib/systemd/system/systemd-firstboot.service"
+    "/usr/lib/systemd/system/systemd-mute-console*"
+    "/usr/lib/systemd/system/nvidia-hibernate.service"
+    "/usr/lib/systemd/system/nvidia-powerd.service"
+    "/usr/lib/systemd/system/nvidia-resume.service"
+    "/usr/lib/systemd/system/nvidia-suspend.service"
+    "/usr/lib/systemd/system/nvidia-suspend-then-hibernate.service"
+    "/usr/lib/systemd/system/systemd-battery-check.*"
+    "/usr/lib/systemd/system/systemd-boot-*.service"
+    "/usr/lib/systemd/system/dpkg-db-backup.*"
+    "/usr/lib/systemd/system/fstrim.*"
+    "/usr/lib/systemd/system/systemd-growfs*"
+    "/usr/lib/systemd/system/systemd-hibernate-resume*"
+    "/usr/lib/systemd/system/systemd-hibernate-clear.service"
+    "/usr/lib/systemd/system/systemd-hibernate.service"
+    "/usr/lib/systemd/system/systemd-hibernate.service.d"
+    "/usr/lib/systemd/system/systemd-hybrid-sleep.service"
+    "/usr/lib/systemd/system/systemd-hybrid-sleep.service.d"
+    "/usr/lib/systemd/system/systemd-hostnamed.*"
+    "/usr/lib/systemd/system/systemd-hwdb-update.service"
+    "/usr/lib/systemd/system/systemd-bootctl*"
+    "/usr/lib/systemd/system/systemd-creds*"
+    "/usr/lib/systemd/system/systemd-journal-catalog-update.service"
+    "/usr/lib/systemd/system/systemd-journal-flush.service"
+    "/usr/lib/systemd/system/systemd-journald-audit.socket"
+    "/usr/lib/systemd/system/systemd-journald-dev-log.socket"
+    "/usr/lib/systemd/system/systemd-journald-varlink@.socket"
+    "/usr/lib/systemd/system/systemd-journald-sync@.service"
+    "/usr/lib/systemd/system/systemd-journald@.service"
+    "/usr/lib/systemd/system/systemd-journald@.socket"
+    "/usr/lib/systemd/system/systemd-loop@.service"
+    "/usr/lib/systemd/system/systemd-machine-id-commit.service"
+    "/usr/lib/systemd/system/systemd-localed.*"
+    "/usr/lib/systemd/system/systemd-logind-varlink.socket"
+    "/usr/lib/systemd/system/systemd-logind.*"
+    "/usr/lib/systemd/system/systemd-modules-load.service"
+    "/usr/lib/systemd/system/ldconfig.service"
+    "/usr/lib/systemd/system/motd-news.*"
+    "/usr/lib/systemd/system/multi-user.target.wants/getty.target"
+    "/usr/lib/systemd/system/multi-user.target.wants/systemd-ask-password-wall.path"
+    "/usr/lib/systemd/system/systemd-network-generator.service"
+    "/usr/lib/systemd/system/systemd-networkd.service"
+    "/usr/lib/systemd/system/systemd-networkd.socket"
+    "/usr/lib/systemd/system/systemd-networkd-persistent-storage.service"
+    "/usr/lib/systemd/system/systemd-networkd-resolve-hook.socket"
+    "/usr/lib/systemd/system/systemd-networkd-varlink.socket"
+    "/usr/lib/systemd/system/systemd-networkd-wait-online.service"
+    "/usr/lib/systemd/system/systemd-networkd-wait-online@.service"
+    "/usr/lib/systemd/system/remote-*.target"
+    "/usr/lib/systemd/system/systemd-confext.*"
+    "/usr/lib/systemd/system/systemd-confext*"
+    "/usr/lib/systemd/system/systemd-factory-reset.*"
+    "/usr/lib/systemd/system/systemd-factory-reset*"
+    "/usr/lib/systemd/system/systemd-pcrextend*"
+    "/usr/lib/systemd/system/systemd-pcr*"
+    "/usr/lib/systemd/system/systemd-pstore.service"
+    "/usr/lib/systemd/system/systemd-random-seed.service"
+    "/usr/lib/systemd/system/systemd-resolved.service"
+    "/usr/lib/systemd/system/systemd-resolved-*.socket"
+    "/usr/lib/systemd/system/systemd-quotacheck*"
+    "/usr/lib/systemd/system/systemd-rfkill.*"
+    "/usr/lib/systemd/system/systemd-sysext.*"
+    "/usr/lib/systemd/system/systemd-sysext*"
+    "/usr/lib/systemd/system/systemd-storagetm.service"
+    "/usr/lib/systemd/system/systemd-suspend.service"
+    "/usr/lib/systemd/system/systemd-suspend.service.d"
+    "/usr/lib/systemd/system/systemd-suspend-then-hibernate.service"
+    "/usr/lib/systemd/system/systemd-suspend-then-hibernate.service.d"
+    "/usr/lib/systemd/system/systemd-tmpfiles-clean.service"
+    "/usr/lib/systemd/system/systemd-tmpfiles-clean.timer"
+    "/usr/lib/systemd/system/systemd-tmpfiles-setup-dev-early.service"
+    "/usr/lib/systemd/system/systemd-tmpfiles-setup-dev.service"
+    "/usr/lib/systemd/system/systemd-timedated.*"
+    "/usr/lib/systemd/system/systemd-tpm2-*"
+    "/usr/lib/systemd/system/systemd-udev-load-credentials.service"
+    "/usr/lib/systemd/system/systemd-udev-settle.service"
+    "/usr/lib/systemd/system/systemd-udev-trigger.service"
+    "/usr/lib/systemd/system/systemd-udevd-control.socket"
+    "/usr/lib/systemd/system/systemd-udevd-kernel.socket"
+    "/usr/lib/systemd/system/systemd-udevd.service"
+    "/usr/lib/systemd/system/systemd-udevd.service.d"
+    "/usr/lib/systemd/system/systemd-udevd-varlink.socket"
+    "/usr/lib/systemd/system/systemd-sysusers.service"
+    "/usr/lib/systemd/system/systemd-update-done.service"
+    "/usr/lib/systemd/system/systemd-user-runtime-dir.*"
+    "/usr/lib/systemd/system/systemd-user-sessions.*"
+    "/usr/lib/systemd/system/systemd-validatefs@.service"
+    "/usr/lib/systemd/system/systemd-volatile-root.*"
+    "/usr/lib/systemd/system/tpm2.target"
+    "/usr/lib/systemd/system/usb-gadget.target"
+    "/usr/lib/systemd/system/user@.service"
+    "/usr/lib/systemd/system/user@.service.d"
+    "/usr/lib/systemd/system/user@0.service.d"
+    "/usr/lib/systemd/system/user-.slice.d"
+    "/usr/lib/systemd/system/user-runtime-dir@.service"
+    "/usr/lib/systemd/system/user.slice"
+    "/usr/lib/tmpfiles.d/20-systemd-ssh-generator.conf"
+    "/usr/lib/tmpfiles.d/credstore.conf"
+    "/usr/lib/tmpfiles.d/provision.conf"
+    "/usr/lib/tmpfiles.d/static-nodes-permissions.conf"
+    "/usr/lib/udev/ata_id"
+    "/usr/lib/udev/cdrom_id"
+    "/usr/lib/udev/dmi_memory_id"
+    "/usr/lib/udev/fido_id"
+    "/usr/lib/udev/hwdb.bin"
+    "/usr/lib/udev/hwdb.d"
+    "/usr/lib/udev/iocost.conf"
+    "/usr/lib/udev/iocost"
+    "/usr/lib/udev/mtd_probe"
+    "/usr/lib/udev/rules.d/40-vm-hotadd.rules"
+    "/usr/lib/udev/rules.d/50-firmware.rules"
+    "/usr/lib/udev/rules.d/60-autosuspend.rules"
+    "/usr/lib/udev/rules.d/60-cdrom_id.rules"
+    "/usr/lib/udev/rules.d/60-dmi-id.rules"
+    "/usr/lib/udev/rules.d/60-evdev.rules"
+    "/usr/lib/udev/rules.d/60-fido-id.rules"
+    "/usr/lib/udev/rules.d/60-input-id.rules"
+    "/usr/lib/udev/rules.d/60-persistent-alsa.rules"
+    "/usr/lib/udev/rules.d/60-persistent-hidraw.rules"
+    "/usr/lib/udev/rules.d/60-persistent-input.rules"
+    "/usr/lib/udev/rules.d/60-persistent-storage-dm.rules"
+    "/usr/lib/udev/rules.d/60-persistent-storage-mtd.rules"
+    "/usr/lib/udev/rules.d/60-persistent-storage-tape.rules"
+    "/usr/lib/udev/rules.d/60-persistent-v4l.rules"
+    "/usr/lib/udev/rules.d/60-gpiochip.rules"
+    "/usr/lib/udev/rules.d/60-infiniband.rules"
+    "/usr/lib/udev/rules.d/60-sensor.rules"
+    "/usr/lib/udev/rules.d/60-serial.rules"
+    "/usr/lib/udev/rules.d/61-persistent-storage-android.rules"
+    "/usr/lib/udev/rules.d/64-btrfs.rules"
+    "/usr/lib/udev/rules.d/70-camera.rules"
+    "/usr/lib/udev/rules.d/70-joystick.rules"
+    "/usr/lib/udev/rules.d/70-memory.rules"
+    "/usr/lib/udev/rules.d/70-mouse.rules"
+    "/usr/lib/udev/rules.d/70-power-switch.rules"
+    "/usr/lib/udev/rules.d/70-touchpad.rules"
+    "/usr/lib/udev/rules.d/70-uaccess.rules"
+    "/usr/lib/udev/rules.d/71-power-switch-proliant.rules"
+    "/usr/lib/udev/rules.d/71-seat.rules"
+    "/usr/lib/udev/rules.d/73-seat-late.rules"
+    "/usr/lib/udev/rules.d/73-special-net-names.rules"
+    "/usr/lib/udev/rules.d/75-net-description.rules"
+    "/usr/lib/udev/rules.d/75-probe_mtd.rules"
+    "/usr/lib/udev/rules.d/78-graphics-card.rules"
+    "/usr/lib/udev/rules.d/78-sound-card.rules"
+    "/usr/lib/udev/rules.d/80-debian-compat.rules"
+    "/usr/lib/udev/rules.d/80-drivers.rules"
+    "/usr/lib/udev/rules.d/80-net-setup-link.rules"
+    "/usr/lib/udev/rules.d/81-net-bridge.rules"
+    "/usr/lib/udev/rules.d/81-net-dhcp.rules"
+    "/usr/lib/udev/rules.d/82-net-auto-link-local.rules"
+    "/usr/lib/udev/rules.d/90-iocost.rules"
+    "/usr/lib/udev/rules.d/90-image-dissect.rules"
+    "/usr/lib/udev/v4l_id"
+    "/usr/lib/udev"
+    "/usr/lib/x86_64-linux-gnu/bfd-plugins"
+    "/usr/lib/x86_64-linux-gnu/gprofng"
+    "/usr/lib/x86_64-linux-gnu/ldscripts"
+    "/usr/lib/x86_64-linux-gnu/perl"
+    "/usr/lib/x86_64-linux-gnu/perl-base"
+    "/usr/libexec/dpkg"
+    "/usr/bin/curl"
+    "/usr/bin/hostnamectl"
+    "/usr/bin/journalctl"
+    "/usr/bin/networkctl"
+    "/usr/bin/ping"
+    "/usr/bin/ping4"
+    "/usr/bin/ping6"
+    "/usr/bin/systemd-creds"
+    "/usr/bin/systemd-ask-password"
+    "/usr/bin/systemd-mute-console"
+    "/usr/bin/systemctl"
+    "/usr/bin/systemd-tty-ask-password-agent"
+    "/usr/bin/udevadm"
+    "/usr/bin/wcurl"
+    "/usr/sbin/agetty"
+    "/usr/sbin/faillock"
+    "/usr/sbin/getty"
+    "/usr/sbin/unix_chkpwd"
+    "/usr/sbin/unix_update"
+    "/usr/src/linux-headers-*"
+    "/var/lib/ucf"
+    "/var/lib/dbus"
+    "/var/lib/systemd/deb-systemd-helper-enabled"
+    "/var/lib/systemd/random-seed"
+    "/work"
+    "/etc/systemd/system/getty.target.wants/getty@tty1.service"
+    "/etc/systemd/system/initrd-*"
+    "/etc/systemd/system/initrd.target"
+    "/etc/systemd/system/initrd.target.wants"
+    "/etc/systemd/system/multi-user.target.wants/remote-*.target"
+    "/etc/systemd/system/sysinit.target.wants/systemd-pcr*"
+    "/etc/systemd/system/sysinit.target.wants/systemd-pstore.service"
+    "/etc/systemd/system/timers.target.wants/*"
+    "/etc/systemd/user"
+    "/etc/systemd/system/factory-reset.target.wants"
+    "/etc/systemd/system/factory-reset.target.wants/systemd-tpm2-clear.service"
+    "/etc/systemd/system/console-getty.service"
+    "/etc/systemd/system/dbus-org.freedesktop.*.service"
+    "/etc/systemd/system/dbus-org.freedesktop.hostname1.service"
+    "/etc/systemd/system/dbus-org.freedesktop.locale1.service"
+    "/etc/systemd/system/dbus-org.freedesktop.login1.service"
+    "/etc/systemd/system/dbus-org.freedesktop.timedate1.service"
+    "/etc/systemd/system/emergency.service"
+    "/etc/systemd/system/emergency.target"
+    "/etc/systemd/system/getty@.service"
+    "/etc/systemd/system/nvidia-powerd.service"
+    "/etc/systemd/system/rescue.service"
+    "/etc/systemd/system/rescue.target"
+    "/etc/systemd/system/serial-getty@.service"
+    "/etc/systemd/system/systemd-firstboot.service"
+    "/etc/systemd/system/systemd-logind.service"
+    "/etc/systemd/system/systemd-logind.socket"
+    "/etc/systemd/system/systemd-logind-varlink.socket"
+    "/etc/systemd/system/dbus-org.freedesktop.network1.service"
+    "/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+    "/etc/systemd/system/sockets.target.wants/systemd-networkd.socket"
+    "/etc/systemd/system/systemd-networkd-persistent-storage.service"
+    "/usr/lib/systemd/system/dbus-org.freedesktop.hostname1.service"
+    "/usr/lib/systemd/system/dbus-org.freedesktop.*.service"
+    "/usr/lib/systemd/system/dbus-org.freedesktop.locale1.service"
+    "/usr/lib/systemd/system/dbus-org.freedesktop.login1.service"
+    "/usr/lib/systemd/system/dbus-org.freedesktop.timedate1.service"
+    "/usr/lib/systemd/system/initrd-root-device.target.wants/remote-*.target"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-battery-check.service"
+    "/usr/lib/systemd/system/multi-user.target.wants/systemd-logind.service"
+    "/usr/lib/systemd/system/multi-user.target.wants/systemd-user-sessions.service"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-hostnamed.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-factory-reset.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-journald-audit.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-journald-dev-log.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-pcrextend.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-pcrlock.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-networkd-resolve-hook.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-networkd-varlink.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-resolved-*.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-sysext.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-udevd-control.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-udevd-kernel.socket"
+    "/etc/systemd/system/sockets.target.wants/systemd-udevd-varlink.socket"
+    "/etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup-dev-early.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup-dev.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-binfmt.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-boot-*.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-confext.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-hwdb-update.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-network-generator.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-pcrphase*.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-pcrlock-*.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-random-seed.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-resolved.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-modules-load.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-sysusers.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-sysext.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-udev-load-credentials.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-udev-trigger.service"
+    "/etc/systemd/system/sysinit.target.wants/systemd-udevd.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-binfmt.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-boot-random-seed.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/kmod-static-nodes.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/proc-sys-fs-binfmt_misc.automount"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-ask-password-console.path"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-firstboot.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-modules-load.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-pcr*.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-tpm2-*.service"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-bsod.service"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-bootctl.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-creds.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-ask-password.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-journald-audit.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-journald-dev-log.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-journald-varlink@.socket"
+    "/usr/lib/systemd/system/systemd-journald.service.wants/systemd-journald-audit.socket"
+    "/usr/lib/systemd/system/systemd-journald.service.wants/systemd-journald-dev-log.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-logind-varlink.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-mute-console.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-networkd-varlink.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-resolved-*.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-rfkill.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-udevd-control.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-udevd-kernel.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-udevd-varlink.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/dbus.socket"
+    "/usr/lib/systemd/system/multi-user.target.wants/dbus.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/ldconfig.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/sys-fs-fuse-connections.mount"
+    "/usr/lib/systemd/system/sysinit.target.wants/sys-kernel-debug.mount"
+    "/usr/lib/systemd/system/sysinit.target.wants/sys-kernel-tracing.mount"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-hibernate-clear.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-journal-catalog-update.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-journal-flush.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-machine-id-commit.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-random-seed.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-sysusers.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup-dev-early.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup-dev.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-udev-trigger.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-udevd.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-update-done.service"
+    "/usr/lib/systemd/system/timers.target.wants/*"
+    "/etc/systemd/system/systemd-hibernate.service.wants"
+    "/etc/systemd/system/systemd-suspend.service.wants"
+    "/etc/systemd/system/systemd-suspend-then-hibernate.service.wants"
+    "/etc/systemd/system/systemd-journald.service.wants/systemd-journald-audit.socket"
+    "/etc/systemd/system/systemd-journald.service.wants/systemd-journald-dev-log.socket"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-hwdb-update.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-udev-load-credentials.service"
+    "/usr/lib/systemd/system/first-boot-complete.target"
+    "/usr/lib/systemd/system/factory-reset-now.target"
+    "/usr/lib/systemd/system/factory-reset.target"
+    "/usr/lib/systemd/system/factory-reset.target.wants"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-confext-initrd.service"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-pcrphase-initrd.service"
+    "/usr/lib/systemd/system/initrd.target.wants/systemd-sysext-initrd.service"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-factory-reset.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-pcrextend.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-pcrlock.socket"
+    "/usr/lib/systemd/system/sockets.target.wants/systemd-sysext.socket"
+    "/usr/lib/systemd/system/storage-target-mode.target.wants/systemd-pcrphase-storage-target-mode.service"
+    "/usr/lib/systemd/system/sysinit.target.wants/systemd-pcrphase*.service"
+    "/usr/lib/systemd/system/rc-local.service"
+    "/usr/lib/systemd/system/rc-local.service.d"
+    "/usr/lib/systemd/system/syslog.socket"
+    "/usr/lib/systemd/systemd-validatefs"
+    "/usr/lib/x86_64-linux-gnu/security/pam_namespace.so"
+    "/usr/bin/dbus-daemon"
+    "/usr/lib/systemd/system/dbus.service"
+    "/usr/lib/systemd/system/dbus.socket"
+    "/usr/lib/sysusers.d/dbus.conf"
+    "/usr/lib/sysctl.d"
+    "/usr/lib/tmpfiles.d"
+    "/usr/bin/systemd-sysusers"
+    "/usr/lib/sysusers.d"
+    "/usr/share/dbus-1"
+    "/usr/share/bug/udev"
+    "/usr/share/doc/udev"
+    "/usr/share/initramfs-tools/hooks/udev"
+    "/usr/share/initramfs-tools/scripts/init-bottom/udev"
+    "/usr/share/initramfs-tools/scripts/init-top/udev"
+    "/etc/systemd/resolved.conf"
+    "/usr/lib/systemd/resolved.conf.d"
+    "/usr/sbin/pam_namespace_helper"
+    "/usr/sbin/sysctl"
+    "/usr/lib/systemd/system/procps.service"
+    "/etc/systemd/network/*.link"
+    "/usr/lib/systemd/network/*.link"
+    "/etc/systemd/network"
+    "/etc/systemd/networkd.conf"
+    "/usr/lib/systemd/network"
+    "/usr/bin/networkctl"
+)
+
+for p in "${debloat_paths[@]}"; do
+    rm -rf "$BUILDROOT"$p
+done
+
+libdevmapper="$BUILDROOT/usr/lib/x86_64-linux-gnu/libdevmapper.so.1.02.1"
+if ! grep -aq 'tinfoil-libdevmapper-noudev-v1' "$libdevmapper"; then
+    echo "ERROR: libdevmapper is missing Tinfoil no-udev marker" >&2
+    exit 1
+fi
+if command -v readelf >/dev/null 2>&1; then
+    libdevmapper_deps="$(readelf -d "$libdevmapper")"
+    if grep -Eq 'lib(udev|systemd|selinux)\.so' <<<"$libdevmapper_deps"; then
+        echo "ERROR: libdevmapper still links udev/systemd/selinux" >&2
+        printf '%s\n' "$libdevmapper_deps" >&2
+        exit 1
+    fi
+fi
+rm -f "$BUILDROOT/usr/lib/x86_64-linux-gnu/libudev.so.1" \
+      "$BUILDROOT"/usr/lib/x86_64-linux-gnu/libudev.so.1.* \
+      "$BUILDROOT/usr/lib/x86_64-linux-gnu/libudev-tinfoil-inactive-shim.so.1"
+
+ln -sfn ../proc/self/mounts "$BUILDROOT/etc/mtab"
+install -d -m 1777 "$BUILDROOT/var/tmp"
+
+install -d -m 0755 "$BUILDROOT/usr/lib/tmpfiles.d"
+cat > "$BUILDROOT/usr/lib/tmpfiles.d/tinfoil-runtime.conf" <<'EOF'
+# Tinfoil CVM minimal tmpfiles policy.
+d /run/lock 1777 root root -
+L /run/shm - - - - /dev/shm
+d /run/log 0755 root root -
+d /run/log/journal 2755 root systemd-journal -
+d /var/log/journal 2755 root systemd-journal -
+EOF
+
+install -d -m 0755 "$BUILDROOT/usr/lib/sysctl.d"
+cat > "$BUILDROOT/usr/lib/sysctl.d/tinfoil-runtime.conf" <<'EOF'
+# Tinfoil CVM minimal sysctl policy.
+kernel.kptr_restrict = 1
+kernel.printk = 4 4 1 7
+kernel.sysrq = 0
+kernel.yama.ptrace_scope = 1
+-net.core.default_qdisc = fq_codel
+net.ipv4.conf.default.rp_filter = 2
+net.ipv4.conf.all.rp_filter = 2
+vm.max_map_count = 1048576
+vm.mmap_min_addr = 65536
+EOF
+
+containerd_unit="$BUILDROOT/usr/lib/systemd/system/containerd.service"
+if [ -f "$containerd_unit" ]; then
+    sed -i -E 's/(^After=| )dbus\.service( |$)/\1/g; s/^After=[[:space:]]*/After=/; s/[[:space:]]+$//' "$containerd_unit"
+fi
+
+docker_unit="$BUILDROOT/usr/lib/systemd/system/docker.service"
+if [ -f "$docker_unit" ]; then
+    sed -i -E '
+        /^After=/ s/[[:space:]]*network-online\.target//g
+        /^After=/ s/[[:space:]]*nss-lookup\.target//g
+        /^After=/ s/[[:space:]]*firewalld\.service//g
+        /^After=/ s/[[:space:]]*time-set\.target//g
+        /^Wants=/ s/[[:space:]]*network-online\.target//g
+        /^After=$/d
+        /^Wants=$/d
+    ' "$docker_unit"
+fi
+
+fabricmanager_unit="$BUILDROOT/usr/lib/systemd/system/nvidia-fabricmanager.service"
+if [ -f "$fabricmanager_unit" ]; then
+    sed -i -E '
+        /^After=/ s/[[:space:]]*network-online\.target//g
+        /^Requires=/ s/[[:space:]]*network-online\.target//g
+        /^After=$/d
+        /^Requires=$/d
+    ' "$fabricmanager_unit"
+fi
+
+networkd_unit="$BUILDROOT/usr/lib/systemd/system/systemd-networkd.service"
+if [ -f "$networkd_unit" ]; then
+    sed -i -E '
+        /udev/d
+        /^(Sockets|Also)=/ s/[[:space:]]*systemd-networkd-resolve-hook\.socket//g
+        /^(Sockets|Also)=/ s/[[:space:]]*systemd-networkd-varlink\.socket//g
+        /^(Sockets|Also)=/ s/[[:space:]]*systemd-network-generator\.service//g
+        /^(Sockets|Also)=/ s/[[:space:]]*systemd-networkd-wait-online\.service//g
+        /^(Before|Conflicts)=/ s/[[:space:]]*initrd-switch-root\.target//g
+        /^After=/ s/[[:space:]]*systemd-udevd\.service//g
+        /^After=/ s/[[:space:]]*systemd-sysusers\.service//g
+        /^Wants=/ s/[[:space:]]*systemd-networkd-persistent-storage\.service//g
+        /^BusName=org\.freedesktop\.network1$/d
+        /^ImportCredential=network\.wireguard\.\*$/d
+        /^Alias=dbus-org\.freedesktop\.network1\.service$/d
+        /^After=$/d
+        /^Wants=$/d
+        /^Before=$/d
+        /^Conflicts=$/d
+        /^Also=$/d
+    ' "$networkd_unit"
+fi
+
+tmpfiles_setup_unit="$BUILDROOT/usr/lib/systemd/system/systemd-tmpfiles-setup.service"
+if [ -f "$tmpfiles_setup_unit" ]; then
+    sed -i -E '
+        /^After=/ s/[[:space:]]*systemd-sysusers\.service//g
+        /^(Before|Conflicts)=/ s/[[:space:]]*initrd-switch-root\.target//g
+        /^ImportCredential=/d
+        /^RestrictSUIDSGID=no$/d
+        /^After=$/d
+        /^Before=$/d
+        /^Conflicts=$/d
+    ' "$tmpfiles_setup_unit"
+fi
+
+for tmpfiles_unit in "$BUILDROOT"/usr/lib/systemd/system/systemd-tmpfiles-*.service; do
+    [ -e "$tmpfiles_unit" ] || continue
+    sed -i -E '
+        /^ImportCredential=/d
+        /^RestrictSUIDSGID=no$/d
+    ' "$tmpfiles_unit"
+done
+
+sysctl_unit="$BUILDROOT/usr/lib/systemd/system/systemd-sysctl.service"
+if [ -f "$sysctl_unit" ]; then
+    sed -i -E '
+        /^ImportCredential=sysctl\.\*$/d
+        /^After=/ s/[[:space:]]*systemd-modules-load\.service//g
+        /^After=$/d
+    ' "$sysctl_unit"
+fi
+
+journald_unit="$BUILDROOT/usr/lib/systemd/system/systemd-journald.service"
+if [ -f "$journald_unit" ]; then
+    sed -i -E '
+        /^(After|Sockets)=/ s/[[:space:]]*systemd-journald-audit\.socket//g
+        /^(After|Sockets)=/ s/[[:space:]]*systemd-journald-dev-log\.socket//g
+        /^After=/ s/[[:space:]]*syslog\.socket//g
+        /^CapabilityBoundingSet=/ s/[[:space:]]*CAP_AUDIT_CONTROL//g
+        /^CapabilityBoundingSet=/ s/[[:space:]]*CAP_AUDIT_READ//g
+        /^(After|Sockets)=$/d
+    ' "$journald_unit"
+fi
+
+rm -f "$BUILDROOT/etc/resolv.conf"
+cat > "$BUILDROOT/etc/resolv.conf" <<'EOF'
+# Tinfoil CVM static resolver.
+#
+# The host bridge dnsmasq is DHCP-only and advertises these upstream resolvers.
+# Keep DNS data-plane resolution direct so systemd-resolved and its local stub
+# listener are not part of the measured runtime TCB.
+nameserver 1.1.1.1
+nameserver 1.0.0.1
+options edns0
+search .
+EOF
+
+if [ -f "$BUILDROOT/etc/nsswitch.conf" ]; then
+    sed -i -E 's/^hosts:.*/hosts: files dns/' "$BUILDROOT/etc/nsswitch.conf"
+fi
+
+if [ -f "$BUILDROOT/etc/passwd" ]; then
+    sed -i -E 's#^(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:).*$#\1/bin/sh#' "$BUILDROOT/etc/passwd"
+fi
+cat > "$BUILDROOT/etc/shells" <<'EOF'
+# /etc/shells: valid login shells
+/bin/sh
+/usr/bin/sh
+/usr/bin/dash
+EOF
+
+ensure_static_group() {
+    local name="$1"
+    local preferred_gid="$2"
+    local group_file="$BUILDROOT/etc/group"
+    local gid="$preferred_gid"
+
+    [ -f "$group_file" ] || return 0
+    if grep -Eq "^${name}:" "$group_file"; then
+        return 0
+    fi
+
+    if awk -F: -v gid="$gid" '$3 == gid { found=1 } END { exit found ? 0 : 1 }' "$group_file"; then
+        gid="$(awk -F: 'BEGIN { gid=300 } { used[$3]=1 } END { while (used[gid]) gid++; print gid }' "$group_file")"
+    fi
+
+    printf '%s:x:%s:\n' "$name" "$gid" >> "$group_file"
+}
+
+ensure_static_group render 107
+
+# Build inputs are still needed during package installation because NVIDIA DKMS
+# and the patched TDX module both compile against the stock kernel. Once those
+# modules exist, remove the executable build surface and source trees from the
+# runtime rootfs.
+transient_build_paths=(
+    "/usr/bin/addr2line"
+    "/usr/bin/ar"
+    "/usr/bin/as"
+    "/usr/bin/c++"
+    "/usr/bin/c89"
+    "/usr/bin/c99"
+    "/usr/bin/*gcc*"
+    "/usr/bin/cc"
+    "/usr/bin/cpp"
+    "/usr/bin/cpp-*"
+    "/usr/bin/dkms"
+    "/usr/bin/deb-systemd-*"
+    "/usr/bin/debconf*"
+    "/usr/bin/dpkg*"
+    "/usr/bin/busctl"
+    "/usr/bin/dpkg-buildflags"
+    "/usr/bin/dpkg-buildpackage"
+    "/usr/bin/dpkg-checkbuilddeps"
+    "/usr/bin/dpkg-genbuildinfo"
+    "/usr/bin/dpkg-genchanges"
+    "/usr/bin/dpkg-gencontrol"
+    "/usr/bin/dpkg-gensymbols"
+    "/usr/bin/dpkg-mergechangelogs"
+    "/usr/bin/dpkg-name"
+    "/usr/bin/dpkg-parsechangelog"
+    "/usr/bin/dpkg-scanpackages"
+    "/usr/bin/dpkg-scansources"
+    "/usr/bin/dpkg-shlibdeps"
+    "/usr/bin/dpkg-source"
+    "/usr/bin/g++"
+    "/usr/bin/g++-*"
+    "/usr/bin/gcc"
+    "/usr/bin/gcc-*"
+    "/usr/bin/gcov*"
+    "/usr/bin/gprof"
+    "/usr/bin/gprofng*"
+    "/usr/bin/gnu*"
+    "/usr/bin/ld"
+    "/usr/bin/ld.*"
+    "/usr/bin/ldd"
+    "/usr/bin/make"
+    "/usr/bin/nm"
+    "/usr/bin/objcopy"
+    "/usr/bin/objdump"
+    "/usr/bin/pahole"
+    "/usr/bin/patch"
+    "/usr/bin/pkg-config"
+    "/usr/bin/pkgconf"
+    "/usr/bin/ranlib"
+    "/usr/bin/readelf"
+    "/usr/bin/size"
+    "/usr/bin/strings"
+    "/usr/bin/strip"
+    "/usr/bin/x86_64-linux-gnu-*"
+    "/usr/bin/bashbug"
+    "/usr/bin/btfdiff"
+    "/usr/bin/codiff"
+    "/usr/bin/corelist"
+    "/usr/bin/cpan*"
+    "/usr/bin/ctracer"
+    "/usr/bin/dtagnames"
+    "/usr/bin/enc2xs"
+    "/usr/bin/encguess"
+    "/usr/bin/fullcircle"
+    "/usr/bin/h2ph"
+    "/usr/bin/h2xs"
+    "/usr/bin/instmodsh"
+    "/usr/bin/json_pp"
+    "/usr/bin/kernel-install"
+    "/usr/bin/libnetcfg"
+    "/usr/bin/linux-*"
+    "/usr/bin/localedef"
+    "/usr/bin/lsb_release"
+    "/usr/bin/nvidia-bug-report.sh"
+    "/usr/bin/nvidia-debugdump"
+    "/usr/bin/nvidia-ngx-updater"
+    "/usr/bin/nvidia-powerd"
+    "/usr/bin/nvidia-sleep.sh"
+    "/usr/bin/pdwtags"
+    "/usr/bin/perl*"
+    "/usr/bin/pfunct"
+    "/usr/bin/pglobal"
+    "/usr/bin/piconv"
+    "/usr/bin/pl2pm"
+    "/usr/bin/pod*"
+    "/usr/bin/prefcnt"
+    "/usr/bin/prove"
+    "/usr/bin/ptar*"
+    "/usr/bin/rpcgen"
+    "/usr/bin/scncopy"
+    "/usr/bin/shasum"
+    "/usr/bin/splain"
+    "/usr/bin/systemd-firstboot"
+    "/usr/bin/systemd-hwdb"
+    "/usr/bin/systemd-analyze"
+    "/usr/bin/systemd-cgls"
+    "/usr/bin/systemd-cgtop"
+    "/usr/bin/systemd-delta"
+    "/usr/bin/systemd-inhibit"
+    "/usr/bin/systemd-mount"
+    "/usr/bin/systemd-run"
+    "/usr/bin/systemd-sysext"
+    "/usr/bin/xsubpp"
+    "/usr/bin/zipdetails"
+    "/usr/bin/bootctl"
+    "/usr/bin/chage"
+    "/usr/bin/chfn"
+    "/usr/bin/chsh"
+    "/usr/bin/dbus-cleanup-sockets"
+    "/usr/bin/dbus-monitor"
+    "/usr/bin/dbus-run-session"
+    "/usr/bin/dbus-send"
+    "/usr/bin/dbus-update-activation-environment"
+    "/usr/bin/dbus-uuidgen"
+    "/usr/bin/chrt"
+    "/usr/bin/choom"
+    "/usr/bin/dmesg"
+    "/usr/bin/efiboot*"
+    "/usr/bin/expiry"
+    "/usr/bin/fallocate"
+    "/usr/bin/fincore"
+    "/usr/bin/findmnt"
+    "/usr/bin/flock"
+    "/usr/bin/gencat"
+    "/usr/bin/gpasswd"
+    "/usr/bin/hardlink"
+    "/usr/bin/ionice"
+    "/usr/bin/ipcmk"
+    "/usr/bin/ipcrm"
+    "/usr/bin/ipcs"
+    "/usr/bin/logger"
+    "/usr/bin/locale"
+    "/usr/bin/localectl"
+    "/usr/bin/loginctl"
+    "/usr/bin/lsblk"
+    "/usr/bin/lsipc"
+    "/usr/bin/lsirq"
+    "/usr/bin/lslocks"
+    "/usr/bin/lslogins"
+    "/usr/bin/lsmem"
+    "/usr/bin/mcookie"
+    "/usr/bin/mesg"
+    "/usr/bin/mountpoint"
+    "/usr/bin/namei"
+    "/usr/bin/nsenter"
+    "/usr/bin/passwd"
+    "/usr/bin/prlimit"
+    "/usr/bin/rename.ul"
+    "/usr/bin/rev"
+    "/usr/bin/script"
+    "/usr/bin/scriptlive"
+    "/usr/bin/scriptreplay"
+    "/usr/bin/setarch"
+    "/usr/bin/setpriv"
+    "/usr/bin/setsid"
+    "/usr/bin/su"
+    "/usr/bin/taskset"
+    "/usr/bin/timedatectl"
+    "/usr/bin/ul"
+    "/usr/bin/unshare"
+    "/usr/bin/update-alternatives"
+    "/usr/bin/utmpdump"
+    "/usr/bin/wall"
+    "/usr/bin/whereis"
+    "/usr/lib/dkms"
+    "/usr/lib/gcc"
+    "/usr/lib/linux-kbuild-*"
+    "/usr/lib/x86_64-linux-gnu/security/pam_*.so"
+    "/usr/sbin/blockdev"
+    "/usr/sbin/cfdisk"
+    "/usr/sbin/dkms"
+    "/usr/sbin/dpkg*"
+    "/usr/sbin/fdisk"
+    "/usr/sbin/fsck"
+    "/usr/sbin/installkernel"
+    "/usr/sbin/invoke-rc.d"
+    "/usr/sbin/losetup"
+    "/usr/sbin/mkfs"
+    "/usr/sbin/mkswap"
+    "/usr/sbin/pivot_root"
+    "/usr/sbin/service"
+    "/usr/sbin/sfdisk"
+    "/usr/sbin/swapoff"
+    "/usr/sbin/swapon"
+    "/usr/sbin/update-rc.d"
+    "/usr/sbin/wipefs"
+    "/usr/sbin/add-shell"
+    "/usr/sbin/adduser"
+    "/usr/sbin/agetty"
+    "/usr/sbin/chgpasswd"
+    "/usr/sbin/chpasswd"
+    "/usr/sbin/deluser"
+    "/usr/sbin/groupadd"
+    "/usr/sbin/groupdel"
+    "/usr/sbin/groupmod"
+    "/usr/sbin/grpck"
+    "/usr/sbin/grpconv"
+    "/usr/sbin/grpunconv"
+    "/usr/sbin/iucode_tool"
+    "/usr/sbin/newusers"
+    "/usr/sbin/pam-auth-update"
+    "/usr/sbin/pam_*"
+    "/usr/sbin/pwck"
+    "/usr/sbin/pwconv"
+    "/usr/sbin/pwhistory_helper"
+    "/usr/sbin/pwunconv"
+    "/usr/sbin/remove-shell"
+    "/usr/sbin/runuser"
+    "/usr/sbin/shadowconfig"
+    "/usr/sbin/sulogin"
+    "/usr/sbin/update-passwd"
+    "/usr/sbin/update-shells"
+    "/usr/sbin/useradd"
+    "/usr/sbin/userdel"
+    "/usr/sbin/usermod"
+    "/usr/sbin/vipw"
+    "/usr/sbin/gnuchroot"
+    "/usr/share/dkms"
+    "/usr/src/linux-headers-*"
+    "/usr/src/nvidia-*"
+    "/var/lib/dkms"
+)
+
+for p in "${transient_build_paths[@]}"; do
+    rm -rf "$BUILDROOT"$p
+done
+
+# Remove distro maintenance/helper script entry points that survive package
+# pruning but are not used by the Tinfoil-owned boot path. Several point to
+# interpreters that are intentionally absent from the measured runtime rootfs.
+stale_runtime_helper_paths=(
+    "/etc/security/namespace.init"
+    "/bin/blkid"
+    "/bin/mount"
+    "/bin/umount"
+    "/sbin/cryptsetup"
+    "/sbin/blkid"
+    "/sbin/dmsetup"
+    "/sbin/dmstats"
+    "/sbin/veritysetup"
+    "/usr/bin/cryptsetup"
+    "/usr/bin/bzdiff"
+    "/usr/bin/blkid"
+    "/usr/bin/bzexe"
+    "/usr/bin/bzgrep"
+    "/usr/bin/bzmore"
+    "/usr/bin/c_rehash"
+    "/usr/bin/egrep"
+    "/usr/bin/fgrep"
+    "/usr/bin/gunzip"
+    "/usr/bin/gzexe"
+    "/usr/bin/lzcmp"
+    "/usr/bin/lzdiff"
+    "/usr/bin/lzegrep"
+    "/usr/bin/lzfgrep"
+    "/usr/bin/lzgrep"
+    "/usr/bin/lzless"
+    "/usr/bin/lzmore"
+    "/usr/bin/make-first-existing-target"
+    "/usr/bin/mount"
+    "/usr/bin/rgrep"
+    "/usr/bin/routel"
+    "/usr/bin/savelog"
+    "/usr/bin/streamzip"
+    "/usr/bin/tzselect"
+    "/usr/bin/umount"
+    "/usr/bin/which"
+    "/usr/bin/which.debianutils"
+    "/usr/bin/xzdiff"
+    "/usr/bin/xzgrep"
+    "/usr/bin/xzless"
+    "/usr/bin/xzmore"
+    "/usr/bin/zcat"
+    "/usr/bin/zcmp"
+    "/usr/bin/zdiff"
+    "/usr/bin/zegrep"
+    "/usr/bin/zfgrep"
+    "/usr/bin/zforce"
+    "/usr/bin/zgrep"
+    "/usr/bin/zless"
+    "/usr/bin/zmore"
+    "/usr/bin/znew"
+    "/usr/libexec/libselinux/selinux_compile_fcontexts"
+    "/usr/sbin/blkdeactivate"
+    "/usr/sbin/blkid"
+    "/usr/sbin/cryptdisks_start"
+    "/usr/sbin/cryptdisks_stop"
+    "/usr/sbin/cryptsetup"
+    "/usr/sbin/dmsetup"
+    "/usr/sbin/dmstats"
+    "/usr/sbin/iptables-apply"
+    "/usr/sbin/luksformat"
+    "/usr/sbin/tarcat"
+    "/usr/sbin/update-ca-certificates"
+    "/usr/sbin/veritysetup"
+)
+
+for p in "${stale_runtime_helper_paths[@]}"; do
+    rm -rf "$BUILDROOT"$p
+done
+
+runtime_bash_paths=(
+    "/etc/bash.bashrc"
+    "/etc/skel/.bash_logout"
+    "/etc/skel/.bashrc"
+    "/root/.bash_logout"
+    "/root/.bashrc"
+    "/usr/bin/bash"
+    "/usr/bin/rbash"
+    "/usr/share/base-files/dot.bashrc"
+    "/usr/share/debianutils/shells.d/bash"
+    "/usr/share/dot.bashrc"
+)
+
+for p in "${runtime_bash_paths[@]}"; do
+    rm -rf "$BUILDROOT"$p
+done
+
+for privileged_path in \
+    "$BUILDROOT/usr/bin/nvidia-modprobe"; do
+    [ -e "$privileged_path" ] || continue
+    chmod ug-s "$privileged_path"
+done
+
+nvidia_driver_modprobe_conf="$BUILDROOT/usr/lib/modprobe.d/nvidia-graphics-drivers.conf"
+if [ -e "$nvidia_driver_modprobe_conf" ]; then
+    sed -i \
+        -e '/^options nvidia .*NVreg_TemporaryFilePath=/d' \
+        -e '/^options nvidia .*NVreg_EnableS0ixPowerManagement=/d' \
+        -e '/^options nvidia .*NVreg_PreserveVideoMemoryAllocations=/d' \
+        -e '/^# Enable complete power management/,/^$/d' \
+        "$nvidia_driver_modprobe_conf"
+fi
+
+nvidia_container_config="$BUILDROOT/etc/nvidia-container-runtime/config.toml"
+if [ -e "$nvidia_container_config" ]; then
+    sed -i -e 's/^load-kmods = true$/load-kmods = false/' "$nvidia_container_config"
+fi
+
+if command -v setcap >/dev/null 2>&1; then
+    for cap_path in \
+        "$BUILDROOT/usr/bin/ping" \
+        "$BUILDROOT/usr/bin/ping4" \
+        "$BUILDROOT/usr/bin/ping6"; do
+        [ -e "$cap_path" ] || continue
+        setcap -r "$cap_path" 2>/dev/null || true
+    done
+fi
+
+# Ubuntu 26.04 maps many coreutils applets through rust-coreutils under
+# /usr/lib/cargo/bin/coreutils. Keep that runtime backend, but drop the duplicate
+# GNU-prefixed applets and repair compatibility symlinks such as rm -> gnurm.
+for symlink in "$BUILDROOT"/usr/bin/*; do
+    [ -L "$symlink" ] || continue
+    target="$(readlink "$symlink")"
+    case "$target" in
+        gnu*)
+            applet="${target#gnu}"
+            if [ -e "$BUILDROOT/usr/lib/cargo/bin/coreutils/$applet" ]; then
+                ln -sfn "../lib/cargo/bin/coreutils/$applet" "$symlink"
+            fi
+            ;;
+    esac
+done
+rm -f "$BUILDROOT"/usr/lib/cargo/bin/su "$BUILDROOT"/usr/lib/cargo/bin/sudo
+
+for tool in iptables ip6tables; do
+    if [ -e "$BUILDROOT/usr/sbin/${tool}-nft" ]; then
+        ln -sfn "${tool}-nft" "$BUILDROOT/usr/sbin/$tool"
+    fi
+done
+
+for dir in "$BUILDROOT"/usr/bin "$BUILDROOT"/usr/sbin "$BUILDROOT"/bin "$BUILDROOT"/sbin; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' symlink; do
+        target="$(readlink "$symlink")"
+        case "$target" in
+            /*) resolved="$BUILDROOT$target" ;;
+            *) resolved="$(dirname "$symlink")/$target" ;;
+        esac
+        [ -e "$resolved" ] || rm -f "$symlink"
+    done < <(find "$dir" -maxdepth 1 -type l -print0)
+done
+
+# Firmware is host-influenced device payload. Keep the NVIDIA firmware needed by
+# the packaged driver plus CPU microcode for UKI generation; remove the generic
+# distro firmware catalog.
+if [ -d "$BUILDROOT/usr/lib/firmware" ]; then
+    find "$BUILDROOT/usr/lib/firmware" -mindepth 1 -maxdepth 1 \
+        ! -name nvidia \
+        ! -name amd-ucode \
+        ! -name intel-ucode \
+        -exec rm -rf {} +
+fi
+
+if [ -d "$BUILDROOT/etc/alternatives" ]; then
+    while IFS= read -r -d '' symlink; do
+        target="$(readlink "$symlink")"
+        case "$target" in
+            /*) resolved="$BUILDROOT$target" ;;
+            *) resolved="$(dirname "$symlink")/$target" ;;
+        esac
+        [ -e "$resolved" ] || rm -f "$symlink"
+    done < <(find "$BUILDROOT/etc/alternatives" -maxdepth 1 -type l -print0)
+fi
+
+# Re-run command symlink cleanup after /etc/alternatives pruning. Many /usr/bin
+# entries are two-hop links through alternatives, so the first pass can only
+# prove that the alternatives link itself exists.
+for dir in "$BUILDROOT"/usr/bin "$BUILDROOT"/usr/sbin "$BUILDROOT"/bin "$BUILDROOT"/sbin; do
+    [ -d "$dir" ] || continue
+    while IFS= read -r -d '' symlink; do
+        target="$(readlink "$symlink")"
+        case "$target" in
+            /*) resolved="$BUILDROOT$target" ;;
+            *) resolved="$(dirname "$symlink")/$target" ;;
+        esac
+        [ -e "$resolved" ] || rm -f "$symlink"
+    done < <(find "$dir" -maxdepth 1 -type l -print0)
+done
+
+# The stock Ubuntu kernel ships thousands of signed modules, most of them for
+# device families a malicious hypervisor could present but Tinfoil never needs.
+# Keep a conservative runtime allowlist for the stock-kernel transition:
+# attestation, NVIDIA, Docker bridge/overlay/netfilter, dm-crypt/verity,
+# virtio-facing rootfs pieces, and their bounded crypto/netfilter dependencies.
+# The DRM carve-out is intentionally tiny: the packaged NVIDIA stack needs
+# ttm + drm_ttm_helper for nvidia-drm, while the core drm module is built in.
+#
+# TINFOIL_DEBUG_KEEP_ALL_MODULES=1 is a diagnostic-only split test for GPU
+# bring-up: it keeps the no-udev/no-systemd userspace shape but preserves the
+# stock module tree so INF14 B300 failures can be attributed to module pruning
+# versus PID1/userspace sequencing. Images built with this flag are not TCB
+# candidates and are expected to fail the mounted-rootfs tcb-check module gates.
+custom_kernel_builtin_dir="$BUILDROOT/usr/lib/tinfoil/custom-kernel"
+custom_kernel_builtin_manifest="$custom_kernel_builtin_dir/modules.builtin"
+custom_kernel_builtin_release="$custom_kernel_builtin_dir/kernel.release"
+install_custom_kernel_builtins() {
+    local module_dir="$1"
+    local kver="$2"
+    local expected_release
+
+    [ -s "$custom_kernel_builtin_manifest" ] || return 0
+    [ -s "$custom_kernel_builtin_release" ] || return 0
+    expected_release="$(tr -d '\n' < "$custom_kernel_builtin_release")"
+    if [ "$expected_release" != "$kver" ]; then
+        echo "mkosi.finalize: custom kernel built-in manifest release $expected_release does not match rootfs module tree $kver" >&2
+        return 1
+    fi
+
+    install -m 0644 "$custom_kernel_builtin_manifest" "$module_dir/modules.builtin"
+    echo "mkosi.finalize: installed custom kernel built-in manifest for $kver" >&2
+}
+
+if [ "${TINFOIL_DEBUG_KEEP_ALL_MODULES:-0}" = "1" ]; then
+    echo "mkosi.finalize: debug build keeps the full rootfs module tree; not a hardened TCB candidate" >&2
+    for module_dir in "$BUILDROOT"/usr/lib/modules/*; do
+        [ -d "$module_dir" ] || continue
+        kver="$(basename "$module_dir")"
+        rm -f "$module_dir/build" "$module_dir/source"
+        depmod -b "$BUILDROOT" "$kver"
+        install_custom_kernel_builtins "$module_dir" "$kver"
+    done
+else
+    for module_dir in "$BUILDROOT"/usr/lib/modules/*; do
+        [ -d "$module_dir" ] || continue
+        kver="$(basename "$module_dir")"
+        while IFS= read -r -d '' module; do
+            rel="${module#$module_dir/}"
+            case "$rel" in
+                updates/dkms/nvidia.ko | \
+                updates/dkms/nvidia-modeset.ko | \
+                updates/dkms/nvidia-peermem.ko | \
+                updates/dkms/nvidia-uvm.ko | \
+                updates/tdx-guest.ko | \
+                kernel/arch/x86/crypto/aesni-intel.ko.* | \
+                kernel/crypto/ecdsa_generic.ko.* | \
+                kernel/drivers/acpi/video.ko.* | \
+                kernel/drivers/block/loop.ko.* | \
+                kernel/drivers/gpu/drm/drm_ttm_helper.ko.* | \
+                kernel/drivers/gpu/drm/ttm/ttm.ko.* | \
+                kernel/drivers/i2c/algos/i2c-algo-bit.ko.* | \
+                kernel/drivers/md/dm-bufio.ko.* | \
+                kernel/drivers/md/dm-crypt.ko.* | \
+                kernel/drivers/md/dm-verity.ko.* | \
+                kernel/drivers/net/tun.ko.* | \
+                kernel/drivers/net/veth.ko.* | \
+                kernel/drivers/platform/wmi/wmi.ko.* | \
+                kernel/drivers/virt/coco/*.ko.* | \
+                kernel/drivers/virt/coco/*/*.ko.* | \
+                kernel/fs/erofs/*.ko.* | \
+                kernel/fs/ext4/*.ko.* | \
+                kernel/fs/jbd2/*.ko.* | \
+                kernel/fs/mbcache.ko.* | \
+                kernel/fs/overlayfs/*.ko.* | \
+                kernel/net/802/stp.ko.* | \
+                kernel/net/bridge/br_netfilter.ko.* | \
+                kernel/net/bridge/bridge.ko.* | \
+                kernel/net/ipv4/netfilter/nf_defrag_ipv4.ko.* | \
+                kernel/net/ipv6/netfilter/nf_defrag_ipv6.ko.* | \
+                kernel/net/llc/llc.ko.* | \
+                kernel/net/netfilter/ipset/ip_set.ko.* | \
+                kernel/net/netfilter/nf_conntrack.ko.* | \
+                kernel/net/netfilter/nf_conntrack_netlink.ko.* | \
+                kernel/net/netfilter/nf_nat.ko.* | \
+                kernel/net/netfilter/nf_tables.ko.* | \
+                kernel/net/netfilter/nfnetlink.ko.* | \
+                kernel/net/netfilter/nft_chain_nat.ko.* | \
+                kernel/net/netfilter/nft_compat.ko.* | \
+                kernel/net/netfilter/nft_ct.ko.* | \
+                kernel/net/netfilter/x_tables.ko.* | \
+                kernel/net/netfilter/xt_MASQUERADE.ko.* | \
+                kernel/net/netfilter/xt_addrtype.ko.* | \
+                kernel/net/netfilter/xt_conntrack.ko.* | \
+                kernel/net/netfilter/xt_nat.ko.* | \
+                kernel/net/netfilter/xt_set.ko.* | \
+                kernel/net/netfilter/xt_tcpudp.ko.* | \
+                kernel/net/sched/sch_fq_codel.ko.*)
+                    ;;
+                *)
+                    rm -f "$module"
+                    ;;
+            esac
+        done < <(find "$module_dir" -type f -name '*.ko*' -print0)
+
+        rm -f "$module_dir/build" "$module_dir/source"
+        find "$module_dir" -depth -type d -empty -delete
+        depmod -b "$BUILDROOT" "$kver"
+        install_custom_kernel_builtins "$module_dir" "$kver"
+    done
+fi
+rm -rf "$custom_kernel_builtin_dir"
+
+runtime_kmod_loader_paths=(
+    "/usr/bin/depmod"
+    "/usr/bin/insmod"
+    "/usr/bin/kmod"
+    "/usr/bin/lsmod"
+    "/usr/bin/modinfo"
+    "/usr/bin/modprobe"
+    "/usr/bin/rmmod"
+    "/usr/sbin/depmod"
+    "/usr/sbin/insmod"
+    "/usr/sbin/kmod"
+    "/usr/sbin/lsmod"
+    "/usr/sbin/modinfo"
+    "/usr/sbin/modprobe"
+    "/usr/sbin/rmmod"
+)
+
+for p in "${runtime_kmod_loader_paths[@]}"; do
+    rm -rf "$BUILDROOT"$p
+done
+rm -f "$BUILDROOT"/usr/lib/x86_64-linux-gnu/libkmod.so.*

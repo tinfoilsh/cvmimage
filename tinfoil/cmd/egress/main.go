@@ -33,13 +33,18 @@ type egressNetwork struct {
 }
 
 func main() {
-	if err := run(); err != nil {
+	once := len(os.Args) == 2 && os.Args[1] == "--once"
+	if len(os.Args) > 1 && !once {
+		log.Printf("usage: tinfoil-egress [--once]")
+		os.Exit(2)
+	}
+	if err := run(once); err != nil {
 		log.Printf("tinfoil-egress: %v", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(once bool) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -51,13 +56,15 @@ func run() error {
 
 	state := readState()
 
-	// Initial population must succeed before notifying systemd; tinfoil-boot
-	// blocks on `systemctl start` until READY=1 so any failure here surfaces
-	// as a boot error.
+	// Initial population must succeed before the daemon enters its refresh
+	// loop. tinfoil-boot runs `tinfoil-egress --once` through tinfoil-init's
+	// hardening wrapper, so failures surface as boot errors.
 	if err := refresh(cfg, state); err != nil {
 		return fmt.Errorf("initial population: %w", err)
 	}
-	notifyReady()
+	if once {
+		return nil
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -209,23 +216,4 @@ func difference(a, b []string) []string {
 		}
 	}
 	return result
-}
-
-// notifyReady sends READY=1 over the systemd NOTIFY_SOCKET so the unit
-// transitions to active only after the first successful resolution. No-op
-// when not running under systemd Type=notify (NOTIFY_SOCKET unset).
-func notifyReady() {
-	addr := os.Getenv("NOTIFY_SOCKET")
-	if addr == "" {
-		return
-	}
-	conn, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: addr, Net: "unixgram"})
-	if err != nil {
-		log.Printf("sd_notify dial: %v", err)
-		return
-	}
-	defer conn.Close()
-	if _, err := conn.Write([]byte("READY=1")); err != nil {
-		log.Printf("sd_notify write: %v", err)
-	}
 }

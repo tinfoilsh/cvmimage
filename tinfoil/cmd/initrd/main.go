@@ -221,10 +221,15 @@ func initrdModuleMode() (string, error) {
 }
 
 func initrdModuleModeFrom(cmdline string) (string, error) {
+	// The mode must be explicit: "builtin" (dm-verity/dm-bufio compiled into
+	// the kernel) vs "manifest" (staged bounded modules). Guessing wrong is
+	// unrecoverable — a stock modular kernel with no manifest would reach the
+	// verity table load with no dm-verity target and park at boot. Requiring
+	// the flag forces image assembly to declare which kernel it built.
 	mode, err := cmdlineValueFrom(cmdline, initrdModuleModeKey)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return initrdModuleBuiltinMode, nil
+		return "", fmt.Errorf("%s is required on the kernel cmdline (builtin|manifest)", initrdModuleModeKey)
 	case err != nil:
 		return "", fmt.Errorf("reading %s: %w", initrdModuleModeKey, err)
 	case mode == initrdModuleManifestMode || mode == initrdModuleBuiltinMode:
@@ -682,11 +687,16 @@ func dmIoctl(control *os.File, request uintptr, buf []byte) error {
 	return nil
 }
 
+// putCString writes value into dst as a NUL-terminated C string, always
+// reserving the final byte for the terminator. The kernel reads these
+// device-mapper ioctl fields as C strings, so an unterminated buffer (value
+// as long as or longer than dst) would cause an overread; truncate instead.
 func putCString(dst []byte, value string) {
-	copy(dst, value)
-	if len(value) < len(dst) {
-		dst[len(value)] = 0
+	if len(dst) == 0 {
+		return
 	}
+	n := copy(dst[:len(dst)-1], value)
+	dst[n] = 0
 }
 
 func align(value, alignment int) int {
@@ -777,7 +787,9 @@ func parseVeritySuperblock(superblock []byte) (verityMetadata, error) {
 }
 
 func validVerityBlockSize(size uint32) bool {
-	return size >= 512 && size <= 512*1024 && size%512 == 0 && size&(size-1) == 0
+	// A power of two (size&(size-1)==0) that is >= 512 is necessarily a
+	// multiple of 512, so no separate divisibility check is needed.
+	return size >= 512 && size <= 512*1024 && size&(size-1) == 0
 }
 
 func blockDevNumber(device string) (string, error) {
@@ -790,8 +802,11 @@ func blockDevNumber(device string) (string, error) {
 }
 
 func switchRoot(newRoot, initPath string) error {
+	// Fail closed: without a recursive private mount the measured root's
+	// mount namespace is not isolated from the initrd, weakening the TCB
+	// boundary this hand-off establishes.
 	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
-		initrdLogf("warning: making mounts private: %v", err)
+		return fmt.Errorf("making mounts private before root hand-off: %w", err)
 	}
 	for _, dir := range []string{"dev", "proc", "sys", "run"} {
 		source := "/" + dir

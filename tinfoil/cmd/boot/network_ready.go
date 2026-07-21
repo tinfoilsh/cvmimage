@@ -15,13 +15,14 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"tinfoil/internal/boot"
 )
 
 const (
 	networkReadyTimeout      = 90 * time.Second
 	networkReadyPollInterval = 500 * time.Millisecond
 
-	etherTypeAll       = 0x0003
 	etherTypeIPv4      = 0x0800
 	ethernetHeaderLen  = 14
 	ipv4HeaderLen      = 20
@@ -81,7 +82,7 @@ func activateExternalEthernetLinks(ctx context.Context, sysClassNet string, run 
 
 	var activated []string
 	for _, link := range links {
-		output, err := run(ctx, "/usr/sbin/ip", "link", "set", "dev", link, "up")
+		output, err := run(ctx, boot.IPBinary, "link", "set", "dev", link, "up")
 		if err != nil {
 			detail := strings.TrimSpace(string(output))
 			if detail != "" {
@@ -268,7 +269,7 @@ type rawDHCPv4Conn struct {
 }
 
 func listenRawDHCPv4(iface *net.Interface) (*rawDHCPv4Conn, error) {
-	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(etherTypeAll)))
+	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(etherTypeIPv4)))
 	if err != nil {
 		return nil, fmt.Errorf("opening raw DHCP socket: %w", err)
 	}
@@ -514,10 +515,10 @@ func parseDHCPOptions(data []byte) map[byte][]byte {
 
 func applyDHCPv4Lease(ctx context.Context, ifname string, lease *dhcpv4Lease, run commandRunner) error {
 	address := fmt.Sprintf("%s/%d", lease.IP, lease.PrefixLength)
-	if output, err := run(ctx, "/usr/sbin/ip", "addr", "replace", address, "dev", ifname); err != nil {
+	if output, err := run(ctx, boot.IPBinary, "addr", "replace", address, "dev", ifname); err != nil {
 		return fmt.Errorf("ip addr replace %s dev %s: %w: %s", address, ifname, err, strings.TrimSpace(string(output)))
 	}
-	if output, err := run(ctx, "/usr/sbin/ip", "route", "replace", "default", "via", lease.Router.String(), "dev", ifname); err != nil {
+	if output, err := run(ctx, boot.IPBinary, "route", "replace", "default", "via", lease.Router.String(), "dev", ifname); err != nil {
 		return fmt.Errorf("ip route replace default via %s dev %s: %w: %s", lease.Router, ifname, err, strings.TrimSpace(string(output)))
 	}
 	return nil

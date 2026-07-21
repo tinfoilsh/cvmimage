@@ -22,6 +22,9 @@ const (
 	filesystemProbeBytes = 4096
 	uuidBytes            = 16
 	maxQuotedIdentity    = 96
+	// Shortest printable run treated as a candidate SCSI identity; below this
+	// VPD fragments are noise rather than serials/wwids.
+	minIdentityStringLength = 4
 
 	erofsSuperOffset = 1024
 	erofsMagic       = 0xE0F5E1E2
@@ -430,7 +433,7 @@ func printableStrings(data []byte) []string {
 }
 
 func appendPrintableString(values []string, data []byte) []string {
-	if len(data) < 4 {
+	if len(data) < minIdentityStringLength {
 		return values
 	}
 	return appendIdentityValue(values, string(data))

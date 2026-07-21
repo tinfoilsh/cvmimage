@@ -21,6 +21,8 @@ func bootLogf(format string, args ...any) {
 	}
 }
 
+const bootLogLine = "tinfoil-boot: %s\n"
+
 func writeKmsg(message string) {
 	message = strings.TrimRight(message, "\n")
 	if message == "" {
@@ -29,7 +31,7 @@ func writeKmsg(message string) {
 
 	file, err := os.OpenFile("/dev/kmsg", os.O_WRONLY|os.O_APPEND, 0)
 	if err == nil {
-		_, _ = fmt.Fprintf(file, boot.KmsgInfoPrefix+"tinfoil-boot: %s\n", message)
+		_, _ = fmt.Fprintf(file, boot.KmsgInfoPrefix+bootLogLine, message)
 		_ = file.Close()
 	}
 
@@ -38,7 +40,7 @@ func writeKmsg(message string) {
 		if err != nil {
 			continue
 		}
-		_, _ = fmt.Fprintf(console, "tinfoil-boot: %s\n", message)
+		_, _ = fmt.Fprintf(console, bootLogLine, message)
 		_ = console.Close()
 	}
 }

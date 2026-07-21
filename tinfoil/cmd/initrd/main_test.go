@@ -193,10 +193,16 @@ func TestCmdlineValueFrom(t *testing.T) {
 	}
 }
 
-func TestInitrdModuleModeFromDefaultsToBuiltIn(t *testing.T) {
-	value, err := initrdModuleModeFrom("console=hvc0 roothash=abcd")
+func TestInitrdModuleModeFromRequiresExplicitMode(t *testing.T) {
+	if _, err := initrdModuleModeFrom("console=hvc0 roothash=abcd"); err == nil {
+		t.Fatal("expected missing tinfoil-initrd-modules to fail closed")
+	}
+}
+
+func TestInitrdModuleModeFromAcceptsBuiltin(t *testing.T) {
+	value, err := initrdModuleModeFrom("tinfoil-initrd-modules=builtin roothash=abcd")
 	if err != nil {
-		t.Fatalf("initrdModuleModeFrom: %v", err)
+		t.Fatalf("initrdModuleModeFrom builtin: %v", err)
 	}
 	if value != initrdModuleBuiltinMode {
 		t.Fatalf("mode = %q, want %q", value, initrdModuleBuiltinMode)

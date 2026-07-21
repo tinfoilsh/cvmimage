@@ -38,9 +38,16 @@ for bin in \
 done
 
 for bin in containerd containerd-shim-runc-v2 ctr docker docker-init docker-proxy dockerd runc; do
-    if readelf -d "$dest_dir/$bin" 2>/dev/null | grep -Eq 'lib(systemd|udev)\.so'; then
+    # A binary we cannot inspect must fail the build; a silently-skipped
+    # check would let an unvetted binary into the image.
+    if ! deps="$(readelf -d "$dest_dir/$bin" 2>&1)"; then
+        echo "ERROR: cannot inspect staged Docker binary $bin" >&2
+        printf '%s\n' "$deps" >&2
+        exit 1
+    fi
+    if grep -Eq 'lib(systemd|udev)\.so' <<<"$deps"; then
         echo "ERROR: static Docker binary $bin links systemd/udev" >&2
-        readelf -d "$dest_dir/$bin" >&2 || true
+        printf '%s\n' "$deps" >&2
         exit 1
     fi
 done

@@ -47,8 +47,10 @@ var (
 		// nvidia-lkca.conf modprobe hook this replaces). On the stock Ubuntu
 		// kernel ecdh_generic is builtin (modules.builtin) and this entry
 		// no-ops; listing it pins the dependency so a kernel that ships it
-		// modular gets it loaded and one that lacks it fails boot loudly
-		// instead of failing GPU attestation at SPDM time.
+		// modular gets it loaded before nvidia. Note the NVIDIA bootstrap
+		// treats a failed core-module load as a warning (the same image also
+		// boots CPU-only CVMs), so a GPU image whose kernel truly lacks ECDH
+		// surfaces the failure downstream at GPU attestation, not here.
 		{
 			name: "ecdh_generic",
 			paths: []string{

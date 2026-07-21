@@ -64,7 +64,7 @@ func setupContainerNetworkFirewall(cfg *Config) error {
 			continue
 		}
 		log.Println("Firewall: starting tinfoil-egress for initial IP population")
-		cmd := exec.Command(boot.InitBinary, "--exec-service", "tinfoil-egress", "--", boot.EgressBinary, "--once")
+		cmd := exec.Command(boot.InitBinary, "--exec-service", boot.EgressServiceName, "--", boot.EgressBinary, "--once")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("tinfoil-egress --once failed: %w (%s)", err, out)
 		}

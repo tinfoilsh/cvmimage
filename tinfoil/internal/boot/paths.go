@@ -37,6 +37,13 @@ const (
 	EgressBinary          = "/usr/bin/tinfoil-egress"
 	ContainerStatusBinary = "/usr/bin/tinfoil-container-status"
 
+	// Service names used both as log labels and as tinfoil-init
+	// --exec-service hardening-policy selectors.
+	EgressServiceName = "tinfoil-egress"
+
+	// IPBinary is iproute2's ip(8), used for link/address/route setup.
+	IPBinary = "/usr/sbin/ip"
+
 	// KmsgInfoPrefix is the printk priority prefix (KERN_INFO, facility 0)
 	// used when writing directly to /dev/kmsg from the Tinfoil init stack.
 	KmsgInfoPrefix = "<6>"

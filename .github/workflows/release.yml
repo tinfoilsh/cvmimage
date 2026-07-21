@@ -56,11 +56,18 @@ jobs:
           cache: false
 
       - name: Build staged image inputs
+        env:
+          # Pin the libdevmapper source fetch to the same Ubuntu snapshot the
+          # package install uses, so `shims` is reproducible.
+          LIBDM_APT_MIRROR: https://snapshot.ubuntu.com/ubuntu/20260525T000000Z
+          LIBDM_SECURITY_MIRROR: https://snapshot.ubuntu.com/ubuntu/20260525T000000Z
         run: |
           # Same staging steps as `make rebuild`: Go binaries (incl. the
           # Tinfoil init stack), the no-udev libdevmapper override checked by
-          # mkosi.postinst.chroot, and the pinned static Docker bundle.
-          make go-binaries shims docker-static initrd-no-modules
+          # mkosi.postinst.chroot, the pinned static Docker bundle, and the
+          # custom-kernel built-in manifest (no-op until a custom kernel is
+          # staged, matching local `make rebuild`).
+          make go-binaries shims docker-static initrd-no-modules custom-kernel-builtins
           sha256sum mkosi.extra/usr/bin/tinfoil-* \
                     mkosi.images/initrd/mkosi.extra/usr/bin/tinfoil-initrd \
                     mkosi.extra/usr/lib/x86_64-linux-gnu/libdevmapper.so.1.02.1

@@ -78,6 +78,7 @@ const (
 	// PCI class codes as exposed by sysfs "class".
 	pciClassVGAController = "0x030000"
 	pciClass3DController  = "0x030200"
+	pciClassNVSwitch      = "0x068000" // bridge/other, used by NVSwitch
 
 	// Fixed NVIDIA control-node minors defined by the NVIDIA kernel driver
 	// (nv.h: NV_CONTROL_DEVICE_MINOR 255, modeset 254; nvidia-uvm uses minor
@@ -200,6 +201,19 @@ func run(parent context.Context) error {
 	bootCtx, cancelBoot := bootContext(parent)
 	defer cancelBoot()
 
+	// superviseCtx governs long-lived processes and the syslog sink. It is a
+	// child of parent (cancelled on signal) so a successful boot keeps
+	// supervising, but on a startup failure we cancel it explicitly so the
+	// restart monitors stop instead of resurrecting containerd/dockerd into a
+	// half-booted CVM. Cancelled via bootFailed unless boot completes.
+	superviseCtx, cancelSupervise := context.WithCancel(parent)
+	bootOK := false
+	defer func() {
+		if !bootOK {
+			cancelSupervise()
+		}
+	}()
+
 	initLogf("starting")
 	if err := setupRuntimeFilesystems(); err != nil {
 		return err
@@ -221,29 +235,31 @@ func run(parent context.Context) error {
 		return err
 	}
 
-	startOptionalNVIDIA(bootCtx, parent)
+	// System-wide syslog sink: not GPU-specific, so it must start regardless
+	// of NVIDIA presence.
+	startOptionalSyslogSink(superviseCtx)
 
-	containerd, err := startManaged(parent, &managedProcess{
+	startOptionalNVIDIA(bootCtx)
+
+	if _, err := startManaged(superviseCtx, &managedProcess{
 		name:     "containerd",
 		path:     "/usr/bin/containerd",
 		required: true,
 		restart:  true,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 	if err := waitForPath(bootCtx, containerdSocket, containerdSocketWait); err != nil {
 		return fmt.Errorf("waiting for containerd socket: %w", err)
 	}
 
-	dockerd, err := startManaged(parent, &managedProcess{
+	if _, err := startManaged(superviseCtx, &managedProcess{
 		name:     "dockerd",
 		path:     "/usr/bin/dockerd",
 		args:     []string{"-H", "unix://" + dockerSocket, "--containerd=" + containerdSocket},
 		required: true,
 		restart:  true,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 	if err := waitForPath(bootCtx, dockerSocket, dockerSocketWait); err != nil {
@@ -251,26 +267,26 @@ func run(parent context.Context) error {
 	}
 
 	if err := runOneShotHardened(bootCtx, tinfoilBootTimeout(), "tinfoil-boot", boot.BootBinary); err != nil {
-		stopProcess(dockerd)
-		stopProcess(containerd)
 		return err
 	}
 
-	if _, err := startManaged(parent, &managedProcess{name: containerStatusName, path: boot.ContainerStatusBinary, restart: true, harden: containerStatusName}); err != nil {
+	if _, err := startManaged(superviseCtx, &managedProcess{name: containerStatusName, path: boot.ContainerStatusBinary, restart: true, harden: containerStatusName}); err != nil {
 		return err
 	}
-	if _, err := startManaged(parent, &managedProcess{name: shimName, path: boot.ShimBinary, required: true, restart: true, harden: shimName}); err != nil {
+	if _, err := startManaged(superviseCtx, &managedProcess{name: shimName, path: boot.ShimBinary, required: true, restart: true, harden: shimName}); err != nil {
 		return err
 	}
 	if _, err := os.Stat(boot.EgressConfigPath); err == nil {
-		if _, err := startManaged(parent, &managedProcess{name: egressName, path: boot.EgressBinary, restart: true, harden: egressName}); err != nil {
+		if _, err := startManaged(superviseCtx, &managedProcess{name: egressName, path: boot.EgressBinary, restart: true, harden: egressName}); err != nil {
 			return err
 		}
 	}
 
 	initLogf("boot complete")
+	bootOK = true
 	cancelBoot()
 	<-parent.Done()
+	cancelSupervise()
 	initLogf("shutdown requested")
 	return nil
 }
@@ -306,6 +322,22 @@ func setupRuntimeFilesystems() error {
 	}
 	if err := ensureSymlink("/dev/shm", "/run/shm"); err != nil {
 		initLogf("warning: creating /run/shm compatibility symlink: %v", err)
+	}
+	// /run is a fresh tmpfs and no systemd-tmpfiles runs, so PID 1 creates the
+	// runtime directories the userspace it launches expects. Only dirs with a
+	// live consumer are created here (lvm/cryptsetup lock + state for the EMWP
+	// dm-crypt path); the journald dirs from the old tmpfiles policy are
+	// intentionally omitted since journald is not part of this image.
+	for _, d := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{"/run/lock", os.ModeSticky | 0777},
+		{"/run/cryptsetup", 0700},
+	} {
+		if err := ensureDir(d.path, d.mode); err != nil {
+			initLogf("warning: creating runtime dir %s: %v", d.path, err)
+		}
 	}
 	return nil
 }
@@ -527,8 +559,11 @@ func applySysctls(path string) error {
 		value = strings.TrimSpace(value)
 		procPath := filepath.Join("/proc/sys", strings.ReplaceAll(key, ".", "/"))
 		if err := os.WriteFile(procPath, []byte(value+"\n"), 0644); err != nil {
-			if ignoreMissing || errors.Is(err, os.ErrNotExist) {
-				initLogf("sysctl %s skipped: %v", key, err)
+			// Only the explicit "-" prefix permits skipping a missing key.
+			// An unprefixed key that cannot be applied is a hardening
+			// regression (typo or unavailable knob), so fail closed.
+			if ignoreMissing && errors.Is(err, os.ErrNotExist) {
+				initLogf("optional sysctl %s skipped: %v", key, err)
 				continue
 			}
 			return fmt.Errorf("setting sysctl %s: %w", key, err)
@@ -541,10 +576,9 @@ func applySysctls(path string) error {
 	return nil
 }
 
-// startOptionalNVIDIA runs the bounded NVIDIA bootstrap. ctx carries the boot
-// deadline; superviseCtx outlives boot and controls long-lived helpers (the
-// syslog sink goroutine), which must not stop when the boot budget expires.
-func startOptionalNVIDIA(ctx, superviseCtx context.Context) {
+// startOptionalNVIDIA runs the bounded NVIDIA bootstrap under the boot
+// deadline context.
+func startOptionalNVIDIA(ctx context.Context) {
 	if !hasNVIDIAPCIDevice() {
 		initLogf("NVIDIA services skipped: no NVIDIA PCI device")
 		return
@@ -583,7 +617,6 @@ func startOptionalNVIDIA(ctx, superviseCtx context.Context) {
 	}
 	setupNVIDIADeviceFiles()
 	startOptionalNVIDIAFabricManager(ctx)
-	startOptionalSyslogSink(superviseCtx)
 	logNVIDIAPreRMOpenDiagnostics("before-settle")
 	waitForNVIDIAPreRMOpenSettle(ctx)
 	logNVIDIAPreRMOpenDiagnostics("after-settle")
@@ -1896,7 +1929,7 @@ func hasNVIDIANVSwitch() bool {
 		if err != nil {
 			continue
 		}
-		if strings.TrimSpace(string(class)) == "0x068000" {
+		if strings.TrimSpace(string(class)) == pciClassNVSwitch {
 			return true
 		}
 	}
@@ -1912,22 +1945,6 @@ func uniqueInts(values []int) []int {
 		if len(out) == 0 || out[len(out)-1] != value {
 			out = append(out, value)
 		}
-	}
-	return out
-}
-
-func uniqueStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(values))
-	out := values[:0]
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
 	}
 	return out
 }
@@ -2126,13 +2143,6 @@ func capLast() int {
 		return 63
 	}
 	return value
-}
-
-func stopProcess(proc *managedProcess) {
-	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
-		return
-	}
-	_ = proc.cmd.Process.Signal(syscall.SIGTERM)
 }
 
 func waitForPath(ctx context.Context, path string, timeout time.Duration) error {

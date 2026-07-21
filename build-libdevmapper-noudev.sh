@@ -20,11 +20,16 @@ apt_opts=(
 )
 
 mkdir -p "$apt_dir/etc" "$apt_dir/lists/partial" "$apt_dir/cache/archives/partial" "$src_parent"
-cat > "$apt_dir/etc/sources.list" <<'EOF'
-deb-src http://archive.ubuntu.com/ubuntu resolute main restricted universe multiverse
-deb-src http://archive.ubuntu.com/ubuntu resolute-updates main restricted universe multiverse
-deb-src http://archive.ubuntu.com/ubuntu resolute-backports main restricted universe multiverse
-deb-src http://security.ubuntu.com/ubuntu resolute-security main restricted universe multiverse
+# Pin the source mirror so reproducible builds fetch from the same Ubuntu
+# snapshot as the rest of the image instead of the moving archive. The release
+# workflow sets LIBDM_APT_MIRROR / LIBDM_SECURITY_MIRROR to its snapshot URL.
+apt_mirror="${LIBDM_APT_MIRROR:-http://archive.ubuntu.com/ubuntu}"
+security_mirror="${LIBDM_SECURITY_MIRROR:-$apt_mirror}"
+cat > "$apt_dir/etc/sources.list" <<EOF
+deb-src [check-valid-until=no] $apt_mirror resolute main restricted universe multiverse
+deb-src [check-valid-until=no] $apt_mirror resolute-updates main restricted universe multiverse
+deb-src [check-valid-until=no] $apt_mirror resolute-backports main restricted universe multiverse
+deb-src [check-valid-until=no] $security_mirror resolute-security main restricted universe multiverse
 EOF
 
 apt-get "${apt_opts[@]}" update

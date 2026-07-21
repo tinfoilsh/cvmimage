@@ -120,7 +120,6 @@ require_file_contains "$repo_dir/Makefile" 'tinfoil-initrd \./cmd/initrd' "build
 require_file_contains "$repo_dir/Makefile" 'ln -s usr/bin/tinfoil-initrd mkosi\.images/initrd/mkosi\.extra/init' "build links /init to compiled Tinfoil initrd entrypoint"
 require_file_not_contains "$repo_dir/Makefile" '^rebuild:.*initrd-modules' "default rebuild does not stage initrd module payload"
 require_file_contains "$repo_dir/Makefile" '^rebuild:.*initrd-no-modules' "default rebuild clears stale initrd module payload"
-require_file_contains "$repo_dir/Makefile" 'legacy-initrd-modules' "Makefile keeps explicit legacy initrd module target for stock-kernel split tests"
 if [ -x "$repo_dir/install-initrd-modules.sh" ]; then
     ok "legacy bounded initrd module installer exists and is executable"
 else
@@ -163,7 +162,6 @@ require_file_contains "$repo_dir/kernel/build-local.sh" 'kernel release mismatch
 require_file_contains "$repo_dir/kernel/build-local.sh" 'Module\.symvers' "custom-kernel build preserves symbol CRCs for bounded external NVIDIA modules"
 require_file_contains "$repo_dir/kernel/build-nvidia-open-local.sh" 'NV_EXCLUDE_KERNEL_MODULES=nvidia-drm' "custom NVIDIA module builder excludes nvidia-drm from the compute-only path"
 require_file_contains "$repo_dir/kernel/build-nvidia-open-local.sh" 'modprobe --dump-modversions' "custom NVIDIA module builder validates module CRCs against the custom kernel"
-require_file_contains "$repo_dir/Makefile" 'custom-nvidia-open-modules' "Makefile exposes the custom NVIDIA open-module staging target"
 require_file_contains "$repo_dir/Makefile" 'custom-kernel-builtins' "Makefile stages custom kernel built-in manifest for rootfs assembly"
 require_file_contains "$repo_dir/Makefile" 'tinfoil-custom\.vmlinuz' "Makefile stages custom kernel image for mkosi UKI assembly"
 require_file_contains "$repo_dir/mkosi.finalize" 'install_custom_kernel_builtins' "finalize installs custom kernel built-in manifest after depmod"

@@ -44,78 +44,94 @@ func TestSplitRoothashAndGUID(t *testing.T) {
 	}
 }
 
-func TestParseVeritySuperblock(t *testing.T) {
-	superblock := testVeritySuperblock()
-	metadata, err := parseVeritySuperblock(superblock)
-	if err != nil {
-		t.Fatalf("parseVeritySuperblock: %v", err)
+func TestReadVeritySalt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "verity")
+	if err := os.WriteFile(path, testVeritySuperblock(), 0644); err != nil {
+		t.Fatal(err)
 	}
-	if metadata.hashType != 1 ||
-		metadata.dataBlocks != 786432 ||
-		metadata.dataBlockSize != 4096 ||
-		metadata.hashBlockSize != 4096 ||
-		metadata.hashStartBlock != 1 ||
-		metadata.hashAlgorithm != "sha256" ||
-		!bytes.Equal(metadata.salt, []byte{
-			0xb0, 0x46, 0x3b, 0x7a, 0x99, 0xb5, 0x5b, 0xdd,
-			0x00, 0x0b, 0x6d, 0x41, 0x8f, 0xf3, 0x7d, 0x7d,
-			0x3a, 0x73, 0xf2, 0xa2, 0x15, 0x3d, 0xf7, 0x42,
-			0xc8, 0x99, 0x6f, 0xc1, 0x7e, 0x47, 0x53, 0xf8,
-		}) {
-		t.Fatalf("unexpected metadata: %+v", metadata)
+	salt, err := readVeritySalt(path)
+	if err != nil {
+		t.Fatalf("readVeritySalt: %v", err)
+	}
+	want := []byte{
+		0xb0, 0x46, 0x3b, 0x7a, 0x99, 0xb5, 0x5b, 0xdd,
+		0x00, 0x0b, 0x6d, 0x41, 0x8f, 0xf3, 0x7d, 0x7d,
+		0x3a, 0x73, 0xf2, 0xa2, 0x15, 0x3d, 0xf7, 0x42,
+		0xc8, 0x99, 0x6f, 0xc1, 0x7e, 0x47, 0x53, 0xf8,
+	}
+	if !bytes.Equal(salt, want) {
+		t.Fatalf("unexpected salt %x", salt)
 	}
 }
 
-func TestParseVeritySuperblockRejectsInvalidMetadata(t *testing.T) {
+func TestReadVeritySaltRejectsInvalid(t *testing.T) {
 	for name, mutate := range map[string]func([]byte){
-		"short": func(superblock []byte) {
-			clear(superblock[8:])
-		},
 		"signature": func(superblock []byte) {
 			superblock[0] = 'x'
 		},
-		"version": func(superblock []byte) {
-			binary.LittleEndian.PutUint32(superblock[8:12], 2)
+		"salt size zero": func(superblock []byte) {
+			binary.LittleEndian.PutUint16(superblock[veritySaltSizeOffset:veritySaltSizeOffset+2], 0)
 		},
-		"hash type": func(superblock []byte) {
-			binary.LittleEndian.PutUint32(superblock[12:16], 2)
-		},
-		"algorithm": func(superblock []byte) {
-			superblock[32] = 0
-		},
-		"block size": func(superblock []byte) {
-			binary.LittleEndian.PutUint32(superblock[64:68], 513)
-		},
-		"data blocks": func(superblock []byte) {
-			binary.LittleEndian.PutUint64(superblock[72:80], 0)
-		},
-		"salt size": func(superblock []byte) {
-			binary.LittleEndian.PutUint16(superblock[80:82], 257)
+		"salt size too large": func(superblock []byte) {
+			binary.LittleEndian.PutUint16(superblock[veritySaltSizeOffset:veritySaltSizeOffset+2], veritySaltMaxLen+1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			superblock := testVeritySuperblock()
 			mutate(superblock)
-			if name == "short" {
-				superblock = superblock[:64]
+			path := filepath.Join(t.TempDir(), "verity")
+			if err := os.WriteFile(path, superblock, 0644); err != nil {
+				t.Fatal(err)
 			}
-			if _, err := parseVeritySuperblock(superblock); err == nil {
+			if _, err := readVeritySalt(path); err == nil {
 				t.Fatalf("expected invalid superblock to fail")
 			}
 		})
 	}
 }
 
-func TestValidVerityBlockSize(t *testing.T) {
-	for _, size := range []uint32{512, 1024, 4096, 512 * 1024} {
-		if !validVerityBlockSize(size) {
-			t.Fatalf("expected %d to be valid", size)
-		}
+func TestVerityDataBlocks(t *testing.T) {
+	// Fake sysfs: /sys/class/block/<name>/size in 512-byte sectors.
+	root := t.TempDir()
+	name := "sdb1"
+	sizeDir := filepath.Join(root, "sys/class/block", name)
+	if err := os.MkdirAll(sizeDir, 0755); err != nil {
+		t.Fatal(err)
 	}
-	for _, size := range []uint32{0, 511, 513, 1000, 1024 * 1024} {
-		if validVerityBlockSize(size) {
-			t.Fatalf("expected %d to be invalid", size)
-		}
+	// 786432 data blocks * 4096 / 512 = 6291456 sectors.
+	if err := os.WriteFile(filepath.Join(sizeDir, "size"), []byte("6291456\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origBase := sysClassBlock
+	sysClassBlock = filepath.Join(root, "sys/class/block")
+	t.Cleanup(func() { sysClassBlock = origBase })
+
+	got, err := verityDataBlocks("/dev/" + name)
+	if err != nil {
+		t.Fatalf("verityDataBlocks: %v", err)
+	}
+	if got != 786432 {
+		t.Fatalf("data blocks = %d, want 786432", got)
+	}
+}
+
+func TestVerityDataBlocksRejectsMisaligned(t *testing.T) {
+	root := t.TempDir()
+	name := "sdb1"
+	sizeDir := filepath.Join(root, "sys/class/block", name)
+	if err := os.MkdirAll(sizeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// One sector short of a 4096-byte block boundary.
+	if err := os.WriteFile(filepath.Join(sizeDir, "size"), []byte("6291455\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origBase := sysClassBlock
+	sysClassBlock = filepath.Join(root, "sys/class/block")
+	t.Cleanup(func() { sysClassBlock = origBase })
+
+	if _, err := verityDataBlocks("/dev/" + name); err == nil {
+		t.Fatal("expected misaligned partition size to be rejected")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -28,6 +29,25 @@ const (
 	initrdModuleBuiltinMode  = "builtin"
 	maxInitrdModules         = 2
 	veritySuperblockLen      = 512
+
+	// Fixed dm-verity parameters for the measured root. These are build
+	// invariants produced by mkosi.repart (10-root.conf / 11-root-verity.conf)
+	// with the stock systemd-repart verity defaults, so they are pinned here
+	// rather than parsed from the host-controlled hash partition. A build that
+	// ever diverges from these would fail dm-verity roothash verification at
+	// first read (fail-closed), and tcb-check asserts the repart config still
+	// matches. The salt is the one per-build value still read from the
+	// superblock (see readVeritySalt); pinning it is a tracked follow-up.
+	verityTableVersion   = 1        // dm-verity on-disk format version (superblock "hash type" 0/1)
+	verityDataBlockSize  = 4096     // bytes
+	verityHashBlockSize  = 4096     // bytes
+	verityHashAlgorithm  = "sha256" // repart default
+	verityHashStartBlock = 1        // hash tree starts after the 512B superblock in block 0
+
+	verityMagic          = "verity\x00\x00"
+	veritySaltSizeOffset = 80  // uint16 LE
+	veritySaltOffset     = 88  // salt bytes
+	veritySaltMaxLen     = 256 // dm-verity superblock salt capacity
 )
 
 const (
@@ -73,15 +93,8 @@ var initrdModuleOrder = []string{
 	"dm-verity.ko",
 }
 
-type verityMetadata struct {
-	hashType       uint32
-	dataBlocks     uint64
-	dataBlockSize  uint32
-	hashBlockSize  uint32
-	hashStartBlock uint64
-	hashAlgorithm  string
-	salt           []byte
-}
+// sysClassBlock is the sysfs block-device base; overridable in tests.
+var sysClassBlock = "/sys/class/block"
 
 type dmInfo struct {
 	dev         uint64
@@ -138,8 +151,18 @@ func run() error {
 		return fmt.Errorf("root verity partition not found: %w", err)
 	}
 
-	initrdLogf("reading measured root metadata")
-	metadata, err := readVerityMetadata(verityDevice)
+	// The dm-verity table is built from pinned build invariants plus two
+	// values that are not fixed at build time: the number of data blocks
+	// (derived from the data partition's own size in sysfs, not from the
+	// host-controlled superblock) and the salt (the only field still read
+	// from the superblock). Every pinned value is verified indirectly: a
+	// mismatch yields a hash tree that does not match the measured roothash,
+	// so dm-verity fails at first read (fail-closed).
+	dataBlocks, err := verityDataBlocks(rootDevice)
+	if err != nil {
+		return err
+	}
+	salt, err := readVeritySalt(verityDevice)
 	if err != nil {
 		return err
 	}
@@ -152,19 +175,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	verityLengthSectors := metadata.dataBlocks * uint64(metadata.dataBlockSize) / 512
+	verityLengthSectors := dataBlocks * uint64(verityDataBlockSize) / 512
 	verityParams := fmt.Sprintf(
 		"%d %s %s %d %d %d %d %s %s %s",
-		metadata.hashType,
+		verityTableVersion,
 		rootDevNumber,
 		verityDevNumber,
-		metadata.dataBlockSize,
-		metadata.hashBlockSize,
-		metadata.dataBlocks,
-		metadata.hashStartBlock,
-		metadata.hashAlgorithm,
+		verityDataBlockSize,
+		verityHashBlockSize,
+		dataBlocks,
+		verityHashStartBlock,
+		verityHashAlgorithm,
 		roothash,
-		hex.EncodeToString(metadata.salt),
+		hex.EncodeToString(salt),
 	)
 
 	initrdLogf("creating measured root")
@@ -703,98 +726,56 @@ func align(value, alignment int) int {
 	return (value + alignment - 1) &^ (alignment - 1)
 }
 
-func readVerityMetadata(device string) (verityMetadata, error) {
+// verityDataBlocks derives the dm-verity data-block count from the data
+// partition's own size in sysfs (blocks of verityDataBlockSize), rather than
+// trusting the host-controlled superblock. A wrong count produces a hash tree
+// that fails to match the measured roothash, so this is fail-closed.
+func verityDataBlocks(dataDevice string) (uint64, error) {
+	name := strings.TrimPrefix(dataDevice, "/dev/")
+	data, err := os.ReadFile(filepath.Join(sysClassBlock, name, "size"))
+	if err != nil {
+		return 0, fmt.Errorf("reading data partition size for %s: %w", dataDevice, err)
+	}
+	sectors, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parsing data partition size %q: %w", strings.TrimSpace(string(data)), err)
+	}
+	// sysfs "size" is always in 512-byte sectors regardless of block size.
+	sizeBytes := sectors * 512
+	if sizeBytes == 0 || sizeBytes%verityDataBlockSize != 0 {
+		return 0, fmt.Errorf("data partition size %d is not a multiple of %d", sizeBytes, verityDataBlockSize)
+	}
+	return sizeBytes / verityDataBlockSize, nil
+}
+
+// readVeritySalt reads only the salt from the verity superblock. All other
+// dm-verity parameters are pinned build invariants (see the verity* consts),
+// so the salt is the sole field still taken from the host-controlled hash
+// partition. It is validated indirectly by roothash verification.
+func readVeritySalt(device string) ([]byte, error) {
 	file, err := os.Open(device)
 	if err != nil {
-		return verityMetadata{}, fmt.Errorf("opening verity metadata device %s: %w", device, err)
+		return nil, fmt.Errorf("opening verity metadata device %s: %w", device, err)
 	}
 	defer file.Close()
 
 	superblock := make([]byte, veritySuperblockLen)
 	if _, err := file.ReadAt(superblock, 0); err != nil {
-		return verityMetadata{}, fmt.Errorf("reading verity superblock: %w", err)
+		return nil, fmt.Errorf("reading verity superblock: %w", err)
 	}
-	return parseVeritySuperblock(superblock)
-}
-
-func parseVeritySuperblock(superblock []byte) (verityMetadata, error) {
-	if len(superblock) < veritySuperblockLen {
-		return verityMetadata{}, fmt.Errorf("verity superblock too short: %d bytes", len(superblock))
+	if string(superblock[:len(verityMagic)]) != verityMagic {
+		return nil, errors.New("verity signature not found")
 	}
-	if string(superblock[:8]) != "verity\x00\x00" {
-		return verityMetadata{}, errors.New("verity signature not found")
+	saltSize := binary.LittleEndian.Uint16(superblock[veritySaltSizeOffset : veritySaltSizeOffset+2])
+	if saltSize == 0 || int(saltSize) > veritySaltMaxLen {
+		return nil, fmt.Errorf("verity salt size %d out of range", saltSize)
 	}
-
-	version := binary.LittleEndian.Uint32(superblock[8:12])
-	if version != 1 {
-		return verityMetadata{}, fmt.Errorf("unsupported verity version %d", version)
-	}
-
-	hashType := binary.LittleEndian.Uint32(superblock[12:16])
-	if hashType > 1 {
-		return verityMetadata{}, fmt.Errorf("unsupported verity hash type %d", hashType)
-	}
-
-	algorithmBytes := superblock[32:64]
-	algorithmLen := 0
-	for algorithmLen < len(algorithmBytes) && algorithmBytes[algorithmLen] != 0 {
-		algorithmLen++
-	}
-	algorithm := string(algorithmBytes[:algorithmLen])
-	if algorithm == "" {
-		return verityMetadata{}, errors.New("verity hash algorithm is empty")
-	}
-	for _, char := range algorithm {
-		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' && char != '_' {
-			return verityMetadata{}, fmt.Errorf("unsupported verity hash algorithm %q", algorithm)
-		}
-	}
-
-	dataBlockSize := binary.LittleEndian.Uint32(superblock[64:68])
-	hashBlockSize := binary.LittleEndian.Uint32(superblock[68:72])
-	if !validVerityBlockSize(dataBlockSize) {
-		return verityMetadata{}, fmt.Errorf("unsupported verity data block size %d", dataBlockSize)
-	}
-	if !validVerityBlockSize(hashBlockSize) {
-		return verityMetadata{}, fmt.Errorf("unsupported verity hash block size %d", hashBlockSize)
-	}
-
-	dataBlocks := binary.LittleEndian.Uint64(superblock[72:80])
-	if dataBlocks == 0 {
-		return verityMetadata{}, errors.New("verity data block count is zero")
-	}
-
-	saltSize := binary.LittleEndian.Uint16(superblock[80:82])
-	if saltSize > 256 {
-		return verityMetadata{}, fmt.Errorf("verity salt size %d exceeds superblock salt capacity", saltSize)
-	}
-	salt := append([]byte(nil), superblock[88:88+int(saltSize)]...)
-
-	hashStartBlock := (uint64(veritySuperblockLen) + uint64(hashBlockSize) - 1) / uint64(hashBlockSize)
-	if hashStartBlock == 0 {
-		return verityMetadata{}, errors.New("verity hash start block is zero")
-	}
-
-	return verityMetadata{
-		hashType:       hashType,
-		dataBlocks:     dataBlocks,
-		dataBlockSize:  dataBlockSize,
-		hashBlockSize:  hashBlockSize,
-		hashStartBlock: hashStartBlock,
-		hashAlgorithm:  algorithm,
-		salt:           salt,
-	}, nil
-}
-
-func validVerityBlockSize(size uint32) bool {
-	// A power of two (size&(size-1)==0) that is >= 512 is necessarily a
-	// multiple of 512, so no separate divisibility check is needed.
-	return size >= 512 && size <= 512*1024 && size&(size-1) == 0
+	return append([]byte(nil), superblock[veritySaltOffset:veritySaltOffset+int(saltSize)]...), nil
 }
 
 func blockDevNumber(device string) (string, error) {
 	name := strings.TrimPrefix(device, "/dev/")
-	data, err := os.ReadFile(filepath.Join("/sys/class/block", name, "dev"))
+	data, err := os.ReadFile(filepath.Join(sysClassBlock, name, "dev"))
 	if err != nil {
 		return "", fmt.Errorf("missing sysfs device number for %s: %w", device, err)
 	}

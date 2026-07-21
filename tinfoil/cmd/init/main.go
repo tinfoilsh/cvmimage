@@ -22,43 +22,87 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"tinfoil/internal/boot"
 )
 
 const (
-	bootTimeout             = 5 * time.Minute
-	defaultStartTimeout     = 60 * time.Second
-	nvidiaMinProbeUptime    = 17 * time.Second
-	nvidiaPreRMOpenWait     = 5 * time.Second
-	nvidiaCoreModuleWait    = 4 * time.Second
+	// Boot timing budget.
+	bootTimeout            = 5 * time.Minute
+	defaultStartTimeout    = 60 * time.Second
+	containerdSocketWait   = 30 * time.Second
+	dockerSocketWait       = 60 * time.Second
+	persistencedSocketWait = 5 * time.Second
+	nvmlReadyTimeout       = 15 * time.Second
+	optionalCommandTimeout = 20 * time.Second
+
+	// NVIDIA CC (B300) bring-up timing gates. Empirical values from the
+	// INF12/INF14 B300 full-CC bring-up: probing the driver too early after
+	// guest boot, or opening RM/NVML too soon after module load,
+	// intermittently failed while GPU firmware was still settling after
+	// reset. These are open-loop waits because no guest-observable readiness
+	// signal has been identified yet; replacing them with condition polls is
+	// tracked as a follow-up (needs hardware revalidation).
+	nvidiaMinProbeUptime = 17 * time.Second // minimum uptime before first driver probe
+	nvidiaPreRMOpenWait  = 5 * time.Second  // settle before the first RM/NVML open
+	nvidiaCoreModuleWait = 4 * time.Second  // settle after core module before uvm/modeset
+
 	nvidiaPreRMOpenShell    = "tinfoil-nvidia-pre-open-shell=on"
 	nvidiaSkipPCIEnableHold = "tinfoil-nvidia-skip-pci-enable-hold=on"
-	pciCommandOffset        = 4
-	pciStatusOffset         = 6
-	pciHeaderTypeOffset     = 0x0e
-	pciCapabilityPtrType0   = 0x34
-	pciConfigSnapshotLen    = 256
-	pciCommandINTxDisable   = 1 << 10
-	pciStatusCapabilities   = 1 << 4
-	pciCapabilityMSI        = 0x05
-	pciCapabilityMSIX       = 0x11
-	dockerSocket            = "/run/docker.sock"
-	containerdSocket        = "/run/containerd/containerd.sock"
-	sysctlRuntimeConf       = "/usr/lib/sysctl.d/tinfoil-runtime.conf"
-	tinfoilPID1Env          = "TINFOIL_PID1"
-	tinfoilPID1EnvValue     = "tinfoil-init"
-	nvidiaRMTraceLogEnv     = "TINFOIL_NVIDIA_RM_TRACE_LOG"
-	selfExecPath            = "/proc/self/exe"
-	containerStatusName     = "tinfoil-container-status"
-	containerStatusPath     = "/usr/bin/tinfoil-container-status"
-	egressName              = "tinfoil-egress"
-	egressPath              = "/usr/bin/tinfoil-egress"
-	shimName                = "tinfoil-shim"
-	shimPath                = "/usr/bin/tinfoil-shim"
-	runtimeNOFILELimit      = 524288
-	ramdiskDir              = "/mnt/ramdisk"
-	ramdiskPrivateDir       = ramdiskDir + "/private"
-	ramdiskPublicDir        = ramdiskDir + "/public"
-	tmpfs512M               = "size=512M,mode=1777"
+
+	// PCI config-space offsets and masks, named as in the kernel's
+	// include/uapi/linux/pci_regs.h.
+	pciCommandOffset      = 4    // PCI_COMMAND
+	pciStatusOffset       = 6    // PCI_STATUS
+	pciHeaderTypeOffset   = 0x0e // PCI_HEADER_TYPE
+	pciHeaderTypeMask     = 0x7f // PCI_HEADER_TYPE_MASK
+	pciCapabilityPtrType0 = 0x34 // PCI_CAPABILITY_LIST (type 0 header)
+	pciCapPtrAlignMask    = 0x03 // capability pointers are dword-aligned
+	pciStdHeaderSize      = 0x40 // PCI_STD_HEADER_SIZEOF: capabilities live above it
+	pciConfigSnapshotLen  = 256
+	pciCommandINTxDisable = 1 << 10 // PCI_COMMAND_INTX_DISABLE
+	pciStatusCapabilities = 1 << 4  // PCI_STATUS_CAP_LIST
+	pciCapabilityMSI      = 0x05    // PCI_CAP_ID_MSI
+	pciCapabilityMSIX     = 0x11    // PCI_CAP_ID_MSIX
+	msixCtrlEnable        = 0x8000  // PCI_MSIX_FLAGS_ENABLE
+	msixCtrlFuncMask      = 0x4000  // PCI_MSIX_FLAGS_MASKALL
+	// Bound on capability-chain walks; belt-and-braces with the seen-map
+	// (a 256-byte type-0 config space fits at most ~48 2-byte entries).
+	maxPCICapabilities = 48
+
+	// PCI class codes as exposed by sysfs "class".
+	pciClassVGAController = "0x030000"
+	pciClass3DController  = "0x030200"
+
+	// Fixed NVIDIA control-node minors defined by the NVIDIA kernel driver
+	// (nv.h: NV_CONTROL_DEVICE_MINOR 255, modeset 254; nvidia-uvm uses minor
+	// 0 and nvidia-uvm-tools minor 1 on the nvidia-uvm major).
+	nvidiaCtlMinor      = 255
+	nvidiaModesetMinor  = 254
+	nvidiaUVMMinor      = 0
+	nvidiaUVMToolsMinor = 1
+
+	dockerSocket        = "/run/docker.sock"
+	containerdSocket    = "/run/containerd/containerd.sock"
+	sysctlRuntimeConf   = "/usr/lib/sysctl.d/tinfoil-runtime.conf"
+	tinfoilPID1Env      = "TINFOIL_PID1"
+	tinfoilPID1EnvValue = "tinfoil-init"
+	nvidiaRMTraceLogEnv = "TINFOIL_NVIDIA_RM_TRACE_LOG"
+	selfExecPath        = "/proc/self/exe"
+	containerStatusName = "tinfoil-container-status"
+	egressName          = "tinfoil-egress"
+	shimName            = "tinfoil-shim"
+	runtimeNOFILELimit  = 524288
+
+	// Ramdisk sizing policy (preserves the legacy tinfoil-ramdisk script):
+	// hosts with at least ramdiskMinRAMGB keep ramdiskReserveGB for the OS
+	// and give the rest to the ramdisk; smaller dev hosts fall back to
+	// ramdiskFallbackGB.
+	ramdiskMinRAMGB   = 32
+	ramdiskReserveGB  = 16
+	ramdiskFallbackGB = 4
+
+	tmpfs512M = "size=512M,mode=1777"
 )
 
 var consoleMu sync.Mutex
@@ -179,7 +223,7 @@ func run(parent context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := waitForPath(ctx, containerdSocket, 30*time.Second); err != nil {
+	if err := waitForPath(ctx, containerdSocket, containerdSocketWait); err != nil {
 		return fmt.Errorf("waiting for containerd socket: %w", err)
 	}
 
@@ -193,24 +237,24 @@ func run(parent context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := waitForPath(ctx, dockerSocket, 60*time.Second); err != nil {
+	if err := waitForPath(ctx, dockerSocket, dockerSocketWait); err != nil {
 		return fmt.Errorf("waiting for Docker socket: %w", err)
 	}
 
-	if err := runOneShotHardened(ctx, tinfoilBootTimeout(), "tinfoil-boot", "/usr/bin/tinfoil-boot"); err != nil {
+	if err := runOneShotHardened(ctx, tinfoilBootTimeout(), "tinfoil-boot", boot.BootBinary); err != nil {
 		stopProcess(dockerd)
 		stopProcess(containerd)
 		return err
 	}
 
-	if _, err := startManaged(ctx, &managedProcess{name: containerStatusName, path: containerStatusPath, restart: true, harden: containerStatusName}); err != nil {
+	if _, err := startManaged(ctx, &managedProcess{name: containerStatusName, path: boot.ContainerStatusBinary, restart: true, harden: containerStatusName}); err != nil {
 		return err
 	}
-	if _, err := startManaged(ctx, &managedProcess{name: shimName, path: shimPath, required: true, restart: true, harden: shimName}); err != nil {
+	if _, err := startManaged(ctx, &managedProcess{name: shimName, path: boot.ShimBinary, required: true, restart: true, harden: shimName}); err != nil {
 		return err
 	}
-	if _, err := os.Stat("/mnt/ramdisk/private/egress.yml"); err == nil {
-		if _, err := startManaged(ctx, &managedProcess{name: egressName, path: egressPath, restart: true, harden: egressName}); err != nil {
+	if _, err := os.Stat(boot.EgressConfigPath); err == nil {
+		if _, err := startManaged(ctx, &managedProcess{name: egressName, path: boot.EgressBinary, restart: true, harden: egressName}); err != nil {
 			return err
 		}
 	}
@@ -234,6 +278,9 @@ func setupRuntimeFilesystems() error {
 		fatal  bool
 	}{
 		{"tmpfs", "/dev/shm", "tmpfs", syscall.MS_NOSUID | syscall.MS_NODEV, "mode=1777,size=512M", true},
+		// devpts 0620/ptmx 0666 is the conventional pty layout (group-write
+		// for the tty group); hugetlbfs 1770 gid=0 keeps hugepages
+		// root-group-only with the sticky bit, matching systemd defaults.
 		{"devpts", "/dev/pts", "devpts", syscall.MS_NOSUID | syscall.MS_NOEXEC, "mode=0620,ptmxmode=0666,newinstance", true},
 		{"mqueue", "/dev/mqueue", "mqueue", syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC, "", false},
 		{"hugetlbfs", "/dev/hugepages", "hugetlbfs", syscall.MS_NOSUID | syscall.MS_NODEV, "mode=1770,gid=0", false},
@@ -263,13 +310,13 @@ func setupRamdisk() error {
 		initLogf("warning: not enough RAM for full ramdisk, falling back to %dG", sizeGB)
 	}
 
-	if err := mountIfNeeded("tmpfs", ramdiskDir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, fmt.Sprintf("size=%dG,mode=0755", sizeGB)); err != nil {
+	if err := mountIfNeeded("tmpfs", boot.RamdiskDir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, fmt.Sprintf("size=%dG,mode=0755", sizeGB)); err != nil {
 		return err
 	}
-	if err := ensureDir(ramdiskPrivateDir, 0700); err != nil {
+	if err := ensureDir(boot.PrivateDir, 0700); err != nil {
 		return err
 	}
-	if err := ensureDir(ramdiskPublicDir, 0755); err != nil {
+	if err := ensureDir(boot.PublicDir, 0755); err != nil {
 		return err
 	}
 	if err := mountIfNeeded("tmpfs", "/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, tmpfs512M); err != nil {
@@ -319,10 +366,10 @@ func ramdiskSizeGB(memTotalKB uint64) (uint64, bool, error) {
 		return 0, false, errors.New("MemTotal is zero")
 	}
 	ramGB := memTotalKB / 1024 / 1024
-	if ramGB < 32 {
-		return 4, true, nil
+	if ramGB < ramdiskMinRAMGB {
+		return ramdiskFallbackGB, true, nil
 	}
-	return ramGB - 16, false, nil
+	return ramGB - ramdiskReserveGB, false, nil
 }
 
 func mountIfNeeded(source, target, fstype string, flags uintptr, data string) error {
@@ -445,10 +492,10 @@ func formatRlimitValue(value uint64) string {
 }
 
 func applySysctls(path string) error {
+	// The sysctl policy is baked into the measured image; a missing file can
+	// only mean a build regression, so fail closed instead of booting with
+	// kernel-default (unhardened) sysctls.
 	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
 	if err != nil {
 		return fmt.Errorf("opening sysctl config: %w", err)
 	}
@@ -529,7 +576,7 @@ func startOptionalNVIDIA(ctx context.Context) {
 	logNVIDIAPreRMOpenDiagnostics("after-settle")
 	maybeRunNVIDIAPreRMOpenDebugShell(ctx)
 	startNVIDIAPersistenced(ctx)
-	if err := waitForNVIDIANVML(ctx, 15*time.Second); err != nil {
+	if err := waitForNVIDIANVML(ctx, nvmlReadyTimeout); err != nil {
 		initLogf("warning: waiting for NVIDIA NVML readiness: %v", err)
 		logNVIDIARMTraceLog("after-nvml-wait")
 	}
@@ -677,7 +724,7 @@ func startNVIDIAPersistenced(ctx context.Context) {
 	if bootDebugEnabled() {
 		logNVIDIAPersistencedProcessDiagnostics("after-persistenced-start")
 	}
-	if err := waitForPath(ctx, nvidiaPersistencedSocket, 5*time.Second); err != nil {
+	if err := waitForPath(ctx, nvidiaPersistencedSocket, persistencedSocketWait); err != nil {
 		initLogf("warning: waiting for nvidia-persistenced socket: %v", err)
 	}
 }
@@ -1049,8 +1096,8 @@ func ensureNVIDIADeviceNodes() error {
 	var errs []error
 
 	if frontend, ok := firstMajor(majors, "nvidia-frontend", "nvidia"); ok {
-		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidiactl"), frontend, 255, 0666))
-		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidia-modeset"), frontend, 254, 0666))
+		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidiactl"), frontend, nvidiaCtlMinor, 0666))
+		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidia-modeset"), frontend, nvidiaModesetMinor, 0666))
 		minors, err := nvidiaDeviceMinors()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("discover GPU minors: %w", err))
@@ -1063,8 +1110,8 @@ func ensureNVIDIADeviceNodes() error {
 	}
 
 	if uvm, ok := firstMajor(majors, "nvidia-uvm"); ok {
-		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidia-uvm"), uvm, 0, 0666))
-		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidia-uvm-tools"), uvm, 1, 0666))
+		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidia-uvm"), uvm, nvidiaUVMMinor, 0666))
+		errs = append(errs, ensureNVIDIACharNode(filepath.Join(devRootDir, "nvidia-uvm-tools"), uvm, nvidiaUVMToolsMinor, 0666))
 	}
 
 	if caps, ok := firstMajor(majors, "nvidia-caps"); ok {
@@ -1100,13 +1147,20 @@ func nvidiaPCIDevices() ([]string, error) {
 
 func isNVIDIAGPUClass(class string) bool {
 	switch strings.TrimSpace(class) {
-	case "0x030000", "0x030200":
+	case pciClassVGAController, pciClass3DController:
 		return true
 	default:
 		return false
 	}
 }
 
+// holdNVIDIAPCIEnableReference pins the PCI enable refcount of every NVIDIA
+// GPU-class device by writing sysfs "enable" before the driver probes.
+// Empirical B300 full-CC bring-up workaround: without the held reference the
+// device could be disabled between the staged probe steps, failing the first
+// RM open. The tinfoil-nvidia-skip-pci-enable-hold cmdline flag exists only
+// to A/B this under tinfoil-debug and should be removed once confidence is
+// established.
 func holdNVIDIAPCIEnableReference() error {
 	devices, err := nvidiaPCIDevices()
 	if err != nil {
@@ -1256,7 +1310,7 @@ func runtimeMountLineInteresting(line string) bool {
 	for _, needle := range []string{
 		" /dev/shm ",
 		" /run ",
-		" /mnt/ramdisk ",
+		" " + boot.RamdiskDir + " ",
 		" /tmp ",
 		" /var/tmp ",
 		" /dev/pts ",
@@ -1435,15 +1489,15 @@ func parsePCICapabilities(config []byte) []pciCapability {
 	if status&pciStatusCapabilities == 0 {
 		return nil
 	}
-	headerType := config[pciHeaderTypeOffset] & 0x7f
+	headerType := config[pciHeaderTypeOffset] & pciHeaderTypeMask
 	if headerType != 0 {
 		return nil
 	}
 
-	ptr := int(config[pciCapabilityPtrType0] &^ 0x03)
+	ptr := int(config[pciCapabilityPtrType0] &^ pciCapPtrAlignMask)
 	seen := map[int]struct{}{}
 	var capabilities []pciCapability
-	for i := 0; i < 48 && ptr >= 0x40 && ptr+1 < len(config); i++ {
+	for i := 0; i < maxPCICapabilities && ptr >= pciStdHeaderSize && ptr+1 < len(config); i++ {
 		if _, ok := seen[ptr]; ok {
 			break
 		}
@@ -1457,7 +1511,7 @@ func parsePCICapabilities(config []byte) []pciCapability {
 		if next == 0 {
 			break
 		}
-		ptr = int(next &^ 0x03)
+		ptr = int(next &^ pciCapPtrAlignMask)
 	}
 	return capabilities
 }
@@ -1487,7 +1541,7 @@ func describePCICapability(config []byte, capability pciCapability) string {
 	case pciCapabilityMSIX:
 		tableSize := (control & 0x07ff) + 1
 		return fmt.Sprintf("%s msix_enable=%t function_mask=%t table_size=%d",
-			base, control&0x8000 != 0, control&0x4000 != 0, tableSize)
+			base, control&msixCtrlEnable != 0, control&msixCtrlFuncMask != 0, tableSize)
 	default:
 		return base
 	}
@@ -1863,7 +1917,7 @@ func runOptional(ctx context.Context, path string, args ...string) {
 	if _, err := os.Stat(path); err != nil {
 		return
 	}
-	if err := runOneShot(ctx, 20*time.Second, path, args...); err != nil {
+	if err := runOneShot(ctx, optionalCommandTimeout, path, args...); err != nil {
 		initLogf("optional command failed: %s %s: %v", path, strings.Join(args, " "), err)
 	}
 }

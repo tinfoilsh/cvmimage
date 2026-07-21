@@ -16,6 +16,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"tinfoil/internal/boot"
 )
 
 const (
@@ -185,7 +187,7 @@ func run() error {
 	}
 	initrdLogf("measured root mounted")
 
-	return switchRoot("/sysroot", "/usr/bin/tinfoil-init")
+	return switchRoot("/sysroot", boot.InitBinary)
 }
 
 func loadInitrdModuleClosure() error {

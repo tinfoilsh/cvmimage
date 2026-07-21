@@ -581,6 +581,17 @@ EOF
 install -d -m 0755 "$BUILDROOT/usr/lib/sysctl.d"
 cat > "$BUILDROOT/usr/lib/sysctl.d/tinfoil-runtime.conf" <<'EOF'
 # Tinfoil CVM minimal sysctl policy.
+#
+# The stock /usr/lib/sysctl.d is deleted from this image, which also drops
+# systemd's 50-default.conf. The fs.protected_* keys below restore the
+# sticky-directory symlink/hardlink/fifo protections that file provided;
+# they default to off in the kernel and have no Kconfig equivalent, and they
+# are global (they also protect container processes).
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+fs.protected_regular = 2
+fs.protected_fifos = 1
+kernel.dmesg_restrict = 1
 kernel.kptr_restrict = 1
 kernel.printk = 4 4 1 7
 kernel.sysrq = 0
@@ -1238,7 +1249,6 @@ else
                 kernel/net/ipv4/netfilter/nf_defrag_ipv4.ko.* | \
                 kernel/net/ipv6/netfilter/nf_defrag_ipv6.ko.* | \
                 kernel/net/llc/llc.ko.* | \
-                kernel/net/netfilter/ipset/ip_set.ko.* | \
                 kernel/net/netfilter/nf_conntrack.ko.* | \
                 kernel/net/netfilter/nf_conntrack_netlink.ko.* | \
                 kernel/net/netfilter/nf_nat.ko.* | \
@@ -1252,7 +1262,6 @@ else
                 kernel/net/netfilter/xt_addrtype.ko.* | \
                 kernel/net/netfilter/xt_conntrack.ko.* | \
                 kernel/net/netfilter/xt_nat.ko.* | \
-                kernel/net/netfilter/xt_set.ko.* | \
                 kernel/net/netfilter/xt_tcpudp.ko.* | \
                 kernel/net/sched/sch_fq_codel.ko.*)
                     ;;

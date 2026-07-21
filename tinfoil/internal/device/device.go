@@ -120,13 +120,15 @@ func SetupRequiredPermissions() error {
 	for _, path := range blockDeviceNodes() {
 		errs = append(errs, chgrpMode(path, diskGID, 0660))
 	}
+	// nvidia-caps/* is deliberately absent: capability nodes keep the
+	// stricter driver-requested DeviceFileMode (typically 0600) applied by
+	// tinfoil-init instead of being widened to group video.
 	for _, pattern := range []string{
 		"nvidiactl",
 		"nvidia-modeset",
 		"nvidia-uvm",
 		"nvidia-uvm-tools",
 		"nvidia[0-9]*",
-		"nvidia-caps/*",
 	} {
 		for _, path := range globDev(pattern) {
 			errs = append(errs, chgrpMode(path, videoGID, 0660))

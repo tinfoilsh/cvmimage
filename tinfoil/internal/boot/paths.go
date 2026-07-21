@@ -29,6 +29,14 @@ const (
 	StatePath          = PrivateDir + "/boot-state.json"
 	EgressStatePath    = PrivateDir + "/egress-prev"
 
+	// Tinfoil binaries baked into the measured rootfs. Shared so PID 1, the
+	// initrd switch_root target, and boot's service invocations cannot drift.
+	InitBinary            = "/usr/bin/tinfoil-init"
+	BootBinary            = "/usr/bin/tinfoil-boot"
+	ShimBinary            = "/usr/bin/tinfoil-shim"
+	EgressBinary          = "/usr/bin/tinfoil-egress"
+	ContainerStatusBinary = "/usr/bin/tinfoil-container-status"
+
 	// ShimListenPort is the public TLS port served by tinfoil-shim.
 	ShimListenPort = 443
 

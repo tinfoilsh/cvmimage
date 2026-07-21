@@ -89,7 +89,6 @@ func TestLoadDockerKernelModulesLoadsFixedClosure(t *testing.T) {
 		"kernel/net/bridge/br_netfilter.ko.zst",
 		"kernel/net/netfilter/x_tables.ko.zst",
 		"kernel/net/netfilter/nfnetlink.ko.zst",
-		"kernel/net/netfilter/ipset/ip_set.ko.zst",
 		"kernel/net/ipv4/netfilter/nf_defrag_ipv4.ko.zst",
 		"kernel/net/ipv6/netfilter/nf_defrag_ipv6.ko.zst",
 		"kernel/net/netfilter/nf_conntrack.ko.zst",
@@ -103,7 +102,6 @@ func TestLoadDockerKernelModulesLoadsFixedClosure(t *testing.T) {
 		"kernel/net/netfilter/xt_addrtype.ko.zst",
 		"kernel/net/netfilter/xt_conntrack.ko.zst",
 		"kernel/net/netfilter/xt_nat.ko.zst",
-		"kernel/net/netfilter/xt_set.ko.zst",
 		"kernel/net/netfilter/xt_MASQUERADE.ko.zst",
 	}
 	for _, rel := range wantPaths {
@@ -125,7 +123,6 @@ func TestLoadDockerKernelModulesLoadsFixedClosure(t *testing.T) {
 			{"/br_netfilter.ko", "br_netfilter"},
 			{"/x_tables.ko", "x_tables"},
 			{"/nfnetlink.ko", "nfnetlink"},
-			{"/ip_set.ko", "ip_set"},
 			{"/nf_defrag_ipv4.ko", "nf_defrag_ipv4"},
 			{"/nf_defrag_ipv6.ko", "nf_defrag_ipv6"},
 			{"/nf_conntrack.ko", "nf_conntrack"},
@@ -139,7 +136,6 @@ func TestLoadDockerKernelModulesLoadsFixedClosure(t *testing.T) {
 			{"/xt_addrtype.ko", "xt_addrtype"},
 			{"/xt_conntrack.ko", "xt_conntrack"},
 			{"/xt_nat.ko", "xt_nat"},
-			{"/xt_set.ko", "xt_set"},
 			{"/xt_MASQUERADE.ko", "xt_MASQUERADE"},
 		}
 		for _, module := range moduleNeedles {

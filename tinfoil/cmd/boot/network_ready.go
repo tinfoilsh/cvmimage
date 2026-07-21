@@ -133,6 +133,17 @@ func kernelEthernetLinks(sysClassNet string) ([]string, error) {
 	return links, nil
 }
 
+// configureExternalEthernetDHCPv4 configures the first e* interface that
+// completes a DHCPv4 exchange and stops there: Tinfoil CVMs have exactly one
+// external NIC, so multi-homing is deliberately unsupported.
+//
+// The lease is also deliberately one-shot: option 51/T1/T2 are neither
+// requested nor honored and nothing ever renews. The host bridge assigns
+// stable per-CVM addresses, so DHCP here is only an address-assignment
+// handshake, not a lease lifecycle. A malicious DHCP server (the host) can
+// only influence the address and default route it already controls at the
+// bridge; DHCP-supplied DNS is ignored in favor of the static resolv.conf
+// baked into the measured image.
 func configureExternalEthernetDHCPv4(ctx context.Context, sysClassNet string, run commandRunner) (string, error) {
 	links, err := kernelEthernetLinks(sysClassNet)
 	if err != nil {

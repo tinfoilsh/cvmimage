@@ -154,13 +154,6 @@ var (
 			},
 		},
 		{
-			name: "ip_set",
-			paths: []string{
-				"kernel/net/netfilter/ipset/ip_set.ko.zst",
-				"kernel/net/netfilter/ipset/ip_set.ko",
-			},
-		},
-		{
 			name: "nf_defrag_ipv4",
 			paths: []string{
 				"kernel/net/ipv4/netfilter/nf_defrag_ipv4.ko.zst",
@@ -249,13 +242,6 @@ var (
 			paths: []string{
 				"kernel/net/netfilter/xt_nat.ko.zst",
 				"kernel/net/netfilter/xt_nat.ko",
-			},
-		},
-		{
-			name: "xt_set",
-			paths: []string{
-				"kernel/net/netfilter/xt_set.ko.zst",
-				"kernel/net/netfilter/xt_set.ko",
 			},
 		},
 		{

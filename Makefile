@@ -9,7 +9,7 @@ NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
 # truth for the digest; rotate via `docker buildx imagetools inspect ubuntu:26.04`.
 NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4
 
-.PHONY: all build rebuild clean deepclean hash nvattest go-binaries shims docker-static initrd-no-modules initrd-modules legacy-initrd-modules nvidia-rm-trace custom-kernel-builtins custom-nvidia-open-modules
+.PHONY: all build rebuild clean deepclean hash nvattest go-binaries shims docker-static initrd-no-modules initrd-modules legacy-initrd-modules custom-kernel-builtins custom-nvidia-open-modules
 
 # tinfoilcvm.hash is written as an artifact of `build`; read it from there if
 # present, otherwise extract the dm-verity roothash from the UKI's .cmdline
@@ -72,10 +72,6 @@ initrd-modules:
 
 legacy-initrd-modules: initrd-modules
 
-nvidia-rm-trace:
-	mkdir -p mkosi.extra/usr/lib/tinfoil
-	$(CC) -shared -fPIC -O2 -Wall -Wextra -s -o mkosi.extra/usr/lib/tinfoil/nvidia-rm-trace.so debug/nvidia-rm-trace.c -ldl
-
 custom-kernel-builtins:
 	rm -rf mkosi.extra/usr/lib/tinfoil/custom-kernel
 	@if [ -s kernel/out/modules.builtin ] && [ -s kernel/out/kernel.release ]; then \
@@ -91,7 +87,8 @@ custom-nvidia-open-modules:
 	./kernel/build-nvidia-open-local.sh
 
 # First build populates mkosi.cache; later builds reuse it for fast iteration.
-rebuild: go-binaries shims docker-static initrd-no-modules nvidia-rm-trace custom-kernel-builtins
+rebuild: go-binaries shims docker-static initrd-no-modules custom-kernel-builtins
+	rm -f mkosi.extra/usr/lib/tinfoil/nvidia-rm-trace.so
 	mkdir -p mkosi.cache packages
 	$(MKOSI) --force
 	rm -f tinfoilcvm

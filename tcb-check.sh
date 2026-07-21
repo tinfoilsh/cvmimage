@@ -295,7 +295,8 @@ require_file_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'bounded initrd mod
 require_file_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'parseVeritySuperblock' "compiled initrd reads measured root metadata directly"
 require_file_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'dmTableLoadIOCTL' "compiled initrd creates measured root with direct device-mapper ioctls"
 require_file_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'ensureBlockNode\(dmRootNode' "compiled initrd creates dm nodes without udev"
-require_file_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'switchRoot\("/sysroot", "/usr/bin/tinfoil-init"\)' "compiled initrd hands off to Tinfoil PID1 by default"
+require_file_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'switchRoot\("/sysroot", boot\.InitBinary\)' "compiled initrd hands off to Tinfoil PID1 by default"
+require_file_contains "$repo_dir/tinfoil/internal/boot/paths.go" 'InitBinary[[:space:]]*= "/usr/bin/tinfoil-init"' "shared paths pin the Tinfoil PID1 binary location"
 require_file_not_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'tinfoil-pid1' "compiled initrd has no systemd PID1 fallback selector"
 require_file_not_contains "$repo_dir/tinfoil/cmd/initrd/main.go" '/usr/lib/systemd/systemd' "compiled initrd cannot hand off to systemd"
 require_file_contains "$repo_dir/Makefile" 'tinfoil-init ./cmd/init' "build produces Tinfoil PID1 binary"
@@ -312,7 +313,7 @@ require_file_contains "$repo_dir/tinfoil/cmd/init/main_test.go" 'TestBootContext
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'harden: shimName' "Tinfoil PID1 starts shim under service hardening policy"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'harden: egressName' "Tinfoil PID1 starts egress under service hardening policy"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main_test.go" 'TestTinfoilOwnedPoliciesAreHardened' "Tinfoil PID1 hardening policy is unit-tested"
-require_file_contains "$repo_dir/tinfoil/cmd/boot/firewall.go" '"/usr/bin/tinfoil-init", "--exec-service", "tinfoil-egress"' "boot-time egress refresh uses hardened PID1 wrapper"
+require_file_contains "$repo_dir/tinfoil/cmd/boot/firewall.go" 'boot\.InitBinary, "--exec-service", "tinfoil-egress"' "boot-time egress refresh uses hardened PID1 wrapper"
 require_file_not_contains "$repo_dir/tinfoil/cmd/boot/firewall.go" 'systemctl' "boot-time egress refresh has no systemctl fallback"
 require_file_not_contains "$repo_dir/tinfoil/cmd/egress/main.go" 'NOTIFY_SOCKET|READY=1|sd_notify' "egress daemon has no systemd notify path"
 require_file_contains "$repo_dir/mkosi.images/initrd/mkosi.finalize" '"/etc/udev"' "initrd finalize removes /etc/udev"
@@ -614,13 +615,13 @@ require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/ipv6/n
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/nf_conntrack\.ko\.zst' "Tinfoil PID1 bounds conntrack module path"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/nf_conntrack_netlink\.ko\.zst' "Tinfoil PID1 bounds conntrack netlink module path"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/nf_nat\.ko\.zst' "Tinfoil PID1 bounds netfilter NAT module path"
-require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/ipset/ip_set\.ko\.zst' "Tinfoil PID1 bounds ipset module path"
+require_file_not_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'ip_set\.ko' "Tinfoil PID1 does not load ipset (no consumer: nftables uses native sets)"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/x_tables\.ko\.zst' "Tinfoil PID1 bounds xtables module path"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/xt_MASQUERADE\.ko\.zst' "Tinfoil PID1 bounds xt MASQUERADE module path"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/xt_addrtype\.ko\.zst' "Tinfoil PID1 bounds xt addrtype module path"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/xt_conntrack\.ko\.zst' "Tinfoil PID1 bounds xt conntrack module path"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/xt_nat\.ko\.zst' "Tinfoil PID1 bounds xt nat module path"
-require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/xt_set\.ko\.zst' "Tinfoil PID1 bounds xt set module path"
+require_file_not_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'xt_set\.ko' "Tinfoil PID1 does not load xt_set (no consumer: nftables uses native sets)"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/net/netfilter/xt_tcpudp\.ko\.zst' "Tinfoil PID1 bounds xt tcpudp module path"
 require_file_order "$repo_dir/tinfoil/cmd/init/main.go" 'loadDockerKernelModules\(\)' '"/usr/sbin/nft", "-f", "/etc/nftables\.conf"' "Tinfoil PID1 loads Docker/nft modules before applying nftables"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'kernel/arch/x86/crypto/aesni-intel\.ko\.zst' "Tinfoil PID1 bounds the NVIDIA B300 AESNI prerequisite module path"
@@ -710,18 +711,10 @@ require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'hasNVIDIANVSwitch' "
 require_file_contains "$repo_dir/tinfoil/cmd/init/main_test.go" 'TestHasNVIDIANVSwitchRequiresNVIDIASwitchClass' "NVIDIA NVSwitch sysfs discovery is unit tested"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'logNVIDIADebugDiagnostics' "Tinfoil PID1 can emit debug-only NVIDIA state before GPU probes"
 require_file_not_contains "$repo_dir/tinfoil/cmd/init/main.go" 'name:[[:space:]]*"nvidia-persistenced"' "Tinfoil PID1 does not supervise nvidia-persistenced as a foreground service"
-require_file_contains "$repo_dir/Makefile" 'debug/nvidia-rm-trace\.c' "build compiles the bounded NVIDIA RM trace helper from local source"
-require_file_contains "$repo_dir/Makefile" 'nvidia-rm-trace\.so' "build installs the bounded NVIDIA RM trace helper"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'TRACE_EVENT_LIMIT 4096' "NVIDIA RM trace helper caps debug event volume"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'TRACE_ARG_HEX_LIMIT 64' "NVIDIA RM trace helper caps ioctl payload previews"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'TRACE_POINTED_COPY_LIMIT 128' "NVIDIA RM trace helper caps pointed RM payload snapshots"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'TINFOIL_NVIDIA_RM_TRACE_LOG' "NVIDIA RM trace helper writes only to the Tinfoil-selected trace log"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'int ioctl' "NVIDIA RM trace helper captures bounded RM ioctl evidence"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'SYS_process_vm_readv' "NVIDIA RM trace helper snapshots ioctl payloads without unsafe direct dereference"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'NV_ESC_WAIT_OPEN_COMPLETE' "NVIDIA RM trace helper decodes bounded NVIDIA open status"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'NV_ESC_RM_CONTROL' "NVIDIA RM trace helper decodes bounded RM control status"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'control_params' "NVIDIA RM trace helper snapshots bounded RM control pointed payloads"
-require_file_contains "$repo_dir/debug/nvidia-rm-trace.c" 'UVM_INITIALIZE' "NVIDIA RM trace helper decodes bounded UVM status"
+require_path_absent "$repo_dir/debug/nvidia-rm-trace.c" "NVIDIA RM LD_PRELOAD trace helper source is not part of production TCB"
+require_file_not_contains "$repo_dir/Makefile" '^nvidia-rm-trace:' "build has no NVIDIA RM trace helper target"
+require_file_not_contains "$repo_dir/Makefile" 'debug/nvidia-rm-trace\.c' "build does not compile a NVIDIA RM LD_PRELOAD trace helper"
+require_file_contains "$repo_dir/Makefile" 'rm -f mkosi\.extra/usr/lib/tinfoil/nvidia-rm-trace\.so' "rebuild prunes stale staged NVIDIA RM trace helper artifacts"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'nvidiaRMTraceEnabled' "Tinfoil PID1 owns the NVIDIA RM trace enablement gate"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'if !bootDebugEnabled\(\)' "NVIDIA RM trace helper is gated by explicit debug mode"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'os\.Stat\(nvidiaRMTraceLibrary\)' "NVIDIA RM trace helper is gated by the installed preload library"
@@ -2348,7 +2341,6 @@ if [ -n "$rootfs" ]; then
                 llc.ko.zst \
                 nf_defrag_ipv4.ko.zst \
                 nf_defrag_ipv6.ko.zst \
-                ip_set.ko.zst \
                 nf_conntrack.ko.zst \
                 nf_conntrack_netlink.ko.zst \
                 nf_nat.ko.zst \
@@ -2362,7 +2354,6 @@ if [ -n "$rootfs" ]; then
                 xt_addrtype.ko.zst \
                 xt_conntrack.ko.zst \
                 xt_nat.ko.zst \
-                xt_set.ko.zst \
                 xt_tcpudp.ko.zst \
                 sch_fq_codel.ko.zst; do
                 if find "$rootfs/usr/lib/modules" -type f -name "$module" -print -quit 2>/dev/null | grep -q .; then
@@ -2456,7 +2447,6 @@ if [ -n "$rootfs" ]; then
                         kernel/net/ipv4/netfilter/nf_defrag_ipv4.ko.zst | \
                         kernel/net/ipv6/netfilter/nf_defrag_ipv6.ko.zst | \
                         kernel/net/llc/llc.ko.zst | \
-                        kernel/net/netfilter/ipset/ip_set.ko.zst | \
                         kernel/net/netfilter/nf_conntrack.ko.zst | \
                         kernel/net/netfilter/nf_conntrack_netlink.ko.zst | \
                         kernel/net/netfilter/nf_nat.ko.zst | \
@@ -2470,7 +2460,6 @@ if [ -n "$rootfs" ]; then
                         kernel/net/netfilter/xt_addrtype.ko.zst | \
                         kernel/net/netfilter/xt_conntrack.ko.zst | \
                         kernel/net/netfilter/xt_nat.ko.zst | \
-                        kernel/net/netfilter/xt_set.ko.zst | \
                         kernel/net/netfilter/xt_tcpudp.ko.zst | \
                         kernel/net/sched/sch_fq_codel.ko.zst)
                             ;;

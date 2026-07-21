@@ -1294,10 +1294,12 @@ func cmdlineHasField(field string) bool {
 
 // bootDebugEnabled gates all debug-only behavior (diagnostics, debug shells,
 // disabled boot deadline) on the kernel cmdline. This is measurement-safe:
-// CVMs launch with SEV-SNP kernel-hashes=on, which binds the kernel, initrd,
-// and full cmdline into the launch measurement, so a CVM booted with
-// tinfoil-debug=on attests with a different measurement than production and
-// cannot pass production verification.
+// the reference measurement clients verify against is derived by the public
+// tinfoilsh/measure-image-action from a fixed production cmdline that does not
+// contain tinfoil-debug=on (measure.py), and that cmdline is bound into the
+// SNP launch digest (measure_amd.py: snp_calc_launch_digest) and the TDX
+// measurement (measure_intel.py: direct.cmdline). A CVM booted with the debug
+// flag therefore measures differently and fails attestation.
 func bootDebugEnabled() bool {
 	return cmdlineHasField("tinfoil-debug=on")
 }

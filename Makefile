@@ -9,7 +9,7 @@ NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
 # truth for the digest; rotate via `docker buildx imagetools inspect ubuntu:26.04`.
 NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4
 
-.PHONY: all build rebuild clean deepclean hash nvattest go-binaries shims docker-static initrd-no-modules initrd-modules legacy-initrd-modules custom-kernel-builtins custom-nvidia-open-modules
+.PHONY: all build rebuild clean deepclean hash nvattest go-binaries shims docker-static initrd-no-modules custom-kernel-builtins
 
 # tinfoilcvm.hash is written as an artifact of `build`; read it from there if
 # present, otherwise extract the dm-verity roothash from the UKI's .cmdline
@@ -67,11 +67,6 @@ initrd-no-modules:
 	rm -rf mkosi.images/initrd/mkosi.extra/usr/lib/modules
 	rm -f mkosi.images/initrd/mkosi.extra/usr/lib/tinfoil/initrd-modules
 
-initrd-modules:
-	./install-initrd-modules.sh
-
-legacy-initrd-modules: initrd-modules
-
 custom-kernel-builtins:
 	rm -rf mkosi.extra/usr/lib/tinfoil/custom-kernel
 	@if [ -s kernel/out/modules.builtin ] && [ -s kernel/out/kernel.release ]; then \
@@ -82,9 +77,6 @@ custom-kernel-builtins:
 	else \
 	    echo "no custom kernel built-in manifest staged"; \
 	fi
-
-custom-nvidia-open-modules:
-	./kernel/build-nvidia-open-local.sh
 
 # First build populates mkosi.cache; later builds reuse it for fast iteration.
 rebuild: go-binaries shims docker-static initrd-no-modules custom-kernel-builtins

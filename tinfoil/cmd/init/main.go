@@ -100,6 +100,10 @@ const (
 	shimName            = "tinfoil-shim"
 	runtimeNOFILELimit  = 524288
 
+	// Managed-service restart backoff (capped exponential).
+	restartBaseDelay = 2 * time.Second
+	restartMaxDelay  = 30 * time.Second
+
 	// Ramdisk sizing policy (preserves the legacy tinfoil-ramdisk script):
 	// hosts with at least ramdiskMinRAMGB keep ramdiskReserveGB for the OS
 	// and give the rest to the ramdisk; smaller dev hosts fall back to
@@ -185,11 +189,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
+	err := run(ctx)
+	// PID 1 must never return: the kernel panics if it does. On a clean
+	// shutdown power the VM off; on fatal error (or if power-off fails) park
+	// so the failure stays diagnosable on the console and the hypervisor can
+	// reset the guest.
+	if err != nil {
 		initLogf("fatal: %v", err)
-		for {
-			time.Sleep(time.Minute)
+	} else {
+		initLogf("shutdown: powering off")
+		if perr := unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF); perr != nil {
+			initLogf("power off failed: %v; parking", perr)
 		}
+	}
+	for {
+		time.Sleep(time.Minute)
 	}
 }
 
@@ -2021,6 +2035,7 @@ func startProcess(proc *managedProcess) error {
 }
 
 func monitorProcess(ctx context.Context, proc *managedProcess) {
+	backoff := restartBaseDelay
 	for {
 		err := proc.cmd.Wait()
 		if ctx.Err() != nil {
@@ -2034,20 +2049,33 @@ func monitorProcess(ctx context.Context, proc *managedProcess) {
 		if !proc.restart {
 			return
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(2 * time.Second):
-		}
-		if err := startProcess(proc); err != nil {
-			initLogf("restart %s failed: %v", proc.name, err)
-			if proc.required {
-				for {
-					time.Sleep(time.Minute)
-				}
+		// Restart with capped backoff and keep retrying until it comes back
+		// or supervision is cancelled. A required service that stays down
+		// means the CVM never becomes ready (fail-closed), but PID 1 must
+		// neither give up silently nor exit.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
 			}
+			if err := startProcess(proc); err != nil {
+				initLogf("restart %s failed: %v", proc.name, err)
+				backoff = nextRestartDelay(backoff)
+				continue
+			}
+			backoff = restartBaseDelay
+			break
 		}
 	}
+}
+
+func nextRestartDelay(current time.Duration) time.Duration {
+	next := current * 2
+	if next > restartMaxDelay {
+		return restartMaxDelay
+	}
+	return next
 }
 
 func commandFor(ctx context.Context, harden, path string, args ...string) *exec.Cmd {

@@ -278,6 +278,10 @@ require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'CAP_NET_ADMIN' "Tinf
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'bootCtx, cancelBoot := bootContext\(parent\)' "Tinfoil PID1 routes boot deadline through an explicit selector"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" '<-parent\.Done\(\)' "Tinfoil PID1 lifecycle wait is not bound to the boot deadline"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'runOneShotHardened\(bootCtx, tinfoilBootTimeout\(\), "tinfoil-boot"' "Tinfoil PID1 starts boot under no_new_privs policy"
+# Availability: PID 1 must never return (kernel panic). On clean shutdown it
+# powers the VM off; otherwise it parks. Both branches keep it resident.
+require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'LINUX_REBOOT_CMD_POWER_OFF' "Tinfoil PID1 powers off on clean shutdown instead of exiting"
+require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'nextRestartDelay' "Tinfoil PID1 restarts managed services with capped backoff and never abandons them"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'func tinfoilBootTimeout\(\) time\.Duration' "Tinfoil PID1 owns the debug boot timeout selector"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main_test.go" 'TestTinfoilBootTimeoutAllowsDebugShellToOutliveBootTimeout' "debug tinfoil-boot timeout behavior is unit-tested"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main_test.go" 'TestBootContextAllowsDebugShellToOutliveBootTimeout' "debug PID1 boot context timeout behavior is unit-tested"

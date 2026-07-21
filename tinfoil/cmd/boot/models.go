@@ -10,6 +10,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/device"
 )
 
 // mountModels mounts all model packs from the config
@@ -55,7 +56,14 @@ func mountModelPack(spec *modelPackRef) error {
 	if err := createLegacyModelPackAlias(spec); err != nil {
 		return err
 	}
-	if err := openAndMountVerity(diskByUUID(spec.UUID), deviceName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
+	// udev is gone, so /dev/disk/by-* aliases no longer exist; resolve the
+	// device by reading superblock UUIDs from the modelwrap SCSI namespace.
+	sourceDevice, err := device.ModelDeviceByFilesystemUUID(spec.UUID)
+	if err != nil {
+		removeLegacyModelPackAlias(spec)
+		return err
+	}
+	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
 		removeLegacyModelPackAlias(spec)
 		return err
 	}
@@ -91,7 +99,12 @@ func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.Externa
 	if err := createLegacyModelPackAlias(spec); err != nil {
 		return err
 	}
-	if err := unwrap.OpenCrypt(diskByPARTUUID(spec.UUID), cryptName, keyFile); err != nil {
+	sourceDevice, err := device.ModelDeviceByPARTUUID(spec.UUID)
+	if err != nil {
+		removeLegacyModelPackAlias(spec)
+		return err
+	}
+	if err := unwrap.OpenCrypt(sourceDevice, cryptName, keyFile); err != nil {
 		removeLegacyModelPackAlias(spec)
 		return err
 	}
@@ -247,14 +260,6 @@ func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset, mountPoi
 		return err
 	}
 	return nil
-}
-
-func diskByUUID(uuid string) string {
-	return fmt.Sprintf("/dev/disk/by-uuid/%s", uuid)
-}
-
-func diskByPARTUUID(uuid string) string {
-	return fmt.Sprintf("/dev/disk/by-partuuid/%s", uuid)
 }
 
 func modelLogName(name, rootHash string) string {

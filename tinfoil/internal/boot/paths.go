@@ -37,6 +37,10 @@ const (
 	EgressBinary          = "/usr/bin/tinfoil-egress"
 	ContainerStatusBinary = "/usr/bin/tinfoil-container-status"
 
+	// KmsgInfoPrefix is the printk priority prefix (KERN_INFO, facility 0)
+	// used when writing directly to /dev/kmsg from the Tinfoil init stack.
+	KmsgInfoPrefix = "<6>"
+
 	// ShimListenPort is the public TLS port served by tinfoil-shim.
 	ShimListenPort = 443
 

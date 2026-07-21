@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+
 docker_static_version="29.5.3"
 docker_static_sha256="34eea64e9c3435f5af1b760827a56a561cd67fc2d6e9cd1813b8bb1e3ff7930b"
 docker_static_url="https://download.docker.com/linux/static/stable/x86_64/docker-${docker_static_version}.tgz"
@@ -35,7 +37,7 @@ for bin in \
     install -m0755 "$extract_dir/$bin" "$dest_dir/$bin"
 done
 
-for bin in containerd containerd-shim-runc-v2 ctr docker docker-proxy dockerd runc; do
+for bin in containerd containerd-shim-runc-v2 ctr docker docker-init docker-proxy dockerd runc; do
     if readelf -d "$dest_dir/$bin" 2>/dev/null | grep -Eq 'lib(systemd|udev)\.so'; then
         echo "ERROR: static Docker binary $bin links systemd/udev" >&2
         readelf -d "$dest_dir/$bin" >&2 || true

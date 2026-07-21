@@ -21,6 +21,7 @@ const (
 
 	filesystemProbeBytes = 4096
 	uuidBytes            = 16
+	maxQuotedIdentity    = 96
 
 	erofsSuperOffset = 1024
 	erofsMagic       = 0xE0F5E1E2
@@ -47,11 +48,19 @@ type scsiIdentity struct {
 	value  string
 }
 
-// DiskBySCSISerial returns the devtmpfs node for a Tinfoil QEMU SCSI disk.
+// DiskBySCSISerial returns the devtmpfs node for a Tinfoil QEMU SCSI disk,
+// polling for up to deviceWaitTimeout for the disk to appear.
 func DiskBySCSISerial(serial string) (string, error) {
 	return waitForDevice(func() (string, error) {
 		return findDiskBySCSISerial(serial)
 	})
+}
+
+// DiskBySCSISerialNoWait is DiskBySCSISerial without the polling wait, for
+// optional disks (e.g. the external-config disk): absence is an expected
+// outcome and must not stall boot for the full device timeout.
+func DiskBySCSISerialNoWait(serial string) (string, error) {
+	return findDiskBySCSISerial(serial)
 }
 
 // ModelDeviceByFilesystemUUID resolves plaintext modelwrap devices by reading
@@ -196,7 +205,7 @@ func modelWrapBlockDevices() ([]string, error) {
 			continue
 		}
 		ids, err := scsiIdentities(name)
-		if err != nil || !identityHasPrefix(ids, ModelWrapSerialPrefix) {
+		if err != nil || !identityTokenHasPrefix(ids, ModelWrapSerialPrefix) {
 			continue
 		}
 		devices = appendDeviceIfReady(devices, name)
@@ -303,19 +312,34 @@ func appendIdentity(ids []scsiIdentity, source, value string) []scsiIdentity {
 	return append(ids, scsiIdentity{source: source, value: value})
 }
 
+// SCSI identity sources embed the QEMU-assigned serial inside larger
+// designators (e.g. wwid "t10.QEMU    QEMU HARDDISK    tinfoil-config"), so
+// serials are compared against whitespace-delimited tokens of each identity
+// value rather than by raw substring: substring matching would let a serial
+// that embeds another Tinfoil serial select the wrong disk.
 func identityMatchesSerial(ids []scsiIdentity, serial string) bool {
 	for _, id := range ids {
-		if id.value == serial || strings.Contains(id.value, serial) {
+		if id.value == serial {
 			return true
+		}
+		for _, token := range strings.Fields(id.value) {
+			if token == serial {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func identityHasPrefix(ids []scsiIdentity, prefix string) bool {
+// identityTokenHasPrefix reports whether any whitespace-delimited token of an
+// identity value starts with prefix. Used for the modelwrap serial namespace
+// (serials like "tinfoil-modelwrap-<n>").
+func identityTokenHasPrefix(ids []scsiIdentity, prefix string) bool {
 	for _, id := range ids {
-		if strings.HasPrefix(id.value, prefix) || strings.Contains(id.value, prefix) {
-			return true
+		for _, token := range strings.Fields(id.value) {
+			if strings.HasPrefix(token, prefix) {
+				return true
+			}
 		}
 	}
 	return false
@@ -458,8 +482,8 @@ func formatIdentities(ids []scsiIdentity) string {
 }
 
 func quoteShort(value string) string {
-	if len(value) > 96 {
-		value = value[:96] + "..."
+	if len(value) > maxQuotedIdentity {
+		value = value[:maxQuotedIdentity] + "..."
 	}
 	return strconv.Quote(value)
 }

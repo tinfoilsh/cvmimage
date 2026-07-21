@@ -201,6 +201,8 @@ func TestLoadNVIDIACoreKernelModulesLoadsFixedClosureWithParams(t *testing.T) {
 	withRuntimeModuleMocks(t, loaded, files, func(path string, compressed bool, params string) error {
 		got = append(got, loadedRuntimeModule{path: path, compressed: compressed, params: params})
 		switch filepath.Base(path) {
+		case "ecdh_generic.ko.zst":
+			loaded["ecdh_generic"] = true
 		case "ecdsa_generic.ko.zst":
 			loaded["ecdsa_generic"] = true
 		case "nvidia.ko":
@@ -216,6 +218,7 @@ func TestLoadNVIDIACoreKernelModulesLoadsFixedClosureWithParams(t *testing.T) {
 	}
 
 	want := []loadedRuntimeModule{
+		{path: "/modules/7.0.0-test/kernel/crypto/ecdh_generic.ko.zst", compressed: true},
 		{path: "/modules/7.0.0-test/kernel/crypto/ecdsa_generic.ko.zst", compressed: true},
 		{path: "/modules/7.0.0-test/updates/dkms/nvidia.ko", params: nvidiaKernelModuleParams},
 	}
@@ -386,7 +389,7 @@ func TestLoadNVIDIACoreKernelModulesSkipsBuiltInECDSA(t *testing.T) {
 		"/modules/7.0.0-test/updates/dkms/nvidia.ko": true,
 	}
 	contents := map[string]string{
-		"/modules/7.0.0-test/modules.builtin": "kernel/crypto/ecdsa_generic.ko\n",
+		"/modules/7.0.0-test/modules.builtin": "kernel/crypto/ecdh_generic.ko\nkernel/crypto/ecdsa_generic.ko\n",
 	}
 	var got []loadedRuntimeModule
 	withRuntimeModuleMocksAndContents(t, loaded, files, contents, func(path string, compressed bool, params string) error {

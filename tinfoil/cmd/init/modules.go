@@ -43,6 +43,19 @@ var (
 	}
 
 	nvidiaCoreKernelModules = []runtimeKernelModule{
+		// NVIDIA CC SPDM needs kernel ECDSA and ECDH (see the historical
+		// nvidia-lkca.conf modprobe hook this replaces). On the stock Ubuntu
+		// kernel ecdh_generic is builtin (modules.builtin) and this entry
+		// no-ops; listing it pins the dependency so a kernel that ships it
+		// modular gets it loaded and one that lacks it fails boot loudly
+		// instead of failing GPU attestation at SPDM time.
+		{
+			name: "ecdh_generic",
+			paths: []string{
+				"kernel/crypto/ecdh_generic.ko.zst",
+				"kernel/crypto/ecdh_generic.ko",
+			},
+		},
 		{
 			name: "ecdsa_generic",
 			paths: []string{

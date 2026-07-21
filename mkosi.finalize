@@ -735,6 +735,10 @@ ensure_static_group() {
     fi
 
     if awk -F: -v gid="$gid" '$3 == gid { found=1 } END { exit found ? 0 : 1 }' "$group_file"; then
+        # Fallback scan starts at 300: above Debian's statically-allocated
+        # 0-99 range and the 100-299 block used by common packaged system
+        # groups, while staying well below SYS_GID_MIN (100)..999 dynamic
+        # allocations already present in the image.
         gid="$(awk -F: 'BEGIN { gid=300 } { used[$3]=1 } END { while (used[gid]) gid++; print gid }' "$group_file")"
     fi
 
@@ -1224,6 +1228,7 @@ else
                 updates/dkms/nvidia-uvm.ko | \
                 updates/tdx-guest.ko | \
                 kernel/arch/x86/crypto/aesni-intel.ko.* | \
+                kernel/crypto/ecdh_generic.ko.* | \
                 kernel/crypto/ecdsa_generic.ko.* | \
                 kernel/drivers/acpi/video.ko.* | \
                 kernel/drivers/block/loop.ko.* | \

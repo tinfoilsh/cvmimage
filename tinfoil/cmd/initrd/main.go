@@ -853,7 +853,7 @@ func initrdLogf(format string, args ...any) {
 			continue
 		}
 		if path == "/dev/kmsg" {
-			_, _ = fmt.Fprintf(file, "<6>tinfoil-initrd: %s\n", message)
+			_, _ = fmt.Fprintf(file, boot.KmsgInfoPrefix+"tinfoil-initrd: %s\n", message)
 		} else {
 			_, _ = fmt.Fprintf(file, "tinfoil-initrd: %s\n", message)
 		}

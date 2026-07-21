@@ -70,6 +70,11 @@ const (
 	// (a 256-byte type-0 config space fits at most ~48 2-byte entries).
 	maxPCICapabilities = 48
 
+	// Kernel ring-buffer diagnostics bounds.
+	kmsgReadMinBytes   = 4096
+	kmsgReadMaxBytes   = 1 << 20
+	kmsgMaxLoggedLines = 120
+
 	// PCI class codes as exposed by sysfs "class".
 	pciClassVGAController = "0x030000"
 	pciClass3DController  = "0x030200"
@@ -1632,11 +1637,11 @@ func logKernelRingFiltered(label string, keep func(string) bool) {
 		initLogf("%s unavailable: %v", label, err)
 		return
 	}
-	if size < 4096 {
-		size = 4096
+	if size < kmsgReadMinBytes {
+		size = kmsgReadMinBytes
 	}
-	if size > 1<<20 {
-		size = 1 << 20
+	if size > kmsgReadMaxBytes {
+		size = kmsgReadMaxBytes
 	}
 	buf := make([]byte, size)
 	n, err := unix.Klogctl(unix.SYSLOG_ACTION_READ_ALL, buf)
@@ -1653,7 +1658,7 @@ func logKernelRingFiltered(label string, keep func(string) bool) {
 		if keep != nil && !keep(line) {
 			continue
 		}
-		if logged >= 120 {
+		if logged >= kmsgMaxLoggedLines {
 			initLogf("%s: truncated after %d matching lines", label, logged)
 			return
 		}
@@ -2179,7 +2184,7 @@ func initLogf(format string, args ...any) {
 			continue
 		}
 		if path == "/dev/kmsg" {
-			_, _ = fmt.Fprintf(file, "<6>tinfoil-init: %s\n", message)
+			_, _ = fmt.Fprintf(file, boot.KmsgInfoPrefix+"tinfoil-init: %s\n", message)
 		} else {
 			_, _ = fmt.Fprintf(file, "tinfoil-init: %s\n", message)
 		}

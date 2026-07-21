@@ -183,6 +183,26 @@ const (
 	dhcpServerPort = 67
 	dhcpMagic      = 0x63825363
 
+	// Fixed BOOTP/DHCP header layout per RFC 2131 §2.
+	dhcpOpOffset          = 0   // op: BOOTREQUEST/BOOTREPLY
+	dhcpHTypeOffset       = 1   // htype: hardware address type
+	dhcpHLenOffset        = 2   // hlen: hardware address length
+	dhcpXIDOffset         = 4   // xid: transaction id (4 bytes)
+	dhcpFlagsOffset       = 10  // flags: broadcast bit lives in the high byte
+	dhcpYiaddrOffset      = 16  // yiaddr: "your" (offered/assigned) address
+	dhcpChaddrOffset      = 28  // chaddr: client hardware address
+	dhcpMagicCookieOffset = 236 // magic cookie preceding options
+	dhcpFixedHeaderLen    = 240 // fixed header incl. magic cookie
+	dhcpMinPacketLen      = 300 // classic BOOTP minimum; some servers drop shorter
+
+	dhcpOpRequest = 1
+	dhcpOpReply   = 2
+
+	dhcpHTypeEthernet = 1
+	dhcpHLenEthernet  = 6
+
+	dhcpFlagBroadcast = 0x80 // high byte of the 16-bit flags field
+
 	dhcpDiscover = 1
 	dhcpOffer    = 2
 	dhcpRequest  = 3
@@ -232,6 +252,11 @@ func requestDHCPv4Lease(ctx context.Context, ifname string) (*dhcpv4Lease, error
 	ack, err := exchangeRawDHCPv4(ctx, conn, request, xid, iface.HardwareAddr, dhcpAck)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
+	}
+	// RFC 2131 requires option 54 in DHCPACK; reject ACKs from a server other
+	// than the one whose offer we accepted.
+	if ack.ServerID == nil || !ack.ServerID.Equal(offer.ServerID) {
+		return nil, fmt.Errorf("ack server identifier %v does not match offer server %v", ack.ServerID, offer.ServerID)
 	}
 	return ack, nil
 }
@@ -393,14 +418,15 @@ func dhcpv4PayloadFromEthernetFrame(frame []byte) ([]byte, error) {
 }
 
 func buildDHCPv4Packet(messageType byte, xid [4]byte, hw net.HardwareAddr, requestedIP, serverID net.IP) []byte {
-	packet := make([]byte, 240, 300)
-	packet[0] = 1 // BOOTREQUEST
-	packet[1] = 1 // Ethernet
-	packet[2] = 6
-	copy(packet[4:8], xid[:])
-	packet[10] = 0x80 // Broadcast replies until the address is configured.
-	copy(packet[28:34], hw[:6])
-	binary.BigEndian.PutUint32(packet[236:240], dhcpMagic)
+	packet := make([]byte, dhcpFixedHeaderLen, dhcpMinPacketLen)
+	packet[dhcpOpOffset] = dhcpOpRequest
+	packet[dhcpHTypeOffset] = dhcpHTypeEthernet
+	packet[dhcpHLenOffset] = dhcpHLenEthernet
+	copy(packet[dhcpXIDOffset:dhcpXIDOffset+4], xid[:])
+	// Broadcast replies until the address is configured.
+	packet[dhcpFlagsOffset] = dhcpFlagBroadcast
+	copy(packet[dhcpChaddrOffset:dhcpChaddrOffset+dhcpHLenEthernet], hw[:6])
+	binary.BigEndian.PutUint32(packet[dhcpMagicCookieOffset:dhcpFixedHeaderLen], dhcpMagic)
 
 	packet = appendDHCPOption(packet, dhcpOptMessageType, []byte{messageType})
 	packet = appendDHCPOption(packet, dhcpOptClientID, append([]byte{1}, hw[:6]...))
@@ -412,33 +438,33 @@ func buildDHCPv4Packet(messageType byte, xid [4]byte, hw net.HardwareAddr, reque
 	}
 	packet = appendDHCPOption(packet, dhcpOptParameterReq, []byte{dhcpOptSubnetMask, dhcpOptRouter, dhcpOptDNS, dhcpOptServerID})
 	packet = append(packet, dhcpOptEnd)
-	for len(packet) < 300 {
+	for len(packet) < dhcpMinPacketLen {
 		packet = append(packet, 0)
 	}
 	return packet
 }
 
 func parseDHCPv4Packet(packet []byte, xid [4]byte, hw net.HardwareAddr) (*dhcpv4Lease, byte, error) {
-	if len(packet) < 240 {
+	if len(packet) < dhcpFixedHeaderLen {
 		return nil, 0, fmt.Errorf("short DHCP packet: %d bytes", len(packet))
 	}
-	if packet[0] != 2 {
+	if packet[dhcpOpOffset] != dhcpOpReply {
 		return nil, 0, fmt.Errorf("not a BOOTREPLY")
 	}
-	if string(packet[4:8]) != string(xid[:]) {
+	if string(packet[dhcpXIDOffset:dhcpXIDOffset+4]) != string(xid[:]) {
 		return nil, 0, fmt.Errorf("mismatched transaction id")
 	}
-	if string(packet[28:34]) != string(hw[:6]) {
+	if string(packet[dhcpChaddrOffset:dhcpChaddrOffset+dhcpHLenEthernet]) != string(hw[:6]) {
 		return nil, 0, fmt.Errorf("mismatched hardware address")
 	}
-	if binary.BigEndian.Uint32(packet[236:240]) != dhcpMagic {
+	if binary.BigEndian.Uint32(packet[dhcpMagicCookieOffset:dhcpFixedHeaderLen]) != dhcpMagic {
 		return nil, 0, fmt.Errorf("missing DHCP magic cookie")
 	}
 
-	options := parseDHCPOptions(packet[240:])
+	options := parseDHCPOptions(packet[dhcpFixedHeaderLen:])
 	messageType := firstOptionByte(options[dhcpOptMessageType])
 	lease := &dhcpv4Lease{
-		IP:       copyIPv4(packet[16:20]),
+		IP:       copyIPv4(packet[dhcpYiaddrOffset : dhcpYiaddrOffset+net.IPv4len]),
 		ServerID: optionIPv4(options[dhcpOptServerID]),
 		Router:   firstOptionIPv4(options[dhcpOptRouter]),
 		DNS:      optionIPv4List(options[dhcpOptDNS]),

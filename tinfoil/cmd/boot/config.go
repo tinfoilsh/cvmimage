@@ -267,7 +267,9 @@ func loadConfigFromRamdisk() (*Config, error) {
 }
 
 func loadExternalConfig() error {
-	externalDiskPath, err := device.DiskBySCSISerial(device.ExternalConfigDiskSerial)
+	// The external config disk is optional and attached at VM creation, so a
+	// single scan suffices; waiting would stall every boot without one.
+	externalDiskPath, err := device.DiskBySCSISerialNoWait(device.ExternalConfigDiskSerial)
 	if err != nil {
 		return fmt.Errorf("finding external config disk: %w", err)
 	}

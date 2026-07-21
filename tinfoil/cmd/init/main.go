@@ -188,8 +188,12 @@ func main() {
 }
 
 func run(parent context.Context) error {
-	ctx, cancel := bootContext(parent)
-	defer cancel()
+	// bootCtx bounds only the startup sequence. Service supervision and the
+	// final lifecycle wait must use parent (cancelled only by signals):
+	// tying them to the boot deadline would stop restarts and shut the CVM
+	// down bootTimeout after a successful boot.
+	bootCtx, cancelBoot := bootContext(parent)
+	defer cancelBoot()
 
 	initLogf("starting")
 	if err := setupRuntimeFilesystems(); err != nil {
@@ -208,13 +212,13 @@ func run(parent context.Context) error {
 	if err := setupRamdisk(); err != nil {
 		return err
 	}
-	if err := runOneShot(ctx, defaultStartTimeout, "/usr/sbin/nft", "-f", "/etc/nftables.conf"); err != nil {
+	if err := runOneShot(bootCtx, defaultStartTimeout, "/usr/sbin/nft", "-f", "/etc/nftables.conf"); err != nil {
 		return err
 	}
 
-	startOptionalNVIDIA(ctx)
+	startOptionalNVIDIA(bootCtx, parent)
 
-	containerd, err := startManaged(ctx, &managedProcess{
+	containerd, err := startManaged(parent, &managedProcess{
 		name:     "containerd",
 		path:     "/usr/bin/containerd",
 		required: true,
@@ -223,11 +227,11 @@ func run(parent context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := waitForPath(ctx, containerdSocket, containerdSocketWait); err != nil {
+	if err := waitForPath(bootCtx, containerdSocket, containerdSocketWait); err != nil {
 		return fmt.Errorf("waiting for containerd socket: %w", err)
 	}
 
-	dockerd, err := startManaged(ctx, &managedProcess{
+	dockerd, err := startManaged(parent, &managedProcess{
 		name:     "dockerd",
 		path:     "/usr/bin/dockerd",
 		args:     []string{"-H", "unix://" + dockerSocket, "--containerd=" + containerdSocket},
@@ -237,30 +241,31 @@ func run(parent context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := waitForPath(ctx, dockerSocket, dockerSocketWait); err != nil {
+	if err := waitForPath(bootCtx, dockerSocket, dockerSocketWait); err != nil {
 		return fmt.Errorf("waiting for Docker socket: %w", err)
 	}
 
-	if err := runOneShotHardened(ctx, tinfoilBootTimeout(), "tinfoil-boot", boot.BootBinary); err != nil {
+	if err := runOneShotHardened(bootCtx, tinfoilBootTimeout(), "tinfoil-boot", boot.BootBinary); err != nil {
 		stopProcess(dockerd)
 		stopProcess(containerd)
 		return err
 	}
 
-	if _, err := startManaged(ctx, &managedProcess{name: containerStatusName, path: boot.ContainerStatusBinary, restart: true, harden: containerStatusName}); err != nil {
+	if _, err := startManaged(parent, &managedProcess{name: containerStatusName, path: boot.ContainerStatusBinary, restart: true, harden: containerStatusName}); err != nil {
 		return err
 	}
-	if _, err := startManaged(ctx, &managedProcess{name: shimName, path: boot.ShimBinary, required: true, restart: true, harden: shimName}); err != nil {
+	if _, err := startManaged(parent, &managedProcess{name: shimName, path: boot.ShimBinary, required: true, restart: true, harden: shimName}); err != nil {
 		return err
 	}
 	if _, err := os.Stat(boot.EgressConfigPath); err == nil {
-		if _, err := startManaged(ctx, &managedProcess{name: egressName, path: boot.EgressBinary, restart: true, harden: egressName}); err != nil {
+		if _, err := startManaged(parent, &managedProcess{name: egressName, path: boot.EgressBinary, restart: true, harden: egressName}); err != nil {
 			return err
 		}
 	}
 
 	initLogf("boot complete")
-	<-ctx.Done()
+	cancelBoot()
+	<-parent.Done()
 	initLogf("shutdown requested")
 	return nil
 }
@@ -531,7 +536,10 @@ func applySysctls(path string) error {
 	return nil
 }
 
-func startOptionalNVIDIA(ctx context.Context) {
+// startOptionalNVIDIA runs the bounded NVIDIA bootstrap. ctx carries the boot
+// deadline; superviseCtx outlives boot and controls long-lived helpers (the
+// syslog sink goroutine), which must not stop when the boot budget expires.
+func startOptionalNVIDIA(ctx, superviseCtx context.Context) {
 	if !hasNVIDIAPCIDevice() {
 		initLogf("NVIDIA services skipped: no NVIDIA PCI device")
 		return
@@ -570,7 +578,7 @@ func startOptionalNVIDIA(ctx context.Context) {
 	}
 	setupNVIDIADeviceFiles()
 	startOptionalNVIDIAFabricManager(ctx)
-	startOptionalSyslogSink(ctx)
+	startOptionalSyslogSink(superviseCtx)
 	logNVIDIAPreRMOpenDiagnostics("before-settle")
 	waitForNVIDIAPreRMOpenSettle(ctx)
 	logNVIDIAPreRMOpenDiagnostics("after-settle")

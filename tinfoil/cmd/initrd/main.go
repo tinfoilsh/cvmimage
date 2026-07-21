@@ -117,6 +117,12 @@ func run() error {
 		return errors.New("missing or invalid roothash")
 	}
 	roothash = strings.ToLower(roothash)
+	// systemd-repart convention (see systemd-repart(8) Verity=/VerityMatchKey=,
+	// also used by systemd's gpt-auto verity discovery): the data partition's
+	// GPT UUID is the first 128 bits of the dm-verity root hash and the hash
+	// partition's UUID is the final 128 bits. mkosi.repart/10-root.conf and
+	// 11-root-verity.conf build the image this way, so the measured roothash
+	// on the kernel cmdline is sufficient to locate both partitions.
 	rootHex32, verityHex32 := splitRoothash(roothash)
 	rootPartUUID := guidFromHex32(rootHex32)
 	verityPartUUID := guidFromHex32(verityHex32)

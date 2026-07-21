@@ -2,7 +2,6 @@ name: Test
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -30,3 +29,10 @@ jobs:
 
       - name: Test
         run: cd tinfoil && go test ./...
+
+      # Static TCB policy checks. Must stay green on every commit: an image
+      # with a forbidden rootfs/initrd payload or a weakened source policy
+      # fails here before it can be merged. (Built-image checks run in the
+      # release flow where a rootfs is available.)
+      - name: TCB checks (static)
+        run: ./tcb-check.sh

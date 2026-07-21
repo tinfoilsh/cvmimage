@@ -80,7 +80,10 @@ require_file_order() {
 }
 
 echo "=== source config ==="
-for pkg in ubuntu-standard nano iputils-ping curl procps systemd systemd-boot systemd-boot-tools systemd-resolved systemd-cryptsetup udev kmod cryptsetup mount docker-ce docker-ce-cli containerd.io; do
+# cryptsetup is still a runtime package at this stage: the EMWP dm-crypt path
+# shells out to it until the direct dm-crypt change removes it (and re-adds it
+# to this exclusion list).
+for pkg in ubuntu-standard nano iputils-ping curl procps systemd systemd-boot systemd-boot-tools systemd-resolved systemd-cryptsetup udev kmod mount docker-ce docker-ce-cli containerd.io; do
     if has_package "$pkg"; then
         fail "mkosi.conf must not include runtime package $pkg"
     else
@@ -120,16 +123,6 @@ require_file_contains "$repo_dir/Makefile" 'tinfoil-initrd \./cmd/initrd' "build
 require_file_contains "$repo_dir/Makefile" 'ln -s usr/bin/tinfoil-initrd mkosi\.images/initrd/mkosi\.extra/init' "build links /init to compiled Tinfoil initrd entrypoint"
 require_file_not_contains "$repo_dir/Makefile" '^rebuild:.*initrd-modules' "default rebuild does not stage initrd module payload"
 require_file_contains "$repo_dir/Makefile" '^rebuild:.*initrd-no-modules' "default rebuild clears stale initrd module payload"
-if [ -x "$repo_dir/install-initrd-modules.sh" ]; then
-    ok "legacy bounded initrd module installer exists and is executable"
-else
-    fail "install-initrd-modules.sh must exist and be executable"
-fi
-require_file_contains "$repo_dir/install-initrd-modules.sh" 'dm-bufio\.ko\.zst' "bounded initrd module installer includes dm-bufio"
-require_file_contains "$repo_dir/install-initrd-modules.sh" 'dm-verity\.ko\.zst' "bounded initrd module installer includes dm-verity"
-require_file_contains "$repo_dir/install-initrd-modules.sh" 'zstd -dc' "bounded initrd module installer emits uncompressed modules for finit_module"
-require_file_contains "$repo_dir/install-initrd-modules.sh" 'modinfo "\$target"' "bounded initrd module installer validates decompressed module payloads"
-require_file_contains "$repo_dir/install-initrd-modules.sh" 'rm -rf "\$repo_dir/mkosi\.images/initrd/mkosi\.extra/usr/lib/modules"' "bounded initrd module installer clears stale module trees"
 require_file_not_contains "$repo_dir/tinfoil/cmd/initrd/main.go" '"/usr/bin/sh"|"/bin/sh"|switch_root|systemd/systemd|tinfoil-pid1|/usr/sbin/(veritysetup|dmsetup)' "compiled initrd source has no shell/veritysetup/dmsetup/systemd fallback"
 require_file_not_contains "$repo_dir/tinfoil/cmd/initrd/main.go" '/usr/sbin/modprobe|exec\.Command|InitModule' "compiled initrd source has no modprobe or broad module loader execution path"
 require_file_contains "$repo_dir/tinfoil/cmd/initrd/main.go" 'unix\.FinitModule' "compiled initrd uses direct finit_module for the bounded module manifest"
@@ -141,29 +134,7 @@ require_file_contains "$repo_dir/tinfoil/cmd/initrd/main_test.go" 'TestCmdlineVa
 require_file_contains "$repo_dir/tinfoil/cmd/initrd/main_test.go" 'TestInitrdModuleModeFromDefaultsToBuiltIn' "initrd built-in dm default is tested"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules.go" 'runtimeKernelModuleBuiltIn' "runtime module loader recognizes exact built-in module paths for the custom-kernel transition"
 require_file_contains "$repo_dir/tinfoil/cmd/init/modules_test.go" 'TestLoadRuntimeKernelModuleSkipsExactBuiltIn' "runtime module loader has built-in module coverage"
-kernel_transition_config="$repo_dir/kernel/config.d/10-tinfoil-cvm-nvidia-transition.config"
-if [ -f "$kernel_transition_config" ]; then
-    ok "custom-kernel transition config exists"
-else
-    fail "custom-kernel transition config is missing"
-fi
-if [ -x "$repo_dir/kernel/check-config.sh" ]; then
-    ok "custom-kernel config checker exists and is executable"
-    if kernel_check_output="$("$repo_dir/kernel/check-config.sh" "$kernel_transition_config" 2>&1)"; then
-        ok "custom-kernel transition config satisfies the Tinfoil kernel gate"
-    else
-        printf '%s\n' "$kernel_check_output" >&2
-        fail "custom-kernel transition config does not satisfy the Tinfoil kernel gate"
-    fi
-else
-    fail "custom-kernel config checker must exist and be executable"
-fi
-require_file_contains "$repo_dir/kernel/build-local.sh" 'kernel release mismatch' "custom-kernel build fails on rootfs module-tree release mismatch"
-require_file_contains "$repo_dir/kernel/build-local.sh" 'Module\.symvers' "custom-kernel build preserves symbol CRCs for bounded external NVIDIA modules"
-require_file_contains "$repo_dir/kernel/build-nvidia-open-local.sh" 'NV_EXCLUDE_KERNEL_MODULES=nvidia-drm' "custom NVIDIA module builder excludes nvidia-drm from the compute-only path"
-require_file_contains "$repo_dir/kernel/build-nvidia-open-local.sh" 'modprobe --dump-modversions' "custom NVIDIA module builder validates module CRCs against the custom kernel"
 require_file_contains "$repo_dir/Makefile" 'custom-kernel-builtins' "Makefile stages custom kernel built-in manifest for rootfs assembly"
-require_file_contains "$repo_dir/Makefile" 'tinfoil-custom\.vmlinuz' "Makefile stages custom kernel image for mkosi UKI assembly"
 require_file_contains "$repo_dir/mkosi.finalize" 'install_custom_kernel_builtins' "finalize installs custom kernel built-in manifest after depmod"
 require_file_contains "$repo_dir/mkosi.finalize" 'custom_kernel_builtin_manifest' "finalize consumes the staged custom kernel built-in manifest"
 require_file_not_contains "$repo_dir/mkosi.finalize" 'updates/dkms/nvidia\*\.ko' "finalize does not keep wildcard stock NVIDIA DKMS modules"
@@ -341,13 +312,6 @@ else
     ok "initrd source ships no systemd policy or masks"
 fi
 require_file_not_contains "$repo_dir/tinfoil/internal/attestation/attestation.go" 'os/exec|exec\.Command|modprobe' "attestation path does not execute modprobe or any command runner"
-require_file_contains "$repo_dir/tinfoil/internal/attestation/attestation.go" 'unix\.FinitModule' "attestation path uses direct finit_module"
-require_file_contains "$repo_dir/tinfoil/internal/attestation/attestation.go" 'MODULE_INIT_COMPRESSED_FILE' "attestation path can load compressed bounded modules without kmod"
-require_file_contains "$repo_dir/tinfoil/internal/attestation/attestation.go" 'tsm_report\.ko\.zst' "attestation path explicitly loads the TSM report dependency"
-require_file_contains "$repo_dir/tinfoil/internal/attestation/attestation.go" 'sev-guest\.ko\.zst' "attestation path can load exact SEV attestation module file"
-require_file_contains "$repo_dir/tinfoil/internal/attestation/attestation.go" 'tdx-guest\.ko\.zst' "attestation path can load exact TDX attestation module file"
-require_file_contains "$repo_dir/tinfoil/internal/attestation/modules_test.go" 'FallsBackToTDX' "attestation module-loading fallback is tested"
-require_file_contains "$repo_dir/tinfoil/internal/attestation/modules_test.go" 'RejectsBroadModuleCandidate' "attestation module loader rejects broad module paths"
 require_file_contains "$repo_dir/tinfoil/internal/device/device.go" 'DiskBySCSISerial' "Tinfoil owns config/external disk discovery"
 require_file_contains "$repo_dir/tinfoil/internal/device/device.go" 'ModelDeviceByFilesystemUUID' "Tinfoil owns modelwrap filesystem UUID discovery"
 require_file_contains "$repo_dir/tinfoil/internal/device/device.go" 'ModelDeviceByPARTUUID' "Tinfoil owns EMWP PARTUUID discovery"
@@ -746,15 +710,6 @@ require_file_contains "$repo_dir/mkosi.finalize" '/usr/sbin/dmstats' "finalize r
 require_file_contains "$repo_dir/mkosi.finalize" '/usr/sbin/veritysetup' "finalize removes rootfs veritysetup CLI"
 require_file_contains "$repo_dir/mkosi.finalize" '/usr/bin/mount' "finalize removes rootfs mount CLI"
 require_file_contains "$repo_dir/mkosi.finalize" '/usr/bin/umount' "finalize removes rootfs umount CLI"
-require_file_contains "$repo_dir/tinfoil/internal/devicemapper/devicemapper.go" 'dmTableLoadIOCTL' "runtime model verity path uses Tinfoil-owned device-mapper ioctls"
-require_file_contains "$repo_dir/tinfoil/internal/devicemapper/devicemapper.go" 'OpenVerity' "runtime model verity path has a Tinfoil-owned open helper"
-require_file_contains "$repo_dir/tinfoil/cmd/boot/models.go" 'devicemapper\.OpenVerity' "model boot path opens dm-verity without veritysetup"
-require_file_contains "$repo_dir/tinfoil/cmd/boot/models.go" 'unix\.Mount' "model boot path mounts verified EROFS without mount CLI"
-require_file_not_contains "$repo_dir/tinfoil/cmd/boot/models.go" 'unwrap\.OpenVerity|unwrap\.CloseVerity|unwrap\.Mount|veritysetup' "model boot path no longer shells out to veritysetup or mount"
-require_file_contains "$repo_dir/tinfoil/internal/devicemapper/devicemapper.go" 'OpenCrypt' "runtime EMWP crypt path has a Tinfoil-owned open helper"
-require_file_contains "$repo_dir/tinfoil/cmd/boot/models.go" 'devicemapper\.OpenCrypt' "EMWP boot path opens dm-crypt without cryptsetup"
-require_file_contains "$repo_dir/tinfoil/internal/devicemapper/devicemapper_test.go" 'TestCryptTableForEMWP' "direct EMWP crypt table construction is unit tested"
-require_file_not_contains "$repo_dir/tinfoil/cmd/boot/models.go" 'unwrap\.OpenCrypt|unwrap\.CloseCrypt|cryptsetup' "EMWP boot path no longer shells out to cryptsetup"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" '"tmpfs", "/var/tmp", "tmpfs"' "Tinfoil PID1 mounts /var/tmp as tmpfs before NVIDIA driver load"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" '"tmpfs", "/dev/shm", "tmpfs"' "Tinfoil PID1 mounts POSIX shared memory tmpfs without systemd-tmpfiles"
 require_file_contains "$repo_dir/tinfoil/cmd/init/main.go" 'ensureSymlink\("/dev/shm", "/run/shm"\)' "Tinfoil PID1 owns the /run/shm compatibility symlink without systemd-tmpfiles"

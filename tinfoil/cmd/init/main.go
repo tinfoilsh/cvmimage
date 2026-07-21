@@ -1245,6 +1245,12 @@ func cmdlineHasField(field string) bool {
 	return false
 }
 
+// bootDebugEnabled gates all debug-only behavior (diagnostics, debug shells,
+// disabled boot deadline) on the kernel cmdline. This is measurement-safe:
+// CVMs launch with SEV-SNP kernel-hashes=on, which binds the kernel, initrd,
+// and full cmdline into the launch measurement, so a CVM booted with
+// tinfoil-debug=on attests with a different measurement than production and
+// cannot pass production verification.
 func bootDebugEnabled() bool {
 	return cmdlineHasField("tinfoil-debug=on")
 }

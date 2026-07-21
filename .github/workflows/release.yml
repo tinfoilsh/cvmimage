@@ -43,7 +43,8 @@ jobs:
           echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
     
           sudo apt-get update
-          sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils
+          sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils \
+            build-essential dpkg-dev pkg-config curl
           sudo pipx install git+https://github.com/systemd/mkosi.git@54c625c380ef5500f17460981a3c67b109b6a847 #v25.3
           sudo pipx ensurepath
           mkdir -p packages mkosi.extra/usr/bin
@@ -54,16 +55,15 @@ jobs:
           go-version: '1.25'
           cache: false
 
-      - name: Build tinfoil binaries
+      - name: Build staged image inputs
         run: |
-          mkdir -p mkosi.extra/usr/bin
-          cd tinfoil
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
-          sha256sum ../mkosi.extra/usr/bin/tinfoil-boot \
-                    ../mkosi.extra/usr/bin/tinfoil-egress \
-                    ../mkosi.extra/usr/bin/tinfoil-shim
+          # Same staging steps as `make rebuild`: Go binaries (incl. the
+          # Tinfoil init stack), the no-udev libdevmapper override checked by
+          # mkosi.postinst.chroot, and the pinned static Docker bundle.
+          make go-binaries shims docker-static initrd-no-modules
+          sha256sum mkosi.extra/usr/bin/tinfoil-* \
+                    mkosi.images/initrd/mkosi.extra/usr/bin/tinfoil-initrd \
+                    mkosi.extra/usr/lib/x86_64-linux-gnu/libdevmapper.so.1.02.1
 
       # The CUDA repo's nvattest links libxml2.so.2, but resolute ships
       # libxml2.so.16, so we build from source. The builder image digest and

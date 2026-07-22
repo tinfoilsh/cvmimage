@@ -30,7 +30,7 @@ docker build \
     --build-arg "RUNTIME_BUILDER_RECIPE_SHA256=$recipe_sha256" \
     --file "$repo_dir/builder/Dockerfile" \
     --tag "$builder_image" \
-    "$repo_dir"
+    "$repo_dir/builder"
 
 actual_base="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.base" }}' "$builder_image")"
 actual_snapshot="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.snapshot" }}' "$builder_image")"

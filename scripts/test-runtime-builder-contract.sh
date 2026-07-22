@@ -46,6 +46,11 @@ export PATH="$scratch/bin:$PATH"
 "$repo_dir/scripts/build-runtime-builder.sh" >/dev/null
 grep -Fq "APT_SNAPSHOT_DATE=$snapshot" "$log"
 grep -Fq "cvmimage-runtime-builder:$builder_tag" "$log"
+grep -Fq "$repo_dir/builder" "$log"
+if grep -Fq "$repo_dir " "$log"; then
+    echo 'runtime builder uses the whole repository as Docker context' >&2
+    exit 1
+fi
 
 run_nvidia() {
     local requested=$1

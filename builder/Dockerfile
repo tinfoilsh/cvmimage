@@ -76,7 +76,7 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-COPY builder/build-initrd.sh /usr/local/bin/build-initrd
+COPY build-initrd.sh /usr/local/bin/build-initrd
 
 WORKDIR /workspace
 

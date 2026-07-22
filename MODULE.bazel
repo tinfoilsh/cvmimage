@@ -1,0 +1,14 @@
+module(
+    name = "cvmimage",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_distroless", version = "0.8.0")
+
+apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
+apt.install(
+    name = "ubuntu_runtime",
+    lock = "//image:runtime-packages.lock.json",
+    manifest = "//image:runtime-packages.yaml",
+)
+use_repo(apt, "ubuntu_runtime")

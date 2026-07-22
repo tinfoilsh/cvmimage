@@ -1,0 +1,23 @@
+version: 1
+sources:
+  - channel: resolute main restricted universe multiverse
+    url: https://snapshot.ubuntu.com/ubuntu/20260721T000000Z
+  - channel: resolute-updates main restricted universe multiverse
+    url: https://snapshot.ubuntu.com/ubuntu/20260721T000000Z
+  - channel: resolute-security main restricted universe multiverse
+    url: https://snapshot.ubuntu.com/ubuntu/20260721T000000Z
+archs:
+  - amd64
+packages:
+  - "ca-certificates (= 20260223)"
+  - "iproute2 (= 6.19.0-1ubuntu1)"
+  - "nftables (= 1.1.6-1)"
+  - "libc6 (= 2.43-2ubuntu2)"
+  - "libcap2 (= 1:2.75-10ubuntu2)"
+  - "libxml2-16 (= 2.15.2+dfsg-0.1)"
+  - "libstdc++6 (= 16-20260322-1ubuntu1)"
+  - "libgcc-s1 (= 16-20260322-1ubuntu1)"
+  - "zlib1g (= 1:1.3.dfsg+really1.3.1-1ubuntu3)"
+  - "libtirpc3t64 (= 1.3.7-0.1)"
+  - "libtirpc-common (= 1.3.7-0.1)"
+  - "libseccomp2 (= 2.6.0-2ubuntu5)"

@@ -2,6 +2,7 @@ all: build
 
 TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
+BAZEL ?= bazel
 
 NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
@@ -14,7 +15,8 @@ NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0
 	builder-initrd additive-initrd verify-additive-initrd \
 	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
-	verify-final-rootfs test-final-rootfs-verifier
+	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
+	verify-runtime-sources update-runtime-locks
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -111,6 +113,18 @@ verify-final-rootfs:
 
 test-final-rootfs-verifier:
 	./scripts/test-final-rootfs-verifier.sh
+
+test-runtime-locks:
+	./scripts/test-runtime-source-lock.sh
+	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-test test \
+		//image:runtime-package-lock-test //scripts:runtime-source-lock-test
+	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-graph mod graph >/dev/null
+
+verify-runtime-sources:
+	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check
+
+update-runtime-locks:
+	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh
 
 # First build populates mkosi.cache; later builds reuse it for fast iteration.
 rebuild: go-binaries

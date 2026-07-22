@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 022
+
+artifact_dir="$BUILDDIR/output/artifacts"
+binary="$artifact_dir/tinfoil-initrd"
+manifest="$BUILDDIR/output/artifacts.tsv"
+go_bin=/usr/lib/go-1.25/bin/go
+
+rm -rf "$artifact_dir"
+mkdir -p "$artifact_dir"
+
+cd "$SRCDIR/tinfoil"
+"$go_bin" build \
+    -trimpath \
+    -buildvcs=false \
+    -mod=readonly \
+    -ldflags='-s -w -buildid=' \
+    -o "$binary" \
+    ./cmd/initrd
+
+chmod 0755 "$binary"
+touch -d @0 "$binary"
+
+binary_sha256="$(sha256sum "$binary" | awk '{print $1}')"
+go_version="$("$go_bin" version | tr '\t\n' '  ')"
+
+{
+    printf '%s\n' '# tinfoil artifact manifest v1'
+    printf '%s\n' '# name<TAB>path<TAB>sha256<TAB>mode<TAB>provenance'
+    printf 'tinfoil-initrd\tartifacts/tinfoil-initrd\t%s\t0755\t%s;CGO_ENABLED=0;go-flags=-trimpath,-buildvcs=false,-mod=readonly;SOURCE_DATE_EPOCH=0\n' \
+        "$binary_sha256" "$go_version"
+} > "$manifest"
+touch -d @0 "$manifest"
+
+printf 'builder: tinfoil-initrd sha256=%s modules=built-in\n' "$binary_sha256"

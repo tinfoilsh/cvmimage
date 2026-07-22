@@ -1,6 +1,6 @@
 all: build
 
-MKOSI = sudo env PATH="/root/.local/bin:$$PATH" mkosi
+MKOSI ?= sudo env PATH="$$PATH" mkosi
 
 NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
@@ -9,7 +9,9 @@ NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
 # truth for the digest; rotate via `docker buildx imagetools inspect ubuntu:26.04`.
 NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4
 
-.PHONY: all build rebuild clean deepclean hash nvattest go-binaries
+.PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
+	builder-initrd additive-initrd verify-additive-initrd \
+	test-additive-initrd reproducible-additive-initrd
 
 # tinfoilcvm.hash is written as an artifact of `build`; read it from there if
 # present, otherwise extract the dm-verity roothash from the UKI's .cmdline
@@ -26,6 +28,7 @@ clean:
 	sudo rm -rf tinfoilcvm.*
 	sudo rm -rf initrd
 	sudo rm -rf initrd.cpio.zst
+	sudo rm -rf build/stage build/artifacts
 
 deepclean:
 	$(MKOSI) clean
@@ -38,6 +41,33 @@ go-binaries:
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-container-status ./cmd/container-status
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
+
+builder-initrd:
+	@version="$$( $(MKOSI) --version)"; \
+	if [ "$$version" != "mkosi 26" ]; then \
+	    echo "builder-initrd requires mkosi 26, found: $${version:-unknown}" >&2; \
+	    exit 1; \
+	fi
+	mkdir -p build/builder-work build/builder-cache build/builder-pkgcache build/builder-workspace
+	$(MKOSI) -C builder --force build
+	sudo chown -R "$$(id -u):$$(id -g)" build/builder-work/output
+
+additive-initrd: builder-initrd
+	sudo env PATH="$$PATH" TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
+	sudo chown "$$(id -u):$$(id -g)" initrd.cpio.zst
+
+verify-additive-initrd:
+	./scripts/initrd_manifest.py verify-archive \
+		--manifest image/initrd/manifest.tsv \
+		--artifacts build/builder-work/output/artifacts.tsv \
+		--artifact-lock image/manifests/artifacts.lock.tsv \
+		--archive initrd.cpio.zst
+
+test-additive-initrd: verify-additive-initrd
+	./scripts/test-additive-initrd.sh
+
+reproducible-additive-initrd:
+	./scripts/reproduce-additive-initrd.sh
 
 # First build populates mkosi.cache; later builds reuse it for fast iteration.
 rebuild: go-binaries

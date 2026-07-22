@@ -46,6 +46,7 @@ func (e Exit) Err() error {
 type backendProcess interface {
 	pid() int
 	signal(syscall.Signal) error
+	groupAlive() (bool, error)
 	release() error
 }
 
@@ -57,10 +58,9 @@ type processBackend interface {
 // Process is a child whose status is owned by Manager. Wait may be called by
 // multiple observers; all receive the same result.
 type Process struct {
-	manager *Manager
-	child   backendProcess
-	done    chan struct{}
-	exit    Exit
+	child backendProcess
+	done  chan struct{}
+	exit  Exit
 }
 
 func (p *Process) PID() int              { return p.child.pid() }
@@ -81,16 +81,10 @@ func (p *Process) complete(exit Exit) {
 }
 
 func (p *Process) Signal(sig syscall.Signal) error {
-	reply := make(chan error, 1)
-	p.manager.ops <- func(children map[int]*Process) {
-		if current := children[p.PID()]; current != p {
-			reply <- os.ErrProcessDone
-		} else {
-			reply <- p.child.signal(sig)
-		}
-	}
-	return <-reply
+	return p.child.signal(sig)
 }
+
+func (p *Process) groupAlive() (bool, error) { return p.child.groupAlive() }
 
 type startResponse struct {
 	process *Process
@@ -141,7 +135,7 @@ func (m *Manager) Start(command Command) (*Process, error) {
 			reply <- startResponse{err: err}
 			return
 		}
-		process := &Process{manager: m, child: child, done: make(chan struct{})}
+		process := &Process{child: child, done: make(chan struct{})}
 		children[child.pid()] = process
 		reply <- startResponse{process: process}
 	}
@@ -230,6 +224,16 @@ func (p osChild) signal(sig syscall.Signal) error {
 	}
 	return err
 }
+func (p osChild) groupAlive() (bool, error) {
+	err := syscall.Kill(-p.process.Pid, 0)
+	if errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return true, nil
+	}
+	return err == nil, err
+}
 func (p osChild) release() error { return p.process.Release() }
 
 // State reports whether a managed service is ready. A required service is
@@ -273,6 +277,7 @@ type Config struct {
 type serviceRecord struct {
 	spec    Service
 	process *Process
+	groups  map[*Process]struct{}
 	started time.Time
 	delay   time.Duration
 	done    chan struct{}
@@ -298,8 +303,11 @@ func New(parent context.Context, manager *Manager, config Config) *Supervisor {
 	if config.RestartBase <= 0 {
 		config.RestartBase = 2 * time.Second
 	}
-	if config.RestartMax < config.RestartBase {
+	if config.RestartMax <= 0 {
 		config.RestartMax = 30 * time.Second
+	}
+	if config.RestartMax < config.RestartBase {
+		config.RestartMax = config.RestartBase
 	}
 	if config.StableAfter <= 0 {
 		config.StableAfter = time.Minute
@@ -316,7 +324,10 @@ func New(parent context.Context, manager *Manager, config Config) *Supervisor {
 }
 
 func (s *Supervisor) Start(ctx context.Context, service Service) error {
-	record := &serviceRecord{spec: service, delay: s.base, done: make(chan struct{})}
+	record := &serviceRecord{
+		spec: service, groups: map[*Process]struct{}{},
+		delay: s.base, done: make(chan struct{}),
+	}
 	s.mu.Lock()
 	if s.draining {
 		s.mu.Unlock()
@@ -328,14 +339,19 @@ func (s *Supervisor) Start(ctx context.Context, service Service) error {
 	}
 	s.services[service.Name] = record
 	process, err := s.startLocked(record)
+	if err != nil {
+		s.retireLocked(record)
+	}
 	s.mu.Unlock()
 	if err != nil {
 		s.emit(State{Name: service.Name, Required: service.Required, Err: err})
 		return err
 	}
 	if err := s.ready(ctx, record, process); err != nil {
-		s.emit(State{Name: service.Name, Required: service.Required, Err: err})
-		return fmt.Errorf("%s readiness: %w", service.Name, err)
+		cleanupErr := s.stopInitial(record, process)
+		readinessErr := fmt.Errorf("%s readiness: %w", service.Name, errors.Join(err, cleanupErr))
+		s.emit(State{Name: service.Name, Required: service.Required, Err: readinessErr})
+		return readinessErr
 	}
 	s.emit(State{Name: service.Name, Required: service.Required, Ready: true})
 	go func() {
@@ -353,8 +369,30 @@ func (s *Supervisor) startLocked(record *serviceRecord) (*Process, error) {
 		return nil, err
 	}
 	record.process = process
+	record.groups[process] = struct{}{}
 	record.started = s.clock.Now()
 	return process, nil
+}
+
+func (s *Supervisor) stopInitial(record *serviceRecord, process *Process) error {
+	var errs []error
+	if err := process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		errs = append(errs, err)
+	}
+	if _, err := process.Wait(context.Background()); err != nil {
+		errs = append(errs, err)
+	}
+	s.mu.Lock()
+	s.retireLocked(record)
+	s.mu.Unlock()
+	return errors.Join(errs...)
+}
+
+func (s *Supervisor) retireLocked(record *serviceRecord) {
+	if s.services[record.spec.Name] == record {
+		delete(s.services, record.spec.Name)
+	}
+	close(record.done)
 }
 
 func (s *Supervisor) ready(ctx context.Context, record *serviceRecord, process *Process) error {
@@ -381,6 +419,10 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 		s.mu.Lock()
 		if record.process == process {
 			record.process = nil
+		}
+		alive, aliveErr := process.groupAlive()
+		if aliveErr == nil && !alive {
+			delete(record.groups, process)
 		}
 		draining := s.draining
 		runtime := s.clock.Now().Sub(record.started)
@@ -423,6 +465,9 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 				s.mu.Lock()
 				if record.process == next {
 					record.process = nil
+				}
+				if alive, err := next.groupAlive(); err == nil && !alive {
+					delete(record.groups, next)
 				}
 				if s.clock.Now().Sub(record.started) >= s.stable {
 					record.delay = s.base
@@ -482,9 +527,15 @@ func (s *Supervisor) Drain(groups [][]string, termGrace, killGrace time.Duration
 func (s *Supervisor) drainGroup(names []string, termGrace, killGrace time.Duration) error {
 	s.mu.Lock()
 	processes := make([]*Process, 0, len(names))
+	seen := map[*Process]bool{}
 	for _, name := range names {
-		if record := s.services[name]; record != nil && record.process != nil {
-			processes = append(processes, record.process)
+		if record := s.services[name]; record != nil {
+			for process := range record.groups {
+				if !seen[process] {
+					seen[process] = true
+					processes = append(processes, process)
+				}
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -493,27 +544,37 @@ func (s *Supervisor) drainGroup(names []string, termGrace, killGrace time.Durati
 	}
 
 	var errs []error
+	alive := processes[:0]
 	for _, process := range processes {
-		if err := process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := process.Signal(syscall.SIGTERM); errors.Is(err, os.ErrProcessDone) {
+			continue
+		} else if err != nil {
 			errs = append(errs, err)
 		}
+		alive = append(alive, process)
 	}
-	alive := waitProcesses(processes, s.clock.After(termGrace))
+	alive, waitErrs := waitProcessGroups(alive, s.clock.After(termGrace))
+	errs = append(errs, waitErrs...)
+	killed := alive[:0]
 	for _, process := range alive {
-		if err := process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := process.Signal(syscall.SIGKILL); errors.Is(err, os.ErrProcessDone) {
+			continue
+		} else if err != nil {
 			errs = append(errs, err)
 		}
+		killed = append(killed, process)
 	}
-	alive = waitProcesses(alive, s.clock.After(killGrace))
+	alive, waitErrs = waitProcessGroups(killed, s.clock.After(killGrace))
+	errs = append(errs, waitErrs...)
 	for _, process := range alive {
 		errs = append(errs, fmt.Errorf("pid %d did not exit after SIGKILL", process.PID()))
 	}
 	return errors.Join(errs...)
 }
 
-func waitProcesses(processes []*Process, timeout <-chan time.Time) []*Process {
+func waitProcessGroups(processes []*Process, timeout <-chan time.Time) ([]*Process, []error) {
 	if len(processes) == 0 {
-		return nil
+		return nil, nil
 	}
 	exited := make(chan *Process, len(processes))
 	alive := make(map[*Process]bool, len(processes))
@@ -527,14 +588,35 @@ func waitProcesses(processes []*Process, timeout <-chan time.Time) []*Process {
 	for len(alive) > 0 {
 		select {
 		case process := <-exited:
-			delete(alive, process)
-		case <-timeout:
-			result := make([]*Process, 0, len(alive))
-			for process := range alive {
-				result = append(result, process)
+			groupAlive, err := process.groupAlive()
+			if err != nil {
+				return processSlice(alive), []error{err}
 			}
-			return result
+			if !groupAlive {
+				delete(alive, process)
+			}
+		case <-timeout:
+			var errs []error
+			for process := range alive {
+				groupAlive, err := process.groupAlive()
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				if !groupAlive {
+					delete(alive, process)
+				}
+			}
+			return processSlice(alive), errs
 		}
 	}
-	return nil
+	return nil, nil
+}
+
+func processSlice(processes map[*Process]bool) []*Process {
+	result := make([]*Process, 0, len(processes))
+	for process := range processes {
+		result = append(result, process)
+	}
+	return result
 }

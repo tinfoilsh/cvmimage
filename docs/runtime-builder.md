@@ -8,8 +8,11 @@ publishes only explicitly named output files.
 The Go producer emits exactly these files under `artifacts/`, with no command
 discovery: `tinfoil-boot`, `tinfoil-container-status`, `tinfoil-egress`,
 `tinfoil-init`, `tinfoil-initrd`, and `tinfoil-shim`. It uses the fixed Go
-1.25.7 toolchain with `GOTOOLCHAIN=local`, disabled CGO, read-only modules,
-trimmed paths, omitted VCS metadata, and an empty build ID.
+1.25.7 toolchain with `GOTOOLCHAIN=local`, read-only modules, trimmed paths,
+omitted VCS metadata, and empty Go build IDs. `tinfoil-initrd` disables CGO and
+is statically linked. The five measured runtime commands enable CGO and use
+the pinned GCC/binutils toolchain in external-link mode with the ELF build ID
+disabled.
 
 The builder is not a runtime filesystem source. Distribution packages and
 their maintainer scripts may run inside it, and its package database, temporary

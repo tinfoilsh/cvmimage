@@ -1,11 +1,171 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	shimconfig "tinfoil/internal/config"
 )
+
+type fakeEgressPopulator struct {
+	populate func(context.Context) error
+}
+
+func (f fakeEgressPopulator) Populate(ctx context.Context) error {
+	return f.populate(ctx)
+}
+
+func TestFirewall_AllowlistPopulationFollowsNftOnce(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+		"metrics": {Egress: "allowlist", Allow: []string{"metrics.tinfoil.sh"}},
+	}}
+	var events []string
+	err := setupContainerNetworkFirewallWith(
+		context.Background(),
+		cfg,
+		func(string) error {
+			events = append(events, "nft")
+			return nil
+		},
+		func() (egressPopulator, error) {
+			events = append(events, "load")
+			return fakeEgressPopulator{populate: func(context.Context) error {
+				events = append(events, "populate")
+				return nil
+			}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"nft", "load", "populate"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("effects = %v, want %v", events, want)
+	}
+}
+
+func TestFirewall_NoAllowlistSkipsPopulation(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"ipc": {Egress: "closed"},
+		"web": {Egress: "open"},
+	}}
+	loaded := false
+	err := setupContainerNetworkFirewallWith(
+		context.Background(),
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			loaded = true
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded {
+		t.Fatal("loaded egress engine without an allowlist network")
+	}
+}
+
+func TestFirewall_PopulationFailureAbortsSetup(t *testing.T) {
+	wantErr := errors.New("resolution failed")
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	populateCalls := 0
+	err := setupContainerNetworkFirewallWith(
+		context.Background(),
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func(context.Context) error {
+				populateCalls++
+				return wantErr
+			}}, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("setup error = %v, want %v", err, wantErr)
+	}
+	if populateCalls != 1 {
+		t.Fatalf("Populate calls = %d, want 1", populateCalls)
+	}
+}
+
+func TestFirewall_PopulationHasFixedBootDeadline(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	err := setupContainerNetworkFirewallWith(
+		context.Background(),
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func(ctx context.Context) error {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatal("population context has no deadline")
+				}
+				remaining := time.Until(deadline)
+				if remaining > egressInitialPopulationTimeout || remaining < egressInitialPopulationTimeout-time.Second {
+					t.Fatalf("population deadline = %s, want %s", remaining, egressInitialPopulationTimeout)
+				}
+				return nil
+			}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFirewall_PopulationInheritsBootCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	err := setupContainerNetworkFirewallWith(
+		ctx,
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}}, nil
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("setup error = %v, want boot cancellation", err)
+	}
+}
+
+func TestFirewall_PopulationHonorsEarlierBootDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	err := setupContainerNetworkFirewallWith(
+		ctx,
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}}, nil
+		},
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("setup error = %v, want boot deadline", err)
+	}
+}
 
 // renderFirewallScript returns the nft script setupContainerNetworkFirewall
 // would commit, minus the runNft call.

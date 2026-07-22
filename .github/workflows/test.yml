@@ -50,6 +50,9 @@ jobs:
       - name: Test direct roothash contract
         run: ./scripts/test-roothash-artifacts.sh
 
+      - name: Test deterministic named initrd packaging
+        run: make test-additive-initrd
+
       - name: Test fixed rootfs policy
         run: make test-rootfs-policy
 
@@ -73,3 +76,6 @@ jobs:
 
       - name: Test nvattest artifact safety
         run: make test-nvattest-artifacts
+
+      - name: Test NVIDIA named module contract
+        run: make test-nvidia-module-producer

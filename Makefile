@@ -8,19 +8,17 @@ NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
                 packages/libnvat_$(NVATTEST_VERSION)_amd64.deb
 NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
-                           build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2 \
-                           build/rootfs-artifacts/nvattest/.stamp
-# Pinned ubuntu:26.04 (resolute) builder image. This is the single source of
-# truth for the digest; rotate the committed file after inspecting the image.
-override NVATTEST_BUILDER := $(file <scripts/nvattest-builder-image.txt)
+                           build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
-	builder-initrd additive-initrd verify-additive-initrd \
+	runtime-builder builder-initrd additive-initrd verify-additive-initrd \
 	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
 	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
 	verify-runtime-sources update-runtime-locks test-runtime-archives \
-	test-nvattest-artifacts reproducible-nvattest
+	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
+	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
+	reproducible-runtime-artifacts
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -66,38 +64,40 @@ go-binaries:
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
 
-builder-initrd:
-	@source_status="$$(git status --porcelain=v1 --untracked-files=all --ignored=matching -- tinfoil)"; \
-	if [ -n "$$source_status" ]; then \
-	    printf 'builder-initrd: refusing uncommitted or ignored tinfoil source:\n%s\n' "$$source_status" >&2; \
-	    exit 1; \
-	fi; \
-	source_revision="tinfoil-tree:$$(git rev-parse HEAD:tinfoil)"; \
-	version="$$( $(MKOSI) --version)"; \
-	if [ "$$version" != "mkosi 26" ]; then \
-	    echo "builder-initrd requires mkosi 26, found: $${version:-unknown}" >&2; \
-	    exit 1; \
-	fi; \
-	mkdir -p build/builder-work build/builder-cache build/builder-pkgcache build/builder-workspace; \
-	$(MKOSI) -C builder --environment=TINFOIL_SOURCE_REVISION="$$source_revision" --force build
-	sudo env PATH="$(TRUSTED_PATH)" chown -R "$$(id -u):$$(id -g)" build/builder-work/output
+runtime-builder:
+	./scripts/build-runtime-builder.sh
+
+builder-initrd: runtime-builder
+	./scripts/run-runtime-builder.sh initrd
+
+custom-kernel-artifacts: runtime-builder
+	./scripts/run-runtime-builder.sh kernel
+
+nvidia-module-artifacts: custom-kernel-artifacts
+	./scripts/run-runtime-builder.sh nvidia
+
+test-nvidia-module-producer:
+	./scripts/test-nvidia-module-producer.sh
 
 additive-initrd: builder-initrd
-	sudo env PATH="$(TRUSTED_PATH)" TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
-	sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" initrd.cpio.zst
+	TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
 
 verify-additive-initrd: additive-initrd
 	./scripts/initrd_manifest.py verify-archive \
 		--manifest image/initrd/manifest.tsv \
-		--artifacts build/builder-work/output/artifacts.tsv \
-		--artifact-lock image/manifests/artifacts.lock.tsv \
+		--binary build/builder-work/output/artifacts/tinfoil-initrd \
 		--archive initrd.cpio.zst
 
-test-additive-initrd: verify-additive-initrd
+test-additive-initrd:
 	./scripts/test-additive-initrd.sh
 
 reproducible-additive-initrd:
 	./scripts/reproduce-additive-initrd.sh
+
+reproducible-nvidia-modules:
+	./scripts/reproduce-nvidia-modules.sh
+
+reproducible-runtime-artifacts: reproducible-additive-initrd reproducible-nvattest reproducible-nvidia-modules
 
 test-rootfs-policy:
 	./scripts/test-rootfs-policy-adversarial.sh
@@ -176,17 +176,14 @@ nvattest: $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS)
 # them is present.
 $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS) &: \
 		build-nvattest.sh \
+		builder/Dockerfile \
 		scripts/nvattest-artifacts.sh \
 		scripts/nvattest-regorus-Cargo.lock \
-		scripts/nvattest-builder-image.txt
-	docker run --rm \
-		-v "$(CURDIR)":/workspace -w /workspace \
-		-v nvattest-apt-cache:/var/cache/apt \
-		-e DEBIAN_FRONTEND=noninteractive \
-		-e HOST_UID="$${SUDO_UID:-$$(id -u)}" \
-		-e HOST_GID="$${SUDO_GID:-$$(id -g)}" \
-		$(NVATTEST_BUILDER) \
-		bash -c './build-nvattest.sh'
+		scripts/build-runtime-builder.sh \
+		scripts/run-runtime-builder.sh \
+		scripts/runtime-builder-base-image.txt
+	./scripts/build-runtime-builder.sh
+	./scripts/run-runtime-builder.sh nvattest
 
 test-nvattest-artifacts:
 	./scripts/test-nvattest-artifacts.sh

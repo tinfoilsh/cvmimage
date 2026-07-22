@@ -9,7 +9,8 @@ nvidia_package_version="${TINFOIL_NVIDIA_OPEN_PACKAGE_VERSION:-595.71.05-1ubuntu
 nvidia_repo_url="${TINFOIL_NVIDIA_OPEN_REPO_URL:-https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64}"
 kernel_source_version="${TINFOIL_KERNEL_SOURCE_VERSION:-7.0.0}"
 kernel_version_override="${TINFOIL_KERNEL_VERSION_OVERRIDE:-$kernel_source_version}"
-kernel_release="${TINFOIL_KERNEL_RELEASE:-$(tr -d '\n' < "$kernel_dir/out/kernel.release")}"
+kernel_out_dir="${TINFOIL_KERNEL_OUT_DIR:-$kernel_dir/out}"
+kernel_release="${TINFOIL_KERNEL_RELEASE:-$(tr -d '\n' < "$kernel_out_dir/kernel.release")}"
 kernel_source_dir="${TINFOIL_KERNEL_SOURCE_DIR:-$kernel_dir/build/linux-source-$kernel_source_version}"
 scratch_dir="${TINFOIL_NVIDIA_OPEN_BUILD_DIR:-$kernel_dir/build/nvidia-open-$nvidia_version}"
 stage_dir="${TINFOIL_NVIDIA_OPEN_STAGE_DIR:-$repo_dir/image/rootfs-overlay/usr/lib/modules/$kernel_release/updates/dkms}"
@@ -55,7 +56,7 @@ require_file() {
     fi
 }
 
-require_file "$kernel_dir/out/kernel.release" "custom kernel release"
+require_file "$kernel_out_dir/kernel.release" "custom kernel release"
 require_file "$kernel_source_dir/.config" "custom kernel config"
 require_file "$kernel_source_dir/arch/x86/boot/bzImage" "custom kernel image"
 require_file "$kernel_source_dir/vmlinux.symvers" "custom kernel symbol versions"
@@ -102,20 +103,18 @@ if ! sudo env \
     exit 1
 fi
 
-install -d -m 0755 "$stage_dir"
-rm -f "$stage_dir"/nvidia*.ko "$stage_dir"/nvidia*.ko.zst
 for module in "${required_modules[@]}"; do
-    install -m 0644 "$nvidia_source_dir/$module" "$stage_dir/$module"
-    case "$(modinfo -F vermagic "$stage_dir/$module")" in
+    require_file "$nvidia_source_dir/$module" "built NVIDIA module"
+    case "$(modinfo -F vermagic "$nvidia_source_dir/$module")" in
         "$kernel_release "*) ;;
         *)
-            echo "module $module has unexpected vermagic: $(modinfo -F vermagic "$stage_dir/$module")" >&2
+            echo "module $module has unexpected vermagic: $(modinfo -F vermagic "$nvidia_source_dir/$module")" >&2
             exit 1
             ;;
     esac
 done
 
-module_versions="$(modprobe --dump-modversions "$stage_dir/nvidia.ko")"
+module_versions="$(modprobe --dump-modversions "$nvidia_source_dir/nvidia.ko")"
 for symbol in pci_iounmap iterate_fd init_pid_ns pci_restore_state; do
     expected="$(awk -v symbol="$symbol" '$2 == symbol { print $1; exit }' "$kernel_source_dir/Module.symvers")"
     actual="$(awk -v symbol="$symbol" '$2 == symbol { print $1; exit }' <<<"$module_versions")"
@@ -125,7 +124,13 @@ for symbol in pci_iounmap iterate_fd init_pid_ns pci_restore_state; do
     fi
 done
 
-out_dir="$kernel_dir/out/nvidia-open"
+install -d -m 0755 "$stage_dir"
+rm -f "$stage_dir"/nvidia*.ko "$stage_dir"/nvidia*.ko.zst
+for module in "${required_modules[@]}"; do
+    install -m 0644 "$nvidia_source_dir/$module" "$stage_dir/$module"
+done
+
+out_dir="$kernel_out_dir/nvidia-open"
 rm -rf "$out_dir"
 install -d -m 0755 "$out_dir"
 sha256sum "$stage_dir"/nvidia*.ko > "$out_dir/checksums.sha256"

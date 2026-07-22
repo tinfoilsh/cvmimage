@@ -4,12 +4,12 @@ set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 kernel_dir="$repo_dir/kernel"
 
-kernel_source_version="${TINFOIL_KERNEL_SOURCE_VERSION:-7.0.0}"
-kernel_package_version="${TINFOIL_KERNEL_PACKAGE_VERSION:-7.0.0-28.28}"
-kernel_source_deb_sha256="${TINFOIL_KERNEL_SOURCE_DEB_SHA256:-dd5994b199a1cb06b1f336bb086c5c23a9258fdcfdcbb7dcc8d3afa9a5d92e13}"
-base_release="${TINFOIL_KERNEL_BASE_RELEASE:-7.0.0-28-generic}"
-kernel_version_override="${TINFOIL_KERNEL_VERSION_OVERRIDE:-$kernel_source_version}"
-defconfig="${TINFOIL_KERNEL_DEFCONFIG:-$kernel_dir/tinfoil-cvm-7.0.defconfig}"
+kernel_source_version="7.0.0"
+kernel_package_version="7.0.0-28.28"
+kernel_source_deb_sha256="dd5994b199a1cb06b1f336bb086c5c23a9258fdcfdcbb7dcc8d3afa9a5d92e13"
+base_release="7.0.0-28-generic"
+kernel_version_override="$kernel_source_version"
+defconfig="$kernel_dir/tinfoil-cvm-7.0.defconfig"
 
 build_root="${TINFOIL_KERNEL_BUILD_ROOT:-$kernel_dir/build}"
 out_dir="${TINFOIL_KERNEL_OUT_DIR:-$kernel_dir/out}"
@@ -45,7 +45,7 @@ extract_pinned_source_tarball() {
         (
             cd "$build_root/debs"
             apt-get download "linux-source-${kernel_source_version}=${kernel_package_version}"
-        )
+        ) >&2
         source_deb="$build_root/debs/$deb_name"
     fi
     if [ ! -f "$source_deb" ]; then
@@ -85,15 +85,7 @@ if [ ! -f "$defconfig" ]; then
 fi
 
 mkdir -p "$build_root" "$out_dir"
-if [ -n "${TINFOIL_KERNEL_SOURCE_TARBALL:-}" ]; then
-    source_tarball="$TINFOIL_KERNEL_SOURCE_TARBALL"
-    if [ ! -f "$source_tarball" ]; then
-        echo "missing kernel source tarball: $source_tarball" >&2
-        exit 1
-    fi
-else
-    source_tarball="$(extract_pinned_source_tarball)"
-fi
+source_tarball="$(extract_pinned_source_tarball)"
 
 rm -rf "$source_dir"
 tar -xaf "$source_tarball" -C "$build_root"
@@ -111,7 +103,8 @@ find "$kernel_dir/config.d" -maxdepth 1 -type f -name '*.config' -print | sort |
     cd "$source_dir"
     install -m 0644 "$defconfig" arch/x86/configs/tinfoil_cvm_defconfig
     make "${make_version_args[@]}" tinfoil_cvm_defconfig
-    mapfile -d '' fragments < <(find "$kernel_dir/config.d" -maxdepth 1 -type f -name '*.config' -print0 | sort -z)
+    shopt -s nullglob
+    fragments=("$kernel_dir"/config.d/*.config)
     if [ "${#fragments[@]}" -eq 0 ]; then
         echo "no kernel policy fragments found under $kernel_dir/config.d" >&2
         exit 1
@@ -131,35 +124,30 @@ make -C "$source_dir" "${make_version_args[@]}" \
 make -C "$source_dir" "${make_version_args[@]}" modules_prepare
 
 kernel_release="$(make -s -C "$source_dir" "${make_version_args[@]}" kernelrelease)"
-if [ "${TINFOIL_KERNEL_ALLOW_RELEASE_MISMATCH:-0}" != 1 ] && [ "$kernel_release" != "$base_release" ]; then
+if [ "$kernel_release" != "$base_release" ]; then
     cat >&2 <<EOF
 kernel release mismatch
   built:    $kernel_release
   expected: $base_release
 
-The rootfs runtime loader keys bounded module paths off /proc/sys/kernel/osrelease.
-Keep the custom kernel release aligned with the rootfs module tree during the
-NVIDIA-module transition, or set TINFOIL_KERNEL_ALLOW_RELEASE_MISMATCH=1 for a
-deliberate experiment.
+Keep the custom kernel release aligned with the external NVIDIA module tree.
 EOF
     exit 1
 fi
 install -m 0644 "$source_dir/arch/x86/boot/bzImage" "$out_dir/tinfoil-custom.vmlinuz"
 install -m 0644 "$source_dir/.config" "$out_dir/config"
 printf '%s\n' "$kernel_release" > "$out_dir/kernel.release"
-if [ -f "$source_dir/vmlinux.symvers" ]; then
-    install -m 0644 "$source_dir/vmlinux.symvers" "$source_dir/Module.symvers"
-    install -m 0644 "$source_dir/Module.symvers" "$out_dir/Module.symvers"
-else
-    echo "warning: $source_dir/vmlinux.symvers was not generated" >&2
-    : > "$out_dir/Module.symvers"
+if [ ! -s "$source_dir/vmlinux.symvers" ]; then
+    echo "missing required kernel symbol versions: $source_dir/vmlinux.symvers" >&2
+    exit 1
 fi
-if [ -f "$source_dir/modules.builtin" ]; then
-    install -m 0644 "$source_dir/modules.builtin" "$out_dir/modules.builtin"
-else
-    echo "warning: $source_dir/modules.builtin was not generated" >&2
-    : > "$out_dir/modules.builtin"
+install -m 0644 "$source_dir/vmlinux.symvers" "$source_dir/Module.symvers"
+install -m 0644 "$source_dir/Module.symvers" "$out_dir/Module.symvers"
+if [ ! -s "$source_dir/modules.builtin" ]; then
+    echo "missing required built-in module inventory: $source_dir/modules.builtin" >&2
+    exit 1
 fi
+install -m 0644 "$source_dir/modules.builtin" "$out_dir/modules.builtin"
 
 sha256sum "$out_dir/tinfoil-custom.vmlinuz" "$out_dir/config" "$out_dir/modules.builtin" "$out_dir/Module.symvers" > "$out_dir/checksums.sha256"
 

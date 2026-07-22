@@ -64,6 +64,17 @@ require_disabled() {
     esac
 }
 
+require_exact() {
+    local line="$1"
+    local label="$2"
+    if grep -Fqx -- "$line" "$config"; then
+        echo "OK: $label ($line)"
+    else
+        echo "FAIL: $label (missing exact setting: $line)" >&2
+        failures=$((failures + 1))
+    fi
+}
+
 require_no_in_tree_modules() {
     local modules
     modules="$(grep -E '^CONFIG_[A-Za-z0-9_]+=m$' "$config" || true)"
@@ -88,6 +99,9 @@ require_disabled CONFIG_MODULE_UNLOAD_TAINT_TRACKING "module unload taint tracki
 require_disabled CONFIG_SECURITY_LOCKDOWN_LSM "unused inactive lockdown LSM is disabled"
 require_disabled CONFIG_MODULE_SIG "unused random module-signing key generation is disabled"
 require_disabled CONFIG_MICROCODE_LATE_LOADING "runtime rootfs CPU microcode loading is disabled"
+require_exact 'CONFIG_SYSTEM_TRUSTED_KEYS=""' "no extra trusted keys are compiled in"
+require_exact 'CONFIG_SYSTEM_REVOCATION_KEYS=""' "no extra revocation keys are compiled in"
+require_exact 'CONFIG_LSM="landlock,yama"' "only selected production LSMs are enabled"
 
 for key in \
     CONFIG_SUSPEND \
@@ -105,6 +119,10 @@ for key in \
     CONFIG_DYNAMIC_DEBUG \
     CONFIG_COREDUMP \
     CONFIG_DEBUG_FS \
+    CONFIG_TTY_PRINTK \
+    CONFIG_UBSAN \
+    CONFIG_DEBUG_VFS \
+    CONFIG_SAMPLES \
     CONFIG_KPROBES \
     CONFIG_FTRACE; do
     require_disabled "$key" "debugger-oriented kernel surface is disabled"
@@ -125,6 +143,8 @@ for key in \
     CONFIG_DEVMEM \
     CONFIG_DEVPORT \
     CONFIG_X86_IOPL_IOPERM \
+    CONFIG_UEVENT_HELPER \
+    CONFIG_FW_LOADER_USER_HELPER \
     CONFIG_ACPI_TABLE_UPGRADE \
     CONFIG_EFI_CUSTOM_SSDT_OVERLAYS \
     CONFIG_LIVEPATCH; do
@@ -234,7 +254,8 @@ for key in \
     CONFIG_CRYPTO_SHA512 \
     CONFIG_CRYPTO_AES \
     CONFIG_CRYPTO_AES_NI_INTEL \
-    CONFIG_CRYPTO_ECDSA; do
+    CONFIG_CRYPTO_ECDSA \
+    CONFIG_CRYPTO_ECDH; do
     require_y "$key" "dm/NVIDIA crypto prerequisite is built in"
 done
 
@@ -269,6 +290,16 @@ for key in \
     CONFIG_X86_SGX \
     CONFIG_TCG_TPM \
     CONFIG_AGP \
+    CONFIG_HAMRADIO \
+    CONFIG_MCTP \
+    CONFIG_RFKILL \
+    CONFIG_RAPIDIO \
+    CONFIG_PC104 \
+    CONFIG_NET_TULIP \
+    CONFIG_FDDI \
+    CONFIG_PPP \
+    CONFIG_WAN \
+    CONFIG_ISDN \
     CONFIG_MMC \
     CONFIG_EDAC \
     CONFIG_REMOTEPROC \

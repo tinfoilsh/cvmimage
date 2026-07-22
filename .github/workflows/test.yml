@@ -33,3 +33,6 @@ jobs:
 
       - name: Test direct roothash contract
         run: ./scripts/test-roothash-artifacts.sh
+
+      - name: Test fixed rootfs policy
+        run: make test-rootfs-policy

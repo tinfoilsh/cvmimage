@@ -117,7 +117,11 @@ test-final-rootfs-verifier:
 test-runtime-locks:
 	./scripts/test-runtime-source-lock.sh
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-test test \
-		//image:runtime-package-lock-test //scripts:runtime-source-lock-test
+		--symlink_prefix=/tmp/cvmimage-bazel-runtime-lock-test- \
+		//image:runtime-package-lock-test \
+		//scripts:runtime-package-members-lock-test \
+		//scripts:runtime-package-members-update-test \
+		//scripts:runtime-source-lock-test
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-graph mod graph >/dev/null
 
 test-runtime-archives:
@@ -130,12 +134,13 @@ test-runtime-archives:
 		hashes="/tmp/cvmimage-bazel-runtime-archive-build-$$suffix.sha256"; \
 		$(BAZEL) --output_base="$$base" build \
 			--symlink_prefix="$$base-" \
+			//image:runtime-package-member-archives \
 			//image:runtime-source-member-archives; \
 		bin="$$( $(BAZEL) --output_base="$$base" info bazel-bin )"; \
 		find "$$bin/image" -maxdepth 1 -type f -name '*-members.tar' -printf '%f\n' | sort | \
 			while read -r name; do sha256sum "$$bin/image/$$name"; done | \
 			sed "s#  $$bin/image/#  #" > "$$hashes"; \
-		test "$$(wc -l < "$$hashes")" -eq 12; \
+		test "$$(wc -l < "$$hashes")" -eq 47; \
 	done; \
 	cmp /tmp/cvmimage-bazel-runtime-archive-build-a.sha256 \
 		/tmp/cvmimage-bazel-runtime-archive-build-b.sha256

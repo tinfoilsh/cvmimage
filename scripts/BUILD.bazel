@@ -12,6 +12,14 @@ py_library(
 )
 
 py_binary(
+    name = "update-runtime-package-members",
+    srcs = ["update_runtime_package_members.py"],
+    legacy_create_init = 0,
+    main = "update_runtime_package_members.py",
+    deps = [":runtime_archive_lib"],
+)
+
+py_binary(
     name = "runtime_archive_tool",
     srcs = ["runtime_archive.py"],
     legacy_create_init = 0,
@@ -24,6 +32,31 @@ py_test(
     legacy_create_init = 0,
     main = "runtime_archive_test.py",
     deps = [":runtime_archive_lib"],
+)
+
+sh_test(
+    name = "runtime-package-members-lock-test",
+    srcs = ["test-runtime-package-members.sh"],
+    args = ["$(location //image:runtime-package-members.lock.json)"],
+    data = ["//image:runtime-package-members.lock.json"],
+)
+
+py_library(
+    name = "runtime-package-members-updater-lib",
+    srcs = ["update_runtime_package_members.py"],
+    imports = [".."],
+    deps = [":runtime_archive_lib"],
+)
+
+py_test(
+    name = "runtime-package-members-update-test",
+    srcs = ["update_runtime_package_members_test.py"],
+    legacy_create_init = 0,
+    main = "update_runtime_package_members_test.py",
+    deps = [
+        ":runtime-package-members-updater-lib",
+        ":runtime_archive_lib",
+    ],
 )
 
 sh_test(

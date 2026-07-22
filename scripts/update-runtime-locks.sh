@@ -122,6 +122,18 @@ EOF
             --lockfile_mode=update > "$tree/module-graph.out"
         cp -- MODULE.bazel.lock "$tree/generated/MODULE.bazel.lock"
     )
+    cp -- "$repo_dir/BUILD.bazel" "$repo_dir/.bazelrc" "$repo_dir/.bazelversion" "$tree/workspace/"
+    cp -- "$repo_dir/image/BUILD.bazel" "$repo_dir/image/runtime_archive.bzl" \
+        "$repo_dir/image/runtime_package_inputs.bzl" \
+        "$repo_dir/image/runtime-package-members.lock.json" "$tree/workspace/image/"
+    cp -- "$repo_dir/image/runtime-package-members.lock.json" \
+        "$tree/generated/runtime-package-members.lock.json"
+    cp -a -- "$repo_dir/scripts" "$tree/workspace/scripts"
+    find "$tree/workspace/scripts" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+    BAZEL="$bazel_bin" python3 "$repo_dir/scripts/update_runtime_package_members.py" \
+        --workspace "$tree/workspace" \
+        --package-lock "$tree/workspace/image/runtime-packages.lock.json" \
+        --lock "$tree/generated/runtime-package-members.lock.json"
 }
 
 resolve_once "$tree_a"
@@ -130,11 +142,14 @@ resolve_once "$tree_b"
 cmp -- "$tree_a/generated/runtime-packages.lock.json" "$tree_b/generated/runtime-packages.lock.json"
 cmp -- "$tree_a/generated/MODULE.bazel.lock" "$tree_b/generated/MODULE.bazel.lock"
 cmp -- "$tree_a/generated/runtime-sources.lock.json" "$tree_b/generated/runtime-sources.lock.json"
+cmp -- "$tree_a/generated/runtime-package-members.lock.json" "$tree_b/generated/runtime-package-members.lock.json"
 
 if [ "$check_only" -eq 1 ]; then
     cmp -- "$tree_a/generated/runtime-packages.lock.json" "$repo_dir/image/runtime-packages.lock.json"
     cmp -- "$tree_a/generated/runtime-sources.lock.json" "$repo_dir/image/runtime-sources.lock.json"
     cmp -- "$tree_a/generated/MODULE.bazel.lock" "$repo_dir/MODULE.bazel.lock"
+    cmp -- "$tree_a/generated/runtime-package-members.lock.json" \
+        "$repo_dir/image/runtime-package-members.lock.json"
 else
     python3 "$repo_dir/scripts/runtime_source_lock.py" atomic-replace \
         "$tree_a/generated/runtime-packages.lock.json" "$repo_dir/image/runtime-packages.lock.json"
@@ -142,4 +157,7 @@ else
         "$tree_a/generated/runtime-sources.lock.json" "$repo_dir/image/runtime-sources.lock.json"
     python3 "$repo_dir/scripts/runtime_source_lock.py" atomic-replace \
         "$tree_a/generated/MODULE.bazel.lock" "$repo_dir/MODULE.bazel.lock"
+    python3 "$repo_dir/scripts/runtime_source_lock.py" atomic-replace \
+        "$tree_a/generated/runtime-package-members.lock.json" \
+        "$repo_dir/image/runtime-package-members.lock.json"
 fi

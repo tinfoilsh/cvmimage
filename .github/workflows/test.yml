@@ -2,7 +2,7 @@ name: Test
 
 on:
   pull_request:
-    branches: [main, jules/harden-tcb, jules/tcb-bazel-runtime-lock]
+    branches: [main, jules/harden-tcb, jules/tcb-bazel-runtime-lock, jules/tcb-bazel-rootfs]
   push:
     branches: [main]
 
@@ -62,11 +62,11 @@ jobs:
       - name: Test final rootfs verifier
         run: make test-final-rootfs-verifier
 
-      - name: Test runtime locks
+      - name: Test runtime source and package-member locks
         run: make test-runtime-locks
 
-      - name: Test exact runtime archive extraction
+      - name: Test exact runtime archive extraction and package data
         run: make test-runtime-archives
 
-      - name: Verify Docker and NVIDIA source locks
+      - name: Verify all runtime locks
         run: make verify-runtime-sources

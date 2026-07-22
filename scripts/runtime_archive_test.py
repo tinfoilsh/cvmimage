@@ -9,11 +9,18 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.runtime_archive import ArchiveError, _ar_members, _load_source_lock, extract_locked_archive
+from scripts.runtime_archive import (
+    ArchiveError,
+    _ar_members,
+    _load_source_lock,
+    _write_validation_marker,
+    extract_locked_archive,
+    validate_source_ids,
+)
 
 
-def _file(path, data=b"payload", mode=0o644):
-    return {"path": path, "type": "file", "data": data, "mode": mode}
+def _file(path, data=b"payload", mode=0o644, **metadata):
+    return {"path": path, "type": "file", "data": data, "mode": mode, **metadata}
 
 
 def _symlink(path, target, mode=0o777):
@@ -22,10 +29,14 @@ def _symlink(path, target, mode=0o777):
 
 def _tar_bytes(entries):
     output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode="w", format=tarfile.GNU_FORMAT) as archive:
+    archive_format = tarfile.PAX_FORMAT if any(entry.get("pax_headers") for entry in entries) else tarfile.GNU_FORMAT
+    with tarfile.open(fileobj=output, mode="w", format=archive_format) as archive:
         for entry in entries:
             member = tarfile.TarInfo(entry["path"])
             member.mode = entry.get("mode", 0o644)
+            member.uid = entry.get("uid", 0)
+            member.gid = entry.get("gid", 0)
+            member.pax_headers = entry.get("pax_headers", {})
             if entry["type"] == "file":
                 member.size = len(entry["data"])
                 archive.addfile(member, io.BytesIO(entry["data"]))
@@ -102,6 +113,26 @@ def _locked(entries, archive_sha256, kind="tar"):
         "url": "https://example.invalid/fixture.deb",
         "version": "1",
     }
+
+
+def _package_locked(source_id, entries):
+    files = []
+    for entry in entries:
+        item = {
+            "gid": entry.get("gid", 0),
+            "mode": f"{entry.get('mode', 0o644):04o}",
+            "path": entry["path"],
+            "type": entry["type"],
+            "uid": entry.get("uid", 0),
+            "xattrs": {},
+        }
+        if entry["type"] == "file":
+            item["sha256"] = hashlib.sha256(entry["data"]).hexdigest()
+            item["size"] = len(entry["data"])
+        else:
+            item["target"] = entry["target"]
+        files.append(item)
+    return {"version": 1, "sources": {source_id: {"files": files, "kind": "tar", "package_data": True}}}
 
 
 class RuntimeArchiveTest(unittest.TestCase):
@@ -183,6 +214,25 @@ class RuntimeArchiveTest(unittest.TestCase):
         with self.assertRaises(ArchiveError):
             extract_locked_archive(archive, lock, self.root / "output.tar")
 
+    def test_unified_non_package_source_requires_archive_hash(self):
+        lock = self.root / "source.json"
+        source = _locked([_file("usr/bin/tool")], "0" * 64)
+        source.pop("sha256")
+        source["package_data"] = False
+        lock.write_text(json.dumps({"version": 1, "sources": {"fixture": source}}), encoding="utf-8")
+        with self.assertRaises(ArchiveError):
+            _load_source_lock(lock, "fixture")
+
+    def test_unified_non_package_source_accepts_exact_archive_hash(self):
+        lock = self.root / "source.json"
+        source = _locked([_file("usr/bin/tool")], "0" * 64)
+        for field in ("id", "members", "url"):
+            source.pop(field)
+        source["package_data"] = False
+        lock.write_text(json.dumps({"version": 1, "sources": {"fixture": source}}), encoding="utf-8")
+        kind, digest, _, package_data = _load_source_lock(lock, "fixture")
+        self.assertEqual((kind, digest, package_data), ("tar", "0" * 64, False))
+
     def test_output_temp_symlink_is_not_followed(self):
         victim = self.root / "victim"
         victim.write_bytes(b"unchanged")
@@ -226,6 +276,21 @@ class RuntimeArchiveTest(unittest.TestCase):
         with self.assertRaises(ArchiveError):
             extract_locked_archive(archive, lock, str(self.root) + "//output.tar")
 
+    def test_validation_marker_rejects_symlink_and_unsafe_parent(self):
+        victim = self.root / "victim"
+        victim.write_bytes(b"unchanged")
+        marker = self.root / "marker"
+        marker.symlink_to(victim)
+        with self.assertRaises(ArchiveError):
+            _write_validation_marker(marker)
+        self.assertEqual(victim.read_bytes(), b"unchanged")
+        real = self.root / "real"
+        real.mkdir()
+        linked = self.root / "linked"
+        linked.symlink_to(real, target_is_directory=True)
+        with self.assertRaises(OSError):
+            _write_validation_marker(linked / "marker")
+
     def test_rejects_unexpected_type(self):
         entries = [_file("usr/bin/tool"), {"path": "usr/run/pipe", "type": "fifo"}]
         self.assert_rejected(entries, [_file("usr/bin/tool")])
@@ -245,6 +310,62 @@ class RuntimeArchiveTest(unittest.TestCase):
         self.assert_rejected([_file("usr/bin/tool", mode=0o755)], [_file("usr/bin/tool", mode=0o644)])
         self.assert_rejected([_file("usr/bin/tool", b"changed")], [_file("usr/bin/tool", b"expected")])
         self.assert_rejected([_symlink("usr/bin/tool", "changed")], [_symlink("usr/bin/tool", "expected")])
+
+    def test_package_data_authenticates_ownership_and_xattrs(self):
+        source_id = "package_1_amd64"
+        selected = [_file("usr/bin/tool")]
+        lock = self.root / "source.json"
+        lock.write_text(json.dumps(_package_locked(source_id, selected)), encoding="utf-8")
+        archive = self.root / "fixture.tar"
+        archive.write_bytes(_tar_bytes([_file("./usr/bin/tool", uid=1)]))
+        with self.assertRaises(ArchiveError):
+            extract_locked_archive(archive, lock, self.root / "output.tar", source_id)
+        for pax_key in ("SCHILY.xattr.user.test", "LIBARCHIVE.xattr.user.test", "vendor.xattr.test"):
+            archive.write_bytes(_tar_bytes([_file("./usr/bin/tool", pax_headers={pax_key: "value"})]))
+            with self.assertRaises(ArchiveError):
+                extract_locked_archive(archive, lock, self.root / "output.tar", source_id)
+
+        output = io.BytesIO()
+        with tarfile.open(
+            fileobj=output,
+            mode="w",
+            format=tarfile.PAX_FORMAT,
+            pax_headers={"LIBARCHIVE.xattr.user.test": "value"},
+        ) as payload:
+            member = tarfile.TarInfo("./usr/bin/tool")
+            member.size = len(b"payload")
+            payload.addfile(member, io.BytesIO(b"payload"))
+        archive.write_bytes(output.getvalue())
+        with self.assertRaises(ArchiveError):
+            extract_locked_archive(archive, lock, self.root / "output.tar", source_id)
+
+    def test_package_data_absolute_symlink_is_root_confined(self):
+        source_id = "package_1_amd64"
+        selected = [_symlink("usr/lib/ssl/openssl.cnf", "/etc/ssl/openssl.cnf")]
+        lock = self.root / "source.json"
+        lock.write_text(json.dumps(_package_locked(source_id, selected)), encoding="utf-8")
+        archive = self.root / "fixture.tar"
+        archive.write_bytes(_tar_bytes([_symlink("./usr/lib/ssl/openssl.cnf", "/etc/ssl/openssl.cnf")]))
+        extract_locked_archive(archive, lock, self.root / "output.tar", source_id)
+        escaped = [_symlink("usr/lib/ssl/openssl.cnf", "/../../outside")]
+        lock.write_text(json.dumps(_package_locked(source_id, escaped)), encoding="utf-8")
+        with self.assertRaises(ArchiveError):
+            extract_locked_archive(archive, lock, self.root / "output.tar", source_id)
+
+    def test_unified_lock_rejects_duplicate_missing_and_extra_sources(self):
+        lock = self.root / "source.json"
+        entry = json.dumps(_package_locked("one", [_file("usr/bin/tool")])["sources"]["one"])
+        lock.write_text('{"version":1,"sources":{"one":' + entry + ',"one":' + entry + '}}', encoding="utf-8")
+        with self.assertRaises(ArchiveError):
+            _load_source_lock(lock, "one")
+        lock.write_text("[]", encoding="utf-8")
+        with self.assertRaisesRegex(ArchiveError, "unsupported unified source lock"):
+            validate_source_ids(lock, ["one"])
+        lock.write_text(json.dumps(_package_locked("one", [_file("usr/bin/tool")])), encoding="utf-8")
+        with self.assertRaises(ArchiveError):
+            validate_source_ids(lock, ["one", "missing"])
+        with self.assertRaises(ArchiveError):
+            validate_source_ids(lock, [])
 
     def test_rejects_duplicate_locked_path(self):
         entries = [_file("usr/bin/tool")]

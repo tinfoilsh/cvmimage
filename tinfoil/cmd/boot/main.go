@@ -12,12 +12,18 @@ import (
 	"tinfoil/internal/boot"
 )
 
+type notifyContextFunc func(context.Context, ...os.Signal) (context.Context, context.CancelFunc)
+
 func init() {
 	log.SetFlags(0)
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	command := ""
+	if len(os.Args) > 1 {
+		command = os.Args[1]
+	}
+	ctx, stop := commandContext(command, signal.NotifyContext)
 	defer stop()
 
 	if len(os.Args) > 1 {
@@ -36,6 +42,13 @@ func main() {
 	}
 
 	log.Println("Tinfoil boot complete")
+}
+
+func commandContext(command string, notify notifyContextFunc) (context.Context, context.CancelFunc) {
+	if command == "models" {
+		return context.Background(), func() {}
+	}
+	return notify(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 }
 
 func runSubcommand(ctx context.Context, cmd string) error {

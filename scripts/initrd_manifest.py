@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import errno
 import hashlib
 import os
+import secrets
 import shutil
 import stat
 import subprocess
@@ -11,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 UINT32_MAX = (1 << 32) - 1
+REPO_DIR = Path(__file__).resolve().parent.parent
+STAGE_BASE = REPO_DIR / "build"
+EXPECTED_SOURCE_KIND = "source-build"
 
 
 @dataclass(frozen=True)
@@ -30,7 +35,9 @@ class Artifact:
     path: Path
     sha256: str
     mode: int
-    provenance: str
+    source_kind: str
+    source_revision: str
+    build_parameters: str
 
 
 @dataclass(frozen=True)
@@ -132,12 +139,12 @@ def parse_artifacts(path: Path) -> dict[str, Artifact]:
     resolved_base = base.resolve(strict=True)
     for number, raw in data_lines(path):
         fields = raw.split("\t")
-        if len(fields) != 5:
-            fail(f"{path}:{number}: expected 5 tab-separated fields")
-        name, relative, digest, mode_text, provenance = fields
+        if len(fields) != 7:
+            fail(f"{path}:{number}: expected 7 tab-separated fields")
+        name, relative, digest, mode_text, source_kind, source_revision, build_parameters = fields
         pure = PurePosixPath(relative)
-        if not name or not provenance:
-            fail(f"{path}:{number}: artifact name and provenance are required")
+        if not all((name, source_kind, source_revision, build_parameters)):
+            fail(f"{path}:{number}: artifact name and provenance fields are required")
         if "\0" in relative or pure == PurePosixPath(".") or pure.is_absolute() or ".." in pure.parts or str(pure) != relative:
             fail(f"{path}:{number}: invalid artifact path: {relative}")
         if name in artifacts:
@@ -165,7 +172,15 @@ def parse_artifacts(path: Path) -> dict[str, Artifact]:
         actual_mode = stat.S_IMODE(metadata.st_mode)
         if actual_mode != mode:
             fail(f"{path}:{number}: artifact mode mismatch: {name}: {actual_mode:04o} != {mode:04o}")
-        artifacts[name] = Artifact(name, artifact_path, digest, mode, provenance)
+        artifacts[name] = Artifact(
+            name,
+            artifact_path,
+            digest,
+            mode,
+            source_kind,
+            source_revision,
+            build_parameters,
+        )
     if not artifacts:
         fail(f"{path}: artifact manifest is empty")
     return artifacts
@@ -202,6 +217,21 @@ def artifact_for(entry: Entry, artifacts: dict[str, Artifact]) -> Artifact:
 
 
 def verify_artifact_locks(entries: dict[str, Entry], artifacts: dict[str, Artifact], locks: dict[str, ArtifactLock]) -> None:
+    source_status = subprocess.run(
+        ["git", "-C", str(REPO_DIR), "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--", "tinfoil"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    if source_status:
+        fail(f"refusing uncommitted or ignored tinfoil source:\n{source_status.rstrip()}")
+    source_tree = subprocess.run(
+        ["git", "-C", str(REPO_DIR), "rev-parse", "HEAD:tinfoil"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    expected_source_revision = f"tinfoil-tree:{source_tree}"
     used = set()
     for entry in entries.values():
         if entry.kind != "file":
@@ -215,6 +245,14 @@ def verify_artifact_locks(entries: dict[str, Entry], artifacts: dict[str, Artifa
             fail(f"{entry.path}: builder artifact differs from source lock: {artifact.sha256} != {lock.sha256}")
         if lock.destination != entry.path:
             fail(f"{entry.path}: locked destination mismatch: {lock.destination}")
+        if entry.provenance != f"builder:{name}":
+            fail(f"{entry.path}: manifest provenance mismatch: {entry.provenance}")
+        if lock.source_kind != EXPECTED_SOURCE_KIND or artifact.source_kind != lock.source_kind:
+            fail(f"{entry.path}: locked source kind mismatch: {lock.source_kind}")
+        if lock.source_revision != expected_source_revision or artifact.source_revision != lock.source_revision:
+            fail(f"{entry.path}: locked source revision mismatch: {lock.source_revision} != {expected_source_revision}")
+        if artifact.build_parameters != lock.build_parameters:
+            fail(f"{entry.path}: builder build parameters differ from source lock")
         used.add(name)
     unused = sorted(set(locks) - used)
     if unused:
@@ -236,11 +274,79 @@ def set_metadata(path: Path, entry: Entry) -> None:
     os.utime(path, (0, 0), follow_symlinks=False)
 
 
+def normalized_stage_root(root: Path) -> tuple[Path, Path]:
+    normalized = Path(os.path.abspath(root))
+    stage_base = Path(os.path.abspath(STAGE_BASE))
+    try:
+        normalized.relative_to(stage_base)
+    except ValueError:
+        fail(f"staging directory must be confined beneath {stage_base}: {normalized}")
+    if normalized == stage_base:
+        fail(f"refusing to use the stage base itself: {stage_base}")
+    current = Path("/")
+    for component in normalized.parts[1:]:
+        current /= component
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            fail(f"refusing symlinked staging path component: {current}")
+        if current != normalized and not stat.S_ISDIR(metadata.st_mode):
+            fail(f"staging path parent is not a directory: {current}")
+    marker = normalized.parent / f".{normalized.name}.tinfoil-initrd-owned"
+    return normalized, marker
+
+
+def claim_stage(parent_descriptor: int, marker_name: str, root: Path) -> None:
+    ownership = f"tinfoil-additive-initrd-stage-v1\n{root}\n"
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(marker_name, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        create_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_CLOEXEC"):
+            create_flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            create_flags |= os.O_NOFOLLOW
+        descriptor = os.open(marker_name, create_flags, 0o600, dir_fd=parent_descriptor)
+        with os.fdopen(descriptor, "w") as destination:
+            destination.write(ownership)
+        return
+    with os.fdopen(descriptor) as source:
+        metadata = os.fstat(source.fileno())
+        contents = source.read()
+    if not stat.S_ISREG(metadata.st_mode) or contents != ownership:
+        fail(f"staging ownership marker is invalid: {marker_name}")
+
+
 def create_stage(root: Path, entries: dict[str, Entry], artifacts: dict[str, Artifact]) -> None:
-    if root == Path("/"):
-        fail("refusing to use / as a staging directory")
-    shutil.rmtree(root, ignore_errors=True)
-    root.mkdir(parents=True, mode=0o755)
+    root, marker = normalized_stage_root(root)
+    verify_static(artifact_for(entries["/usr/bin/tinfoil-initrd"], artifacts).path)
+    parent_descriptor, root_name = open_output_parent(root)
+    marker_name = marker.name
+    try:
+        try:
+            root_metadata = os.stat(root_name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            root_metadata = None
+        if root_metadata is not None:
+            if not stat.S_ISDIR(root_metadata.st_mode):
+                fail(f"staging path is not a real directory: {root}")
+            try:
+                os.stat(marker_name, dir_fd=parent_descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                fail(f"refusing to replace unowned staging directory: {root}")
+        claim_stage(parent_descriptor, marker_name, root)
+        if root_metadata is not None:
+            shutil.rmtree(root_name, dir_fd=parent_descriptor)
+        os.mkdir(root_name, 0o755, dir_fd=parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
     for entry in sorted(entries.values(), key=lambda item: (len(PurePosixPath(item.path).parts), item.path)):
         destination = stage_path(root, entry.path)
         if entry.kind == "dir":
@@ -357,6 +463,67 @@ def cpio_record(name: str, ino: int, mode: int, uid: int, gid: int, nlink: int, 
     return record
 
 
+def open_output_parent(output: Path) -> tuple[int, str]:
+    normalized = Path(os.path.abspath(output))
+    if normalized == Path("/"):
+        fail("archive output must name a file")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        directory_flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    descriptor = os.open("/", directory_flags)
+    try:
+        for component in normalized.parts[1:-1]:
+            try:
+                child = os.open(component, directory_flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                os.mkdir(component, 0o755, dir_fd=descriptor)
+                child = os.open(component, directory_flags, dir_fd=descriptor)
+            except OSError as error:
+                if error.errno in (errno.ELOOP, errno.ENOTDIR):
+                    fail(f"archive output parent is not a real directory: {normalized.parent}")
+                raise
+            os.close(descriptor)
+            descriptor = child
+        return descriptor, normalized.name
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def write_output(output: Path, data: bytes) -> None:
+    parent_descriptor, output_name = open_output_parent(output)
+    temporary_name = f".{output_name}.tmp-{os.getpid()}-{secrets.token_hex(8)}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        try:
+            metadata = os.stat(output_name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            metadata = None
+        if metadata is not None and not stat.S_ISREG(metadata.st_mode):
+            fail(f"archive output is not a regular file: {output}")
+        descriptor = os.open(temporary_name, flags, 0o644, dir_fd=parent_descriptor)
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as destination:
+                destination.write(data)
+            os.fchmod(descriptor, 0o644)
+            os.utime(descriptor, (0, 0))
+        finally:
+            os.close(descriptor)
+        os.replace(temporary_name, output_name, src_dir_fd=parent_descriptor, dst_dir_fd=parent_descriptor)
+    finally:
+        try:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+        os.close(parent_descriptor)
+
+
 def write_archive(output: Path, root: Path, entries: dict[str, Entry], artifacts: dict[str, Artifact]) -> None:
     verify_stage(root, entries, artifacts)
     archive = bytearray()
@@ -377,15 +544,16 @@ def write_archive(output: Path, root: Path, entries: dict[str, Entry], artifacts
         archive.extend(cpio_record(name, ino, mode, entry.uid, entry.gid, nlink, data))
     archive.extend(cpio_record("TRAILER!!!", len(entries) + 1, 0, 0, 0, 1, b""))
     archive.extend(b"\0" * ((512 - len(archive) % 512) % 512))
-    output.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(output, flags, 0o644)
-    with os.fdopen(descriptor, "wb") as destination:
-        destination.write(archive)
-    os.chmod(output, 0o644)
-    os.utime(output, (0, 0))
+    write_output(output, archive)
+
+
+def compress_archive(source: Path, output: Path) -> None:
+    result = subprocess.run(
+        ["zstd", "-q", "-T1", "-19", "--no-progress", "-c", str(source)],
+        capture_output=True,
+        check=True,
+    )
+    write_output(output, result.stdout)
 
 
 def parse_archive(data: bytes):
@@ -399,7 +567,10 @@ def parse_archive(data: bytes):
             if not any(data[offset:]):
                 break
             fail(f"invalid newc magic at offset {offset}")
-        values = [int(header[index:index + 8], 16) for index in range(6, 110, 8)]
+        raw_fields = [header[index:index + 8] for index in range(6, 110, 8)]
+        values = [int(field, 16) for field in raw_fields]
+        if raw_fields != [f"{value:08x}".encode() for value in values]:
+            fail(f"non-canonical newc field encoding at offset {offset}")
         ino, mode, uid, gid, nlink, mtime, size, devmajor, devminor, rdevmajor, rdevminor, namesize, check = values
         offset += 110
         name_data = data[offset:offset + namesize]
@@ -489,13 +660,14 @@ def load(args):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("stage", "verify-stage", "archive", "verify-archive"))
+    parser.add_argument("command", choices=("stage", "verify-stage", "archive", "compress", "verify-archive"))
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--artifact-lock", type=Path, required=True)
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--archive", type=Path)
+    parser.add_argument("--input", type=Path)
     args = parser.parse_args()
     entries, artifacts = load(args)
     if args.command == "stage":
@@ -511,6 +683,10 @@ def main() -> int:
         if args.stage is None or args.output is None:
             parser.error("archive requires --stage and --output")
         write_archive(args.output, args.stage, entries, artifacts)
+    elif args.command == "compress":
+        if args.input is None or args.output is None:
+            parser.error("compress requires --input and --output")
+        compress_archive(args.input, args.output)
     else:
         if args.archive is None:
             parser.error("verify-archive requires --archive")

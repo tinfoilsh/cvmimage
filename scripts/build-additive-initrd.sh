@@ -58,11 +58,12 @@ fi
     --stage "$stage_dir" \
     --output "$raw_archive"
 
-mkdir -p "$(dirname "$output")"
-rm -f -- "$output.tmp"
-zstd -q -f -T1 -19 --no-progress "$raw_archive" -o "$output.tmp"
-touch -d @0 "$output.tmp"
-mv -f "$output.tmp" "$output"
+"$tool" compress \
+    --manifest "$manifest" \
+    --artifacts "$artifacts" \
+    --artifact-lock "$artifact_lock" \
+    --input "$raw_archive" \
+    --output "$output"
 
 "$tool" verify-archive \
     --manifest "$manifest" \

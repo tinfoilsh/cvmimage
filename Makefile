@@ -1,6 +1,7 @@
 all: build
 
-MKOSI ?= sudo env PATH="$$PATH" mkosi
+TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 
 NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
@@ -25,15 +26,15 @@ hash:
 	fi
 
 clean:
-	sudo rm -rf tinfoilcvm.*
-	sudo rm -rf initrd
-	sudo rm -rf initrd.cpio.zst
-	sudo rm -rf build/stage build/artifacts
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd.cpio.zst
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/stage build/artifacts
 
 deepclean:
 	$(MKOSI) clean
-	sudo rm -rf mkosi.cache/*
-	sudo rm -f packages/nvattest_*.deb packages/libnvat_*.deb
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf mkosi.cache/*
+	sudo env PATH="$(TRUSTED_PATH)" rm -f packages/nvattest_*.deb packages/libnvat_*.deb
 
 go-binaries:
 	mkdir -p mkosi.extra/usr/bin
@@ -43,20 +44,26 @@ go-binaries:
 	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
 
 builder-initrd:
-	@version="$$( $(MKOSI) --version)"; \
+	@source_status="$$(git status --porcelain=v1 --untracked-files=all --ignored=matching -- tinfoil)"; \
+	if [ -n "$$source_status" ]; then \
+	    printf 'builder-initrd: refusing uncommitted or ignored tinfoil source:\n%s\n' "$$source_status" >&2; \
+	    exit 1; \
+	fi; \
+	source_revision="tinfoil-tree:$$(git rev-parse HEAD:tinfoil)"; \
+	version="$$( $(MKOSI) --version)"; \
 	if [ "$$version" != "mkosi 26" ]; then \
 	    echo "builder-initrd requires mkosi 26, found: $${version:-unknown}" >&2; \
 	    exit 1; \
-	fi
-	mkdir -p build/builder-work build/builder-cache build/builder-pkgcache build/builder-workspace
-	$(MKOSI) -C builder --force build
-	sudo chown -R "$$(id -u):$$(id -g)" build/builder-work/output
+	fi; \
+	mkdir -p build/builder-work build/builder-cache build/builder-pkgcache build/builder-workspace; \
+	$(MKOSI) -C builder --environment=TINFOIL_SOURCE_REVISION="$$source_revision" --force build
+	sudo env PATH="$(TRUSTED_PATH)" chown -R "$$(id -u):$$(id -g)" build/builder-work/output
 
 additive-initrd: builder-initrd
-	sudo env PATH="$$PATH" TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
-	sudo chown "$$(id -u):$$(id -g)" initrd.cpio.zst
+	sudo env PATH="$(TRUSTED_PATH)" TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
+	sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" initrd.cpio.zst
 
-verify-additive-initrd:
+verify-additive-initrd: additive-initrd
 	./scripts/initrd_manifest.py verify-archive \
 		--manifest image/initrd/manifest.tsv \
 		--artifacts build/builder-work/output/artifacts.tsv \

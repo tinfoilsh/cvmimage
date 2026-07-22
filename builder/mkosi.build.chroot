@@ -7,6 +7,22 @@ artifact_dir="$BUILDDIR/output/artifacts"
 binary="$artifact_dir/tinfoil-initrd"
 manifest="$BUILDDIR/output/artifacts.tsv"
 go_bin=/usr/lib/go-1.25/bin/go
+source_kind=source-build
+source_revision="${TINFOIL_SOURCE_REVISION:?TINFOIL_SOURCE_REVISION is required}"
+build_parameters='go1.25.7;CGO_ENABLED=0;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid='
+
+if [[ ! "$source_revision" =~ ^tinfoil-tree:[0-9a-f]{40}$ ]]; then
+    echo "builder: invalid TINFOIL_SOURCE_REVISION: $source_revision" >&2
+    exit 1
+fi
+if [ "$CGO_ENABLED" != 0 ] || [ "$SOURCE_DATE_EPOCH" != 0 ]; then
+    echo "builder: non-canonical build environment" >&2
+    exit 1
+fi
+if [ "$("$go_bin" version | awk '{print $3}')" != go1.25.7 ]; then
+    echo "builder: non-canonical Go toolchain" >&2
+    exit 1
+fi
 
 rm -rf "$artifact_dir"
 mkdir -p "$artifact_dir"
@@ -24,13 +40,12 @@ chmod 0755 "$binary"
 touch -d @0 "$binary"
 
 binary_sha256="$(sha256sum "$binary" | awk '{print $1}')"
-go_version="$("$go_bin" version | tr '\t\n' '  ')"
 
 {
-    printf '%s\n' '# tinfoil artifact manifest v1'
-    printf '%s\n' '# name<TAB>path<TAB>sha256<TAB>mode<TAB>provenance'
-    printf 'tinfoil-initrd\tartifacts/tinfoil-initrd\t%s\t0755\t%s;CGO_ENABLED=0;go-flags=-trimpath,-buildvcs=false,-mod=readonly;SOURCE_DATE_EPOCH=0\n' \
-        "$binary_sha256" "$go_version"
+    printf '%s\n' '# tinfoil artifact manifest v2'
+    printf '%s\n' '# name<TAB>path<TAB>sha256<TAB>mode<TAB>source_kind<TAB>source_revision<TAB>build_parameters'
+    printf 'tinfoil-initrd\tartifacts/tinfoil-initrd\t%s\t0755\t%s\t%s\t%s\n' \
+        "$binary_sha256" "$source_kind" "$source_revision" "$build_parameters"
 } > "$manifest"
 touch -d @0 "$manifest"
 

@@ -4,13 +4,22 @@ set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$repo_dir/build/reproducibility"
 evidence="$repo_dir/evidence/additive-initrd-reproducibility.txt"
+trusted_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+source_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all --ignored=matching -- tinfoil)"
+if [ -n "$source_status" ]; then
+    printf 'reproducibility check: refusing uncommitted or ignored tinfoil source:\n%s\n' \
+        "$source_status" >&2
+    exit 1
+fi
+source_revision="tinfoil-tree:$(git -C "$repo_dir" rev-parse HEAD:tinfoil)"
 
 cleanup() {
-    sudo rm -rf "$scratch"
+    sudo env PATH="$trusted_path" rm -rf "$scratch"
 }
 trap cleanup EXIT
 
-sudo rm -rf "$scratch"
+sudo env PATH="$trusted_path" rm -rf "$scratch"
 mkdir -p "$scratch" "$(dirname "$evidence")"
 
 mkosi_version="$(mkosi --version)"
@@ -26,7 +35,8 @@ build_once() {
     local log="$repo_dir/evidence/additive-initrd-builder-$name.log"
 
     mkdir -p "$root"
-    if ! sudo env PATH="$PATH" mkosi -C "$repo_dir/builder" \
+    if ! sudo env PATH="$trusted_path" mkosi -C "$repo_dir/builder" \
+        --environment=TINFOIL_SOURCE_REVISION="$source_revision" \
         --force \
         --incremental=no \
         --build-directory="$root/builder-work" \
@@ -38,7 +48,7 @@ build_once() {
         return 1
     fi
 
-    sudo env PATH="$PATH" \
+    sudo env PATH="$trusted_path" \
         TINFOIL_BUILDER_OUTPUT="$root/builder-work/output" \
         TINFOIL_INITRD_STAGE="$root/stage" \
         TINFOIL_INITRD_RAW="$root/initrd.cpio" \
@@ -66,8 +76,14 @@ if [ "$initrd_a" != "$initrd_b" ]; then
     cmp -l "$scratch/a/initrd.cpio.zst" "$scratch/b/initrd.cpio.zst" | head -n 100 >&2 || true
     exit 1
 fi
-cmp -s "$scratch/a/builder-work/output/artifacts/tinfoil-initrd" "$scratch/b/builder-work/output/artifacts/tinfoil-initrd"
-cmp -s "$scratch/a/initrd.cpio.zst" "$scratch/b/initrd.cpio.zst"
+if ! cmp -s "$scratch/a/builder-work/output/artifacts/tinfoil-initrd" "$scratch/b/builder-work/output/artifacts/tinfoil-initrd"; then
+    echo "builder hashes match but artifacts are not byte-identical" >&2
+    exit 1
+fi
+if ! cmp -s "$scratch/a/initrd.cpio.zst" "$scratch/b/initrd.cpio.zst"; then
+    echo "initrd hashes match but archives are not byte-identical" >&2
+    exit 1
+fi
 
 cat > "$evidence" <<EOF
 builder_a_sha256=$builder_a

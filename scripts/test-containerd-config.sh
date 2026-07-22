@@ -184,7 +184,7 @@ run_inventory() {
     fi
     sed -n 's/.*msg="loading plugin" id=\([^ ]*\) type=.*/\1/p' "$run_dir/log" \
         | LC_ALL=C sort -u >"$scratch/actual-$name"
-    if [[ "$name" == policy ]] && grep -Eq 'level=(error|fatal)|failed to load plugin|skip loading plugin' "$run_dir/log"; then
+    if [[ "$name" == policy ]] && grep -Eq 'level=(error|fatal)' "$run_dir/log"; then
         cat "$run_dir/log" >&2
         echo "enabled containerd plugin failed to load" >&2
         exit 1

@@ -12,7 +12,8 @@ NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0
 
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
 	builder-initrd additive-initrd verify-additive-initrd \
-	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts test-rootfs-policy
+	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
+	test-rootfs-policy test-rootfs-manifest
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -93,6 +94,9 @@ reproducible-additive-initrd:
 
 test-rootfs-policy:
 	./scripts/test-rootfs-policy-adversarial.sh
+
+test-rootfs-manifest:
+	./scripts/test-rootfs-manifest.sh
 
 # First build populates mkosi.cache; later builds reuse it for fast iteration.
 rebuild: go-binaries

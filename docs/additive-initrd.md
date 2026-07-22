@@ -4,14 +4,15 @@ The initrd is constructed from two fixed inputs:
 
 - `image/initrd/manifest.tsv`, which declares the complete archive layout and
   deterministic metadata;
-- `build/builder-work/output/artifacts/tinfoil-initrd`, the single named binary
-  produced by the shared pinned runtime builder.
+- `build/builder-work/output/artifacts/tinfoil-initrd`, the initrd-specific
+  member of the shared pinned runtime builder's six fixed named Go outputs.
 
 The Go compiler and its packages are installed in the disposable builder
 image. Package installation and maintainer scripts are allowed there because
 the builder filesystem is never copied into the initrd or measured rootfs. The
-only builder output accepted by this producer is the fixed
-`artifacts/tinfoil-initrd` file.
+additive-initrd producer accepts only the fixed `artifacts/tinfoil-initrd`
+file; the builder's other five named Go outputs are consumed by their own
+measured runtime destinations.
 
 `scripts/build-additive-initrd.sh` writes a canonical `newc` archive directly
 from those inputs, compresses it with Zstandard 1.5.7 using one thread and level

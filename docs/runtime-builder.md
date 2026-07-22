@@ -1,9 +1,15 @@
 # Shared runtime builder
 
-The initrd Go binary, nvattest, custom kernel, and NVIDIA modules use one
-disposable builder image. Its Ubuntu base digest, dated package snapshot, and
-tool versions are pinned. Each producer has a fixed entrypoint and publishes
-only explicitly named output files.
+The six measured Go commands, nvattest, custom kernel, and NVIDIA modules use
+one disposable builder image. Its Ubuntu base digest, dated package snapshot,
+and tool versions are pinned. Each producer has a fixed entrypoint and
+publishes only explicitly named output files.
+
+The Go producer emits exactly these files under `artifacts/`, with no command
+discovery: `tinfoil-boot`, `tinfoil-container-status`, `tinfoil-egress`,
+`tinfoil-init`, `tinfoil-initrd`, and `tinfoil-shim`. It uses the fixed Go
+1.25.7 toolchain with `GOTOOLCHAIN=local`, disabled CGO, read-only modules,
+trimmed paths, omitted VCS metadata, and an empty build ID.
 
 The builder is not a runtime filesystem source. Distribution packages and
 their maintainer scripts may run inside it, and its package database, temporary
@@ -19,6 +25,7 @@ The standard interface is:
 ./scripts/run-runtime-builder.sh nvattest
 ./scripts/run-runtime-builder.sh kernel
 ./scripts/run-runtime-builder.sh nvidia
+make test-go-producer
 ```
 
 Initrd, nvattest, and kernel producers use ordinary unprivileged containers.

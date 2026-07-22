@@ -12,7 +12,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
 	runtime-builder builder-initrd additive-initrd verify-additive-initrd \
-	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
+	test-go-producer test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
 	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
 	verify-runtime-sources update-runtime-locks test-runtime-archives \
@@ -57,18 +57,22 @@ deepclean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf mkosi.cache/*
 	sudo env PATH="$(TRUSTED_PATH)" rm -f packages/nvattest_*.deb packages/libnvat_*.deb
 
-go-binaries:
+go-binaries: builder-initrd
 	mkdir -p mkosi.extra/usr/bin
-	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
-	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-container-status ./cmd/container-status
-	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
-	cd tinfoil && go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
+	install -m 0755 build/builder-work/output/artifacts/tinfoil-boot mkosi.extra/usr/bin/tinfoil-boot
+	install -m 0755 build/builder-work/output/artifacts/tinfoil-container-status mkosi.extra/usr/bin/tinfoil-container-status
+	install -m 0755 build/builder-work/output/artifacts/tinfoil-egress mkosi.extra/usr/bin/tinfoil-egress
+	install -m 0755 build/builder-work/output/artifacts/tinfoil-init mkosi.extra/usr/bin/tinfoil-init
+	install -m 0755 build/builder-work/output/artifacts/tinfoil-shim mkosi.extra/usr/bin/tinfoil-shim
 
 runtime-builder:
 	./scripts/build-runtime-builder.sh
 
 builder-initrd: runtime-builder
 	./scripts/run-runtime-builder.sh initrd
+
+test-go-producer:
+	./scripts/test-go-producer.sh
 
 custom-kernel-artifacts: runtime-builder
 	./scripts/run-runtime-builder.sh kernel
@@ -177,12 +181,12 @@ nvattest: $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS)
 $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS) &: \
 		build-nvattest.sh \
 		builder/Dockerfile \
+		builder/build-initrd.sh \
 		scripts/nvattest-artifacts.sh \
 		scripts/nvattest-regorus-Cargo.lock \
 		scripts/build-runtime-builder.sh \
 		scripts/run-runtime-builder.sh \
-		scripts/runtime-builder-base-image.txt
-	./scripts/build-runtime-builder.sh
+		scripts/runtime-builder-base-image.txt | runtime-builder
 	./scripts/run-runtime-builder.sh nvattest
 
 test-nvattest-artifacts:

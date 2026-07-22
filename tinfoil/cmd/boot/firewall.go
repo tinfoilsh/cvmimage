@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/egress"
 )
 
 // Non-public destination ranges blocked even on `egress: open` and
@@ -28,12 +30,26 @@ const (
 	nonPublicIPv6Ranges = "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
 )
 
+type egressPopulator interface {
+	Populate(context.Context) error
+}
+
 // setupContainerNetworkFirewall installs one bridge's worth of nftables
 // rules per declared network plus the implicit shim-net, in a single
-// transaction, then starts tinfoil-egress if any network needs it.
+// transaction, then synchronously populates any allowlist sets.
 // Must be called after the bridge interfaces exist so iif/oif resolve
 // by index.
 func setupContainerNetworkFirewall(cfg *Config) error {
+	return setupContainerNetworkFirewallWith(cfg, runNft, func() (egressPopulator, error) {
+		return egress.Load()
+	})
+}
+
+func setupContainerNetworkFirewallWith(
+	cfg *Config,
+	applyNft func(string) error,
+	loadEgress func() (egressPopulator, error),
+) error {
 	names := make([]string, 0, len(cfg.Networks))
 	for k := range cfg.Networks {
 		names = append(names, k)
@@ -47,7 +63,7 @@ func setupContainerNetworkFirewall(cfg *Config) error {
 	if shimUpstreamSet(cfg) {
 		writeBridgeRules(&script, containernet.ShimNetName, &NetworkSpec{Egress: "closed"})
 	}
-	if err := runNft(script.String()); err != nil {
+	if err := applyNft(script.String()); err != nil {
 		return fmt.Errorf("installing container-network firewall rules: %w", err)
 	}
 
@@ -62,12 +78,13 @@ func setupContainerNetworkFirewall(cfg *Config) error {
 		if spec.Egress != "allowlist" {
 			continue
 		}
-		// Type=notify; `systemctl start` blocks until the daemon resolves
-		// the first set of IPs and signals READY=1, so failures here
-		// surface as a boot error.
-		log.Println("Firewall: starting tinfoil-egress for initial IP population")
-		if out, err := exec.Command("systemctl", "start", "tinfoil-egress.service").CombinedOutput(); err != nil {
-			return fmt.Errorf("tinfoil-egress.service failed on initial run: %w (%s)", err, out)
+		engine, err := loadEgress()
+		if err != nil {
+			return fmt.Errorf("loading egress policy: %w", err)
+		}
+		log.Println("Firewall: populating egress allowlists")
+		if err := engine.Populate(context.Background()); err != nil {
+			return fmt.Errorf("populating egress allowlists: %w", err)
 		}
 		break
 	}

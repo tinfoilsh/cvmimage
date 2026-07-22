@@ -1,11 +1,96 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	shimconfig "tinfoil/internal/config"
 )
+
+type fakeEgressPopulator struct {
+	populate func() error
+}
+
+func (f fakeEgressPopulator) Populate(context.Context) error {
+	return f.populate()
+}
+
+func TestFirewall_AllowlistPopulationFollowsNftOnce(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+		"metrics": {Egress: "allowlist", Allow: []string{"metrics.tinfoil.sh"}},
+	}}
+	var events []string
+	err := setupContainerNetworkFirewallWith(
+		cfg,
+		func(string) error {
+			events = append(events, "nft")
+			return nil
+		},
+		func() (egressPopulator, error) {
+			events = append(events, "load")
+			return fakeEgressPopulator{populate: func() error {
+				events = append(events, "populate")
+				return nil
+			}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"nft", "load", "populate"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("effects = %v, want %v", events, want)
+	}
+}
+
+func TestFirewall_NoAllowlistSkipsPopulation(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"ipc": {Egress: "closed"},
+		"web": {Egress: "open"},
+	}}
+	loaded := false
+	err := setupContainerNetworkFirewallWith(
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			loaded = true
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded {
+		t.Fatal("loaded egress engine without an allowlist network")
+	}
+}
+
+func TestFirewall_PopulationFailureAbortsSetup(t *testing.T) {
+	wantErr := errors.New("resolution failed")
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	populateCalls := 0
+	err := setupContainerNetworkFirewallWith(
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func() error {
+				populateCalls++
+				return wantErr
+			}}, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("setup error = %v, want %v", err, wantErr)
+	}
+	if populateCalls != 1 {
+		t.Fatalf("Populate calls = %d, want 1", populateCalls)
+	}
+}
 
 // renderFirewallScript returns the nft script setupContainerNetworkFirewall
 // would commit, minus the runNft call.

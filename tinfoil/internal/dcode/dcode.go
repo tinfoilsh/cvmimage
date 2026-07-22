@@ -15,16 +15,32 @@ import (
 	"tinfoil/internal/compress"
 )
 
+const (
+	maxDomainChunks         = 100
+	maxDecompressedAttBytes = 1 << 20
+)
+
 func gzDecompress(data []byte) ([]byte, error) {
 	gzReader, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gzip reader: %v", err)
 	}
-	return io.ReadAll(gzReader)
+	defer gzReader.Close()
+	decompressed, err := io.ReadAll(io.LimitReader(gzReader, maxDecompressedAttBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(decompressed) > maxDecompressedAttBytes {
+		return nil, fmt.Errorf("decompressed payload exceeds %d-byte limit", maxDecompressedAttBytes)
+	}
+	return decompressed, nil
 }
 
 // Encode encodes a byte slice into a string of domains
 func Encode(content []byte, domain string) ([]string, error) {
+	if len(content) == 0 {
+		return nil, fmt.Errorf("payload must not be empty")
+	}
 	// Encode the entire compressed data using base32
 	encoder := base32.StdEncoding.WithPadding(base32.NoPadding)
 	encoded := encoder.EncodeToString(content)
@@ -41,8 +57,8 @@ func Encode(content []byte, domain string) ([]string, error) {
 		end := min(i+maxLength, len(encoded))
 		chunk := encoded[i:end]
 		index := len(domains)
-		if index > 99 {
-			return nil, fmt.Errorf("payload requires %d+ chunks; 2-digit prefix supports at most 100", index+1)
+		if index >= maxDomainChunks {
+			return nil, fmt.Errorf("payload requires more than %d chunks", maxDomainChunks)
 		}
 		domains = append(domains, fmt.Sprintf("%02d%s%s", index, chunk, domainSuffix))
 	}
@@ -65,10 +81,16 @@ func EncodeAtt(att *attestation.Document, domain string) ([]string, error) {
 
 // Decode decodes a string of domains into an attestation document
 func Decode(domains []string) (*attestation.Document, error) {
+	if len(domains) == 0 || len(domains) > maxDomainChunks {
+		return nil, fmt.Errorf("domain chunk count must be between 1 and %d", maxDomainChunks)
+	}
 	for _, d := range domains {
-		label := strings.Split(d, ".")[0]
-		if len(label) < 3 {
+		label := strings.SplitN(d, ".", 2)[0]
+		if len(label) < 3 || len(label) > 63 {
 			return nil, fmt.Errorf("malformed domain chunk: %q", d)
+		}
+		if label[0] < '0' || label[0] > '9' || label[1] < '0' || label[1] > '9' {
+			return nil, fmt.Errorf("malformed domain chunk index: %q", d)
 		}
 	}
 
@@ -76,11 +98,16 @@ func Decode(domains []string) (*attestation.Document, error) {
 	sort.Slice(domains, func(i, j int) bool {
 		return domains[i][:2] < domains[j][:2]
 	})
+	for index, domain := range domains {
+		if domain[:2] != fmt.Sprintf("%02d", index) {
+			return nil, fmt.Errorf("domain chunks must have unique contiguous indexes starting at 00")
+		}
+	}
 
 	// Extract encoded data from the domains
 	var encodedData string
 	for _, domain := range domains {
-		domain = strings.Split(domain, ".")[0]
+		domain = strings.SplitN(domain, ".", 2)[0]
 		encodedData += domain[2:]
 	}
 

@@ -23,6 +23,8 @@ modules. Its reproducibility target builds two independent custom-kernel source
 and output roots before comparing module artifacts byte-for-byte.
 
 These targets do not assemble a rootfs or alter the mkosi shipping path.
-The generated `build`, `kernel/build`, and `kernel/out` trees are excluded from
-Git and Bazel package discovery so producer caches cannot become source inputs
-or break normal `bazel test //...` validation.
+Generated producer trees remain excluded from Git and Bazel package discovery.
+The consumer exposes only the authenticated `build/runtime-artifacts` package;
+all other `build` subtrees plus `kernel/build` and `kernel/out` remain excluded
+so producer caches cannot become source inputs or break normal
+`bazel test //...` validation.

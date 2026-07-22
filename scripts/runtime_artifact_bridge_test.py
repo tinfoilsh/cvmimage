@@ -1,15 +1,17 @@
+import argparse
 import errno
 import hashlib
 import multiprocessing
 import os
 import shutil
 import stat
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts import rootfs_artifacts, runtime_artifact_bridge as bridge
+from scripts import rootfs_artifacts, rootfs_manifest, runtime_artifact_bridge as bridge
 
 
 def prepare_worker(root: str, queue) -> None:
@@ -95,6 +97,18 @@ class RuntimeArtifactBridgeTest(unittest.TestCase):
         state = self.root / "build" / bridge.STATE
         return sorted(state.glob(".runtime-artifacts.*")) if state.exists() else []
 
+    def archive_arguments(self, suffix=""):
+        generated = self.generated()
+        names = sorted(name for name, entry in self.entries.items() if entry.kind == "file")
+        return argparse.Namespace(
+            lock=str(self.root / bridge.LOCK),
+            marker=str(generated / bridge.MARKER),
+            manifest=[str(generated / "producers" / producer / "rootfs-artifacts.tsv") for producer in sorted(bridge.PRODUCER_ROOTS)],
+            file_name=names,
+            file=[str(generated / "producers" / self.entries[name].producer / self.entries[name].source_path) for name in names],
+            output_tar=str(self.root / f"members{suffix}.tar"),
+            output_manifest=str(self.root / f"members{suffix}.tsv"),
+        )
 
     def tree_digest(self, root):
         digest = hashlib.sha256()
@@ -218,6 +232,34 @@ class RuntimeArtifactBridgeTest(unittest.TestCase):
                 self.assertEqual(self.staging(), [])
                 shutil.rmtree(self.generated())
                 bridge.prepare()
+
+    def test_write_all_retries_short_writes(self):
+        target = self.root / "short-write"
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        original = os.write
+
+        def short_write(fd, content):
+            return original(fd, content[:3])
+
+        try:
+            with mock.patch.object(bridge.os, "write", side_effect=short_write):
+                bridge.write_all(descriptor, b"complete payload")
+        finally:
+            os.close(descriptor)
+        self.assertEqual(target.read_bytes(), b"complete payload")
+
+    def test_write_all_fails_closed_on_zero_and_io_errors(self):
+        descriptor = os.open(self.root / "failed-write", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with mock.patch.object(bridge.os, "write", return_value=0):
+                with self.assertRaisesRegex(ValueError, "no progress"):
+                    bridge.write_all(descriptor, b"payload")
+            for error in (errno.ENOSPC, errno.EIO):
+                with self.subTest(error=error), mock.patch.object(bridge.os, "write", side_effect=OSError(error, os.strerror(error))):
+                    with self.assertRaises(OSError):
+                        bridge.write_all(descriptor, b"payload")
+        finally:
+            os.close(descriptor)
 
     def test_failed_writes_and_fsyncs_remove_owned_staging(self):
         original_write = os.write
@@ -391,6 +433,40 @@ class RuntimeArtifactBridgeTest(unittest.TestCase):
         (self.root / "build").chmod(0o775)
         with self.assertRaisesRegex(ValueError, "group trust"):
             bridge.prepare()
+
+    def test_archive_is_exact_and_reproducible(self):
+        bridge.prepare()
+        first = self.archive_arguments("-one")
+        second = self.archive_arguments("-two")
+        bridge.archive(first)
+        bridge.archive(second)
+        self.assertEqual(Path(first.output_tar).read_bytes(), Path(second.output_tar).read_bytes())
+        self.assertEqual(Path(first.output_manifest).read_bytes(), Path(second.output_manifest).read_bytes())
+        manifest = rootfs_manifest.parse_manifest(Path(first.output_manifest))
+        self.assertEqual(set(manifest), {entry.destination for entry in self.entries.values()})
+        with tarfile.open(first.output_tar, "r:") as bundle:
+            members = bundle.getmembers()
+        ordered = sorted(self.entries.values(), key=lambda entry: entry.destination.encode())
+        self.assertEqual([member.name for member in members], [entry.destination[1:] for entry in ordered])
+        for member, entry in zip(members, ordered, strict=True):
+            self.assertEqual((member.uid, member.gid, member.mode, member.mtime), (0, 0, int(entry.mode, 8), 0))
+            self.assertFalse(member.pax_headers)
+            self.assertEqual(member.issym(), entry.kind == "symlink")
+
+    def test_archive_rejects_mutation_and_lock_drift(self):
+        bridge.prepare()
+        arguments = self.archive_arguments()
+        artifact = Path(arguments.file[0])
+        artifact.write_bytes(b"mutated")
+        artifact.chmod(int(self.entries[arguments.file_name[0]].mode, 8))
+        with self.assertRaises(ValueError):
+            bridge.archive(arguments)
+        shutil.rmtree(self.generated())
+        bridge.prepare()
+        with open(self.root / bridge.LOCK, "ab") as lock:
+            lock.write(b"# drift\n")
+        with self.assertRaises(ValueError):
+            bridge.archive(self.archive_arguments("-drift"))
 
     def test_existing_wrong_mode_package_is_preserved(self):
         bridge.prepare()

@@ -105,6 +105,7 @@ prepare-runtime-artifacts: verify-rootfs-artifacts
 
 test-runtime-artifact-bridge: prepare-runtime-artifacts
 	python3 -m unittest scripts.runtime_artifact_bridge_test
+	./scripts/test-runtime-artifact-bridge.sh
 
 test-rootfs-artifacts:
 	python3 -m unittest scripts.rootfs_artifacts_test

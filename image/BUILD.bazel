@@ -7,6 +7,7 @@ load(
     "runtime_archive_lock_check",
     "runtime_package_inputs_manifest",
 )
+load(":runtime_artifacts.bzl", "runtime_artifacts")
 load(":runtime_package_inputs.bzl", "RUNTIME_PACKAGE_INPUTS")
 
 _CA_CERTIFICATES_SOURCE_ID = "ca-certificates_20260223_amd64"
@@ -100,4 +101,8 @@ runtime_package_inputs_manifest(
 filegroup(
     name = "runtime-package-member-archives",
     srcs = [":" + source_id + "_members" for source_id in RUNTIME_PACKAGE_INPUTS],
+)
+
+runtime_artifacts(
+    name = "runtime-artifact-members",
 )

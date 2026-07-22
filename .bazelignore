@@ -1,3 +1,7 @@
-build
+build/builder-cache
+build/builder-pkgcache
+build/builder-work
+build/builder-workspace
+build/rootfs-artifacts
 kernel/build
 kernel/out

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 
 import argparse
+import base64
 import ctypes
 import fcntl
 import hashlib
+import io
 import os
 import secrets
 import stat
+import tarfile
 from pathlib import Path, PurePosixPath
 
-from scripts import rootfs_artifacts
+from scripts import rootfs_artifacts, rootfs_manifest
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -83,6 +86,14 @@ def read_regular(path: Path) -> tuple[bytes, os.stat_result]:
     finally:
         os.close(descriptor)
         os.close(parent)
+
+
+def read_bazel_input(path: Path) -> tuple[bytes, os.stat_result]:
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        return read_descriptor(descriptor, path, False)
+    finally:
+        os.close(descriptor)
 
 
 def mkdir(parent: int, name: str, mode: int = 0o755, accepted_modes: set[int] | None = None) -> int:
@@ -557,16 +568,112 @@ def prepare() -> None:
         os.close(build)
 
 
+def archive(args) -> None:
+    lock_content, _ = read_bazel_input(Path(args.lock))
+    locked = rootfs_artifacts.parse_content(Path(args.lock), lock_content.decode())
+    if set(locked) != set(rootfs_artifacts.EXPECTED):
+        fail("rootfs artifact lock differs from fixed contract")
+    validate_contract(locked)
+    expected_marker = f"{SCHEMA}\t{hashlib.sha256(lock_content).hexdigest()}\n".encode()
+    marker, marker_metadata = read_bazel_input(Path(args.marker))
+    if marker != expected_marker or stat.S_IMODE(marker_metadata.st_mode) != 0o644:
+        fail("generated runtime artifact marker does not match the checked-in lock")
+    produced = {}
+    for producer, manifest_path in zip(sorted(PRODUCER_ROOTS), args.manifest, strict=True):
+        content, metadata = read_bazel_input(Path(manifest_path))
+        if stat.S_IMODE(metadata.st_mode) != 0o644:
+            fail(f"{producer}: generated manifest mode mismatch")
+        entries = rootfs_artifacts.parse_content(Path(manifest_path), content.decode(), producer)
+        produced.update(entries)
+    if produced != locked or set(locked) != set(rootfs_artifacts.EXPECTED):
+        fail("generated manifests differ from the checked-in rootfs artifact lock")
+    regular = sorted((entry for entry in locked.values() if entry.kind == "file"), key=lambda entry: entry.name)
+    if [entry.name for entry in regular] != sorted(args.file_name):
+        fail("Bazel runtime artifact inputs differ from the fixed file set")
+    payloads = {}
+    for name, path in zip(args.file_name, args.file, strict=True):
+        entry = locked[name]
+        content, metadata = read_bazel_input(Path(path))
+        if stat.S_IMODE(metadata.st_mode) != int(entry.mode, 8) or hashlib.sha256(content).hexdigest() != entry.sha256:
+            fail(f"{name}: generated runtime artifact differs from lock")
+        payloads[name] = content
+    ordered = sorted(locked.values(), key=lambda entry: entry.destination.encode())
+    manifest_entries = []
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w", format=tarfile.USTAR_FORMAT) as bundle:
+        for entry in ordered:
+            member = tarfile.TarInfo(entry.destination.removeprefix("/"))
+            member.mode = int(entry.mode, 8)
+            member.uid = member.gid = 0
+            member.uname = member.gname = ""
+            member.mtime = 0
+            member.pax_headers = {}
+            if entry.kind == "file":
+                content = payloads[entry.name]
+                member.type = tarfile.REGTYPE
+                member.size = len(content)
+                bundle.addfile(member, io.BytesIO(content))
+                manifest_content = f"sha256:{entry.sha256}"
+            else:
+                member.type = tarfile.SYMTYPE
+                member.linkname = entry.link_target
+                member.size = 0
+                bundle.addfile(member)
+                manifest_content = f"target64:{base64.b64encode(entry.link_target.encode()).decode()}"
+            manifest_entries.append(rootfs_manifest.Entry(entry.destination, entry.kind, entry.mode, "0", "0", manifest_content, "-", "-"))
+    manifest_content = rootfs_manifest.serialize(manifest_entries)
+    with tarfile.open(fileobj=io.BytesIO(archive_buffer.getvalue()), mode="r:") as bundle:
+        members = bundle.getmembers()
+        if len(members) != len(ordered):
+            fail("runtime artifact archive member count mismatch")
+        for member, entry, manifest_entry in zip(members, ordered, manifest_entries, strict=True):
+            if (
+                member.name != entry.destination[1:]
+                or member.mode != int(entry.mode, 8)
+                or member.uid != 0
+                or member.gid != 0
+                or member.mtime != 0
+                or member.pax_headers
+                or manifest_entry.path != entry.destination
+            ):
+                fail(f"{entry.name}: runtime artifact archive metadata mismatch")
+            if entry.kind == "file":
+                extracted = bundle.extractfile(member)
+                if not member.isfile() or extracted is None or extracted.read() != payloads[entry.name]:
+                    fail(f"{entry.name}: runtime artifact archive payload mismatch")
+            elif not member.issym() or member.linkname != entry.link_target:
+                fail(f"{entry.name}: runtime artifact archive symlink mismatch")
+    for path, content in ((Path(args.output_tar), archive_buffer.getvalue()), (Path(args.output_manifest), manifest_content)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(6)}")
+        with open(temporary, "xb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("prepare")
-    parser.parse_args()
-    prepare()
+    archive_parser = subparsers.add_parser("archive")
+    archive_parser.add_argument("--lock", required=True)
+    archive_parser.add_argument("--marker", required=True)
+    archive_parser.add_argument("--manifest", action="append", required=True)
+    archive_parser.add_argument("--file-name", action="append", required=True)
+    archive_parser.add_argument("--file", action="append", required=True)
+    archive_parser.add_argument("--output-tar", required=True)
+    archive_parser.add_argument("--output-manifest", required=True)
+    args = parser.parse_args()
+    if args.command == "prepare":
+        prepare()
+    else:
+        archive(args)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, UnicodeError, ValueError) as error:
+    except (OSError, UnicodeError, ValueError, tarfile.TarError) as error:
         raise SystemExit(f"runtime artifact bridge: {error}")

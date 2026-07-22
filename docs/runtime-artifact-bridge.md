@@ -27,8 +27,21 @@ malformed, symlinked, differently owned, incorrectly shaped, or byte-mutated
 trees are preserved and rejected. There is no non-atomic compatibility
 fallback.
 
-This preparation review publishes the generated package but keeps the entire
-`build` tree outside Bazel package discovery. The following consumer review
-narrows that exclusion to expose only authenticated `build/runtime-artifacts`,
-with files visible only to `//image:__pkg__`. Bazel never runs Make or a
-producer.
+The generated package exposes files only to `//image:__pkg__`. Bazel never
+runs Make or a producer. A clean build therefore fails until preparation is
+explicitly completed. `.bazelignore` excludes the other Make/mkosi producer
+trees so `bazel test //...` does not traverse privileged cache content while
+the exact `build/runtime-artifacts` package remains visible.
+
+`//image:runtime-artifact-members` independently checks the marker, lock,
+three manifests, ten file hashes and modes, fixed provenance, destinations,
+and the exact two symlink declarations. It emits only:
+
+- `runtime-artifact-members.tar`, containing twelve byte-sorted members with
+  locked modes, ownership `0:0`, timestamp zero, and no directory, hardlink,
+  device, xattr, or PAX records;
+- `runtime-artifact-members.tsv`, using the canonical eight-field rootfs
+  manifest format.
+
+This prerequisite deliberately performs no final rootfs assembly or shipping
+wiring.

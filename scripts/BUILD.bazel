@@ -3,6 +3,35 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["compare_runtime_package_lock.sh"])
 
 py_library(
+    name = "rootfs-artifact-contract",
+    srcs = [
+        "__init__.py",
+        "rootfs_artifacts.py",
+        "rootfs_manifest.py",
+    ],
+    imports = [".."],
+)
+
+py_binary(
+    name = "runtime_artifact_bridge",
+    srcs = ["runtime_artifact_bridge.py"],
+    legacy_create_init = 0,
+    main = "runtime_artifact_bridge.py",
+    deps = [":rootfs-artifact-contract"],
+)
+
+py_test(
+    name = "runtime-artifact-bridge-test",
+    srcs = ["runtime_artifact_bridge_test.py"],
+    legacy_create_init = 0,
+    main = "runtime_artifact_bridge_test.py",
+    deps = [
+        ":rootfs-artifact-contract",
+        ":runtime_artifact_bridge",
+    ],
+)
+
+py_library(
     name = "runtime_archive_lib",
     srcs = [
         "__init__.py",

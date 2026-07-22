@@ -35,4 +35,7 @@ const (
 	// HTTPChallengePort is the plaintext-HTTP port served by tinfoil-boot
 	// during cert-proxy + tls-challenge.
 	HTTPChallengePort = 80
+
+	// InitBinary is PID 1 after the measured root replaces the initrd.
+	InitBinary = "/usr/bin/tinfoil-init"
 )

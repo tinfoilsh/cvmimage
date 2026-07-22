@@ -34,6 +34,7 @@ PROTECTIVE_MBR_PREFIX = bytes.fromhex("00 00 02 00 ee ff ff ff")
 VERITY_BLOCK_SIZE = 4096
 VERITY_HASH_OFFSET = 4096
 VERITY_DIGEST_SIZE = 32
+ROOTHASH_HEX_SIZE = VERITY_DIGEST_SIZE * 2
 VERITY_SALT = "d8f43870af05f2fb613c2bb571f911da45cfa46a77e6efeabbdd5ed760ebabde"
 ROOT_PARTITION_SIZE = 3 * 1024**3
 ROOT_VERITY_PARTITION_SIZE = 256 * 1024**2
@@ -352,9 +353,9 @@ def inspect_gpt(descriptor):
 
 def read_roothash(descriptor):
     original = file_state(descriptor)
-    value = pread_exact(descriptor, 64, 0, "direct roothash")
-    if os.fstat(descriptor).st_size != 64:
-        fail("direct roothash must contain exactly 64 bytes")
+    value = pread_exact(descriptor, ROOTHASH_HEX_SIZE, 0, "direct roothash")
+    if os.fstat(descriptor).st_size != ROOTHASH_HEX_SIZE:
+        fail(f"direct roothash must contain exactly {ROOTHASH_HEX_SIZE} bytes")
     try:
         text = value.decode("ascii")
     except UnicodeDecodeError:

@@ -40,10 +40,11 @@ arguments with only those descriptors passed to the child. The invocation
 disables superblock parsing and pins format 1, SHA-256, 4096-byte data and hash
 blocks, a 4096-byte hash offset, the GPT-derived data-block count, and the
 measured build salt.
-The verifier independently calculates every SHA-256 format-1 hash-tree level
-at 128 digests per 4096-byte block. It requires the complete 4096-byte prefix
-before the tree and every byte after the exact final tree block through the end
-of the fixed verity partition to be zero.
+The verifier independently calculates the exact extent occupied by every
+SHA-256 format-1 hash-tree level at 128 digests per 4096-byte block;
+`veritysetup verify` authenticates the tree contents. The verifier requires the
+complete 4096-byte prefix before the tree and every byte after the exact final
+tree block through the end of the fixed verity partition to be zero.
 
 After GPT validation it creates a private mount namespace, configures a
 read-only/autoclear/partition-scanning loop device through the kernel ioctl,

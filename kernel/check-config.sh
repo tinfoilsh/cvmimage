@@ -16,6 +16,10 @@ fi
 failures=0
 checks=0
 
+valid_config_key() {
+    [[ "$1" =~ ^CONFIG_[A-Za-z0-9_]+$ ]]
+}
+
 actual_setting() {
     local key=$1
     local actual
@@ -45,7 +49,7 @@ for policy in "$@"; do
         case "$line" in
             CONFIG_*=*)
                 key=${line%%=*}
-                if [[ ! "$key" =~ ^CONFIG_[A-Za-z0-9_]+$ ]]; then
+                if ! valid_config_key "$key"; then
                     fail_setting "$policy" "$line_number" "$line" "$key"
                     continue
                 fi
@@ -57,7 +61,7 @@ for policy in "$@"; do
             "# CONFIG_"*" is not set")
                 key=${line#\# }
                 key=${key% is not set}
-                if [[ ! "$key" =~ ^CONFIG_[A-Za-z0-9_]+$ ]]; then
+                if ! valid_config_key "$key"; then
                     fail_setting "$policy" "$line_number" "$line" "$key"
                     continue
                 fi
@@ -65,6 +69,11 @@ for policy in "$@"; do
                 if grep -Eq "^${key}=" "$resolved_config"; then
                     fail_setting "$policy" "$line_number" "$line" "$key"
                 fi
+                ;;
+            "# CONFIG_"*)
+                printf 'FAIL: malformed disabled-symbol policy at %s:%d: %s\n' \
+                    "$policy" "$line_number" "$line" >&2
+                failures=$((failures + 1))
                 ;;
             ""|\#*)
                 ;;

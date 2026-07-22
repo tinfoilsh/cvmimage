@@ -10,7 +10,7 @@ go_bin=/usr/lib/go-1.25/bin/go
 source_kind=source-build
 source_revision="${TINFOIL_SOURCE_REVISION:?TINFOIL_SOURCE_REVISION is required}"
 initrd_build_parameters='go1.25.7;CGO_ENABLED=0;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid='
-rootfs_build_parameters='go1.25.7;CGO_ENABLED=1;gcc=15.2.0-5ubuntu1;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid= -extldflags=-Wl,--build-id=none'
+rootfs_build_parameters='go1.25.7;CGO_ENABLED=1;gcc=4:15.2.0-5ubuntu1;libc6-dev=2.43-2ubuntu2;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid= -extldflags=-Wl,--build-id=none'
 
 if [[ ! "$source_revision" =~ ^tinfoil-tree:[0-9a-f]{40}$ ]]; then
     echo "builder: invalid TINFOIL_SOURCE_REVISION: $source_revision" >&2

@@ -62,13 +62,11 @@ build_once() {
 build_once a
 build_once b
 
-builder_a="$(sha256sum "$scratch/a/builder.sha256" | cut -d' ' -f1)"
-builder_b="$(sha256sum "$scratch/b/builder.sha256" | cut -d' ' -f1)"
 initrd_a="$(cut -d' ' -f1 "$scratch/a/initrd.sha256")"
 initrd_b="$(cut -d' ' -f1 "$scratch/b/initrd.sha256")"
 
-if [ "$builder_a" != "$builder_b" ]; then
-    echo "builder artifacts differ: $builder_a != $builder_b" >&2
+if ! cmp -s "$scratch/a/builder.sha256" "$scratch/b/builder.sha256"; then
+    echo "builder artifact hash lists differ" >&2
     exit 1
 fi
 if [ "$initrd_a" != "$initrd_b" ]; then

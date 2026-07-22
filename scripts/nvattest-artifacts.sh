@@ -212,7 +212,7 @@ nvattest_publish_runtime_artifacts() {
                     return 1
                 }
                 case "${type}:${path}" in
-                    d:usr|d:usr/bin|d:usr/lib|d:usr/lib/x86_64-linux-gnu|f:.stamp|f:usr/bin/nvattest|"${expected_library}") ;;
+                    d:usr|d:usr/bin|d:usr/lib|d:usr/lib/x86_64-linux-gnu|f:.stamp|f:rootfs-artifacts.tsv|f:usr/bin/nvattest|"${expected_library}") ;;
                     *)
                         echo "refusing to replace unexpected runtime output entry: ${type} ${path}" >&2
                         return 1

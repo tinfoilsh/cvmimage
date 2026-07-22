@@ -4,12 +4,13 @@ set -Eeuo pipefail
 umask 022
 
 artifact_dir="$BUILDDIR/output/artifacts"
-binary="$artifact_dir/tinfoil-initrd"
-manifest="$BUILDDIR/output/artifacts.tsv"
+initrd_manifest="$BUILDDIR/output/artifacts.tsv"
+rootfs_manifest="$BUILDDIR/output/rootfs-artifacts.tsv"
 go_bin=/usr/lib/go-1.25/bin/go
 source_kind=source-build
 source_revision="${TINFOIL_SOURCE_REVISION:?TINFOIL_SOURCE_REVISION is required}"
-build_parameters='go1.25.7;CGO_ENABLED=0;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid='
+initrd_build_parameters='go1.25.7;CGO_ENABLED=0;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid='
+rootfs_build_parameters='go1.25.7;CGO_ENABLED=1;gcc=15.2.0-5ubuntu1;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid= -extldflags=-Wl,--build-id=none'
 
 if [[ ! "$source_revision" =~ ^tinfoil-tree:[0-9a-f]{40}$ ]]; then
     echo "builder: invalid TINFOIL_SOURCE_REVISION: $source_revision" >&2
@@ -23,30 +24,53 @@ if [ "$("$go_bin" version | awk '{print $3}')" != go1.25.7 ]; then
     echo "builder: non-canonical Go toolchain" >&2
     exit 1
 fi
+if [ "$(dpkg-query -W -f='${Version}' gcc)" != '4:15.2.0-5ubuntu1' ] || \
+   [ "$(dpkg-query -W -f='${Version}' libc6-dev)" != '2.43-2ubuntu2' ]; then
+    echo "builder: non-canonical C toolchain" >&2
+    exit 1
+fi
 
 rm -rf "$artifact_dir"
 mkdir -p "$artifact_dir"
 
 cd "$SRCDIR/tinfoil"
-"$go_bin" build \
-    -trimpath \
-    -buildvcs=false \
-    -mod=readonly \
-    -ldflags='-s -w -buildid=' \
-    -o "$binary" \
-    ./cmd/initrd
+build_binary() {
+    local name=$1 package=$2 cgo=$3 ldflags=$4 binary="$artifact_dir/$1"
+    CGO_ENABLED="$cgo" CC=/usr/bin/gcc "$go_bin" build \
+        -trimpath \
+        -buildvcs=false \
+        -mod=readonly \
+        -ldflags="$ldflags" \
+        -o "$binary" \
+        "$package"
+    chmod 0755 "$binary"
+    touch -d @0 "$binary"
+}
 
-chmod 0755 "$binary"
-touch -d @0 "$binary"
+build_binary tinfoil-initrd ./cmd/initrd 0 '-s -w -buildid='
+for name in tinfoil-init tinfoil-boot tinfoil-container-status tinfoil-egress tinfoil-shim; do
+    package="./cmd/${name#tinfoil-}"
+    build_binary "$name" "$package" 1 '-s -w -buildid= -extldflags=-Wl,--build-id=none'
+done
 
-binary_sha256="$(sha256sum "$binary" | awk '{print $1}')"
+initrd_sha256="$(sha256sum "$artifact_dir/tinfoil-initrd" | awk '{print $1}')"
 
 {
     printf '%s\n' '# tinfoil artifact manifest v2'
     printf '%s\n' '# name<TAB>path<TAB>sha256<TAB>mode<TAB>source_kind<TAB>source_revision<TAB>build_parameters'
     printf 'tinfoil-initrd\tartifacts/tinfoil-initrd\t%s\t0755\t%s\t%s\t%s\n' \
-        "$binary_sha256" "$source_kind" "$source_revision" "$build_parameters"
-} > "$manifest"
-touch -d @0 "$manifest"
+        "$initrd_sha256" "$source_kind" "$source_revision" "$initrd_build_parameters"
+} > "$initrd_manifest"
 
-printf 'builder: tinfoil-initrd sha256=%s modules=built-in\n' "$binary_sha256"
+{
+    printf '%s\n' '# rootfs artifact producer manifest v1'
+    printf '%s\n' '# producer<TAB>name<TAB>kind<TAB>path<TAB>mode<TAB>uid<TAB>gid<TAB>sha256<TAB>link_target<TAB>destination<TAB>source_kind<TAB>source_revision<TAB>build_parameters'
+    for name in tinfoil-init tinfoil-boot tinfoil-container-status tinfoil-egress tinfoil-shim; do
+        digest="$(sha256sum "$artifact_dir/$name" | awk '{print $1}')"
+        printf 'go\t%s\tfile\tartifacts/%s\t0755\t0\t0\t%s\t-\t/usr/bin/%s\t%s\t%s\t%s\n' \
+            "$name" "$name" "$digest" "$name" "$source_kind" "$source_revision" "$rootfs_build_parameters"
+    done
+} > "$rootfs_manifest"
+touch -d @0 "$initrd_manifest" "$rootfs_manifest"
+
+printf 'builder: tinfoil-initrd sha256=%s rootfs-binaries=5 modules=built-in\n' "$initrd_sha256"

@@ -23,3 +23,5 @@ mkosi.extra/usr/bin/tinfoil-egress
 mkosi.extra/usr/bin/tinfoil-shim
 /build/
 /evidence/
+/kernel/build/
+/kernel/out/

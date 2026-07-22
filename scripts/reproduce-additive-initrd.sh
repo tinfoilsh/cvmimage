@@ -55,15 +55,15 @@ build_once() {
         TINFOIL_INITRD_OUTPUT="$root/initrd.cpio.zst" \
         "$repo_dir/scripts/build-additive-initrd.sh" >>"$log" 2>&1
 
-    sha256sum "$root/builder-work/output/artifacts/tinfoil-initrd" > "$root/builder.sha256"
+    (cd "$root/builder-work/output" && sha256sum artifacts/*) > "$root/builder.sha256"
     sha256sum "$root/initrd.cpio.zst" > "$root/initrd.sha256"
 }
 
 build_once a
 build_once b
 
-builder_a="$(cut -d' ' -f1 "$scratch/a/builder.sha256")"
-builder_b="$(cut -d' ' -f1 "$scratch/b/builder.sha256")"
+builder_a="$(sha256sum "$scratch/a/builder.sha256" | cut -d' ' -f1)"
+builder_b="$(sha256sum "$scratch/b/builder.sha256" | cut -d' ' -f1)"
 initrd_a="$(cut -d' ' -f1 "$scratch/a/initrd.sha256")"
 initrd_b="$(cut -d' ' -f1 "$scratch/b/initrd.sha256")"
 
@@ -76,10 +76,11 @@ if [ "$initrd_a" != "$initrd_b" ]; then
     cmp -l "$scratch/a/initrd.cpio.zst" "$scratch/b/initrd.cpio.zst" | head -n 100 >&2 || true
     exit 1
 fi
-if ! cmp -s "$scratch/a/builder-work/output/artifacts/tinfoil-initrd" "$scratch/b/builder-work/output/artifacts/tinfoil-initrd"; then
-    echo "builder hashes match but artifacts are not byte-identical" >&2
-    exit 1
-fi
+for path in artifacts.tsv rootfs-artifacts.tsv \
+    artifacts/tinfoil-initrd artifacts/tinfoil-init artifacts/tinfoil-boot \
+    artifacts/tinfoil-container-status artifacts/tinfoil-egress artifacts/tinfoil-shim; do
+    cmp "$scratch/a/builder-work/output/$path" "$scratch/b/builder-work/output/$path"
+done
 if ! cmp -s "$scratch/a/initrd.cpio.zst" "$scratch/b/initrd.cpio.zst"; then
     echo "initrd hashes match but archives are not byte-identical" >&2
     exit 1

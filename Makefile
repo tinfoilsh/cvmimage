@@ -20,7 +20,9 @@ override NVATTEST_BUILDER := $(file <scripts/nvattest-builder-image.txt)
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
 	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
 	verify-runtime-sources update-runtime-locks test-runtime-archives \
-	test-nvattest-artifacts reproducible-nvattest
+	test-nvattest-artifacts reproducible-nvattest \
+	runtime-go-artifacts custom-kernel-artifacts nvidia-module-artifacts verify-rootfs-artifacts \
+	test-rootfs-artifacts reproducible-nvidia-modules reproducible-runtime-artifacts
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -81,6 +83,30 @@ builder-initrd:
 	mkdir -p build/builder-work build/builder-cache build/builder-pkgcache build/builder-workspace; \
 	$(MKOSI) -C builder --environment=TINFOIL_SOURCE_REVISION="$$source_revision" --force build
 	sudo env PATH="$(TRUSTED_PATH)" chown -R "$$(id -u):$$(id -g)" build/builder-work/output
+
+runtime-go-artifacts: builder-initrd
+	@test -f build/builder-work/output/rootfs-artifacts.tsv
+
+custom-kernel-artifacts:
+	./kernel/build-local.sh
+
+nvidia-module-artifacts: custom-kernel-artifacts
+	./kernel/build-nvidia-open-local.sh
+
+verify-rootfs-artifacts: runtime-go-artifacts nvattest nvidia-module-artifacts
+	./scripts/rootfs_artifacts.py --lock image/manifests/rootfs-artifacts.lock.tsv \
+		--manifest go=build/builder-work/output/rootfs-artifacts.tsv \
+		--manifest nvattest=build/rootfs-artifacts/nvattest/rootfs-artifacts.tsv \
+		--manifest nvidia-modules=kernel/out/rootfs-artifacts/nvidia-modules/rootfs-artifacts.tsv
+
+test-rootfs-artifacts:
+	python3 -m unittest scripts.rootfs_artifacts_test
+	./scripts/test-runtime-artifact-producers.sh
+
+reproducible-nvidia-modules:
+	./scripts/reproduce-nvidia-modules.sh
+
+reproducible-runtime-artifacts: reproducible-additive-initrd reproducible-nvattest reproducible-nvidia-modules
 
 additive-initrd: builder-initrd
 	sudo env PATH="$(TRUSTED_PATH)" TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh

@@ -68,6 +68,9 @@ jobs:
       - name: Test exact runtime archive extraction and package data
         run: make test-runtime-archives
 
+      - name: Test rootfs artifact contract
+        run: make test-rootfs-artifacts
+
       - name: Verify all runtime locks
         run: make verify-runtime-sources
 

@@ -167,6 +167,21 @@ nvattest_publish_runtime_artifacts \
     "${RUNTIME_STAGE}" "${RUNTIME_OUT_DIR}" "${SO_VERSION}" \
     "${HOST_UID}" "${HOST_GID}" "${SOURCE_DATE_EPOCH}"
 
+nvattest_source_revision="attestation-sdk:${UPSTREAM_SHA}"
+nvattest_build_parameters="tag=${UPSTREAM_TAG};apt=${APT_SNAPSHOT_DATE};json=${JSON_SHA256};cli11=${DEP_SHAS[cli11]};corrosion=${DEP_SHAS[corrosion]};regorus=${DEP_SHAS[regorus]};regorus-lock=${REGORUS_LOCK_SHA256};jwt-cpp=${DEP_SHAS[jwt-cpp]};fmt=${DEP_SHAS[fmt]};spdlog=${DEP_SHAS[spdlog]};x86-64;build-id=none"
+nvattest_sha256="$(sha256sum "${RUNTIME_OUT_DIR}/usr/bin/nvattest" | awk '{print $1}')"
+libnvat_sha256="$(sha256sum "${RUNTIME_OUT_DIR}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" | awk '{print $1}')"
+cat > "${RUNTIME_OUT_DIR}/rootfs-artifacts.tsv" <<EOF
+# rootfs artifact producer manifest v1
+# producer<TAB>name<TAB>kind<TAB>path<TAB>mode<TAB>uid<TAB>gid<TAB>sha256<TAB>link_target<TAB>destination<TAB>source_kind<TAB>source_revision<TAB>build_parameters
+nvattest	nvattest	file	usr/bin/nvattest	0755	0	0	${nvattest_sha256}	-	/usr/bin/nvattest	source-build	${nvattest_source_revision}	${nvattest_build_parameters}
+nvattest	libnvat.so.1.2.2	file	usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}	0644	0	0	${libnvat_sha256}	-	/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}	source-build	${nvattest_source_revision}	${nvattest_build_parameters}
+nvattest	libnvat.so.1	symlink	-	0777	0	0	-	libnvat.so.${SO_VERSION}	/usr/lib/x86_64-linux-gnu/libnvat.so.1	assembly-declaration	${nvattest_source_revision}	${nvattest_build_parameters}
+nvattest	libnvat.so	symlink	-	0777	0	0	-	libnvat.so.1	/usr/lib/x86_64-linux-gnu/libnvat.so	assembly-declaration	${nvattest_source_revision}	${nvattest_build_parameters}
+EOF
+touch -d "@${SOURCE_DATE_EPOCH}" "${RUNTIME_OUT_DIR}/rootfs-artifacts.tsv"
+chown "${HOST_UID}:${HOST_GID}" "${RUNTIME_OUT_DIR}/rootfs-artifacts.tsv"
+
 make_deb() {
     local stage=$1 pkg=$2 section=$3 deps=$4 desc=$5
     local size; size=$(du -sk "${stage}/usr" | awk '{print $1}')

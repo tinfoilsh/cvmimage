@@ -11,7 +11,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
                            build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
-	runtime-builder builder-initrd additive-initrd verify-additive-initrd \
+	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
@@ -75,6 +75,11 @@ test-go-producer:
 
 test-runtime-builder-contract:
 	./scripts/test-runtime-builder-contract.sh
+
+bazel-rootfs: builder-initrd nvattest nvidia-module-artifacts
+	$(BAZEL) build --lockfile_mode=error //image:rootfs
+	mkdir -p build/stage
+	install -m 0644 bazel-bin/image/bazel-rootfs.tar build/stage/bazel-rootfs.tar
 
 custom-kernel-artifacts: runtime-builder
 	./scripts/run-runtime-builder.sh kernel

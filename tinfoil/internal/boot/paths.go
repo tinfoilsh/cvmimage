@@ -29,6 +29,10 @@ const (
 	StatePath          = PrivateDir + "/boot-state.json"
 	EgressStatePath    = PrivateDir + "/egress-prev"
 
+	// NVIDIABootstrapStatusPath is the fixed PID 1 to tinfoil-boot handoff
+	// for NVIDIA bring-up readiness.
+	NVIDIABootstrapStatusPath = "/run/tinfoil/nvidia-bootstrap-status"
+
 	// ShimListenPort is the public TLS port served by tinfoil-shim.
 	ShimListenPort = 443
 

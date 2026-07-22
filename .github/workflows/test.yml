@@ -36,3 +36,6 @@ jobs:
 
       - name: Test fixed rootfs policy
         run: make test-rootfs-policy
+
+      - name: Test Fabric Manager config contract
+        run: ./scripts/test-fabric-manager-config.sh

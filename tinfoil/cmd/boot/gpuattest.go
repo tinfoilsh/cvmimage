@@ -50,16 +50,6 @@ func forEachNVIDIAGPU(fn func(entryName string) bool) error {
 	return nil
 }
 
-// detectGPUCount returns the number of NVIDIA 3D-controller PCI devices
-// in the guest. The caller validates against the config-declared count.
-func detectGPUCount() (int, error) {
-	count := 0
-	if err := forEachNVIDIAGPU(func(string) bool { count++; return true }); err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
 // detectGPUArch returns "h100", "h200", "b200", "b300", or "" from the first GPU.
 func detectGPUArch() (string, error) {
 	const pciPath = "/sys/bus/pci/devices"

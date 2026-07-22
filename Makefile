@@ -126,6 +126,7 @@ test-final-rootfs-verifier:
 	./scripts/test-final-rootfs-verifier.sh
 
 test-runtime-locks:
+	./scripts/test-update-runtime-locks.sh
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-test test \
 		--symlink_prefix=/tmp/cvmimage-bazel-runtime-lock-test- \
 		//image:runtime-package-lock-test

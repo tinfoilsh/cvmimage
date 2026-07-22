@@ -17,7 +17,14 @@ if [ "$("$bazel_bin" --version)" != "bazel 8.7.0" ]; then
 fi
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/cvmimage-runtime-lock.XXXXXXXX")"
-trap 'rm -rf -- "$scratch"' EXIT
+replacement=
+cleanup() {
+    rm -rf -- "$scratch"
+    if [ -n "$replacement" ]; then
+        rm -f -- "$replacement"
+    fi
+}
+trap cleanup EXIT
 
 resolve_once() {
     local name=$1
@@ -41,14 +48,25 @@ EOF
         cd "$workspace"
         "$bazel_bin" --batch --output_base="$output_base" build --lockfile_mode=update \
             '@@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile'
-        lockfile="$("$bazel_bin" --batch --output_base="$output_base" cquery \
+        "$bazel_bin" --batch --output_base="$output_base" cquery \
             --lockfile_mode=error --output=files \
-            '@@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile')"
+            '@@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile' \
+            > "$generated/cquery.out"
+        mapfile -t outputs < "$generated/cquery.out"
+        if [ "${#outputs[@]}" -ne 1 ] || [ -z "${outputs[0]}" ]; then
+            printf 'expected one generated package lock, got %s\n' "${#outputs[@]}" >&2
+            exit 1
+        fi
+        lockfile=${outputs[0]}
         case "$lockfile" in
             /*) ;;
-            *) lockfile="$output_base/$lockfile" ;;
+            *)
+                execution_root="$("$bazel_bin" --batch --output_base="$output_base" \
+                    info --lockfile_mode=error execution_root)"
+                lockfile="$execution_root/$lockfile"
+                ;;
         esac
-        cp "$lockfile" "$generated/runtime-packages.lock.json"
+        cp -- "$lockfile" "$generated/runtime-packages.lock.json"
     )
 }
 
@@ -56,13 +74,14 @@ resolve_once first
 resolve_once second
 cmp "$scratch/first/generated/runtime-packages.lock.json" \
     "$scratch/second/generated/runtime-packages.lock.json"
+(cd "$repo_dir" && "$bazel_bin" mod deps --lockfile_mode=error >/dev/null)
 
 if [ "$check_only" -eq 1 ]; then
     cmp "$scratch/first/generated/runtime-packages.lock.json" \
         "$repo_dir/image/runtime-packages.lock.json"
 else
-    install -m 0644 "$scratch/first/generated/runtime-packages.lock.json" \
-        "$repo_dir/image/runtime-packages.lock.json"
+    replacement="$(mktemp "$repo_dir/image/.runtime-packages.lock.json.XXXXXXXX")"
+    install -m 0644 "$scratch/first/generated/runtime-packages.lock.json" "$replacement"
+    mv -f -- "$replacement" "$repo_dir/image/runtime-packages.lock.json"
+    replacement=
 fi
-
-(cd "$repo_dir" && "$bazel_bin" mod deps --lockfile_mode=error >/dev/null)

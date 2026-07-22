@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	shimconfig "tinfoil/internal/config"
 )
@@ -46,6 +47,31 @@ func TestNetworkInterfaceAtPCIRejectsAmbiguousTopology(t *testing.T) {
 	}
 }
 
+func TestWaitForNetworkInterfacePollsUntilSysfsAppears(t *testing.T) {
+	root := t.TempDir()
+	createErr := make(chan error, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		createErr <- os.MkdirAll(
+			filepath.Join(root, "0000:00:02.0", "virtio0", "net", "ens2"),
+			0755,
+		)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	got, err := waitForNetworkInterface(ctx, root, "0000:00:02.0", 5*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-createErr; err != nil {
+		t.Fatal(err)
+	}
+	if got != "ens2" {
+		t.Fatalf("waitForNetworkInterface() = %q, want ens2", got)
+	}
+}
+
 func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
 	var calls []string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -53,17 +79,23 @@ func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
 		return nil, nil
 	}
 	config := shimconfig.ExternalNetworkConfig{
-		Version: 1,
+		Version: 2,
 		Address: "100.64.0.42/20",
 		Gateway: "100.64.0.1",
+		DNS:     "1.1.1.1",
 	}
 	if err := applyStaticNetwork(context.Background(), "ens2", &config, run); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"/usr/sbin/ip link set dev ens2 up",
+		"/usr/sbin/ip addr flush dev ens2",
+		"/usr/sbin/ip route flush dev ens2",
 		"/usr/sbin/ip addr replace 100.64.0.42/20 dev ens2",
 		"/usr/sbin/ip route replace default via 100.64.0.1 dev ens2",
+		"/usr/bin/resolvectl dns ens2 1.1.1.1",
+		"/usr/bin/resolvectl domain ens2 ~.",
+		"/usr/bin/resolvectl default-route ens2 yes",
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
@@ -72,9 +104,10 @@ func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
 
 func TestApplyStaticNetworkPropagatesCommandFailure(t *testing.T) {
 	config := &shimconfig.ExternalNetworkConfig{
-		Version: 1,
+		Version: 2,
 		Address: "100.64.0.42/20",
 		Gateway: "100.64.0.1",
+		DNS:     "1.1.1.1",
 	}
 	run := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return []byte("permission denied"), errors.New("exit status 2")
@@ -82,5 +115,28 @@ func TestApplyStaticNetworkPropagatesCommandFailure(t *testing.T) {
 	err := applyStaticNetwork(context.Background(), "ens2", config, run)
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("command failure = %v", err)
+	}
+}
+
+func TestImageNetworkWiringLeavesNICToTinfoilBoot(t *testing.T) {
+	networkdConfig, err := os.ReadFile(
+		"../../../mkosi.extra/etc/systemd/network/20-enp0s2.network",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(networkdConfig), "Unmanaged=yes") ||
+		strings.Contains(string(networkdConfig), "DHCP=") {
+		t.Fatalf("networkd still owns guest addressing:\n%s", networkdConfig)
+	}
+
+	bootUnit, err := os.ReadFile(
+		"../../../mkosi.extra/etc/systemd/system/tinfoil-boot.service",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(bootUnit), "network-online.target") {
+		t.Fatalf("tinfoil-boot still waits for network-online.target:\n%s", bootUnit)
 	}
 }

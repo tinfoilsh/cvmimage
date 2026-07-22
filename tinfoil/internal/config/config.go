@@ -70,6 +70,7 @@ type ExternalNetworkConfig struct {
 	Version int    `yaml:"version"`
 	Address string `yaml:"address"`
 	Gateway string `yaml:"gateway"`
+	DNS     string `yaml:"dns"`
 }
 
 type ExternalConfig struct {

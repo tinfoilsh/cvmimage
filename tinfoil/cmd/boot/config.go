@@ -147,7 +147,7 @@ func validateExternalNetwork(config *shimconfig.ExternalNetworkConfig) error {
 	if config == nil {
 		return fmt.Errorf("network section is required")
 	}
-	if config.Version != 1 {
+	if config.Version != 2 {
 		return fmt.Errorf("unsupported external network version %d", config.Version)
 	}
 	prefix, err := netip.ParsePrefix(config.Address)
@@ -160,6 +160,10 @@ func validateExternalNetwork(config *shimconfig.ExternalNetworkConfig) error {
 	gateway, err := netip.ParseAddr(config.Gateway)
 	if err != nil || !gateway.Is4() {
 		return fmt.Errorf("invalid IPv4 gateway %q", config.Gateway)
+	}
+	dns, err := netip.ParseAddr(config.DNS)
+	if err != nil || !dns.Is4() {
+		return fmt.Errorf("invalid IPv4 DNS server %q", config.DNS)
 	}
 	if !prefix.Contains(gateway) {
 		return fmt.Errorf("gateway %s is outside address subnet %s", config.Gateway, config.Address)

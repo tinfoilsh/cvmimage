@@ -38,41 +38,50 @@ func TestValidateModelCount(t *testing.T) {
 
 func TestValidateExternalNetwork(t *testing.T) {
 	valid := shimconfig.ExternalNetworkConfig{
-		Version: 1,
+		Version: 2,
 		Address: "100.64.0.42/20",
 		Gateway: "100.64.0.1",
+		DNS:     "1.1.1.1",
 	}
 	if err := validateExternalNetwork(&valid); err != nil {
 		t.Fatalf("valid network rejected: %v", err)
 	}
 
-	for name, config := range map[string]shimconfig.ExternalNetworkConfig{
-		"version zero": {Version: 0, Address: valid.Address, Gateway: valid.Gateway},
-		"version two":  {Version: 2, Address: valid.Address, Gateway: valid.Gateway},
-		"version negative": {
-			Version: -1, Address: valid.Address, Gateway: valid.Gateway,
+	for name, mutate := range map[string]func(*shimconfig.ExternalNetworkConfig){
+		"version zero":     func(c *shimconfig.ExternalNetworkConfig) { c.Version = 0 },
+		"version one":      func(c *shimconfig.ExternalNetworkConfig) { c.Version = 1 },
+		"version negative": func(c *shimconfig.ExternalNetworkConfig) { c.Version = -1 },
+		"IPv6": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "2001:db8::2/64", "2001:db8::1"
 		},
-		"IPv6": {Version: 1, Address: "2001:db8::2/64", Gateway: "2001:db8::1"},
-		"mapped IPv6": {
-			Version: 1, Address: "::ffff:100.64.0.42/120", Gateway: "::ffff:100.64.0.1",
+		"mapped IPv6": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "::ffff:100.64.0.42/120", "::ffff:100.64.0.1"
 		},
-		"missing prefix": {Version: 1, Address: "100.64.0.42", Gateway: valid.Gateway},
-		"point-to-point prefix": {
-			Version: 1, Address: "192.0.2.0/31", Gateway: "192.0.2.1",
+		"missing prefix": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address = "100.64.0.42"
 		},
-		"host prefix": {Version: 1, Address: "192.0.2.1/32", Gateway: "192.0.2.1"},
-		"subnet":      {Version: 1, Address: valid.Address, Gateway: "192.0.2.1"},
-		"network":     {Version: 1, Address: "100.64.0.0/20", Gateway: valid.Gateway},
-		"broadcast":   {Version: 1, Address: "100.64.15.255/20", Gateway: valid.Gateway},
-		"gateway":     {Version: 1, Address: "100.64.0.1/20", Gateway: valid.Gateway},
-		"gateway network": {
-			Version: 1, Address: valid.Address, Gateway: "100.64.0.0",
+		"point-to-point prefix": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "192.0.2.0/31", "192.0.2.1"
 		},
-		"gateway broadcast": {
-			Version: 1, Address: valid.Address, Gateway: "100.64.15.255",
+		"host prefix": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "192.0.2.1/32", "192.0.2.1"
 		},
+		"subnet":    func(c *shimconfig.ExternalNetworkConfig) { c.Gateway = "192.0.2.1" },
+		"network":   func(c *shimconfig.ExternalNetworkConfig) { c.Address = "100.64.0.0/20" },
+		"broadcast": func(c *shimconfig.ExternalNetworkConfig) { c.Address = "100.64.15.255/20" },
+		"gateway":   func(c *shimconfig.ExternalNetworkConfig) { c.Address = "100.64.0.1/20" },
+		"gateway network": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Gateway = "100.64.0.0"
+		},
+		"gateway broadcast": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Gateway = "100.64.15.255"
+		},
+		"invalid DNS": func(c *shimconfig.ExternalNetworkConfig) { c.DNS = "not-an-ip" },
+		"IPv6 DNS":    func(c *shimconfig.ExternalNetworkConfig) { c.DNS = "2001:db8::53" },
 	} {
 		t.Run(name, func(t *testing.T) {
+			config := valid
+			mutate(&config)
 			if err := validateExternalNetwork(&config); err == nil {
 				t.Fatalf("invalid network accepted: %+v", config)
 			}
@@ -86,9 +95,10 @@ func TestValidateExternalNetwork(t *testing.T) {
 func TestDecodeExternalConfigRequiresStrictNetwork(t *testing.T) {
 	valid := []byte(`
 network:
-  version: 1
+  version: 2
   address: 10.0.2.15/24
   gateway: 10.0.2.2
+  dns: 10.0.2.3
 secrets:
   API_KEY: secret
 `)
@@ -96,7 +106,7 @@ secrets:
 		t.Fatalf("valid external config rejected: %v", err)
 	}
 
-	unknown := strings.Replace(string(valid), "  gateway:", "  dns: 10.0.2.3\n  gateway:", 1)
+	unknown := strings.Replace(string(valid), "  gateway:", "  unexpected: true\n  gateway:", 1)
 	if _, err := decodeExternalConfig([]byte(unknown)); err == nil {
 		t.Fatal("decodeExternalConfig accepted an unknown network field")
 	}

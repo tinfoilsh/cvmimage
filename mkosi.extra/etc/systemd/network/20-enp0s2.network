@@ -1,6 +1,7 @@
 [Match]
-Name=enp0s2
+Path=pci-0000:00:02.0
 
-[Network]
-DHCP=yes
-IPv6AcceptRA=no
+[Link]
+# tinfoil-boot exclusively owns this measured NIC and applies the validated
+# external_config.network contract. networkd must not start or renew DHCP.
+Unmanaged=yes

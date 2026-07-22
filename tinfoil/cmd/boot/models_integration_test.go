@@ -21,8 +21,9 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 
 	ref := os.Getenv("TINFOIL_EMWP_REF")
 	key := os.Getenv("TINFOIL_EMWP_KEY_B64")
-	if ref == "" || key == "" {
-		t.Fatal("TINFOIL_EMWP_REF and TINFOIL_EMWP_KEY_B64 are required")
+	device := os.Getenv("TINFOIL_EMWP_DEVICE")
+	if ref == "" || key == "" || device == "" {
+		t.Fatal("TINFOIL_EMWP_REF, TINFOIL_EMWP_KEY_B64, and TINFOIL_EMWP_DEVICE are required")
 	}
 
 	spec, err := parseModelPackRef(ref)
@@ -40,7 +41,7 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 		KeySecret: "PRIVATE_MODEL_KEY",
 	}, &shimconfig.ExternalConfig{
 		Secrets: map[string]string{"PRIVATE_MODEL_KEY": key},
-	})
+	}, device)
 	if err != nil {
 		t.Fatalf("mounting EMWP: %v", err)
 	}

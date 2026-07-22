@@ -38,4 +38,8 @@ const (
 
 	// InitBinary is PID 1 after the measured root replaces the initrd.
 	InitBinary = "/usr/bin/tinfoil-init"
+
+	// ExternalNICPCIAddress is the measured virtio-net topology ABI. It MUST
+	// match tinfoild/admin/guest_topology.go.
+	ExternalNICPCIAddress = "0000:00:02.0"
 )

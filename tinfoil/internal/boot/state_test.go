@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestNetworkStagePrecedesIdentityAndAttestation(t *testing.T) {
+	positions := make(map[string]int, len(InitialStages))
+	for index, stage := range InitialStages {
+		positions[stage] = index
+	}
+	for _, stage := range []string{StageNetwork, StageIdentity, StageCPUAttestation} {
+		if _, ok := positions[stage]; !ok {
+			t.Fatalf("required stage %q is missing: %v", stage, InitialStages)
+		}
+	}
+	if positions[StageNetwork] >= positions[StageIdentity] ||
+		positions[StageNetwork] >= positions[StageCPUAttestation] {
+		t.Fatalf("network stage must precede network-dependent boot work: %v", InitialStages)
+	}
+}
+
 func TestWriteStateAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "boot-state.json")

@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 
@@ -55,18 +57,32 @@ type Metadata struct {
 	ID     string `yaml:"id"`
 	Domain string `yaml:"domain"`
 	Image  string `yaml:"image"`
+	CPU    string `yaml:"cpu"`
 	GPU    string `yaml:"gpu"`
 	Repo   string `yaml:"repo,omitempty"`
 	Digest string `yaml:"digest,omitempty"`
+	// Extra preserves operator metadata that tinfoild merges into this
+	// unmeasured document. Only the security-sensitive network block is closed.
+	Extra map[string]yaml.Node `yaml:",inline"`
+}
+
+type ExternalNetworkConfig struct {
+	Address string `yaml:"address"`
+	Gateway string `yaml:"gateway"`
 }
 
 type ExternalConfig struct {
-	MetricsAPIKey string
-	ACPIAPIKey    string
-	Env           map[string]string `yaml:"env"`
-	Secrets       map[string]string `yaml:"secrets"`
-	Metadata      Metadata          `yaml:"metadata"`
-	VaultToken    string            `yaml:"vault-token,omitempty"`
+	MetricsAPIKey string                 `yaml:"-"`
+	ACPIAPIKey    string                 `yaml:"-"`
+	Env           map[string]string      `yaml:"env"`
+	Secrets       map[string]string      `yaml:"secrets"`
+	Metadata      Metadata               `yaml:"metadata"`
+	VaultToken    string                 `yaml:"vault-token,omitempty"`
+	Network       *ExternalNetworkConfig `yaml:"network"`
+
+	// tinfoild preserves operator-owned top-level external data. Keep accepting
+	// those unrelated keys while KnownFields rejects unknown network fields.
+	Extra map[string]yaml.Node `yaml:",inline"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {
@@ -78,6 +94,31 @@ func (e *ExternalConfig) GetSecret(key string) string {
 		return ""
 	}
 	return v
+}
+
+// DecodeExternal strictly decodes typed external-config sections. Unknown
+// operator-owned top-level keys remain opaque through ExternalConfig.Extra.
+func DecodeExternal(data []byte) (*ExternalConfig, error) {
+	var config ExternalConfig
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode external config: %v", err)
+	}
+	var trailing yaml.Node
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("failed to decode external config: multiple YAML documents")
+		}
+		return nil, fmt.Errorf("failed to decode external config: %v", err)
+	}
+	if err := defaults.Set(&config); err != nil {
+		return nil, fmt.Errorf("failed to set external config defaults: %v", err)
+	}
+
+	config.MetricsAPIKey = config.GetSecret(SecretMetricsAPIKey)
+	config.ACPIAPIKey = config.GetSecret(SecretACPIAPIKey)
+	return &config, nil
 }
 
 // Decode populates a Config from a yaml.Node (a parsed YAML subtree),
@@ -135,16 +176,9 @@ func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read external config file: %v", err)
 	}
-	var externalConfig ExternalConfig
-	if err := yaml.Unmarshal(externalConfigBytes, &externalConfig); err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal external config: %v", err)
+	externalConfig, err := DecodeExternal(externalConfigBytes)
+	if err != nil {
+		return nil, nil, err
 	}
-	if err := defaults.Set(&externalConfig); err != nil {
-		return nil, nil, fmt.Errorf("failed to set defaults: %v", err)
-	}
-
-	externalConfig.MetricsAPIKey = externalConfig.GetSecret(SecretMetricsAPIKey)
-	externalConfig.ACPIAPIKey = externalConfig.GetSecret(SecretACPIAPIKey)
-
-	return config, &externalConfig, nil
+	return config, externalConfig, nil
 }

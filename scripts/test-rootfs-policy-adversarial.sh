@@ -16,8 +16,12 @@ fail() {
 copy_case() {
     local name=$1
     local case_dir="$scratch/$name"
-    mkdir -p "$case_dir/scripts" || fail "failed to create case directory: $name"
+    mkdir -p "$case_dir/scripts" "$case_dir/mkosi.extra/etc/containerd" ||
+        fail "failed to create case directory: $name"
     cp -a "$repo_dir/image" "$case_dir/" || fail "failed to copy policy image: $name"
+    cp -a "$repo_dir/mkosi.extra/etc/containerd/config.toml" \
+        "$case_dir/mkosi.extra/etc/containerd/" ||
+        fail "failed to copy installed containerd configuration: $name"
     cp -a "$repo_dir/scripts/test-rootfs-policy.sh" "$case_dir/scripts/" ||
         fail "failed to copy policy verifier: $name"
     printf '%s\n' "$case_dir"
@@ -84,4 +88,14 @@ fi
 case_dir=$(copy_case symlink)
 rm "$case_dir/image/rootfs/etc/hosts"
 ln -s hostname "$case_dir/image/rootfs/etc/hosts"
+expect_rejected "$case_dir"
+
+case_dir=$(copy_case installed-containerd-mismatch)
+printf '\n# unexpected\n' >>"$case_dir/mkosi.extra/etc/containerd/config.toml"
+expect_rejected "$case_dir"
+
+case_dir=$(copy_case installed-containerd-symlink)
+rm "$case_dir/mkosi.extra/etc/containerd/config.toml"
+ln -s ../../../image/rootfs/etc/containerd/config.toml \
+    "$case_dir/mkosi.extra/etc/containerd/config.toml"
 expect_rejected "$case_dir"

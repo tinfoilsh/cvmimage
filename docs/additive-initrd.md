@@ -44,9 +44,9 @@ artifact is `initrd.cpio.zst`.
 The additive artifact remains opt-in until the image switch activates the
 minimized built-in kernel. The current distro initrd stays wired to the current
 stock-kernel image, so this milestone does not create a temporarily unbootable
-default build. The release workflow also retains its existing mkosi v25.3 pin;
-the v26 requirement applies only to the opt-in additive targets. No subtractive
-initrd finalizer is introduced.
+default build. The direct-roothash follow-up upgrades the release builder to
+mkosi v26 only to consume its fixed split roothash artifact; it does not select
+this opt-in initrd. No subtractive initrd finalizer is introduced.
 
 The assembler requires Zstandard CLI 1.5.7 and fails closed on another version.
 Compression uses one thread, level 19, no progress output, and a fixed input

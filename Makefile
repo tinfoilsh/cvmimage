@@ -12,18 +12,33 @@ NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0
 
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
 	builder-initrd additive-initrd verify-additive-initrd \
-	test-additive-initrd reproducible-additive-initrd
+	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts
 
-# tinfoilcvm.hash is written as an artifact of `build`; read it from there if
-# present, otherwise extract the dm-verity roothash from the UKI's .cmdline
-# section. grep -aoE finds the roothash= token regardless of position so the
-# command stays correct even if mkosi adds other kv pairs to the cmdline.
+# tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
+# direct roothash split artifact is the source contract.
 hash:
-	@if [ -f tinfoilcvm.hash ]; then \
-	    cat tinfoilcvm.hash; \
-	else \
-	    objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -aoE 'roothash=[a-f0-9]+' | cut -d= -f2; \
-	fi
+	@if [ ! -f tinfoilcvm.roothash ]; then \
+	    echo "missing authoritative tinfoilcvm.roothash" >&2; \
+	    exit 1; \
+	fi; \
+	if [ "$$(wc -c < tinfoilcvm.roothash)" -ne 64 ] || ! grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.roothash; then \
+	    echo "invalid roothash artifact tinfoilcvm.roothash" >&2; \
+	    exit 1; \
+	fi; \
+	if [ -f tinfoilcvm.hash ]; then \
+	    if [ "$$(wc -c < tinfoilcvm.hash)" -ne 64 ] || ! grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.hash; then \
+	        echo "invalid compatibility artifact tinfoilcvm.hash" >&2; \
+	        exit 1; \
+	    fi; \
+	    if ! cmp -s tinfoilcvm.roothash tinfoilcvm.hash; then \
+	        echo "tinfoilcvm.hash differs from authoritative tinfoilcvm.roothash" >&2; \
+	        exit 1; \
+	    fi; \
+	fi; \
+	cat tinfoilcvm.roothash
+
+test-roothash-artifacts:
+	./scripts/test-roothash-artifacts.sh
 
 clean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
@@ -81,7 +96,9 @@ rebuild: go-binaries
 	mkdir -p mkosi.cache packages
 	$(MKOSI) --force
 	rm -f tinfoilcvm
-	objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | grep -aoE 'roothash=[a-f0-9]+' | cut -d= -f2 > tinfoilcvm.hash
+	test "$$(wc -c < tinfoilcvm.roothash)" -eq 64
+	grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.roothash
+	cp tinfoilcvm.roothash tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
 build: nvattest rebuild

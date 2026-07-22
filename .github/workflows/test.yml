@@ -2,7 +2,7 @@ name: Test
 
 on:
   pull_request:
-    branches: [main, jules/harden-tcb]
+    branches: [main, jules/harden-tcb, jules/tcb-bazel-runtime-lock]
   push:
     branches: [main]
 
@@ -64,6 +64,9 @@ jobs:
 
       - name: Test runtime locks
         run: make test-runtime-locks
+
+      - name: Test exact runtime archive extraction
+        run: make test-runtime-archives
 
       - name: Verify Docker and NVIDIA source locks
         run: make verify-runtime-sources

@@ -105,9 +105,15 @@ resolve_once() {
         "$tree/generated/runtime-sources.lock.json" \
         "$tree/generated/runtime-packages.lock.json"
     cp -- "$repo_dir/MODULE.bazel" "$tree/workspace/MODULE.bazel"
+    cp -- "$repo_dir/image/runtime_sources.bzl" "$tree/workspace/image/runtime_sources.bzl"
+    cp -- "$tree/generated/runtime-sources.lock.json" "$tree/workspace/image/runtime-sources.lock.json"
     cp -- "$tree/generated/runtime-packages.lock.json" "$tree/workspace/image/runtime-packages.lock.json"
     cat > "$tree/workspace/image/BUILD.bazel" <<'EOF'
-exports_files(["runtime-packages.lock.json", "runtime-packages.yaml"])
+exports_files([
+    "runtime-packages.lock.json",
+    "runtime-packages.yaml",
+    "runtime-sources.lock.json",
+])
 EOF
     rm -f -- "$tree/workspace/MODULE.bazel.lock"
     (

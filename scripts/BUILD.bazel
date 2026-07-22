@@ -2,6 +2,30 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["compare_runtime_package_lock.sh"])
 
+py_library(
+    name = "runtime_archive_lib",
+    srcs = [
+        "__init__.py",
+        "runtime_archive.py",
+    ],
+    imports = [".."],
+)
+
+py_binary(
+    name = "runtime_archive_tool",
+    srcs = ["runtime_archive.py"],
+    legacy_create_init = 0,
+    main = "runtime_archive.py",
+)
+
+py_test(
+    name = "runtime-archive-test",
+    srcs = ["runtime_archive_test.py"],
+    legacy_create_init = 0,
+    main = "runtime_archive_test.py",
+    deps = [":runtime_archive_lib"],
+)
+
 sh_test(
     name = "runtime-source-lock-test",
     srcs = ["test-runtime-source-lock.sh"],

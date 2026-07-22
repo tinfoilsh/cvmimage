@@ -4,6 +4,12 @@ module(
 )
 
 bazel_dep(name = "rules_distroless", version = "0.8.0")
+bazel_dep(name = "rules_python", version = "2.2.0")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.defaults(python_version = "3.14")
+python.toolchain(python_version = "3.14")
+use_repo(python, "python_3_14")
 
 apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
 apt.install(
@@ -12,3 +18,21 @@ apt.install(
     manifest = "//image:runtime-packages.yaml",
 )
 use_repo(apt, "ubuntu_runtime")
+
+runtime_sources = use_extension("//image:runtime_sources.bzl", "runtime_sources")
+runtime_sources.from_lock(lock = "//image:runtime-sources.lock.json")
+use_repo(
+    runtime_sources,
+    "runtime_source_docker_static",
+    "runtime_source_libnvidia_cfg1",
+    "runtime_source_libnvidia_compute",
+    "runtime_source_libnvidia_container_tools",
+    "runtime_source_libnvidia_container1",
+    "runtime_source_libnvidia_gpucomp",
+    "runtime_source_libnvidia_nscq",
+    "runtime_source_nvidia_container_toolkit",
+    "runtime_source_nvidia_container_toolkit_base",
+    "runtime_source_nvidia_fabricmanager",
+    "runtime_source_nvidia_firmware",
+    "runtime_source_nvidia_persistenced",
+)

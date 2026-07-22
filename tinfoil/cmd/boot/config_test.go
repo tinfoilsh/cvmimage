@@ -38,10 +38,10 @@ func TestValidateModelCount(t *testing.T) {
 
 func TestValidateExternalNetwork(t *testing.T) {
 	valid := shimconfig.ExternalNetworkConfig{
-		Version: 2,
-		Address: "100.64.0.42/20",
-		Gateway: "100.64.0.1",
-		DNS:     "1.1.1.1",
+		Version:     2,
+		Address:     "100.64.0.42/20",
+		Gateway:     "100.64.0.1",
+		Nameservers: []string{"1.1.1.1", "1.0.0.1"},
 	}
 	if err := validateExternalNetwork(&valid); err != nil {
 		t.Fatalf("valid network rejected: %v", err)
@@ -76,8 +76,15 @@ func TestValidateExternalNetwork(t *testing.T) {
 		"gateway broadcast": func(c *shimconfig.ExternalNetworkConfig) {
 			c.Gateway = "100.64.15.255"
 		},
-		"invalid DNS": func(c *shimconfig.ExternalNetworkConfig) { c.DNS = "not-an-ip" },
-		"IPv6 DNS":    func(c *shimconfig.ExternalNetworkConfig) { c.DNS = "2001:db8::53" },
+		"missing DNS": func(c *shimconfig.ExternalNetworkConfig) { c.Nameservers = nil },
+		"invalid DNS": func(c *shimconfig.ExternalNetworkConfig) { c.Nameservers = []string{"not-an-ip"} },
+		"IPv6 DNS":    func(c *shimconfig.ExternalNetworkConfig) { c.Nameservers = []string{"2001:db8::53"} },
+		"duplicate DNS": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Nameservers = []string{"1.1.1.1", "1.1.1.1"}
+		},
+		"too many DNS servers": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Nameservers = []string{"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4"}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := valid
@@ -98,7 +105,7 @@ network:
   version: 2
   address: 10.0.2.15/24
   gateway: 10.0.2.2
-  dns: 10.0.2.3
+  nameservers: [10.0.2.3]
 secrets:
   API_KEY: secret
 `)

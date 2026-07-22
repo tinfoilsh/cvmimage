@@ -35,7 +35,7 @@ network:
   version: 2
   address: 100.64.0.42/20
   gateway: 100.64.0.1
-  dns: 1.1.1.1
+  nameservers: [1.1.1.1, 1.0.0.1]
 secrets:
   METRICS_API_KEY: metrics-secret
 metadata:
@@ -51,7 +51,9 @@ operator-extension:
 		config.Network.Version != 2 ||
 		config.Network.Address != "100.64.0.42/20" ||
 		config.Network.Gateway != "100.64.0.1" ||
-		config.Network.DNS != "1.1.1.1" {
+		len(config.Network.Nameservers) != 2 ||
+		config.Network.Nameservers[0] != "1.1.1.1" ||
+		config.Network.Nameservers[1] != "1.0.0.1" {
 		t.Fatalf("unexpected network config: %+v", config.Network)
 	}
 	if config.Metadata.CPU != "amd" {
@@ -74,7 +76,7 @@ network:
   version: 2
   address: 10.0.2.15/24
   gateway: 10.0.2.2
-  dns: 10.0.2.3
+  nameservers: [10.0.2.3]
   unexpected: true
 `))
 	if err == nil {

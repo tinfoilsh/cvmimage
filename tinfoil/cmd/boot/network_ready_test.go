@@ -79,10 +79,10 @@ func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
 		return nil, nil
 	}
 	config := shimconfig.ExternalNetworkConfig{
-		Version: 2,
-		Address: "100.64.0.42/20",
-		Gateway: "100.64.0.1",
-		DNS:     "1.1.1.1",
+		Version:     2,
+		Address:     "100.64.0.42/20",
+		Gateway:     "100.64.0.1",
+		Nameservers: []string{"1.1.1.1", "1.0.0.1"},
 	}
 	if err := applyStaticNetwork(context.Background(), "ens2", &config, run); err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
 		"/usr/sbin/ip route flush dev ens2",
 		"/usr/sbin/ip addr replace 100.64.0.42/20 dev ens2",
 		"/usr/sbin/ip route replace default via 100.64.0.1 dev ens2",
-		"/usr/bin/resolvectl dns ens2 1.1.1.1",
+		"/usr/bin/resolvectl dns ens2 1.1.1.1 1.0.0.1",
 		"/usr/bin/resolvectl domain ens2 ~.",
 		"/usr/bin/resolvectl default-route ens2 yes",
 	}
@@ -104,10 +104,10 @@ func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
 
 func TestApplyStaticNetworkPropagatesCommandFailure(t *testing.T) {
 	config := &shimconfig.ExternalNetworkConfig{
-		Version: 2,
-		Address: "100.64.0.42/20",
-		Gateway: "100.64.0.1",
-		DNS:     "1.1.1.1",
+		Version:     2,
+		Address:     "100.64.0.42/20",
+		Gateway:     "100.64.0.1",
+		Nameservers: []string{"1.1.1.1"},
 	}
 	run := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return []byte("permission denied"), errors.New("exit status 2")

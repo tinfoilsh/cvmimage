@@ -48,7 +48,7 @@ func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetwo
 	}
 	return fmt.Sprintf(
 		"static network configured; interface=%s address=%s gateway=%s dns=%s",
-		iface, config.Address, config.Gateway, config.DNS,
+		iface, config.Address, config.Gateway, strings.Join(config.Nameservers, ","),
 	), nil
 }
 
@@ -122,6 +122,7 @@ func applyStaticNetwork(
 	config *shimconfig.ExternalNetworkConfig,
 	run commandRunner,
 ) error {
+	dnsArgs := append([]string{"dns", iface}, config.Nameservers...)
 	commands := []struct {
 		name string
 		args []string
@@ -131,7 +132,7 @@ func applyStaticNetwork(
 		{ipBinary, []string{"route", "flush", "dev", iface}},
 		{ipBinary, []string{"addr", "replace", config.Address, "dev", iface}},
 		{ipBinary, []string{"route", "replace", "default", "via", config.Gateway, "dev", iface}},
-		{resolvectlBinary, []string{"dns", iface, config.DNS}},
+		{resolvectlBinary, dnsArgs},
 		{resolvectlBinary, []string{"domain", iface, "~."}},
 		{resolvectlBinary, []string{"default-route", iface, "yes"}},
 	}

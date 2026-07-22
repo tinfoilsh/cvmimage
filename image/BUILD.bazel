@@ -79,10 +79,19 @@ pkg_files(
         "rootfs/etc/nvidia-container-runtime/config.toml",
         "rootfs/etc/passwd",
         "rootfs/etc/resolv.conf",
+        "rootfs/etc/systemd/system-preset/00-tinfoil.preset",
+        "rootfs/usr/lib/clock-epoch",
         "rootfs/usr/lib/os-release",
         "rootfs/usr/share/nvidia/nvswitch/fabricmanager.cfg",
     ],
     attributes = pkg_attributes(mode = "0644", uid = 0, gid = 0),
+    strip_prefix = strip_prefix.from_pkg("rootfs"),
+)
+
+pkg_files(
+    name = "repository-rootfs-0600",
+    srcs = ["rootfs/etc/.pwd.lock"],
+    attributes = pkg_attributes(mode = "0600", uid = 0, gid = 0),
     strip_prefix = strip_prefix.from_pkg("rootfs"),
 )
 
@@ -197,6 +206,7 @@ pkg_tar(
         ":link-var-run",
         ":nvattest-binary",
         ":nvidia-kernel-modules",
+        ":repository-rootfs-0600",
         ":repository-rootfs-0640",
         ":repository-rootfs-0644",
         ":rootfs-mountpoints",

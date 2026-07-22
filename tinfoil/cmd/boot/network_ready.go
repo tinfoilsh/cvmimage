@@ -38,6 +38,9 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 }
 
 func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetworkConfig) (string, error) {
+	if err := verifyFixedResolver(resolverPath); err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(ctx, networkReadyTimeout)
 	defer cancel()
 
@@ -48,9 +51,6 @@ func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetwo
 		networkPollInterval,
 	)
 	if err != nil {
-		return "", err
-	}
-	if err := verifyFixedResolver(resolverPath); err != nil {
 		return "", err
 	}
 	if err := applyStaticNetwork(ctx, iface, config, runCommand); err != nil {
@@ -132,10 +132,6 @@ func verifyFixedResolver(path string) error {
 		return fmt.Errorf("open fixed resolver %s: %w", path, err)
 	}
 	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		unix.Close(fd)
-		return fmt.Errorf("open fixed resolver %s: invalid file descriptor", path)
-	}
 	defer file.Close()
 
 	info, err := file.Stat()

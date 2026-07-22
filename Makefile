@@ -16,7 +16,7 @@ NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0
 	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
 	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
-	verify-runtime-sources update-runtime-locks
+	verify-runtime-sources update-runtime-locks test-runtime-archives
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -119,6 +119,26 @@ test-runtime-locks:
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-test test \
 		//image:runtime-package-lock-test //scripts:runtime-source-lock-test
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-graph mod graph >/dev/null
+
+test-runtime-archives:
+	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-archive-test test \
+		--symlink_prefix=/tmp/cvmimage-bazel-runtime-archive-test- \
+		//scripts:runtime-archive-test
+	@set -eu; \
+	for suffix in a b; do \
+		base="/tmp/cvmimage-bazel-runtime-archive-build-$$suffix"; \
+		hashes="/tmp/cvmimage-bazel-runtime-archive-build-$$suffix.sha256"; \
+		$(BAZEL) --output_base="$$base" build \
+			--symlink_prefix="$$base-" \
+			//image:runtime-source-member-archives; \
+		bin="$$( $(BAZEL) --output_base="$$base" info bazel-bin )"; \
+		find "$$bin/image" -maxdepth 1 -type f -name '*-members.tar' -printf '%f\n' | sort | \
+			while read -r name; do sha256sum "$$bin/image/$$name"; done | \
+			sed "s#  $$bin/image/#  #" > "$$hashes"; \
+		test "$$(wc -l < "$$hashes")" -eq 12; \
+	done; \
+	cmp /tmp/cvmimage-bazel-runtime-archive-build-a.sha256 \
+		/tmp/cvmimage-bazel-runtime-archive-build-b.sha256
 
 verify-runtime-sources:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check

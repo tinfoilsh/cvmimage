@@ -1,0 +1,19 @@
+disable-require = false
+supported-driver-capabilities = "compute,utility"
+
+[nvidia-container-cli]
+environment = []
+ldconfig = "@/sbin/ldconfig"
+load-kmods = false
+
+[nvidia-container-runtime]
+log-level = "info"
+mode = "cdi"
+runtimes = ["/usr/bin/runc"]
+
+[nvidia-container-runtime.modes.cdi]
+default-kind = "nvidia.com/gpu"
+spec-dirs = ["/var/run/cdi"]
+
+[features]
+allow-ldconfig-from-container = false

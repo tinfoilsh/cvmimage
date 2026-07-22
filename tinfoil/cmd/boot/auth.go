@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"tinfoil/internal/boot"
+	shimconfig "tinfoil/internal/config"
 )
 
 const (
@@ -28,11 +29,9 @@ type DockerAuth struct {
 // Supports:
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
-func setupRegistryAuth() error {
+func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 	os.Setenv("DOCKER_CONFIG", boot.DockerConfigDir)
-
-	ext, err := getExternalConfig()
-	if err != nil || ext.Secrets == nil {
+	if ext == nil || ext.Secrets == nil {
 		log.Println("No external config, skipping registry auth")
 		return nil
 	}
@@ -108,4 +107,3 @@ func setupRegistryAuth() error {
 	}
 	return nil
 }
-

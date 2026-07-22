@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"tinfoil/internal/boot"
-	shimconfig "tinfoil/internal/config"
 )
 
 func init() {
@@ -49,8 +49,7 @@ func runSubcommand(cmd string) error {
 	case "containers":
 		externalConfig, err := getExternalConfig()
 		if err != nil {
-			log.Printf("Warning: external config not available, using defaults: %v", err)
-			externalConfig = &shimconfig.ExternalConfig{}
+			return fmt.Errorf("loading external config: %w", err)
 		}
 		// Manual re-run must fetch vault secrets, they're not persisted on disk.
 		if config.VaultURL != "" {
@@ -60,16 +59,15 @@ func runSubcommand(cmd string) error {
 			}
 		}
 		log.Println("Setting up registry authentication")
-		if err := setupRegistryAuth(); err != nil {
-			log.Printf("Warning: registry auth setup failed: %v", err)
+		if err := setupRegistryAuth(externalConfig); err != nil {
+			return fmt.Errorf("registry auth setup failed: %w", err)
 		}
 		log.Println("Launching containers")
 		return launchContainers(config, externalConfig)
 	case "models":
 		externalConfig, err := getExternalConfig()
 		if err != nil {
-			log.Printf("Warning: external config not available, using defaults: %v", err)
-			externalConfig = &shimconfig.ExternalConfig{}
+			return fmt.Errorf("loading external config: %w", err)
 		}
 		log.Println("Mounting models")
 		return mountModels(config, externalConfig)
@@ -90,12 +88,22 @@ func run() error {
 	}
 	externalConfig, err := getExternalConfig()
 	if err != nil {
-		log.Printf("Warning: external config not available, using defaults: %v", err)
-		externalConfig = &shimconfig.ExternalConfig{}
+		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("loading external config: %w", err)
 	}
 	tracker.Record("config", boot.StatusOK, time.Since(start), "")
 
-	// 2. Identity
+	// 2. Network
+	start = time.Now()
+	log.Println("Configuring guest network")
+	networkDetail, err := configureGuestNetwork(context.Background(), externalConfig.Network)
+	if err != nil {
+		tracker.Record(boot.StageNetwork, boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("network configuration failed: %w", err)
+	}
+	tracker.Record(boot.StageNetwork, boot.StatusOK, time.Since(start), networkDetail)
+
+	// 3. Identity
 	start = time.Now()
 	log.Println("Generating node identity")
 	nodeID, err := generateIdentity(config.ShimCfg, externalConfig)
@@ -105,7 +113,7 @@ func run() error {
 	}
 	tracker.Record("identity", boot.StatusOK, time.Since(start), nodeID.Domain)
 
-	// 3. CPU attestation
+	// 4. CPU attestation
 	start = time.Now()
 	log.Println("Fetching CPU attestation")
 	cpuAtt, err := fetchCPUAttestation(nodeID, config.ShimCfg)
@@ -115,7 +123,7 @@ func run() error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
-	// 4. GPU attestation
+	// 5. GPU attestation
 	start = time.Now()
 	gpuCount := config.GPUs
 	if gpuCount == 0 {
@@ -149,7 +157,7 @@ func run() error {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
 	}
 
-	// 5. Certificate
+	// 6. Certificate
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
 	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
@@ -158,7 +166,7 @@ func run() error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 6. Fetch any external vault secrets.
+	// 7. Fetch any external vault secrets.
 	start = time.Now()
 	if config.VaultURL == "" {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
@@ -171,17 +179,16 @@ func run() error {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
 	}
 
-	// 7. Registry auth
+	// 8. Registry auth
 	start = time.Now()
 	log.Println("Setting up registry authentication")
-	if err := setupRegistryAuth(); err != nil {
-		log.Printf("Warning: registry auth setup failed: %v", err)
-		tracker.Record("registry-auth", boot.StatusWarning, time.Since(start), err.Error())
-	} else {
-		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
+	if err := setupRegistryAuth(externalConfig); err != nil {
+		tracker.Record("registry-auth", boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("registry auth setup failed: %w", err)
 	}
+	tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 
-	// 8. Firewall
+	// 9. Firewall
 	start = time.Now()
 	log.Println("Configuring firewall")
 	if err := setupFirewall(config); err != nil {
@@ -190,7 +197,7 @@ func run() error {
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
 
-	// 9. Models
+	// 10. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config, externalConfig); err != nil {
@@ -199,7 +206,7 @@ func run() error {
 	}
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
 
-	// 10. Containers + health checks
+	// 11. Containers + health checks
 	log.Println("Launching containers")
 	if err := launchContainersAndWaitHealthy(tracker, config, externalConfig); err != nil {
 		return err

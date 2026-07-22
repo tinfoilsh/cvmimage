@@ -44,7 +44,7 @@ jobs:
     
           sudo apt-get update
           sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils
-          sudo pipx install git+https://github.com/systemd/mkosi.git@54c625c380ef5500f17460981a3c67b109b6a847 #v25.3
+          sudo pipx install git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2 #v26
           sudo pipx ensurepath
           mkdir -p packages mkosi.extra/usr/bin
 
@@ -84,6 +84,8 @@ jobs:
           mkdir -p /tmp/out
           sudo chmod 644 tinfoilcvm.*
           sudo chown $USER:$USER tinfoilcvm.*
+          test "$(wc -c < tinfoilcvm.roothash)" -eq 64
+          grep -Eq '^[a-f0-9]{64}$' tinfoilcvm.roothash
 
       - name: Generate manifest
         id: manifest
@@ -94,7 +96,7 @@ jobs:
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
           {
             "version": "${REF_NAME}",
-            "root": "$(objcopy -O binary --only-section .cmdline tinfoilcvm.efi /dev/stdout | cut -d "=" -f 2)",
+            "root": "$(tr -d '\n' < tinfoilcvm.roothash)",
             "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
             "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')",
             "raw": "$(sha256sum tinfoilcvm.raw | awk '{print $1}')",

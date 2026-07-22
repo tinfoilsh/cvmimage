@@ -169,7 +169,11 @@ func ramdiskSizeGB(memTotalKB uint64) (uint64, bool, error) {
 }
 
 func mountIfNeeded(source, target, fstype string, flags uintptr, data string, log LogFunc) error {
-	if isMountPoint(target) {
+	mounted, err := isMountPoint(target)
+	if err != nil {
+		return fmt.Errorf("check mount point %s: %w", target, err)
+	}
+	if mounted {
 		return nil
 	}
 	if err := os.MkdirAll(target, 0755); err != nil {
@@ -221,19 +225,35 @@ func ensureSymlink(target, linkPath string) error {
 	return nil
 }
 
-func isMountPoint(target string) bool {
+type statxFunc func(int, string, int, int, *unix.Statx_t) error
+
+func isMountPoint(target string) (bool, error) {
+	return isMountPointWith(target, unix.Statx)
+}
+
+func isMountPointWith(target string, statx statxFunc) (bool, error) {
 	target = filepath.Clean(target)
 	parent := filepath.Dir(target)
-	var targetStat, parentStat unix.Statx_t
-	if err := unix.Statx(unix.AT_FDCWD, target, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &targetStat); err != nil {
-		return false
+	targetID, err := mountID(target, statx)
+	if err != nil {
+		return false, err
 	}
-	if err := unix.Statx(unix.AT_FDCWD, parent, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &parentStat); err != nil {
-		return false
+	parentID, err := mountID(parent, statx)
+	if err != nil {
+		return false, err
 	}
-	return targetStat.Mask&unix.STATX_MNT_ID != 0 &&
-		parentStat.Mask&unix.STATX_MNT_ID != 0 &&
-		targetStat.Mnt_id != parentStat.Mnt_id
+	return targetID != parentID, nil
+}
+
+func mountID(path string, statx statxFunc) (uint64, error) {
+	var info unix.Statx_t
+	if err := statx(unix.AT_FDCWD, path, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &info); err != nil {
+		return 0, fmt.Errorf("statx %s: %w", path, err)
+	}
+	if info.Mask&unix.STATX_MNT_ID == 0 {
+		return 0, fmt.Errorf("statx %s did not report STATX_MNT_ID", path)
+	}
+	return info.Mnt_id, nil
 }
 
 func applySysctls(procSysRoot string, policy []sysctlSetting, log LogFunc) error {

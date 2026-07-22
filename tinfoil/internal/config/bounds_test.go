@@ -54,10 +54,45 @@ func TestYAMLStructureBudgetRejectsNodeBombBeforeDecode(t *testing.T) {
 	}
 }
 
+func TestYAMLStructureBudgetRejectsCRCommentBypass(t *testing.T) {
+	data := []byte("# comment\r" + strings.Repeat("- x\r", maxYAMLNodes))
+	if err := validateYAMLStructureBudget(data); err == nil {
+		t.Fatal("validateYAMLStructureBudget accepted a CR-only oversized sequence")
+	}
+}
+
 func TestYAMLStructureBudgetAllowsLargeQuotedScalar(t *testing.T) {
 	data := []byte("value: \"" + strings.Repeat("-?:,[]{}", 4096) + "\"\n")
 	if err := validateYAMLStructureBudget(data); err != nil {
 		t.Fatalf("validateYAMLStructureBudget rejected a scalar payload: %v", err)
+	}
+}
+
+func TestYAMLStructureBudgetAllowsLargeBlockScalars(t *testing.T) {
+	for _, indicator := range []string{"|", ">", "|2-", ">+2"} {
+		t.Run(indicator, func(t *testing.T) {
+			data := []byte("- " + indicator + "\n" + strings.Repeat("  - ?:,[]{}\n", 4096))
+			if err := validateYAMLStructureBudget(data); err != nil {
+				t.Fatalf("validateYAMLStructureBudget rejected block scalar: %v", err)
+			}
+			if _, err := decodeYAMLDocument(data); err != nil {
+				t.Fatalf("decodeYAMLDocument rejected block scalar: %v", err)
+			}
+		})
+	}
+}
+
+func TestYAMLStructureBudgetResumesAfterBlockScalar(t *testing.T) {
+	data := []byte("- |\n  text\n" + strings.Repeat("- x\n", maxYAMLNodes))
+	if err := validateYAMLStructureBudget(data); err == nil {
+		t.Fatal("validateYAMLStructureBudget ignored structure after a block scalar")
+	}
+}
+
+func TestYAMLStructureBudgetDoesNotTreatPlainPipeAsBlockScalar(t *testing.T) {
+	data := []byte("- plain |\n" + strings.Repeat("- x\n", maxYAMLNodes))
+	if err := validateYAMLStructureBudget(data); err == nil {
+		t.Fatal("validateYAMLStructureBudget treated a plain pipe as a block scalar")
 	}
 }
 

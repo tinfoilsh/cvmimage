@@ -97,83 +97,188 @@ func decodeYAMLDocument(data []byte) (*yaml.Node, error) {
 func validateYAMLStructureBudget(data []byte) error {
 	potentialNodes := 2
 	flowDepth := 0
-	lineOnlySpace := true
 	var quote byte
 	escaped := false
-	comment := false
+	blockHeaderIndent := -1
+	blockContentIndent := -1
 
-	for index := 0; index < len(data); index++ {
-		character := data[index]
-		if comment {
-			if character == '\n' {
-				comment = false
-				lineOnlySpace = true
+	for offset := 0; offset < len(data); {
+		line, nextOffset := nextYAMLLine(data, offset)
+		offset = nextOffset
+		indent := yamlLineIndent(line)
+		if blockHeaderIndent >= 0 {
+			if yamlLineBlank(line) {
+				continue
 			}
-			continue
+			if blockContentIndent < 0 && indent > blockHeaderIndent {
+				blockContentIndent = indent
+				continue
+			}
+			if blockContentIndent >= 0 && indent >= blockContentIndent {
+				continue
+			}
+			blockHeaderIndent = -1
+			blockContentIndent = -1
 		}
-		if quote != 0 {
-			if quote == '"' && escaped {
-				escaped = false
-				continue
-			}
-			if quote == '"' && character == '\\' {
-				escaped = true
-				continue
-			}
-			if character == quote {
-				if quote == '\'' && index+1 < len(data) && data[index+1] == '\'' {
-					index++
+
+		lineOnlySpace := true
+		for index := 0; index < len(line); index++ {
+			character := line[index]
+			if quote != 0 {
+				if quote == '"' && escaped {
+					escaped = false
 					continue
 				}
-				quote = 0
+				if quote == '"' && character == '\\' {
+					escaped = true
+					continue
+				}
+				if character == quote {
+					if quote == '\'' && index+1 < len(line) && line[index+1] == '\'' {
+						index++
+						continue
+					}
+					quote = 0
+				}
+				continue
 			}
-			continue
-		}
 
-		if character == '#' && (index == 0 || isYAMLSeparation(data[index-1])) {
-			comment = true
-			continue
-		}
-		switch character {
-		case '\n', '\r':
-			lineOnlySpace = true
-		case ' ', '\t':
-			continue
-		case '\'', '"':
-			quote = character
-			lineOnlySpace = false
-		case '[', '{':
-			potentialNodes++
-			flowDepth++
-			lineOnlySpace = false
-		case ']', '}':
-			if flowDepth > 0 {
-				flowDepth--
+			if character == '#' && (index == 0 || isYAMLSeparation(line[index-1])) {
+				break
 			}
-			lineOnlySpace = false
-		case ',':
-			if flowDepth > 0 {
+			switch character {
+			case ' ', '\t':
+				continue
+			case '\'', '"':
+				quote = character
+				lineOnlySpace = false
+			case '[', '{':
 				potentialNodes++
+				flowDepth++
+				lineOnlySpace = false
+			case ']', '}':
+				if flowDepth > 0 {
+					flowDepth--
+				}
+				lineOnlySpace = false
+			case ',':
+				if flowDepth > 0 {
+					potentialNodes++
+				}
+				lineOnlySpace = false
+			case ':':
+				if flowDepth > 0 || index+1 == len(line) || isYAMLSeparation(line[index+1]) {
+					potentialNodes += 2
+				}
+				lineOnlySpace = false
+			case '-', '?':
+				if lineOnlySpace && (index+1 == len(line) || isYAMLSeparation(line[index+1])) {
+					potentialNodes++
+				}
+				lineOnlySpace = false
+			case '|', '>':
+				explicitIndent, ok := yamlBlockScalarHeader(line[index:])
+				if flowDepth == 0 && ok && yamlBlockScalarPosition(line, index, indent) {
+					blockHeaderIndent = indent
+					blockContentIndent = -1
+					if explicitIndent > 0 {
+						blockContentIndent = indent + explicitIndent
+					}
+					index = len(line)
+				}
+				lineOnlySpace = false
+			default:
+				lineOnlySpace = false
 			}
-			lineOnlySpace = false
-		case ':':
-			if flowDepth > 0 || index+1 == len(data) || isYAMLSeparation(data[index+1]) {
-				potentialNodes += 2
+			if potentialNodes > maxYAMLNodes {
+				return fmt.Errorf("YAML exceeds %d-node structural budget", maxYAMLNodes)
 			}
-			lineOnlySpace = false
-		case '-', '?':
-			if lineOnlySpace && (index+1 == len(data) || isYAMLSeparation(data[index+1])) {
-				potentialNodes++
-			}
-			lineOnlySpace = false
-		default:
-			lineOnlySpace = false
 		}
-		if potentialNodes > maxYAMLNodes {
-			return fmt.Errorf("YAML exceeds %d-node structural budget", maxYAMLNodes)
+		if quote == '"' && escaped {
+			escaped = false
 		}
 	}
 	return nil
+}
+
+func nextYAMLLine(data []byte, offset int) ([]byte, int) {
+	end := offset
+	for end < len(data) && data[end] != '\n' && data[end] != '\r' {
+		end++
+	}
+	next := end
+	if next < len(data) {
+		if data[next] == '\r' && next+1 < len(data) && data[next+1] == '\n' {
+			next += 2
+		} else {
+			next++
+		}
+	}
+	return data[offset:end], next
+}
+
+func yamlLineIndent(line []byte) int {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+	}
+	return indent
+}
+
+func yamlLineBlank(line []byte) bool {
+	for _, character := range line {
+		if character != ' ' && character != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+func yamlBlockScalarHeader(header []byte) (int, bool) {
+	if len(header) == 0 || header[0] != '|' && header[0] != '>' {
+		return 0, false
+	}
+	explicitIndent := 0
+	seenChomp := false
+	for index := 1; index < len(header); index++ {
+		character := header[index]
+		switch {
+		case character == '+' || character == '-':
+			if seenChomp {
+				return 0, false
+			}
+			seenChomp = true
+		case character >= '1' && character <= '9':
+			if explicitIndent != 0 {
+				return 0, false
+			}
+			explicitIndent = int(character - '0')
+		case character == ' ' || character == '\t':
+			for index < len(header) && (header[index] == ' ' || header[index] == '\t') {
+				index++
+			}
+			return explicitIndent, index == len(header) || header[index] == '#'
+		default:
+			return 0, false
+		}
+	}
+	return explicitIndent, true
+}
+
+func yamlBlockScalarPosition(line []byte, index, indent int) bool {
+	if index == indent {
+		return true
+	}
+	if index == 0 || !isYAMLSeparation(line[index-1]) {
+		return false
+	}
+	for previous := index - 1; previous >= 0; previous-- {
+		if line[previous] == ' ' || line[previous] == '\t' {
+			continue
+		}
+		return line[previous] == ':' || line[previous] == '-' || line[previous] == '?'
+	}
+	return false
 }
 
 func isYAMLSeparation(character byte) bool {

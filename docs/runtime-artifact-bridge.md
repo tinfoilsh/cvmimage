@@ -7,19 +7,23 @@ discover artifacts or accept paths from callers.
 `make prepare-runtime-artifacts` first runs all three fixed producers and their
 existing bidirectional verifier. It then snapshots only the ten regular files
 and three producer manifests into `build/runtime-artifacts`. Copying is
-descriptor-relative and no-follow, hashes bytes while copying, and rejects
-source metadata changes. A literal exports-only `BUILD.bazel` and a marker
-binding the checked-in lock digest are published only after the snapshot is
-complete.
+descriptor-relative and no-follow. Regular artifacts are hashed while copying
+and revalidated afterward; manifests are read into stable buffers before those
+exact bytes are written and authenticated in the completed package. A literal
+exports-only `BUILD.bazel` and a marker binding the checked-in lock digest are
+published only after the snapshot is complete.
 
 Preparation serializes writers under a private mode-`0700`
 `build/.runtime-artifacts-state` directory and uses mode-`0700` staging. The
 repository's established shared-group checkout policy permits an existing
 mode-`0775` `build` directory only when it has the repository owner and group;
 new build directories are not group-writable. Failed marker-owned staging is
-removed, while hostile or unowned staging is preserved.
+removed only after the private preparation marker and each entry's inode, type,
+ownership, link count, xattr state, and identity are validated. Hostile,
+replaced, or unowned staging is preserved.
 
-Before publication or deletion, the bridge reauthenticates the literal
+Before publication or deletion of a completed package, the bridge
+reauthenticates the literal
 `BUILD.bazel`, all three manifests, the marker, and every artifact byte and
 mode. Initial publication uses Linux `renameat2(RENAME_NOREPLACE)`, and
 replacement uses `renameat2(RENAME_EXCHANGE)`. Existing or raced unmarked,

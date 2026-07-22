@@ -19,6 +19,8 @@ STATE = ".runtime-artifacts-state"
 MARKER = ".tinfoil-runtime-artifacts-v1"
 PREPARING = ".tinfoil-runtime-artifacts-preparing-v1"
 SCHEMA = "tinfoil-runtime-artifacts-v1"
+RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
 PRODUCER_ROOTS = {
     "go": Path("build/builder-work/output"),
     "nvattest": Path("build/rootfs-artifacts/nvattest"),
@@ -86,8 +88,10 @@ def read_regular(path: Path) -> tuple[bytes, os.stat_result]:
 
 
 def mkdir(parent: int, name: str, mode: int = 0o755, accepted_modes: set[int] | None = None) -> int:
+    created = False
     try:
         os.mkdir(name, mode, dir_fd=parent)
+        created = True
     except FileExistsError:
         pass
     descriptor = os.open(
@@ -95,6 +99,8 @@ def mkdir(parent: int, name: str, mode: int = 0o755, accepted_modes: set[int] | 
         os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
         dir_fd=parent,
     )
+    if created:
+        os.fchmod(descriptor, mode)
     metadata = os.fstat(descriptor)
     modes = accepted_modes or {mode}
     if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) not in modes or os.listxattr(descriptor):
@@ -111,6 +117,7 @@ def write_file(parent: int, name: str, content: bytes, mode: int) -> None:
         dir_fd=parent,
     )
     try:
+        os.fchmod(descriptor, mode)
         write_all(descriptor, content)
         os.fsync(descriptor)
     finally:
@@ -140,7 +147,7 @@ def open_beneath(root: int, relative: str) -> tuple[int, int]:
             parent = child
         descriptor = os.open(
             path.parts[-1],
-            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
             dir_fd=parent,
         )
         return parent, descriptor
@@ -182,6 +189,7 @@ def snapshot_file(source_root: int, source: str, output_root: int, output: str, 
         )
         digest = hashlib.sha256()
         try:
+            os.fchmod(destination, int(entry.mode, 8))
             while chunk := os.read(source_fd, 1024 * 1024):
                 digest.update(chunk)
                 write_all(destination, chunk)
@@ -256,7 +264,11 @@ def validate_tree(parent: int, name: str, files: dict[str, tuple[int, str]]) -> 
                 finally:
                     os.close(child)
             else:
-                child = os.open(child_name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=descriptor)
+                child = os.open(
+                    child_name,
+                    os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
                 try:
                     opened = os.fstat(child)
                     if identity(metadata) != identity(opened) or not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or os.listxattr(child):
@@ -316,7 +328,11 @@ def remove_owned(parent: int, name: str, files: dict[str, tuple[int, str]]) -> N
                     fail(f"refusing to remove replaced directory: {child_name}")
                 os.rmdir(child_name, dir_fd=descriptor)
             else:
-                child = os.open(child_name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=descriptor)
+                child = os.open(
+                    child_name,
+                    os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
                 try:
                     opened = os.fstat(child)
                     if identity(metadata) != identity(opened) or not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or os.listxattr(child):
@@ -382,7 +398,11 @@ def remove_staging(parent: int, name: str, preparing_content: bytes, files: dict
                         fail(f"refusing to remove replaced staging directory: {child_name}")
                     os.rmdir(child_name, dir_fd=descriptor)
                 else:
-                    child = os.open(child_name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=descriptor)
+                    child = os.open(
+                        child_name,
+                        os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
                     try:
                         opened = os.fstat(child)
                         if identity(child_metadata) != identity(opened) or not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or os.listxattr(child):
@@ -419,11 +439,18 @@ def renameat2(source_parent: int, source: str, destination_parent: int, destinat
 
 
 def publish(source_parent: int, temporary: str, destination_parent: int, destination: str) -> None:
-    renameat2(source_parent, temporary, destination_parent, destination, 1, "no-replace publication")
+    renameat2(
+        source_parent,
+        temporary,
+        destination_parent,
+        destination,
+        RENAME_NOREPLACE,
+        "no-replace publication",
+    )
 
 
 def exchange(source_parent: int, temporary: str, destination_parent: int, destination: str) -> None:
-    renameat2(source_parent, temporary, destination_parent, destination, 2, "exchange")
+    renameat2(source_parent, temporary, destination_parent, destination, RENAME_EXCHANGE, "exchange")
 
 
 def open_build(repository: int, repository_metadata: os.stat_result) -> int:
@@ -463,7 +490,16 @@ def prepare() -> None:
         os.close(state)
         os.close(build)
         fail("runtime artifact state crosses the build filesystem boundary")
-    lock_fd = os.open("lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=state)
+    try:
+        lock_fd = os.open(
+            "lock",
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=state,
+        )
+        os.fchmod(lock_fd, 0o600)
+    except FileExistsError:
+        lock_fd = os.open("lock", os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=state)
     temporary = f".runtime-artifacts.{os.getpid()}.{secrets.token_hex(8)}"
     preparing_content = f"{SCHEMA}\t{temporary}\n".encode()
     contract_files = None
@@ -477,6 +513,7 @@ def prepare() -> None:
         cleanup_temporary = True
         output = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=state)
         try:
+            os.fchmod(output, 0o700)
             output_metadata = os.fstat(output)
             if output_metadata.st_dev != build_metadata.st_dev or output_metadata.st_uid != os.getuid() or stat.S_IMODE(output_metadata.st_mode) != 0o700:
                 fail("temporary runtime artifact package crosses the build filesystem boundary")
@@ -532,7 +569,7 @@ def prepare() -> None:
             os.fsync(state)
             try:
                 validate_tree(build, OUTPUT.name, contract_files)
-            except Exception:
+            except Exception as validation_error:
                 try:
                     validate_tree(state, temporary, contract_files)
                     exchange(state, temporary, build, OUTPUT.name)
@@ -540,8 +577,9 @@ def prepare() -> None:
                     os.fsync(build)
                     os.fsync(state)
                     validate_tree(build, OUTPUT.name, contract_files)
-                except Exception:
-                    pass
+                except Exception as rollback_error:
+                    validation_error.add_note(f"rollback failed: {rollback_error}")
+                    raise validation_error from rollback_error
                 raise
             validate_tree(state, temporary, contract_files)
             remove_owned(state, temporary, contract_files)

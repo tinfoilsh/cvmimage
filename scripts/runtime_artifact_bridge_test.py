@@ -116,6 +116,48 @@ class RuntimeArtifactBridgeTest(unittest.TestCase):
         bridge.prepare()
         self.assertEqual(self.tree_digest(self.generated()), first)
 
+    def test_restrictive_umask_preserves_fixed_output_modes(self):
+        previous = os.umask(0o077)
+        try:
+            bridge.prepare()
+        finally:
+            os.umask(previous)
+        expected = bridge.expected_shape(self.contract_files())
+        for relative, mode in expected.items():
+            with self.subTest(relative=relative):
+                self.assertEqual(stat.S_IMODE((self.generated() / relative).stat().st_mode), mode)
+        self.assertEqual(stat.S_IMODE((self.root / "build" / bridge.STATE).stat().st_mode), 0o700)
+
+    def test_rejects_fifo_replacing_producer_source_after_traversal(self):
+        source = self.root / bridge.PRODUCER_ROOTS["go"] / self.entries["tinfoil-init"].source_path
+        original_verify_tree = rootfs_artifacts.verify_tree
+        replaced = False
+
+        def replace_after_traversal(root_descriptor, manifest_metadata, producer, entries):
+            nonlocal replaced
+            original_verify_tree(root_descriptor, manifest_metadata, producer, entries)
+            if producer == "go" and not replaced:
+                source.unlink()
+                os.mkfifo(source)
+                replaced = True
+
+        with mock.patch.object(rootfs_artifacts, "verify_tree", side_effect=replace_after_traversal):
+            with self.assertRaisesRegex(ValueError, "single-linked regular file"):
+                bridge.prepare()
+
+    def test_rejects_fifo_in_generated_package_without_blocking(self):
+        bridge.prepare()
+        target = self.generated() / "BUILD.bazel"
+        target.unlink()
+        os.mkfifo(target)
+        target.chmod(0o644)
+        build = os.open(self.root / "build", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with self.assertRaisesRegex(ValueError, "unsafe generated package file"):
+                bridge.validate_tree(build, bridge.OUTPUT.name, self.contract_files())
+        finally:
+            os.close(build)
+
     def test_unmarked_and_symlink_destinations_are_preserved(self):
         destination = self.generated()
         destination.mkdir(parents=True)
@@ -384,6 +426,34 @@ class RuntimeArtifactBridgeTest(unittest.TestCase):
         finally:
             os.close(build)
         self.assertEqual(len(self.staging()), 1)
+
+    def test_failed_exchange_rollback_preserves_both_diagnostics(self):
+        bridge.prepare()
+        original_validate = bridge.validate_tree
+        original_exchange = bridge.exchange
+        exchanges = 0
+
+        def exchange_then_fail_rollback(*args):
+            nonlocal exchanges
+            exchanges += 1
+            if exchanges == 2:
+                raise ValueError("injected rollback failure")
+            return original_exchange(*args)
+
+        def fail_post_exchange(parent, name, files):
+            result = original_validate(parent, name, files)
+            if exchanges == 1 and name == bridge.OUTPUT.name:
+                raise ValueError("injected post-exchange validation failure")
+            return result
+
+        with mock.patch.object(bridge, "exchange", side_effect=exchange_then_fail_rollback), mock.patch.object(
+            bridge, "validate_tree", side_effect=fail_post_exchange
+        ):
+            with self.assertRaisesRegex(ValueError, "post-exchange validation") as caught:
+                bridge.prepare()
+        self.assertIsNotNone(caught.exception.__cause__)
+        self.assertRegex(str(caught.exception.__cause__), "rollback failure")
+        self.assertTrue(any("rollback failed" in note for note in caught.exception.__notes__))
 
     def test_private_state_and_untrusted_shared_build_policy(self):
         bridge.prepare()

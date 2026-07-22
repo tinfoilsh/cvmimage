@@ -13,6 +13,54 @@ py_library(
 )
 
 py_binary(
+    name = "rootfs_assembly",
+    srcs = ["rootfs_assembly.py"],
+    legacy_create_init = 0,
+    main = "rootfs_assembly.py",
+    deps = [":rootfs-artifact-contract"],
+)
+
+py_test(
+    name = "rootfs-assembly-test",
+    srcs = ["rootfs_assembly_test.py"],
+    data = [
+        "//image:nvidia_fabricmanager_members",
+        "//image:runtime-artifact-members",
+        "//image:runtime-sources.lock.json",
+        "//image:manifests/rootfs-artifacts.lock.tsv",
+    ],
+    legacy_create_init = 0,
+    main = "rootfs_assembly_test.py",
+    deps = [
+        ":rootfs-artifact-contract",
+        ":rootfs_assembly",
+    ],
+)
+
+py_test(
+    name = "rootfs-assembly-output-test",
+    srcs = ["rootfs_assembly_output_test.py"],
+    args = [
+        "--outputs",
+        "$(locations //image:rootfs)",
+    ],
+    data = ["//image:rootfs"],
+    legacy_create_init = 0,
+    main = "rootfs_assembly_output_test.py",
+    deps = [":rootfs-artifact-contract"],
+)
+
+sh_test(
+    name = "rootfs-assembly-structure-test",
+    srcs = ["test-rootfs-assembly-structure.sh"],
+    data = [
+        "//image:BUILD.bazel",
+        "//image:rootfs.bzl",
+        ":rootfs_assembly.py",
+    ],
+)
+
+py_binary(
     name = "runtime_artifact_bridge",
     srcs = ["runtime_artifact_bridge.py"],
     legacy_create_init = 0,

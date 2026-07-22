@@ -682,6 +682,10 @@ def parse_manifest(path: Path) -> dict[str, Entry]:
         data = path.read_bytes()
     except OSError as error:
         fail(f"cannot read manifest {path}: {error}")
+    return parse_content(path, data)
+
+
+def parse_content(path: Path, data: bytes) -> dict[str, Entry]:
     if not data:
         fail(f"{path}: manifest is empty")
     if not data.endswith(b"\n"):

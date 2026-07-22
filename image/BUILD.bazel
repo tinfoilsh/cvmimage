@@ -9,6 +9,7 @@ load(
 )
 load(":runtime_artifacts.bzl", "runtime_artifacts")
 load(":runtime_package_inputs.bzl", "RUNTIME_PACKAGE_INPUTS")
+load(":rootfs.bzl", "rootfs")
 
 _CA_CERTIFICATES_SOURCE_ID = "ca-certificates_20260223_amd64"
 
@@ -24,6 +25,7 @@ _RUNTIME_PACKAGE_ARCHIVES[_CA_CERTIFICATES_SOURCE_ID] = ":ubuntu-runtime-cacerts
 # Generated/declarative lock data is intentionally kept separate from build
 # rules so its reviewable size is not confused with executable mechanism.
 exports_files([
+    "rootfs.bzl",
     "runtime-packages.lock.json",
     "runtime-package-members.lock.json",
     "runtime-packages.yaml",
@@ -105,4 +107,8 @@ filegroup(
 
 runtime_artifacts(
     name = "runtime-artifact-members",
+)
+
+rootfs(
+    name = "rootfs",
 )

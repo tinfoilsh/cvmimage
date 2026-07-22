@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/nvidia"
 )
 
 type notifyContextFunc func(context.Context, ...os.Signal) (context.Context, context.CancelFunc)
@@ -144,17 +145,10 @@ func run(ctx context.Context) error {
 	// 5. GPU attestation
 	start = time.Now()
 	gpuCount := config.GPUs
-	if gpuCount == 0 {
-		detected, err := detectGPUCount()
-		if err != nil {
-			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
-			return err
-		}
-		if detected > 0 {
-			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start),
-				fmt.Sprintf("detected %d GPU(s) but config declares gpus: 0 — set the correct gpu count in the config", detected))
-			return fmt.Errorf("gpu count mismatch: detected %d, config says 0", detected)
-		}
+	if err := validateGPUAttestationBootstrap(boot.NVIDIABootstrapStatusPath, config); err != nil {
+		wrapped := fmt.Errorf("NVIDIA bootstrap status: %w", err)
+		tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), wrapped.Error())
+		return wrapped
 	}
 	if gpuCount > 0 && config.ShimCfg.DummyAttestation {
 		log.Printf("Skipping GPU attestation for %d GPUs (dummy-attestation mode)", gpuCount)
@@ -231,4 +225,11 @@ func run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func validateGPUAttestationBootstrap(path string, config *Config) error {
+	if config == nil || config.ShimCfg == nil {
+		return fmt.Errorf("GPU attestation config is incomplete")
+	}
+	return nvidia.ValidateBootstrapStatus(path, config.GPUs)
 }

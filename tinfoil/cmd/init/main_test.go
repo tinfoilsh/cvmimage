@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/nvidia"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
@@ -21,6 +25,7 @@ type fakeServices struct {
 	drained   chan [][]string
 	fail      map[string]error
 	observe   func(supervisor.State)
+	onStart   func(string)
 }
 
 func newFakeServices() *fakeServices {
@@ -37,6 +42,9 @@ func (f *fakeServices) Start(_ context.Context, service supervisor.Service) erro
 	err := f.fail[service.Name]
 	f.mu.Unlock()
 	f.startedCh <- service.Name
+	if f.onStart != nil {
+		f.onStart(service.Name)
+	}
 	if err != nil {
 		f.observe(supervisor.State{Name: service.Name, Required: service.Required, Err: err})
 		return err
@@ -77,6 +85,7 @@ func newLifecycleHarness() *lifecycleHarness {
 	harness.deps = lifecycleDeps{
 		services: harness.services,
 		oneShot:  func(context.Context, supervisor.Command) error { return nil },
+		nvidia:   func(context.Context) error { return nil },
 		setupFS:  noSetup,
 		sysctls:  noSetup,
 		ramdisk:  noSetup,
@@ -88,6 +97,360 @@ func newLifecycleHarness() *lifecycleHarness {
 		timeout: time.Hour,
 	}
 	return harness
+}
+
+type fakeNVIDIA struct {
+	mu         sync.Mutex
+	calls      []string
+	fail       map[string]error
+	gpuCount   int
+	hasSwitch  bool
+	fabricMode nvidia.FabricMode
+	fabricErr  error
+	temporary  string
+}
+
+func newFakeNVIDIA(t *testing.T, gpuCount int) *fakeNVIDIA {
+	t.Helper()
+	return &fakeNVIDIA{
+		fail:      map[string]error{},
+		gpuCount:  gpuCount,
+		temporary: filepath.Join(t.TempDir(), "nvidia.yaml.tmp"),
+	}
+}
+
+func (f *fakeNVIDIA) call(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, name)
+	return f.fail[name]
+}
+
+func (f *fakeNVIDIA) GPUCount() (int, error) {
+	return f.gpuCount, f.call("gpu-count")
+}
+func (f *fakeNVIDIA) HasNVSwitch() (bool, error) {
+	return f.hasSwitch, f.call("has-nvswitch")
+}
+func (f *fakeNVIDIA) HoldGPUEnableReferences() error {
+	return f.call("hold-pci")
+}
+func (f *fakeNVIDIA) EnableGPURuntimePowerManagement() error {
+	return f.call("runtime-pm")
+}
+func (f *fakeNVIDIA) LoadCoreKernelModules() error { return f.call("load-core") }
+func (f *fakeNVIDIA) WaitForCoreDeviceNodes(_ context.Context, expectedGPUs int) error {
+	return f.call(fmt.Sprintf("setup-core-devices-%d", expectedGPUs))
+}
+func (f *fakeNVIDIA) PreparePersistencedRuntime() error { return f.call("prepare-persistenced") }
+func (f *fakeNVIDIA) WaitForPersistenced(context.Context) error {
+	return f.call("wait-persistenced")
+}
+func (f *fakeNVIDIA) LoadUVMKernelModules() error { return f.call("load-uvm") }
+func (f *fakeNVIDIA) WaitForUVMDeviceNodes(_ context.Context, expectedGPUs int) error {
+	return f.call(fmt.Sprintf("setup-uvm-devices-%d", expectedGPUs))
+}
+func (f *fakeNVIDIA) LoadModesetKernelModules() error {
+	return f.call("load-modeset")
+}
+func (f *fakeNVIDIA) DetectFabricMode() (nvidia.FabricMode, error) {
+	if err := f.call("detect-fabric"); err != nil {
+		return nvidia.FabricModeNone, err
+	}
+	return f.fabricMode, f.fabricErr
+}
+func (f *fakeNVIDIA) PrepareFabricManagerRuntime() error {
+	return f.call("prepare-fabric")
+}
+func (f *fakeNVIDIA) WaitForFabricManager(context.Context) error {
+	return f.call("wait-fabric")
+}
+func (f *fakeNVIDIA) WaitForNVML(_ context.Context, count int) error {
+	return f.call(fmt.Sprintf("wait-nvml-%d", count))
+}
+func (f *fakeNVIDIA) CreateCDITemporary() (string, error) {
+	return f.temporary, f.call("create-cdi")
+}
+func (f *fakeNVIDIA) PublishCDI(path string) error {
+	if path != f.temporary {
+		return fmt.Errorf("publish path = %s, want %s", path, f.temporary)
+	}
+	return f.call("publish-cdi")
+}
+
+func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
+	t.Setenv("FM_CONFIG_FILE", "poisoned")
+	t.Setenv("FM_PID_FILE", "poisoned")
+	control := newFakeNVIDIA(t, 8)
+	control.fabricMode = nvidia.FabricModeFabricManager
+	var commands []supervisor.Command
+	var persistencedLimit time.Duration
+	oneShot := func(ctx context.Context, command supervisor.Command) error {
+		control.calls = append(control.calls, "exec:"+command.Name)
+		commands = append(commands, command)
+		if command.Name == "nvidia-persistenced" {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("nvidia-persistenced context has no deadline")
+			}
+			persistencedLimit = time.Until(deadline)
+		}
+		return nil
+	}
+	var statuses []nvidia.BootstrapStatus
+	err := runNVIDIABootstrap(context.Background(), control, oneShot, func(status nvidia.BootstrapStatus) error {
+		control.calls = append(control.calls, fmt.Sprintf("status:%d:%d", status.State, status.GPUCount))
+		statuses = append(statuses, status)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{
+		"gpu-count", "hold-pci", "runtime-pm", "load-core", "setup-core-devices-8",
+		"prepare-persistenced", "exec:nvidia-persistenced", "wait-persistenced",
+		"load-uvm", "setup-uvm-devices-8", "load-modeset", "setup-uvm-devices-8",
+		"detect-fabric", "prepare-fabric", "exec:nvidia-fabricmanager", "wait-fabric", "wait-nvml-8",
+		"create-cdi", "exec:nvidia-ctk-cdi", "publish-cdi",
+		fmt.Sprintf("status:%d:8", nvidia.BootstrapStateReady),
+	}
+	if !slices.Equal(control.calls, wantOrder) {
+		t.Fatalf("calls = %v, want %v", control.calls, wantOrder)
+	}
+	if persistencedLimit > nvidiaChildLimit || persistencedLimit < nvidiaChildLimit-time.Second {
+		t.Fatalf("persistenced child limit = %s, want %s", persistencedLimit, nvidiaChildLimit)
+	}
+	if len(statuses) != 1 || statuses[0] != nvidia.ReadyBootstrapStatus(8) {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+	if len(commands) != 3 {
+		t.Fatalf("commands = %d, want 3", len(commands))
+	}
+	assertCommand(t, commands[0], "nvidia-persistenced", "/usr/bin/nvidia-persistenced",
+		[]string{"--user", "nvidia-persistenced", "--uvm-persistence-mode", "--verbose"})
+	assertCommand(t, commands[1], "nvidia-fabricmanager", "/usr/bin/nv-fabricmanager",
+		[]string{"-c", fabricConfigPath})
+	assertCommand(t, commands[2], "nvidia-ctk-cdi", "/usr/bin/nvidia-ctk",
+		[]string{"cdi", "generate", "--output=" + control.temporary})
+	env := environmentMap(commands[1].Env)
+	if _, ok := env["FM_CONFIG_FILE"]; ok {
+		t.Fatalf("Fabric Manager inherited FM_CONFIG_FILE: %#v", env)
+	}
+	if _, ok := env["FM_PID_FILE"]; ok {
+		t.Fatalf("Fabric Manager inherited FM_PID_FILE: %#v", env)
+	}
+}
+
+func TestNVIDIABootstrapWritesExplicitNoGPUStatus(t *testing.T) {
+	control := newFakeNVIDIA(t, 0)
+	var got nvidia.BootstrapStatus
+	err := runNVIDIABootstrap(context.Background(), control, func(context.Context, supervisor.Command) error {
+		t.Fatal("no-GPU bootstrap ran a child")
+		return nil
+	}, func(status nvidia.BootstrapStatus) error {
+		got = status
+		control.calls = append(control.calls, "status")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nvidia.NoGPUBootstrapStatus() {
+		t.Fatalf("status = %#v", got)
+	}
+	if !slices.Equal(control.calls, []string{"gpu-count", "has-nvswitch", "status"}) {
+		t.Fatalf("calls = %v", control.calls)
+	}
+}
+
+func TestNVIDIABootstrapRejectsNVSwitchOnlyTopology(t *testing.T) {
+	control := newFakeNVIDIA(t, 0)
+	control.hasSwitch = true
+	var got nvidia.BootstrapStatus
+	err := runNVIDIABootstrap(context.Background(), control, func(context.Context, supervisor.Command) error {
+		t.Fatal("NVSwitch-only bootstrap ran a child")
+		return nil
+	}, func(status nvidia.BootstrapStatus) error {
+		got = status
+		control.calls = append(control.calls, "status")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nvidia.FailedBootstrapStatus() {
+		t.Fatalf("status = %#v", got)
+	}
+	if !slices.Equal(control.calls, []string{"gpu-count", "has-nvswitch", "status"}) {
+		t.Fatalf("calls = %v", control.calls)
+	}
+}
+
+func TestWaitForNVIDIADeviceNodesRetriesUntilReadyAndHonorsDeadline(t *testing.T) {
+	attempts := 0
+	err := waitForNVIDIADeviceNodes(context.Background(), func() error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("not ready")
+		}
+		return nil
+	}, time.Second, time.Millisecond)
+	if err != nil || attempts != 3 {
+		t.Fatalf("wait error = %v, attempts = %d", err, attempts)
+	}
+
+	err = waitForNVIDIADeviceNodes(context.Background(), func() error {
+		return errors.New("still unavailable")
+	}, 5*time.Millisecond, time.Millisecond)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline error = %v", err)
+	}
+}
+
+func TestNVIDIABootstrapFailuresPersistAndContinue(t *testing.T) {
+	failure := errors.New("boom")
+	for _, failedCall := range []string{
+		"gpu-count", "hold-pci", "runtime-pm", "load-core", "setup-core-devices-8",
+		"prepare-persistenced", "wait-persistenced", "load-uvm", "setup-uvm-devices-8",
+		"load-modeset", "detect-fabric", "prepare-fabric", "wait-fabric", "wait-nvml-8",
+		"create-cdi", "publish-cdi",
+	} {
+		t.Run(failedCall, func(t *testing.T) {
+			control := newFakeNVIDIA(t, 8)
+			if failedCall == "prepare-fabric" || failedCall == "wait-fabric" {
+				control.fabricMode = nvidia.FabricModeFabricManager
+			}
+			control.fail[failedCall] = failure
+			var got nvidia.BootstrapStatus
+			err := runNVIDIABootstrap(context.Background(), control,
+				func(context.Context, supervisor.Command) error { return nil },
+				func(status nvidia.BootstrapStatus) error { got = status; return nil },
+			)
+			if err != nil {
+				t.Fatalf("bootstrap did not hand failure to boot: %v", err)
+			}
+			if got != nvidia.FailedBootstrapStatus() {
+				t.Fatalf("status = %#v", got)
+			}
+		})
+	}
+}
+
+func TestNVIDIABootstrapChildFailuresPersistAndStatusWriteFailureIsFatal(t *testing.T) {
+	childFailure := errors.New("child failed")
+	for _, child := range []string{"nvidia-persistenced", "nvidia-fabricmanager", "nvidia-ctk-cdi"} {
+		t.Run(child, func(t *testing.T) {
+			control := newFakeNVIDIA(t, 8)
+			control.fabricMode = nvidia.FabricModeFabricManager
+			var got nvidia.BootstrapStatus
+			err := runNVIDIABootstrap(context.Background(), control,
+				func(_ context.Context, command supervisor.Command) error {
+					if command.Name == child {
+						return childFailure
+					}
+					return nil
+				},
+				func(status nvidia.BootstrapStatus) error { got = status; return nil },
+			)
+			if err != nil || got != nvidia.FailedBootstrapStatus() {
+				t.Fatalf("error = %v, status = %#v", err, got)
+			}
+		})
+	}
+	control := newFakeNVIDIA(t, 8)
+	control.fail["hold-pci"] = childFailure
+	writeFailure := errors.New("disk failed")
+	err := runNVIDIABootstrap(context.Background(), control,
+		func(context.Context, supervisor.Command) error { return nil },
+		func(nvidia.BootstrapStatus) error { return writeFailure },
+	)
+	if err == nil || !errors.Is(err, writeFailure) {
+		t.Fatalf("status persistence error = %v", err)
+	}
+	for _, gpuCount := range []int{0, 8} {
+		control := newFakeNVIDIA(t, gpuCount)
+		err := runNVIDIABootstrap(context.Background(), control,
+			func(context.Context, supervisor.Command) error { return nil },
+			func(nvidia.BootstrapStatus) error { return writeFailure },
+		)
+		if err == nil || !errors.Is(err, writeFailure) {
+			t.Fatalf("GPU count %d status persistence error = %v", gpuCount, err)
+		}
+	}
+}
+
+func TestNVIDIABootstrapRejectsNVL5WithTypedError(t *testing.T) {
+	control := newFakeNVIDIA(t, 8)
+	control.fabricErr = &nvidia.ErrNVL5RequiresNVLSM{}
+	err := runNVIDIABootstrapSteps(context.Background(), control,
+		func(context.Context, supervisor.Command) error { return nil }, 8)
+	var typed *nvidia.ErrNVL5RequiresNVLSM
+	if !errors.As(err, &typed) {
+		t.Fatalf("error = %v, want ErrNVL5RequiresNVLSM", err)
+	}
+}
+
+func TestNVIDIABootstrapRejectsUnknownFabricMode(t *testing.T) {
+	control := newFakeNVIDIA(t, 8)
+	control.fabricMode = nvidia.FabricMode(255)
+	if err := runNVIDIABootstrapSteps(context.Background(), control,
+		func(context.Context, supervisor.Command) error { return nil }, 8); err == nil {
+		t.Fatal("unknown fabric mode succeeded")
+	}
+}
+
+func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
+	harness := newLifecycleHarness()
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	}
+	harness.deps.oneShot = func(_ context.Context, command supervisor.Command) error {
+		record(command.Name)
+		return nil
+	}
+	harness.deps.nvidia = func(context.Context) error {
+		record("nvidia-bootstrap")
+		return nil
+	}
+	harness.services.onStart = record
+	parent, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runLifecycle(parent, harness.deps, harness.readiness) }()
+	if ready := receiveTest(t, harness.ready); !ready {
+		t.Fatal("lifecycle did not become ready")
+	}
+	cancel()
+	if err := receiveTest(t, result); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	loopback := slices.Index(events, "loopback")
+	bootstrap := slices.Index(events, "nvidia-bootstrap")
+	containerd := slices.Index(events, containerdName)
+	if loopback < 0 || bootstrap != loopback+1 || containerd <= bootstrap {
+		t.Fatalf("startup events = %v", events)
+	}
+}
+
+func assertCommand(t *testing.T, got supervisor.Command, name, path string, args []string) {
+	t.Helper()
+	if got.Name != name || got.Path != path || !slices.Equal(got.Args, args) || got.Dir != "/" {
+		t.Fatalf("command = %#v, want name=%q path=%q args=%v dir=/", got, name, path, args)
+	}
+}
+
+func environmentMap(entries []string) map[string]string {
+	env := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, value, _ := strings.Cut(entry, "=")
+		env[key] = value
+	}
+	return env
 }
 
 func receiveTest[T any](t *testing.T, channel <-chan T) T {

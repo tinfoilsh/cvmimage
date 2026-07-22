@@ -1,0 +1,22 @@
+package(default_visibility = ["//visibility:public"])
+
+# Generated/declarative lock data is intentionally kept separate from build
+# rules so its reviewable size is not confused with executable mechanism.
+exports_files([
+    "runtime-packages.lock.json",
+    "runtime-packages.yaml",
+    "runtime-sources.lock.json",
+])
+
+sh_test(
+    name = "runtime-package-lock-test",
+    srcs = ["//scripts:compare_runtime_package_lock.sh"],
+    args = [
+        "$(location :runtime-packages.lock.json)",
+        "$(location @@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile)",
+    ],
+    data = [
+        ":runtime-packages.lock.json",
+        "@@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile",
+    ],
+)

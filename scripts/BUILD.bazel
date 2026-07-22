@@ -1,0 +1,14 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["compare_runtime_package_lock.sh"])
+
+sh_test(
+    name = "runtime-source-lock-test",
+    srcs = ["test-runtime-source-lock.sh"],
+    data = [
+        "runtime_source_lock.py",
+        "update-runtime-locks.sh",
+        "//image:runtime-packages.lock.json",
+        "//image:runtime-sources.lock.json",
+    ],
+)

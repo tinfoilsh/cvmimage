@@ -48,6 +48,30 @@ The verifier rejects setuid, setgid, file capabilities, device nodes, FIFOs, and
 sockets unless the source manifest explicitly permits the exact path and value.
 The initial additive rootfs policy is expected to permit none of them.
 
+## Fixed policy gate
+
+Apply the immutable-rootfs metadata and path contract to an already canonical
+manifest with:
+
+```bash
+scripts/rootfs_manifest.py policy manifest.tsv
+```
+
+The command uses the same eight-field parser as validation and comparison. It
+has no exception file, wildcard, archive reader, or second parsing path. A
+malformed manifest exits `2`; a canonical manifest that violates policy exits
+`1` and reports deterministic `policy` records on standard error.
+
+The fixed gate rejects world-writable objects, special permission bits,
+capability representations, special objects, forbidden package/boot/systemd
+and runtime-state paths, stock or misplaced kernel modules, and shipped PID1
+runtime state. `/dev`, `/proc`, `/run`, and `/sys` must be empty root-owned
+`0755` mountpoint directories. `/tmp` and `/var/tmp` have the same immutable
+metadata before PID1 mounts mode-`1777` tmpfs instances over them. The only
+permitted modules are three unlinked, xattr-free, root-owned `0644` regular
+files named `nvidia.ko`, `nvidia-uvm.ko`, and `nvidia-modeset.ko` directly in
+`/usr/lib/tinfoil/kernel-modules`; all three are required.
+
 ## Safety boundary
 
 Inventory must not follow symlinks and must operate on an explicitly selected

@@ -42,3 +42,6 @@ jobs:
 
       - name: Test rootfs manifest security
         run: sudo make test-rootfs-manifest
+
+      - name: Test final rootfs verifier
+        run: make test-final-rootfs-verifier

@@ -30,7 +30,7 @@ const (
 	defaultPidsLimit   int64 = 65536
 )
 
-func setupContainerNetwork(cli *client.Client, cfg *Config) error {
+func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config) error {
 	for name := range cfg.Networks {
 		if err := ensureNetwork(cli, name); err != nil {
 			return err
@@ -41,7 +41,7 @@ func setupContainerNetwork(cli *client.Client, cfg *Config) error {
 			return err
 		}
 	}
-	return setupContainerNetworkFirewall(cfg)
+	return setupContainerNetworkFirewall(ctx, cfg)
 }
 
 func ensureNetwork(cli *client.Client, name string) error {
@@ -108,7 +108,7 @@ func networkCreateOptions(name string) dockernetwork.CreateOptions {
 }
 
 // launchContainers starts all containers from the config
-func launchContainers(config *Config, extConfig *shimconfig.ExternalConfig) error {
+func launchContainers(ctx context.Context, config *Config, extConfig *shimconfig.ExternalConfig) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		return nil
@@ -120,7 +120,7 @@ func launchContainers(config *Config, extConfig *shimconfig.ExternalConfig) erro
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(cli, config); err != nil {
+	if err := setupContainerNetwork(ctx, cli, config); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
 	}
 
@@ -148,7 +148,7 @@ func launchContainers(config *Config, extConfig *shimconfig.ExternalConfig) erro
 // launchContainersAndWaitHealthy launches all containers in parallel with
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
-func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig) error {
+func launchContainersAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
@@ -161,7 +161,7 @@ func launchContainersAndWaitHealthy(tracker *boot.Tracker, config *Config, extCo
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(cli, config); err != nil {
+	if err := setupContainerNetwork(ctx, cli, config); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
 	}
 

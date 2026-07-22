@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"tinfoil/internal/boot"
@@ -15,8 +17,11 @@ func init() {
 }
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
 	if len(os.Args) > 1 {
-		if err := runSubcommand(os.Args[1]); err != nil {
+		if err := runSubcommand(ctx, os.Args[1]); err != nil {
 			log.Printf("Failed: %v", err)
 			os.Exit(1)
 		}
@@ -25,7 +30,7 @@ func main() {
 
 	log.Println("Tinfoil boot starting")
 
-	if err := run(); err != nil {
+	if err := run(ctx); err != nil {
 		log.Printf("Boot failed: %v", err)
 		os.Exit(1)
 	}
@@ -33,7 +38,7 @@ func main() {
 	log.Println("Tinfoil boot complete")
 }
 
-func runSubcommand(cmd string) error {
+func runSubcommand(ctx context.Context, cmd string) error {
 	switch cmd {
 	case "containers", "models":
 	default:
@@ -63,7 +68,7 @@ func runSubcommand(cmd string) error {
 			return fmt.Errorf("registry auth setup failed: %w", err)
 		}
 		log.Println("Launching containers")
-		return launchContainers(config, externalConfig)
+		return launchContainers(ctx, config, externalConfig)
 	case "models":
 		externalConfig, err := getExternalConfig()
 		if err != nil {
@@ -75,7 +80,7 @@ func runSubcommand(cmd string) error {
 	return nil
 }
 
-func run() error {
+func run(ctx context.Context) error {
 	tracker := boot.NewTracker(boot.InitialStages)
 
 	// 1. Config
@@ -96,7 +101,7 @@ func run() error {
 	// 2. Network
 	start = time.Now()
 	log.Println("Configuring guest network")
-	networkDetail, err := configureGuestNetwork(context.Background(), externalConfig.Network)
+	networkDetail, err := configureGuestNetwork(ctx, externalConfig.Network)
 	if err != nil {
 		tracker.Record(boot.StageNetwork, boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("network configuration failed: %w", err)
@@ -208,7 +213,7 @@ func run() error {
 
 	// 11. Containers + health checks
 	log.Println("Launching containers")
-	if err := launchContainersAndWaitHealthy(tracker, config, externalConfig); err != nil {
+	if err := launchContainersAndWaitHealthy(ctx, tracker, config, externalConfig); err != nil {
 		return err
 	}
 

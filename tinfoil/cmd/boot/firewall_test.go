@@ -6,16 +6,17 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	shimconfig "tinfoil/internal/config"
 )
 
 type fakeEgressPopulator struct {
-	populate func() error
+	populate func(context.Context) error
 }
 
-func (f fakeEgressPopulator) Populate(context.Context) error {
-	return f.populate()
+func (f fakeEgressPopulator) Populate(ctx context.Context) error {
+	return f.populate(ctx)
 }
 
 func TestFirewall_AllowlistPopulationFollowsNftOnce(t *testing.T) {
@@ -25,6 +26,7 @@ func TestFirewall_AllowlistPopulationFollowsNftOnce(t *testing.T) {
 	}}
 	var events []string
 	err := setupContainerNetworkFirewallWith(
+		context.Background(),
 		cfg,
 		func(string) error {
 			events = append(events, "nft")
@@ -32,7 +34,7 @@ func TestFirewall_AllowlistPopulationFollowsNftOnce(t *testing.T) {
 		},
 		func() (egressPopulator, error) {
 			events = append(events, "load")
-			return fakeEgressPopulator{populate: func() error {
+			return fakeEgressPopulator{populate: func(context.Context) error {
 				events = append(events, "populate")
 				return nil
 			}}, nil
@@ -53,6 +55,7 @@ func TestFirewall_NoAllowlistSkipsPopulation(t *testing.T) {
 	}}
 	loaded := false
 	err := setupContainerNetworkFirewallWith(
+		context.Background(),
 		cfg,
 		func(string) error { return nil },
 		func() (egressPopulator, error) {
@@ -75,10 +78,11 @@ func TestFirewall_PopulationFailureAbortsSetup(t *testing.T) {
 	}}
 	populateCalls := 0
 	err := setupContainerNetworkFirewallWith(
+		context.Background(),
 		cfg,
 		func(string) error { return nil },
 		func() (egressPopulator, error) {
-			return fakeEgressPopulator{populate: func() error {
+			return fakeEgressPopulator{populate: func(context.Context) error {
 				populateCalls++
 				return wantErr
 			}}, nil
@@ -89,6 +93,77 @@ func TestFirewall_PopulationFailureAbortsSetup(t *testing.T) {
 	}
 	if populateCalls != 1 {
 		t.Fatalf("Populate calls = %d, want 1", populateCalls)
+	}
+}
+
+func TestFirewall_PopulationHasFixedBootDeadline(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	err := setupContainerNetworkFirewallWith(
+		context.Background(),
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func(ctx context.Context) error {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatal("population context has no deadline")
+				}
+				remaining := time.Until(deadline)
+				if remaining > egressInitialPopulationTimeout || remaining < egressInitialPopulationTimeout-time.Second {
+					t.Fatalf("population deadline = %s, want %s", remaining, egressInitialPopulationTimeout)
+				}
+				return nil
+			}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFirewall_PopulationInheritsBootCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	err := setupContainerNetworkFirewallWith(
+		ctx,
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}}, nil
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("setup error = %v, want boot cancellation", err)
+	}
+}
+
+func TestFirewall_PopulationHonorsEarlierBootDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
+	}}
+	err := setupContainerNetworkFirewallWith(
+		ctx,
+		cfg,
+		func(string) error { return nil },
+		func() (egressPopulator, error) {
+			return fakeEgressPopulator{populate: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}}, nil
+		},
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("setup error = %v, want boot deadline", err)
 	}
 }
 

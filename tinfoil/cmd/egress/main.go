@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -10,6 +9,11 @@ import (
 
 	"tinfoil/internal/egress"
 )
+
+type egressRunner interface {
+	Configured() bool
+	Run(context.Context, func(error))
+}
 
 func init() {
 	log.SetFlags(0)
@@ -23,7 +27,15 @@ func main() {
 }
 
 func run() error {
-	engine, err := egress.Load()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	return runWith(ctx, func() (egressRunner, error) {
+		return egress.Load()
+	})
+}
+
+func runWith(ctx context.Context, load func() (egressRunner, error)) error {
+	engine, err := load()
 	if err != nil {
 		return err
 	}
@@ -31,13 +43,8 @@ func run() error {
 		log.Println("no allowlist networks configured, exiting")
 		return nil
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
-
-	if err := engine.Populate(ctx); err != nil {
-		return fmt.Errorf("initial population: %w", err)
-	}
-
+	// Boot owns the readiness-gating initial population. This service only
+	// refreshes the already-populated sets at the fixed engine interval.
 	engine.Run(ctx, func(err error) {
 		log.Printf("refresh failed: %v", err)
 	})

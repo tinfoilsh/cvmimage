@@ -1,0 +1,3 @@
+# Tinfoil artifact lock schema v1
+# name<TAB>source_kind<TAB>source_revision<TAB>build_parameters<TAB>sha256<TAB>destination
+tinfoil-initrd	source-build	tinfoil-tree:b7a6051ea076a7449fd431e2f7a9a5fb9f59a400	go1.25.7;CGO_ENABLED=0;-trimpath;-buildvcs=false;-mod=readonly;-ldflags=-s -w -buildid=	eb7cd6099ccd9265dae476781b96dfb962f8ef572a8bff94188276261353c79d	/usr/bin/tinfoil-initrd

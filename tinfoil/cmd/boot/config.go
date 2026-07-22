@@ -49,8 +49,27 @@ type NetworkSpec struct {
 func (n *NetworkSpec) UnmarshalYAML(node *yaml.Node) error {
 	// `name:` with a null scalar body decodes to a ScalarNode here.
 	if node.Kind == yaml.ScalarNode {
+		if node.Tag != "!!null" {
+			return fmt.Errorf("network entry must be a mapping or null")
+		}
 		n.Egress = "closed"
 		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("network entry must be a mapping")
+	}
+	seen := map[string]bool{}
+	for index := 0; index < len(node.Content); index += 2 {
+		field := node.Content[index].Value
+		if seen[field] {
+			return fmt.Errorf("duplicate network field %q", field)
+		}
+		seen[field] = true
+		switch field {
+		case "egress", "allow":
+		default:
+			return fmt.Errorf("unknown network field %q", field)
+		}
 	}
 	type alias NetworkSpec
 	var raw alias
@@ -220,6 +239,9 @@ func loadAndVerifyConfig() (*Config, error) {
 	if err := yaml.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	if err := validateConfigShape(&config); err != nil {
+		return nil, err
+	}
 
 	if err := validateGPUCount(config.GPUs); err != nil {
 		return nil, err
@@ -300,6 +322,9 @@ func loadConfigFromRamdisk() (*Config, error) {
 	var config Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if err := validateConfigShape(&config); err != nil {
+		return nil, err
 	}
 	if err := validateModelCount(len(config.Models)); err != nil {
 		return nil, err

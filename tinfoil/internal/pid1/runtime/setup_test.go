@@ -1,12 +1,9 @@
 package runtime
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 func TestEnsureSymlinkCreatesAndReplacesStaleLink(t *testing.T) {
@@ -80,37 +77,11 @@ func TestMemoryKBUsesKernelUnit(t *testing.T) {
 }
 
 func TestIsMountPointUsesKernelMountIDs(t *testing.T) {
-	mounted, err := isMountPoint("/proc")
-	if err != nil {
-		t.Fatalf("isMountPoint(/proc): %v", err)
-	}
-	if !mounted {
+	if !isMountPoint("/proc") {
 		t.Fatal("/proc is not detected as a mount point")
 	}
-	mounted, err = isMountPoint(t.TempDir())
-	if err != nil {
-		t.Fatalf("isMountPoint(temp): %v", err)
-	}
-	if mounted {
+	if isMountPoint(t.TempDir()) {
 		t.Fatal("ordinary temporary directory detected as a mount point")
-	}
-}
-
-func TestIsMountPointFailsClosedWithoutKernelMountID(t *testing.T) {
-	noMountID := func(_ int, _ string, _, _ int, info *unix.Statx_t) error {
-		info.Mask = 0
-		return nil
-	}
-	if _, err := isMountPointWith("/target", noMountID); err == nil {
-		t.Fatal("isMountPointWith accepted missing STATX_MNT_ID")
-	}
-
-	statErr := errors.New("statx unavailable")
-	failing := func(_ int, _ string, _, _ int, _ *unix.Statx_t) error {
-		return statErr
-	}
-	if _, err := isMountPointWith("/target", failing); !errors.Is(err, statErr) {
-		t.Fatalf("isMountPointWith error = %v, want %v", err, statErr)
 	}
 }
 

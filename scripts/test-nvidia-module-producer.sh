@@ -48,12 +48,12 @@ expect_failure() {
 mkdir -p "$package_cache_dir"
 printf 'expected package\n' > "$package_cache_dir/valid.deb"
 expected_sha256="$(sha256sum "$package_cache_dir/valid.deb" | awk '{print $1}')"
-resolved_package="$(TINFOIL_OFFLINE=1 download_deb valid.deb "$expected_sha256")"
+resolved_package="$(download_deb valid.deb "$expected_sha256")"
 test "$resolved_package" = "$package_cache_dir/valid.deb"
 
 printf 'corrupt package\n' > "$package_cache_dir/cached.deb"
 expected_sha256="$(printf 'expected package\n' | sha256sum | awk '{print $1}')"
-TINFOIL_OFFLINE=1 expect_failure \
+expect_failure \
     "a cached NVIDIA package with a checksum mismatch" \
     download_deb cached.deb "$expected_sha256"
 test ! -e "$package_cache_dir/cached.deb"

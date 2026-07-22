@@ -74,7 +74,7 @@ RUN set -eux; \
     test "$(dpkg-query -W -f='${Version}' kmod)" = 34.2-2ubuntu2; \
     test "$(sha256sum /opt/tinfoil-builder/packages/linux-source-7.0.0_7.0.0-28.28_all.deb | awk '{print $1}')" = dd5994b199a1cb06b1f336bb086c5c23a9258fdcfdcbb7dcc8d3afa9a5d92e13; \
     apt-get clean; \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+    rm -rf /var/lib/apt/lists/*
 
 COPY build-initrd.sh /usr/local/bin/build-initrd
 

@@ -53,6 +53,12 @@ jobs:
       - name: Test deterministic named initrd packaging
         run: make test-additive-initrd
 
+      - name: Test deterministic named Go producers
+        run: make test-go-producer
+
+      - name: Test pinned runtime builder contract
+        run: make test-runtime-builder-contract
+
       - name: Test fixed rootfs policy
         run: make test-rootfs-policy
 

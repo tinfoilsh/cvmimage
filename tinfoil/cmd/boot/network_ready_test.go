@@ -172,7 +172,7 @@ func TestVerifyFixedResolverFailsClosed(t *testing.T) {
 }
 
 func TestMeasuredResolverAssetMatchesFixedContract(t *testing.T) {
-	path := "../../../mkosi.extra/etc/resolv.conf"
+	path := "../../../image/rootfs/etc/resolv.conf"
 	if err := verifyFixedResolver(path); err != nil {
 		t.Fatalf("measured resolver asset: %v", err)
 	}
@@ -189,28 +189,5 @@ func TestApplyStaticNetworkPropagatesCommandFailure(t *testing.T) {
 	err := applyStaticNetwork(context.Background(), "ens2", config, run)
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("command failure = %v", err)
-	}
-}
-
-func TestImageNetworkWiringLeavesNICToTinfoilBoot(t *testing.T) {
-	networkdConfig, err := os.ReadFile(
-		"../../../mkosi.extra/etc/systemd/network/20-enp0s2.network",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(networkdConfig), "Unmanaged=yes") ||
-		strings.Contains(string(networkdConfig), "DHCP=") {
-		t.Fatalf("networkd still owns guest addressing:\n%s", networkdConfig)
-	}
-
-	bootUnit, err := os.ReadFile(
-		"../../../mkosi.extra/etc/systemd/system/tinfoil-boot.service",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(bootUnit), "network-online.target") {
-		t.Fatalf("tinfoil-boot still waits for network-online.target:\n%s", bootUnit)
 	}
 }

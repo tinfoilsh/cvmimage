@@ -10,6 +10,7 @@ load(
 load(":runtime_artifacts.bzl", "runtime_artifacts")
 load(":runtime_package_inputs.bzl", "RUNTIME_PACKAGE_INPUTS")
 load(":rootfs.bzl", "rootfs")
+load(":rootfs_archive_gate.bzl", "rootfs_archive_gate_test")
 
 _CA_CERTIFICATES_SOURCE_ID = "ca-certificates_20260223_amd64"
 
@@ -111,4 +112,8 @@ runtime_artifacts(
 
 rootfs(
     name = "rootfs",
+)
+
+rootfs_archive_gate_test(
+    name = "final-rootfs-archive-gate",
 )

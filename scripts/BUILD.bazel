@@ -50,6 +50,44 @@ py_test(
     deps = [":rootfs-artifact-contract"],
 )
 
+py_binary(
+    name = "rootfs_archive_gate",
+    srcs = ["rootfs_archive_gate.py"],
+    legacy_create_init = 0,
+    main = "rootfs_archive_gate.py",
+    deps = [
+        ":rootfs-artifact-contract",
+        ":rootfs_assembly",
+    ],
+)
+
+sh_binary(
+    name = "rootfs_archive_namespace",
+    srcs = ["rootfs_archive_namespace.sh"],
+)
+
+py_binary(
+    name = "rootfs_archive_gate_test_bin",
+    srcs = ["rootfs_archive_gate_test.py"],
+    legacy_create_init = 0,
+    main = "rootfs_archive_gate_test.py",
+    deps = [
+        ":rootfs-artifact-contract",
+        ":rootfs_archive_gate",
+        ":rootfs_assembly",
+    ],
+)
+
+sh_test(
+    name = "rootfs-archive-gate-test",
+    srcs = ["rootfs_archive_namespace.sh"],
+    args = ["$(location :rootfs_archive_gate_test_bin)"],
+    data = [
+        ":rootfs_archive_gate_test_bin",
+        "//image:manifests/rootfs.expected.tsv",
+    ],
+)
+
 sh_test(
     name = "rootfs-assembly-structure-test",
     srcs = ["test-rootfs-assembly-structure.sh"],

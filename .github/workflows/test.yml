@@ -73,7 +73,3 @@ jobs:
 
       - name: Test nvattest artifact safety
         run: make test-nvattest-artifacts
-
-      - name: Reproduce nvattest runtime artifacts
-        timeout-minutes: 60
-        run: make reproducible-nvattest

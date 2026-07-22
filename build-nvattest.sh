@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
-# Builds nvattest + libnvat into ./packages/ for mkosi. Always runs inside an
-# ubuntu:26.04 container as root (see Makefile / release.yml).
+# Builds nvattest + libnvat debs for mkosi and exports the two runtime artifacts
+# needed by the future additive rootfs. Always runs inside the pinned container
+# selected by the Makefile.
 # The cuda-ubuntu2604 repo now ships nvattest, but its libnvat links
 # libxml2.so.2 while Ubuntu resolute ships only libxml2.so.16 (libxml2 2.14
 # bumped the SONAME). So we keep building from source against system libxml2-16.
 
 set -Eeuo pipefail
 
-UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
-UPSTREAM_TAG=2026.06.09
-UPSTREAM_SHA=9d12801cea8a198ea0f29640dfaf8a4017c841c5
-APT_SNAPSHOT_DATE=20260525T000000Z
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${repo_dir}/scripts/nvattest-artifacts.sh"
+
+readonly UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
+readonly UPSTREAM_TAG=2026.06.09
+readonly UPSTREAM_SHA=9d12801cea8a198ea0f29640dfaf8a4017c841c5
+readonly APT_SNAPSHOT_DATE=20260525T000000Z
 
 # Transitive CMake FetchContent deps. We pre-fetch each at the expected SHA
 # *before* cmake runs and pass FETCHCONTENT_SOURCE_DIR_<NAME>, so a moved
 # upstream tag can never cause arbitrary configure-time code to execute.
 declare -rA DEP_REPOS=(
+    [cli11]=https://github.com/CLIUtils/CLI11.git
     [corrosion]=https://github.com/corrosion-rs/corrosion.git
     [regorus]=https://github.com/microsoft/regorus.git
     [jwt-cpp]=https://github.com/Thalhammer/jwt-cpp.git
@@ -23,6 +28,7 @@ declare -rA DEP_REPOS=(
     [spdlog]=https://github.com/gabime/spdlog.git
 )
 declare -rA DEP_SHAS=(
+    [cli11]=bfffd37e1f804ca4fae1caae106935791696b6a9
     [corrosion]=6be991bb34c348dfb8344be22f3606288ea5c7fd
     [regorus]=c7bf460bc160c96e38048296e5708943d2e43909
     [jwt-cpp]=e71e0c2d584baff06925bbb3aad683f677e4d498
@@ -31,19 +37,59 @@ declare -rA DEP_SHAS=(
 )
 
 # Upstream fetches nlohmann/json by URL without URL_HASH; we verify it ourselves.
-JSON_URL=https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
-JSON_SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+readonly JSON_URL=https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+readonly JSON_SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+readonly REGORUS_LOCK_SHA256=847ed5732480d7b4bdb65ed932c0413f6966c5bdc5a62e272be9a48bf103cd3b
 
-PKG_VERSION=1.2.2.1780962352-1
-SO_VERSION=1.2.2
-ARCH=amd64
+readonly PKG_VERSION=1.2.2.1780962352-1
+readonly SO_VERSION=1.2.2
+readonly ARCH=amd64
 
-OUT_DIR="$(cd "$(dirname "$0")" && pwd)/packages"
-WORK="$(mktemp -d)"
+DEB_OUT_DIR="${repo_dir}/packages"
+RUNTIME_OUT_DIR="${repo_dir}/build/rootfs-artifacts/nvattest"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --deb-output)
+            DEB_OUT_DIR=${2:?missing value for --deb-output}
+            shift 2
+            ;;
+        --runtime-output)
+            RUNTIME_OUT_DIR=${2:?missing value for --runtime-output}
+            shift 2
+            ;;
+        *)
+            echo "usage: $0 [--deb-output DIR] [--runtime-output DIR]" >&2
+            exit 2
+            ;;
+    esac
+done
+
+nvattest_require_absolute_output "${DEB_OUT_DIR}"
+nvattest_require_absolute_output "${RUNTIME_OUT_DIR}"
+
+WORK="$(nvattest_make_fixed_owned_temp /tmp tinfoil-nvattest-build)"
 SRC="${WORK}/src"
 BUILD="${WORK}/build"
 INSTALL="${WORK}/install"
-mkdir -p "${OUT_DIR}"
+RUNTIME_STAGE="${WORK}/runtime"
+cleanup() {
+    nvattest_remove_fixed_owned_temp "${WORK}" /tmp tinfoil-nvattest-build
+}
+trap cleanup EXIT
+
+mkdir -p "${DEB_OUT_DIR}"
+
+export SOURCE_DATE_EPOCH=0
+export TZ=UTC
+export LC_ALL=C.UTF-8
+prefix_map="-ffile-prefix-map=${WORK}=/usr/src/tinfoil-nvattest -fdebug-prefix-map=${WORK}=/usr/src/tinfoil-nvattest"
+portable_target="-march=x86-64 -mtune=generic"
+export CFLAGS="${prefix_map} ${portable_target}"
+export CXXFLAGS="${prefix_map} ${portable_target}"
+export CARGO_INCREMENTAL=0
+export RUSTFLAGS="--remap-path-prefix=${WORK}=/usr/src/tinfoil-nvattest -C target-cpu=x86-64 -C codegen-units=1"
+export CARGO_BUILD_JOBS=1
 
 # Bootstrap toolchain from snapshot.ubuntu.com (reproducible). ca-certificates
 # first so apt can do TLS to snapshot; integrity is enforced by GPG either way.
@@ -62,7 +108,7 @@ Check-Valid-Until: no
 EOF
 apt-get update -q
 apt-get install -y --no-install-recommends \
-    build-essential cmake git perl pkg-config rustc cargo \
+    binutils build-essential cmake git perl pkg-config rustc cargo \
     libxml2-dev curl xz-utils
 
 # Clone upstream and verify SHA.
@@ -71,7 +117,8 @@ git clone --depth=1 --branch "${UPSTREAM_TAG}" "${UPSTREAM_URL}" "${SRC}"
 
 # Pre-fetch transitive deps at their expected SHA before cmake configures.
 fetchcontent_overrides=()
-for name in "${!DEP_SHAS[@]}"; do
+mapfile -t dependency_names < <(printf '%s\n' "${!DEP_SHAS[@]}" | sort)
+for name in "${dependency_names[@]}"; do
     target="${WORK}/prefetch/${name}"
     git init -q "${target}"
     git -C "${target}" remote add origin "${DEP_REPOS[${name}]}"
@@ -82,6 +129,15 @@ for name in "${!DEP_SHAS[@]}"; do
     fetchcontent_overrides+=( "-DFETCHCONTENT_SOURCE_DIR_${upper}=${target}" )
 done
 
+printf '%s  %s\n' \
+    "${REGORUS_LOCK_SHA256}" \
+    "${repo_dir}/scripts/nvattest-regorus-Cargo.lock" | sha256sum --check --strict -
+install -m 0444 "${repo_dir}/scripts/nvattest-regorus-Cargo.lock" \
+    "${WORK}/prefetch/regorus/bindings/ffi/Cargo.lock"
+cargo fetch --locked \
+    --manifest-path "${WORK}/prefetch/regorus/bindings/ffi/Cargo.toml"
+export CARGO_NET_OFFLINE=true
+
 # Pre-fetch + verify nlohmann/json into FetchContent's cache.
 json_cache="${BUILD}/_deps/json-subbuild/json-populate-prefix/src"
 mkdir -p "${json_cache}"
@@ -90,11 +146,26 @@ echo "${JSON_SHA256}  ${json_cache}/json.tar.xz" | sha256sum -c -
 
 cmake -S "${SRC}/nv-attestation-cli" -B "${BUILD}" \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_EXE_LINKER_FLAGS=-Wl,--build-id=none \
+    -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--build-id=none \
     -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF \
     "${fetchcontent_overrides[@]}"
-cmake --build "${BUILD}" --parallel "$(nproc)"
+cmake --build "${BUILD}" --parallel 1
 DESTDIR="${INSTALL}" cmake --install "${BUILD}"
 DESTDIR="${INSTALL}" cmake --install "${BUILD}/nv-attestation-sdk-build"
+
+/usr/bin/strip --strip-unneeded \
+    "${INSTALL}/usr/bin/nvattest" \
+    "${INSTALL}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
+
+install -D -m 0755 "${INSTALL}/usr/bin/nvattest" \
+    "${RUNTIME_STAGE}/usr/bin/nvattest"
+install -D -m 0644 "${INSTALL}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
+    "${RUNTIME_STAGE}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
+nvattest_verify_runtime_artifacts "${RUNTIME_STAGE}" "${SO_VERSION}"
+nvattest_publish_runtime_artifacts \
+    "${RUNTIME_STAGE}" "${RUNTIME_OUT_DIR}" "${SO_VERSION}" \
+    "${HOST_UID}" "${HOST_GID}" "${SOURCE_DATE_EPOCH}"
 
 make_deb() {
     local stage=$1 pkg=$2 section=$3 deps=$4 desc=$5
@@ -113,7 +184,7 @@ Description: ${desc}
  Built from ${UPSTREAM_URL}@${UPSTREAM_TAG}.
 EOF
     dpkg-deb --root-owner-group --build "${stage}" \
-        "${OUT_DIR}/${pkg}_${PKG_VERSION}_${ARCH}.deb"
+        "${DEB_OUT_DIR}/${pkg}_${PKG_VERSION}_${ARCH}.deb"
 }
 
 libnvat="${WORK}/deb-libnvat"
@@ -131,5 +202,14 @@ make_deb "${nvattest}" nvattest devel \
     "libnvat (= ${PKG_VERSION}), libc6 (>= 2.34), libgcc-s1 (>= 3.0), libstdc++6 (>= 13)" \
     "NVIDIA Attestation SDK CLI (built from source)"
 
-chown -R "${HOST_UID}:${HOST_GID}" "${OUT_DIR}"
-ls -la "${OUT_DIR}"/{libnvat,nvattest}_*.deb
+for package in \
+    "${DEB_OUT_DIR}/libnvat_${PKG_VERSION}_${ARCH}.deb" \
+    "${DEB_OUT_DIR}/nvattest_${PKG_VERSION}_${ARCH}.deb"; do
+    chown "${HOST_UID}:${HOST_GID}" "${package}"
+    touch -d "@${SOURCE_DATE_EPOCH}" "${package}"
+done
+
+sha256sum \
+    "${RUNTIME_OUT_DIR}/usr/bin/nvattest" \
+    "${RUNTIME_OUT_DIR}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
+ls -la "${DEB_OUT_DIR}"/{libnvat,nvattest}_*.deb

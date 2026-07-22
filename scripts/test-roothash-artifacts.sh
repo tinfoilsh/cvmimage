@@ -41,6 +41,9 @@ else
     exit 1
 fi
 
+printf 'invalid' > "$workdir/tinfoilcvm.hash"
+expect_failure "malformed compatibility hash"
+
 printf '%s' "$hash_b" > "$workdir/tinfoilcvm.hash"
 expect_failure "stale compatibility hash"
 

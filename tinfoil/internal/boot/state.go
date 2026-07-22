@@ -33,6 +33,7 @@ const (
 
 const (
 	StageConfig         = "config"
+	StageNetwork        = "network"
 	StageIdentity       = "identity"
 	StageCPUAttestation = "cpu-attestation"
 	StageGPUAttestation = "gpu-attestation"
@@ -48,7 +49,7 @@ const (
 // InitialStages is the ordered list of stages known at boot time.
 // Both boot and shim use this as the starting point.
 var InitialStages = []string{
-	StageConfig, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
+	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
 	StageVaultSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
 }
 

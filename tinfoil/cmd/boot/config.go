@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
+	"net/netip"
 	"os"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/device"
 )
 
 // Config represents the main configuration file
@@ -123,12 +126,8 @@ type Healthcheck struct {
 	StartPeriod string   `yaml:"start_period,omitempty"` // "60s"
 }
 
-const (
-	configDiskPath   = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-config"
-	externalDiskPath = "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_tinfoil-ext-config"
-)
-
 const maxGPUCount = 8
+const maxDiskPayloadBytes = 1 << 20
 
 func validateGPUCount(count int) error {
 	if count < 0 || count > maxGPUCount {
@@ -137,14 +136,62 @@ func validateGPUCount(count int) error {
 	return nil
 }
 
-// loadAndVerifyConfig reads the config from disk and verifies its hash
-func loadAndVerifyConfig() (*Config, error) {
-	if _, err := os.Stat(configDiskPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config disk not found at %s", configDiskPath)
+func validateModelCount(count int) error {
+	if count < 0 || count > device.MaxModelDisks {
+		return fmt.Errorf("models must contain at most %d entries (got %d)", device.MaxModelDisks, count)
+	}
+	return nil
+}
+
+func validateExternalNetwork(config *shimconfig.ExternalNetworkConfig) error {
+	if config == nil {
+		return fmt.Errorf("network section is required")
+	}
+	prefix, err := netip.ParsePrefix(config.Address)
+	if err != nil || !prefix.Addr().Is4() {
+		return fmt.Errorf("invalid IPv4 address %q", config.Address)
+	}
+	if prefix.Bits() > 30 {
+		return fmt.Errorf("IPv4 prefix /%d has no distinct guest and gateway addresses", prefix.Bits())
+	}
+	gateway, err := netip.ParseAddr(config.Gateway)
+	if err != nil || !gateway.Is4() {
+		return fmt.Errorf("invalid IPv4 gateway %q", config.Gateway)
+	}
+	if !prefix.Contains(gateway) {
+		return fmt.Errorf("gateway %s is outside address subnet %s", config.Gateway, config.Address)
 	}
 
-	// Read config from disk device (strip null bytes)
-	configData, err := readDiskAndStripNulls(configDiskPath)
+	address := prefix.Addr()
+	network := prefix.Masked().Addr()
+	broadcast := ipv4Broadcast(prefix)
+	if gateway == network || gateway == broadcast {
+		return fmt.Errorf("gateway %s is reserved in subnet %s", gateway, prefix)
+	}
+	if address == network ||
+		address == broadcast ||
+		address == gateway {
+		return fmt.Errorf("address %s is reserved in subnet %s", address, prefix)
+	}
+	return nil
+}
+
+func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
+	broadcast := prefix.Masked().Addr().As4()
+	for bit := prefix.Bits(); bit < 32; bit++ {
+		broadcast[bit/8] |= 1 << (7 - bit%8)
+	}
+	return netip.AddrFrom4(broadcast)
+}
+
+// loadAndVerifyConfig reads the config from disk and verifies its hash
+func loadAndVerifyConfig() (*Config, error) {
+	configDiskPath, err := device.ConfigDisk()
+	if err != nil {
+		return nil, fmt.Errorf("finding config disk: %w", err)
+	}
+
+	configData, err := readDiskPayload(configDiskPath, maxDiskPayloadBytes)
 	if err != nil {
 		return nil, fmt.Errorf("reading config disk: %w", err)
 	}
@@ -169,13 +216,15 @@ func loadAndVerifyConfig() (*Config, error) {
 		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
-	// Parse config
 	var config Config
 	if err := yaml.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
 	if err := validateGPUCount(config.GPUs); err != nil {
+		return nil, err
+	}
+	if err := validateModelCount(len(config.Models)); err != nil {
 		return nil, err
 	}
 
@@ -207,7 +256,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	}
 
 	if err := loadExternalConfig(); err != nil {
-		log.Printf("Warning: external config not loaded: %v", err)
+		return nil, err
 	}
 
 	return &config, nil
@@ -252,6 +301,9 @@ func loadConfigFromRamdisk() (*Config, error) {
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	if err := validateModelCount(len(config.Models)); err != nil {
+		return nil, err
+	}
 
 	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
 	if err != nil {
@@ -268,13 +320,17 @@ func loadConfigFromRamdisk() (*Config, error) {
 }
 
 func loadExternalConfig() error {
-	if _, err := os.Stat(externalDiskPath); os.IsNotExist(err) {
-		return fmt.Errorf("external config disk not found at %s", externalDiskPath)
+	externalDiskPath, err := device.ExternalConfigDisk()
+	if err != nil {
+		return fmt.Errorf("finding external config disk: %w", err)
 	}
 
-	data, err := readDiskAndStripNulls(externalDiskPath)
+	data, err := readDiskPayload(externalDiskPath, maxDiskPayloadBytes)
 	if err != nil {
 		return fmt.Errorf("reading external config disk: %w", err)
+	}
+	if _, err := decodeExternalConfig(data); err != nil {
+		return err
 	}
 
 	if err := os.WriteFile(boot.ExternalConfigPath, data, 0600); err != nil {
@@ -290,21 +346,44 @@ func getExternalConfig() (*shimconfig.ExternalConfig, error) {
 		return nil, fmt.Errorf("reading external config: %w", err)
 	}
 
-	var config shimconfig.ExternalConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("parsing external config: %w", err)
-	}
-	return &config, nil
+	return decodeExternalConfig(data)
 }
 
-// readDiskAndStripNulls reads a disk device and strips trailing null bytes
-func readDiskAndStripNulls(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+func decodeExternalConfig(data []byte) (*shimconfig.ExternalConfig, error) {
+	config, err := shimconfig.DecodeExternal(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing external config: %w", err)
+	}
+	if err := validateExternalNetwork(config.Network); err != nil {
+		return nil, fmt.Errorf("external network config: %w", err)
+	}
+	return config, nil
+}
+
+// readDiskPayload reads a NUL-padded config disk without reading its full
+// capacity into memory. Embedded non-NUL bytes after padding are rejected.
+func readDiskPayload(path string, maxBytes int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
-
-	data = bytes.TrimRight(data, "\x00")
+	if padding := bytes.IndexByte(data, 0); padding >= 0 {
+		for _, value := range data[padding:] {
+			if value != 0 {
+				return nil, fmt.Errorf("%s contains data after NUL padding", path)
+			}
+		}
+		return data[:padding], nil
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s payload exceeds %d bytes", path, maxBytes)
+	}
 	return data, nil
 }
 

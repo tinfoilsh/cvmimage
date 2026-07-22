@@ -77,7 +77,7 @@ download_deb() {
             chown "$host_uid:$host_gid" "$destination"
         fi
     fi
-    if ! printf '%s  %s\n' "$sha256" "$destination" | sha256sum -c --strict -; then
+    if ! printf '%s  %s\n' "$sha256" "$destination" | sha256sum -c --strict --status -; then
         echo "removing NVIDIA package with checksum mismatch: $destination" >&2
         rm -f -- "$destination"
         exit 1

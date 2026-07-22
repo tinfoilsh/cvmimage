@@ -2,8 +2,10 @@ package nvidia
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,10 +30,29 @@ const (
 	nvidiaNVLinkMinor      = 0
 	nvidiaNVSwitchCtlMinor = 255
 	maxNVSwitches          = 64
+	maxVPDSize             = 64 << 10
 
 	maxDeviceMajor = (1 << 12) - 1
 	maxDeviceMinor = (1 << 20) - 1
 )
+
+var swManagementVPDMarker = []byte("SW_MNG")
+
+// FabricMode identifies the userspace fabric services required by detected
+// hardware.
+type FabricMode uint8
+
+const (
+	FabricModeNone FabricMode = iota
+	FabricModeFabricManager
+)
+
+// ErrNVL5RequiresNVLSM reports NVL5 hardware when NVLSM is not allowlisted.
+type ErrNVL5RequiresNVLSM struct{}
+
+func (*ErrNVL5RequiresNVLSM) Error() string {
+	return "NVL5 fabric requires allowlisted NVLSM"
+}
 
 var allowedCapabilityFiles = [...]string{
 	"mig/config",
@@ -89,6 +110,18 @@ func HasNVSwitch() (bool, error) {
 	return hasNVSwitch(systemDevicePaths)
 }
 
+// GPUCount returns the number of NVIDIA PCI functions with an exact VGA or 3D
+// controller class. Any unreadable or malformed PCI identity fails closed.
+func GPUCount() (int, error) {
+	return gpuCount(systemDevicePaths)
+}
+
+// DetectFabricMode selects the userspace fabric contract from direct NVIDIA
+// NVSwitch PCI functions and vendor-independent SW_MNG VPD markers.
+func DetectFabricMode() (FabricMode, error) {
+	return detectFabricMode(systemDevicePaths)
+}
+
 func hasNVSwitch(paths devicePaths) (bool, error) {
 	devices, err := nvidiaPCIDevices(paths)
 	if err != nil {
@@ -100,6 +133,85 @@ func hasNVSwitch(paths devicePaths) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func gpuCount(paths devicePaths) (int, error) {
+	devices, err := nvidiaPCIDevices(paths)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, device := range devices {
+		if isGPUClass(device.class) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func detectFabricMode(paths devicePaths) (FabricMode, error) {
+	nvswitch, err := hasNVSwitch(paths)
+	if err != nil {
+		return FabricModeNone, fmt.Errorf("detect NVIDIA NVSwitch: %w", err)
+	}
+	swManaged, err := hasSWManagementVPD(paths)
+	if err != nil {
+		return FabricModeNone, fmt.Errorf("detect SW_MNG VPD: %w", err)
+	}
+	if swManaged {
+		return FabricModeNone, &ErrNVL5RequiresNVLSM{}
+	}
+	if nvswitch {
+		return FabricModeFabricManager, nil
+	}
+	return FabricModeNone, nil
+}
+
+func hasSWManagementVPD(paths devicePaths) (bool, error) {
+	entries, err := os.ReadDir(paths.pciDevices)
+	if err != nil {
+		return false, fmt.Errorf("read PCI devices: %w", err)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(paths.pciDevices, entry.Name(), "vpd")
+		fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("open PCI VPD for %s: %w", entry.Name(), err)
+		}
+		file := os.NewFile(uintptr(fd), path)
+		info, statErr := file.Stat()
+		if statErr != nil {
+			_ = file.Close()
+			return false, fmt.Errorf("inspect PCI VPD for %s: %w", entry.Name(), statErr)
+		}
+		if !info.Mode().IsRegular() {
+			_ = file.Close()
+			return false, fmt.Errorf("PCI VPD for %s is not a regular file", entry.Name())
+		}
+		swManaged, readErr := scanSWManagementVPD(file)
+		_ = file.Close()
+		if readErr != nil {
+			return false, fmt.Errorf("read PCI VPD for %s: %w", entry.Name(), readErr)
+		}
+		if swManaged {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func scanSWManagementVPD(reader io.Reader) (bool, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxVPDSize+1))
+	if err != nil {
+		return false, err
+	}
+	if len(data) > maxVPDSize {
+		return false, fmt.Errorf("PCI VPD exceeds %d bytes", maxVPDSize)
+	}
+	return bytes.Contains(data, swManagementVPDMarker), nil
 }
 
 // HoldGPUEnableReferences increments the PCI enable reference for each NVIDIA
@@ -114,10 +226,20 @@ func EnableGPURuntimePowerManagement() error {
 	return enableGPURuntimePowerManagement(systemDevicePaths)
 }
 
-// SetupDeviceNodes creates and verifies the NVIDIA character devices and their
-// /dev/char links using kernel-assigned majors and NVIDIA-assigned minors.
-func SetupDeviceNodes() error {
-	return setupDeviceNodes(systemDevicePaths)
+// SetupCoreDeviceNodes creates and verifies the core NVIDIA character devices
+// only after the driver reports exactly the detected number of GPUs.
+func SetupCoreDeviceNodes(expectedGPUs int) error {
+	return setupDeviceNodes(systemDevicePaths, deviceNodeRequirements{expectedGPUs: expectedGPUs})
+}
+
+// SetupUVMDeviceNodes creates and verifies the core, UVM, and allowlisted
+// capability character devices after the UVM modules load.
+func SetupUVMDeviceNodes(expectedGPUs int) error {
+	return setupDeviceNodes(systemDevicePaths, deviceNodeRequirements{
+		expectedGPUs:        expectedGPUs,
+		requireUVM:          true,
+		requireCapabilities: true,
+	})
 }
 
 func hasPCIDevice(paths devicePaths) (bool, error) {
@@ -219,23 +341,62 @@ func enableGPURuntimePowerManagement(paths devicePaths) error {
 	return nil
 }
 
-func setupDeviceNodes(paths devicePaths) error {
+type deviceNodeRequirements struct {
+	expectedGPUs        int
+	requireUVM          bool
+	requireCapabilities bool
+}
+
+func setupDeviceNodes(paths devicePaths, requirements deviceNodeRequirements) error {
+	devices, err := discoverDeviceNodes(paths, requirements)
+	if err != nil {
+		return err
+	}
+	if err := validateCharDevices(devices); err != nil {
+		return err
+	}
+	for _, device := range devices {
+		if err := ensureCharDevice(paths.dev, device); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func discoverDeviceNodes(paths devicePaths, requirements deviceNodeRequirements) ([]charDevice, error) {
+	if requirements.expectedGPUs < 1 {
+		return nil, fmt.Errorf("invalid expected NVIDIA GPU count %d", requirements.expectedGPUs)
+	}
 	majors, err := charDeviceMajors(paths.procDevices)
 	if err != nil {
-		return fmt.Errorf("read character device majors: %w", err)
+		return nil, fmt.Errorf("read character device majors: %w", err)
 	}
 	frontend, ok := firstMajor(majors, "nvidia-frontend", "nvidia")
 	if !ok {
-		return errors.New("missing nvidia-frontend character device major")
+		return nil, errors.New("missing nvidia-frontend character device major")
 	}
 
 	gpuMinors, err := nvidiaDeviceMinors(paths.gpus)
 	if err != nil {
-		return fmt.Errorf("discover NVIDIA GPU minors: %w", err)
+		return nil, fmt.Errorf("discover NVIDIA GPU minors: %w", err)
+	}
+	if len(gpuMinors) != requirements.expectedGPUs {
+		return nil, fmt.Errorf("NVIDIA driver reported %d GPU device minors, want %d", len(gpuMinors), requirements.expectedGPUs)
+	}
+	if requirements.requireCapabilities {
+		for _, relative := range allowedCapabilityFiles {
+			path := filepath.Join(paths.capabilities, filepath.FromSlash(relative))
+			if _, err := os.Lstat(path); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return nil, fmt.Errorf("missing NVIDIA capability descriptor %s", path)
+				}
+				return nil, fmt.Errorf("inspect NVIDIA capability descriptor %s: %w", path, err)
+			}
+		}
 	}
 	capabilities, err := nvidiaCapabilityDevices(paths.capabilities)
 	if err != nil {
-		return fmt.Errorf("discover NVIDIA capability devices: %w", err)
+		return nil, fmt.Errorf("discover NVIDIA capability devices: %w", err)
 	}
 
 	devices := []charDevice{
@@ -261,7 +422,11 @@ func setupDeviceNodes(paths devicePaths) error {
 		})
 	}
 
-	if uvm, ok := majors["nvidia-uvm"]; ok {
+	uvm, uvmLoaded := majors["nvidia-uvm"]
+	if requirements.requireUVM && !uvmLoaded {
+		return nil, errors.New("missing nvidia-uvm character device major")
+	}
+	if uvmLoaded {
 		devices = append(devices,
 			charDevice{
 				path:  filepath.Join(paths.dev, "nvidia-uvm"),
@@ -281,7 +446,7 @@ func setupDeviceNodes(paths devicePaths) error {
 	if len(capabilities) > 0 {
 		caps, ok := majors["nvidia-caps"]
 		if !ok {
-			return errors.New("NVIDIA capability descriptors exist without nvidia-caps character device major")
+			return nil, errors.New("NVIDIA capability descriptors exist without nvidia-caps character device major")
 		}
 		for _, capability := range capabilities {
 			devices = append(devices, charDevice{
@@ -294,19 +459,10 @@ func setupDeviceNodes(paths devicePaths) error {
 	}
 	interconnects, err := nvidiaInterconnectDevices(paths, majors)
 	if err != nil {
-		return fmt.Errorf("discover NVIDIA interconnect devices: %w", err)
+		return nil, fmt.Errorf("discover NVIDIA interconnect devices: %w", err)
 	}
 	devices = append(devices, interconnects...)
-
-	if err := validateCharDevices(devices); err != nil {
-		return err
-	}
-	for _, device := range devices {
-		if err := ensureCharDevice(paths.dev, device); err != nil {
-			return err
-		}
-	}
-	return nil
+	return devices, nil
 }
 
 func nvidiaInterconnectDevices(paths devicePaths, majors map[string]int) ([]charDevice, error) {

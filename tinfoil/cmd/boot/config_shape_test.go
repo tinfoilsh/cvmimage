@@ -13,6 +13,10 @@ func TestValidateConfigShapeEnforcesCollectionLimits(t *testing.T) {
 	for index := 0; index <= maxConfigNetworks; index++ {
 		networks[fmt.Sprintf("network-%d", index)] = &NetworkSpec{}
 	}
+	tmpfs := make(map[string]string, maxContainerTmpfsEntries+1)
+	for index := 0; index <= maxContainerTmpfsEntries; index++ {
+		tmpfs[fmt.Sprintf("/tmp/%d", index)] = "size=1m"
+	}
 	tests := []struct {
 		name   string
 		config Config
@@ -23,6 +27,8 @@ func TestValidateConfigShapeEnforcesCollectionLimits(t *testing.T) {
 		{name: "networks", config: Config{Networks: networks}, want: "networks exceeds"},
 		{name: "ports", config: Config{CVMNetwork: CVMNetworkConfig{InboundPorts: make([]int, maxConfigInboundPorts+1)}}, want: "inbound-ports exceeds"},
 		{name: "command", config: Config{Containers: []Container{{Command: make([]string, maxContainerListEntries+1)}}}, want: "command exceeds"},
+		{name: "tmpfs", config: Config{Containers: []Container{{Tmpfs: tmpfs}}}, want: "tmpfs exceeds"},
+		{name: "healthcheck", config: Config{Containers: []Container{{Healthcheck: &Healthcheck{Test: make([]string, maxHealthcheckTestEntries+1)}}}}, want: "healthcheck.test exceeds"},
 		{name: "allow", config: Config{Networks: map[string]*NetworkSpec{"web": {Allow: make([]string, maxNetworkAllowEntries+1)}}}, want: "allow exceeds"},
 	}
 	for _, test := range tests {

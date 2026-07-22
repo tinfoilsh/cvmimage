@@ -121,6 +121,100 @@ func TestPCIDiscoveryAndGPUSetupUseExactClasses(t *testing.T) {
 	}
 }
 
+func TestGPUCountUsesExactNVIDIAClassesAndFailsClosed(t *testing.T) {
+	paths := testDevicePaths(t)
+	for name, fixture := range map[string][2]string{
+		"0000:01:00.0": {"0x10de", "0x030000"},
+		"0000:02:00.0": {"0x10de", "0x030200"},
+		"0000:03:00.0": {"0x10de", "0x030201"},
+		"0000:04:00.0": {"0x10de", "0x068000"},
+		"0000:05:00.0": {"0x1af4", "0x030200"},
+	} {
+		addPCIFixture(t, paths, name, fixture[0], fixture[1], false)
+	}
+	count, err := gpuCount(paths)
+	if err != nil || count != 2 {
+		t.Fatalf("gpuCount = %d, %v; want 2, nil", count, err)
+	}
+	writeTestFile(t, filepath.Join(paths.pciDevices, "0000:04:00.0", "class"), "invalid\n")
+	if _, err := gpuCount(paths); err == nil {
+		t.Fatal("gpuCount accepted malformed NVIDIA class")
+	}
+}
+
+func TestSWManagementVPDDetectionIsBoundedAndVendorIndependent(t *testing.T) {
+	paths := testDevicePaths(t)
+	addPCIFixture(t, paths, "0000:01:00.0", "0x15b3", "0x020000", false)
+	vpd := filepath.Join(paths.pciDevices, "0000:01:00.0", "vpd")
+	writeTestFile(t, vpd, "MLX:MN=MLNX:SMDL=SW_MNG:MODL=C7010Z")
+	present, err := hasSWManagementVPD(paths)
+	if err != nil || !present {
+		t.Fatalf("hasSWManagementVPD = %v, %v; want true, nil", present, err)
+	}
+
+	writeTestFile(t, vpd, strings.Repeat("x", maxVPDSize+1))
+	if _, err := hasSWManagementVPD(paths); err == nil {
+		t.Fatal("hasSWManagementVPD accepted oversized VPD")
+	}
+	if err := os.Remove(vpd); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, vpd+".target", "SMDL=SW_MNG")
+	if err := os.Symlink(vpd+".target", vpd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hasSWManagementVPD(paths); err == nil {
+		t.Fatal("hasSWManagementVPD followed VPD symlink")
+	}
+}
+
+func TestSWManagementVPDDetectionFailsClosedOnReadError(t *testing.T) {
+	wantErr := errors.New("VPD read failed")
+	present, err := scanSWManagementVPD(errorReader{err: wantErr})
+	if present || !errors.Is(err, wantErr) {
+		t.Fatalf("scanSWManagementVPD = %v, %v; want false, %v", present, err, wantErr)
+	}
+}
+
+type errorReader struct {
+	err error
+}
+
+func (reader errorReader) Read([]byte) (int, error) {
+	return 0, reader.err
+}
+
+func TestDetectFabricMode(t *testing.T) {
+	t.Run("none", func(t *testing.T) {
+		mode, err := detectFabricMode(testDevicePaths(t))
+		if err != nil || mode != FabricModeNone {
+			t.Fatalf("detectFabricMode = %v, %v", mode, err)
+		}
+	})
+
+	t.Run("fabric manager", func(t *testing.T) {
+		paths := testDevicePaths(t)
+		addPCIFixture(t, paths, "0000:01:00.0", "0x10de", "0x068000", false)
+		mode, err := detectFabricMode(paths)
+		if err != nil || mode != FabricModeFabricManager {
+			t.Fatalf("detectFabricMode = %v, %v", mode, err)
+		}
+	})
+
+	t.Run("NVL5 denied", func(t *testing.T) {
+		paths := testDevicePaths(t)
+		addPCIFixture(t, paths, "0000:01:00.0", "0x10de", "0x068000", false)
+		addPCIFixture(t, paths, "0000:02:00.0", "0x15b3", "0x020000", false)
+		writeTestFile(t, filepath.Join(paths.pciDevices, "0000:02:00.0", "vpd"), "SMDL=SW_MNG")
+		mode, err := detectFabricMode(paths)
+		var nvlsmErr *ErrNVL5RequiresNVLSM
+		if mode != FabricModeNone || !errors.As(err, &nvlsmErr) {
+			t.Fatalf("detectFabricMode = %v, %v; want typed NVLSM error", mode, err)
+		}
+	})
+
+}
+
 func TestHasPCIDeviceUsesSupportedGPUAndNVSwitchClasses(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -238,6 +332,56 @@ func TestCapabilityParserFailsClosed(t *testing.T) {
 				t.Fatalf("parseCapabilityDevice accepted %q", contents)
 			}
 		})
+	}
+}
+
+func TestDeviceNodeReadinessRequiresExpectedGPUsAndUVMCapabilities(t *testing.T) {
+	paths := testDevicePaths(t)
+	writeTestFile(t, paths.procDevices, `Character devices:
+195 nvidia-frontend
+236 nvidia-caps
+237 nvidia-uvm
+`)
+	writeTestFile(t, filepath.Join(paths.gpus, "0000:01:00.0", "information"), "Device Minor: 0\n")
+
+	core := deviceNodeRequirements{expectedGPUs: 2}
+	if _, err := discoverDeviceNodes(paths, core); err == nil || !strings.Contains(err.Error(), "want 2") {
+		t.Fatalf("core readiness error = %v, want GPU count mismatch", err)
+	}
+
+	uvm := deviceNodeRequirements{expectedGPUs: 1, requireUVM: true, requireCapabilities: true}
+	if _, err := discoverDeviceNodes(paths, uvm); err == nil || !strings.Contains(err.Error(), "missing NVIDIA capability descriptor") {
+		t.Fatalf("UVM readiness error = %v, want missing capability descriptor", err)
+	}
+	writeTestFile(t, filepath.Join(paths.capabilities, "mig", "config"),
+		"DeviceFileMinor: 1\nDeviceFileMode: 256\n")
+	writeTestFile(t, filepath.Join(paths.capabilities, "mig", "monitor"),
+		"DeviceFileMinor: 2\nDeviceFileMode: 288\n")
+
+	devices, err := discoverDeviceNodes(paths, uvm)
+	if err != nil {
+		t.Fatalf("discoverDeviceNodes: %v", err)
+	}
+	wantPaths := []string{
+		filepath.Join(paths.dev, "nvidiactl"),
+		filepath.Join(paths.dev, "nvidia-modeset"),
+		filepath.Join(paths.dev, "nvidia0"),
+		filepath.Join(paths.dev, "nvidia-uvm"),
+		filepath.Join(paths.dev, "nvidia-uvm-tools"),
+		filepath.Join(paths.dev, "nvidia-caps", "nvidia-cap1"),
+		filepath.Join(paths.dev, "nvidia-caps", "nvidia-cap2"),
+	}
+	gotPaths := make([]string, 0, len(devices))
+	for _, device := range devices {
+		gotPaths = append(gotPaths, device.path)
+	}
+	if !reflect.DeepEqual(gotPaths, wantPaths) {
+		t.Fatalf("device paths = %v, want %v", gotPaths, wantPaths)
+	}
+
+	writeTestFile(t, paths.procDevices, "Character devices:\n195 nvidia-frontend\n236 nvidia-caps\n")
+	if _, err := discoverDeviceNodes(paths, uvm); err == nil || !strings.Contains(err.Error(), "missing nvidia-uvm") {
+		t.Fatalf("UVM major error = %v, want missing nvidia-uvm major", err)
 	}
 }
 
@@ -382,9 +526,11 @@ func TestEnsureCharNodeRecreatesOnlyStaleCharacterDevices(t *testing.T) {
 func TestSetupDeviceNodesFailsBeforeReplacingRequiredPaths(t *testing.T) {
 	paths := testDevicePaths(t)
 	writeTestFile(t, paths.procDevices, "Character devices:\n195 nvidia-frontend\n")
+	writeTestFile(t, filepath.Join(paths.gpus, "0000:01:00.0", "information"), "Device Minor: 0\n")
 	writeTestFile(t, filepath.Join(paths.dev, "nvidiactl"), "keep\n")
 
-	err := setupDeviceNodes(paths)
+	requirements := deviceNodeRequirements{expectedGPUs: 1}
+	err := setupDeviceNodes(paths, requirements)
 	if err == nil || !strings.Contains(err.Error(), "not a character device") {
 		t.Fatalf("setupDeviceNodes error = %v, want required node error", err)
 	}
@@ -394,7 +540,7 @@ func TestSetupDeviceNodesFailsBeforeReplacingRequiredPaths(t *testing.T) {
 
 	writeTestFile(t, filepath.Join(paths.capabilities, "mig", "config"),
 		"DeviceFileMinor: 1\nDeviceFileMode: 256\n")
-	err = setupDeviceNodes(paths)
+	err = setupDeviceNodes(paths, requirements)
 	if err == nil || !strings.Contains(err.Error(), "without nvidia-caps") {
 		t.Fatalf("setupDeviceNodes capability error = %v", err)
 	}

@@ -30,6 +30,13 @@ This preserves ordinary additive filesystem semantics when a repository-owned
 file intentionally replaces a package default, such as the Fabric Manager
 command-socket setting.
 
+The measured overlay also owns `/usr/lib/os-release` and the fixed files that
+make mkosi's unavoidable systemd finalization byte-neutral: an empty
+`/etc/.pwd.lock`, an empty `/usr/lib/clock-epoch`, and a `disable *` systemd
+preset. Final disk assembly therefore adds no service enablement or other
+runtime policy; only the ext4 formatter's `lost+found` directory is outside the
+rootfs tar.
+
 The rootfs target deliberately has no hostile-builder verifier, every-path
 manifest, forbidden-path policy, package filter or runtime-footprint denylist.
 The trusted release worker, independent reproduction, protected expected-

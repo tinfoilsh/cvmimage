@@ -19,6 +19,10 @@ grep -Fq 'cp -a /mnt/source/kernel /mnt/work/kernel' "$canonical_builder"
 grep -Fq 'cp -a /mnt/source/nvidia /mnt/work/nvidia' "$canonical_builder"
 grep -Fq '"$kernel_build_dir" "$kernel_source_dir" "$kernel_out_dir"' "$local_builder"
 grep -Fq 'unset MAKEFLAGS MFLAGS ARCH CROSS_COMPILE CC CFLAGS CPPFLAGS KCFLAGS KCPPFLAGS LDFLAGS' "$local_builder"
+grep -Fq 'readonly package_cache_dir="$kernel_build_dir/nvidia-packages"' "$local_builder"
+grep -Fq 'missing pinned offline NVIDIA package:' "$local_builder"
+grep -Fq 'require_canonical_directory "$output_parent" "rootfs-artifacts output parent"' "$local_builder"
+grep -Fq 'pinned_output_dir="/proc/self/fd/$output_parent_fd/$output_name"' "$local_builder"
 grep -Fq "export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'" "$canonical_builder"
 grep -Fq 'export KBUILD_BUILD_USER=tinfoil' "$canonical_builder"
 grep -Fq 'export KBUILD_BUILD_HOST=tinfoil-builder' "$canonical_builder"
@@ -36,5 +40,12 @@ if grep -Fq 'make -s -C "$kernel_source_dir"' "$local_builder"; then
     echo "module producer probes the shared kernel source with make" >&2
     exit 1
 fi
+
+crc_line="$(grep -nF 'module_versions="$(modprobe --dump-modversions "$scratch/built-modules/nvidia.ko")"' "$local_builder" | cut -d: -f1)"
+copy_line="$(grep -nF 'install -m 0644 "$scratch/built-modules/$module" "$publish/artifacts/$module"' "$local_builder" | cut -d: -f1)"
+[ -n "$crc_line" ] && [ -n "$copy_line" ] && [ "$crc_line" -lt "$copy_line" ] || {
+    echo "module validation must precede publication staging" >&2
+    exit 1
+}
 
 echo "runtime artifact producer structure is fixed and least-privileged"

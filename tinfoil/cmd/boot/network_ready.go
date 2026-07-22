@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
@@ -18,9 +22,10 @@ const (
 	networkReadyTimeout = 90 * time.Second
 	networkPollInterval = 100 * time.Millisecond
 	ipBinary            = "/usr/sbin/ip"
-	resolvectlBinary    = "/usr/bin/resolvectl"
+	resolverPath        = "/etc/resolv.conf"
 	primaryNameserver   = "1.1.1.1"
 	secondaryNameserver = "1.0.0.1"
+	fixedResolver       = "nameserver 1.1.1.1\nnameserver 1.0.0.1\n"
 )
 
 var sysBusPCIDevices = "/sys/bus/pci/devices"
@@ -33,6 +38,9 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 }
 
 func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetworkConfig) (string, error) {
+	if err := verifyFixedResolver(resolverPath); err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(ctx, networkReadyTimeout)
 	defer cancel()
 
@@ -118,13 +126,37 @@ func compactStrings(values []string) []string {
 	return out
 }
 
+func verifyFixedResolver(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("open fixed resolver %s: %w", path, err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat fixed resolver %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("fixed resolver %s is not a regular file", path)
+	}
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("read fixed resolver %s: %w", path, err)
+	}
+	if !bytes.Equal(contents, []byte(fixedResolver)) {
+		return fmt.Errorf("fixed resolver %s does not match measured contents", path)
+	}
+	return nil
+}
+
 func applyStaticNetwork(
 	ctx context.Context,
 	iface string,
 	config *shimconfig.ExternalNetworkConfig,
 	run commandRunner,
 ) error {
-	dnsArgs := []string{"dns", iface, primaryNameserver, secondaryNameserver}
 	commands := []struct {
 		name string
 		args []string
@@ -134,9 +166,6 @@ func applyStaticNetwork(
 		{ipBinary, []string{"route", "flush", "dev", iface}},
 		{ipBinary, []string{"addr", "replace", config.Address, "dev", iface}},
 		{ipBinary, []string{"route", "replace", "default", "via", config.Gateway, "dev", iface}},
-		{resolvectlBinary, dnsArgs},
-		{resolvectlBinary, []string{"domain", iface, "~."}},
-		{resolvectlBinary, []string{"default-route", iface, "yes"}},
 	}
 	for _, command := range commands {
 		output, err := run(ctx, command.name, command.args...)

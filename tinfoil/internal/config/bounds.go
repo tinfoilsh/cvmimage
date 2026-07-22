@@ -36,14 +36,14 @@ func readConfigFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("open descriptor")
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
+	var initialStat unix.Stat_t
+	if err := unix.Fstat(descriptor, &initialStat); err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
+	if initialStat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, fmt.Errorf("not a regular file")
 	}
-	if info.Size() > maxConfigFileBytes {
+	if initialStat.Size > maxConfigFileBytes {
 		return nil, fmt.Errorf("exceeds %d-byte limit", maxConfigFileBytes)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxConfigFileBytes+1))
@@ -53,19 +53,28 @@ func readConfigFile(path string) ([]byte, error) {
 	if len(data) > maxConfigFileBytes {
 		return nil, fmt.Errorf("exceeds %d-byte limit", maxConfigFileBytes)
 	}
-	finalInfo, err := file.Stat()
-	if err != nil {
+	var finalStat unix.Stat_t
+	if err := unix.Fstat(descriptor, &finalStat); err != nil {
 		return nil, err
 	}
-	if info.Size() != finalInfo.Size() || !info.ModTime().Equal(finalInfo.ModTime()) {
+	if !sameConfigFileVersion(&initialStat, &finalStat) {
 		return nil, fmt.Errorf("changed while being read")
 	}
 	return data, nil
 }
 
+func sameConfigFileVersion(initial, final *unix.Stat_t) bool {
+	return initial.Size == final.Size &&
+		initial.Mtim.Sec == final.Mtim.Sec && initial.Mtim.Nsec == final.Mtim.Nsec &&
+		initial.Ctim.Sec == final.Ctim.Sec && initial.Ctim.Nsec == final.Ctim.Nsec
+}
+
 func decodeYAMLDocument(data []byte) (*yaml.Node, error) {
 	if len(data) > maxConfigFileBytes {
 		return nil, fmt.Errorf("input exceeds %d-byte limit", maxConfigFileBytes)
+	}
+	if err := validateYAMLStructureBudget(data); err != nil {
+		return nil, err
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	var node yaml.Node
@@ -83,6 +92,92 @@ func decodeYAMLDocument(data []byte) (*yaml.Node, error) {
 		return nil, err
 	}
 	return &node, nil
+}
+
+func validateYAMLStructureBudget(data []byte) error {
+	potentialNodes := 2
+	flowDepth := 0
+	lineOnlySpace := true
+	var quote byte
+	escaped := false
+	comment := false
+
+	for index := 0; index < len(data); index++ {
+		character := data[index]
+		if comment {
+			if character == '\n' {
+				comment = false
+				lineOnlySpace = true
+			}
+			continue
+		}
+		if quote != 0 {
+			if quote == '"' && escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				if quote == '\'' && index+1 < len(data) && data[index+1] == '\'' {
+					index++
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+
+		if character == '#' && (index == 0 || isYAMLSeparation(data[index-1])) {
+			comment = true
+			continue
+		}
+		switch character {
+		case '\n', '\r':
+			lineOnlySpace = true
+		case ' ', '\t':
+			continue
+		case '\'', '"':
+			quote = character
+			lineOnlySpace = false
+		case '[', '{':
+			potentialNodes++
+			flowDepth++
+			lineOnlySpace = false
+		case ']', '}':
+			if flowDepth > 0 {
+				flowDepth--
+			}
+			lineOnlySpace = false
+		case ',':
+			if flowDepth > 0 {
+				potentialNodes++
+			}
+			lineOnlySpace = false
+		case ':':
+			if flowDepth > 0 || index+1 == len(data) || isYAMLSeparation(data[index+1]) {
+				potentialNodes += 2
+			}
+			lineOnlySpace = false
+		case '-', '?':
+			if lineOnlySpace && (index+1 == len(data) || isYAMLSeparation(data[index+1])) {
+				potentialNodes++
+			}
+			lineOnlySpace = false
+		default:
+			lineOnlySpace = false
+		}
+		if potentialNodes > maxYAMLNodes {
+			return fmt.Errorf("YAML exceeds %d-node structural budget", maxYAMLNodes)
+		}
+	}
+	return nil
+}
+
+func isYAMLSeparation(character byte) bool {
+	return character == ' ' || character == '\t' || character == '\r' || character == '\n'
 }
 
 func validateYAMLTree(root *yaml.Node) error {

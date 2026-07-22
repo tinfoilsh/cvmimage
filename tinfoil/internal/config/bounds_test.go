@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,6 +44,36 @@ func TestDecodeRejectsOversizedScalarData(t *testing.T) {
 	}}}
 	if _, err := Decode(&root); err == nil {
 		t.Fatal("Decode accepted oversized scalar data")
+	}
+}
+
+func TestYAMLStructureBudgetRejectsNodeBombBeforeDecode(t *testing.T) {
+	data := []byte(strings.Repeat("- x\n", maxYAMLNodes))
+	if err := validateYAMLStructureBudget(data); err == nil {
+		t.Fatal("validateYAMLStructureBudget accepted an oversized sequence")
+	}
+}
+
+func TestYAMLStructureBudgetAllowsLargeQuotedScalar(t *testing.T) {
+	data := []byte("value: \"" + strings.Repeat("-?:,[]{}", 4096) + "\"\n")
+	if err := validateYAMLStructureBudget(data); err != nil {
+		t.Fatalf("validateYAMLStructureBudget rejected a scalar payload: %v", err)
+	}
+}
+
+func TestSameConfigFileVersionIncludesChangeTime(t *testing.T) {
+	initial := unix.Stat_t{
+		Size: 4,
+		Mtim: unix.Timespec{Sec: 10, Nsec: 20},
+		Ctim: unix.Timespec{Sec: 30, Nsec: 40},
+	}
+	final := initial
+	if !sameConfigFileVersion(&initial, &final) {
+		t.Fatal("sameConfigFileVersion rejected identical metadata")
+	}
+	final.Ctim.Nsec++
+	if sameConfigFileVersion(&initial, &final) {
+		t.Fatal("sameConfigFileVersion ignored a change-time update")
 	}
 }
 

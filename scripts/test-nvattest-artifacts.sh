@@ -36,6 +36,15 @@ expect_failure nvattest_publish_runtime_artifacts \
     "$(id -u)" "$(id -g)" 0
 test -f "${temporary}/unexpected-output/unexpected"
 
+mkdir -p "${temporary}/hardlinked-output"
+printf 'external sentinel\n' >"${temporary}/external-manifest"
+ln "${temporary}/external-manifest" "${temporary}/hardlinked-output/rootfs-artifacts.tsv"
+external_manifest_sha256="$(sha256sum "${temporary}/external-manifest")"
+expect_failure nvattest_publish_runtime_artifacts \
+    "${temporary}/source" "${temporary}/hardlinked-output" "${SO_VERSION}" \
+    "$(id -u)" "$(id -g)" 0
+test "$(sha256sum "${temporary}/external-manifest")" = "${external_manifest_sha256}"
+
 mkdir -p "${temporary}/real-parent"
 ln -s "${temporary}/real-parent" "${temporary}/linked-parent"
 expect_failure nvattest_publish_runtime_artifacts \

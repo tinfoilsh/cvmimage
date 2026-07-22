@@ -75,6 +75,18 @@ class RootfsArtifactsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fixed contract"):
             self.verify()
 
+    def test_rejects_blank_lock_and_manifest_records(self):
+        original_lock = self.lock.read_text()
+        self.lock.write_text(original_lock.replace("\n", "\n\n", 1))
+        with self.assertRaisesRegex(ValueError, "blank records are forbidden"):
+            self.verify()
+        self.lock.write_text(original_lock)
+
+        manifest = Path(self.manifests[0].partition("=")[2])
+        manifest.write_text(manifest.read_text().replace("\n", "\n\n", 1))
+        with self.assertRaisesRegex(ValueError, "blank records are forbidden"):
+            self.verify()
+
     def test_rejects_unmanifested_producer_file(self):
         extra = self.root / "go/artifacts/extra"
         extra.write_bytes(b"extra")
@@ -159,7 +171,9 @@ class RootfsArtifactsTest(unittest.TestCase):
             {"kind": "symlink"},
             {"uid": "1"},
             {"gid": "1"},
+            {"source_kind": "binary-package"},
             {"source_revision": "drift"},
+            {"build_parameters": "drift"},
         )
         for changes in mutations:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -187,10 +201,48 @@ class RootfsArtifactsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "external hardlinks are forbidden"):
             self.verify()
 
+    def test_revalidates_source_metadata_after_tree_traversal(self):
+        source = self.root / "go/artifacts/tinfoil-init"
+        original_verify_tree = rootfs_artifacts.verify_tree
+
+        for mutation, cleanup in (
+            (
+                lambda: os.setxattr(source, "user.tinfoil-race", b"forbidden"),
+                lambda: os.removexattr(source, "user.tinfoil-race"),
+            ),
+            (
+                lambda: os.link(source, self.root / "raced-external-hardlink"),
+                lambda: (self.root / "raced-external-hardlink").unlink(),
+            ),
+        ):
+            mutated = False
+
+            def verify_then_mutate(root_descriptor, manifest_metadata, producer, entries):
+                nonlocal mutated
+                original_verify_tree(root_descriptor, manifest_metadata, producer, entries)
+                if producer == "go" and not mutated:
+                    mutation()
+                    mutated = True
+
+            try:
+                with self.subTest(mutation=mutation), mock.patch.object(
+                    rootfs_artifacts, "verify_tree", side_effect=verify_then_mutate
+                ), self.assertRaisesRegex(ValueError, "source xattrs are forbidden|external hardlinks are forbidden"):
+                    self.verify()
+            finally:
+                if mutated:
+                    cleanup()
+
     def test_rejects_module_contract_drift(self):
-        for changes in ({"mode": "0755"}, {"destination": "/usr/lib/modules/nvidia.ko"}, {"name": "nvidia-drm.ko"}):
-            with self.subTest(changes=changes), self.assertRaises(ValueError):
-                self.verify(self.mutated_lock("nvidia.ko", **changes))
+        for module in ("nvidia.ko", "nvidia-uvm.ko", "nvidia-modeset.ko"):
+            for changes in (
+                {"mode": "0755"},
+                {"destination": f"/usr/lib/modules/{module}"},
+                {"source_kind": "binary-package"},
+                {"build_parameters": "drift"},
+            ):
+                with self.subTest(module=module, changes=changes), self.assertRaises(ValueError):
+                    self.verify(self.mutated_lock(module, **changes))
 
 
 if __name__ == "__main__":

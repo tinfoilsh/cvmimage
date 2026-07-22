@@ -203,14 +203,18 @@ nvattest_publish_runtime_artifacts() {
             echo "refusing to replace runtime output directory owned by UID ${destination_uid}: ${destination}" >&2
             return 1
         }
-        existing="$(find "${destination}" -mindepth 1 -printf '%y\t%U\t%P\n' | LC_ALL=C sort)" || return
+        existing="$(find "${destination}" -mindepth 1 -printf '%y\t%U\t%n\t%P\n' | LC_ALL=C sort)" || return
         expected_library="f:usr/lib/x86_64-linux-gnu/libnvat.so.${so_version}"
         if [ -n "${existing}" ]; then
-            while IFS=$'\t' read -r type uid path; do
+            while IFS=$'\t' read -r type uid links path; do
                 [ "${uid}" = "${owner_uid}" ] || {
                     echo "refusing to replace runtime output entry owned by UID ${uid}: ${path}" >&2
                     return 1
                 }
+                if [ "${type}" = f ] && [ "${links}" != 1 ]; then
+                    echo "refusing to replace hardlinked runtime output entry: ${path}" >&2
+                    return 1
+                fi
                 case "${type}:${path}" in
                     d:usr|d:usr/bin|d:usr/lib|d:usr/lib/x86_64-linux-gnu|f:.stamp|f:rootfs-artifacts.tsv|f:usr/bin/nvattest|"${expected_library}") ;;
                     *)

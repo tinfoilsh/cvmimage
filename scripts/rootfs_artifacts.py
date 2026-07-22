@@ -57,7 +57,9 @@ def fail(message: str) -> None:
 
 def lines(content: str):
     for number, raw in enumerate(content.splitlines(), 1):
-        if raw and not raw.startswith("#"):
+        if not raw:
+            fail(f"line {number}: blank records are forbidden")
+        if not raw.startswith("#"):
             yield number, raw
 
 
@@ -77,9 +79,12 @@ def verify_node_metadata(descriptor: int, metadata: os.stat_result, label: str, 
     if metadata_identity(metadata) != metadata_identity(opened):
         fail(f"{label}: source changed while opening")
     attributes = os.listxattr(descriptor)
+    stable = os.fstat(descriptor)
+    if metadata_identity(opened) != metadata_identity(stable):
+        fail(f"{label}: source changed while validating metadata")
     if attributes:
         fail(f"{label}: source xattrs are forbidden: {sorted(attributes)}")
-    if regular and opened.st_nlink != 1:
+    if regular and stable.st_nlink != 1:
         fail(f"{label}: external hardlinks are forbidden")
 
 
@@ -215,6 +220,7 @@ def verify_file(root_descriptor: int, entry: Entry) -> None:
             metadata = os.fstat(file_descriptor)
             if not stat.S_ISREG(metadata.st_mode):
                 fail(f"{entry.name}: source is not a regular file")
+            verify_node_metadata(file_descriptor, metadata, entry.name, regular=True)
             if f"{stat.S_IMODE(metadata.st_mode):04o}" != entry.mode:
                 fail(f"{entry.name}: source mode mismatch")
             with os.fdopen(os.dup(file_descriptor), "rb") as source:
@@ -222,6 +228,7 @@ def verify_file(root_descriptor: int, entry: Entry) -> None:
             stable = os.fstat(file_descriptor)
             if metadata_identity(metadata) != metadata_identity(stable):
                 fail(f"{entry.name}: source changed while hashing")
+            verify_node_metadata(file_descriptor, stable, entry.name, regular=True)
             if digest != entry.sha256:
                 fail(f"{entry.name}: source hash mismatch: {digest} != {entry.sha256}")
         finally:

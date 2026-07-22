@@ -13,7 +13,8 @@ NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
 	builder-initrd additive-initrd verify-additive-initrd \
 	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
-	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy
+	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
+	verify-final-rootfs test-final-rootfs-verifier
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -100,6 +101,16 @@ test-rootfs-manifest: test-rootfs-manifest-policy
 
 test-rootfs-manifest-policy:
 	./scripts/test-rootfs-manifest-policy.py
+
+verify-final-rootfs:
+	@test -n "$(FINAL_ROOTFS_IMAGE)" -a -n "$(FINAL_ROOTFS_MANIFEST)" || { \
+		echo "set absolute FINAL_ROOTFS_IMAGE and FINAL_ROOTFS_MANIFEST paths" >&2; exit 2; }
+	sudo env -i PATH="$(TRUSTED_PATH)" LC_ALL=C LANG=C \
+		/usr/bin/python3 -I ./scripts/verify-final-rootfs.py \
+		--image "$(FINAL_ROOTFS_IMAGE)" --manifest "$(FINAL_ROOTFS_MANIFEST)"
+
+test-final-rootfs-verifier:
+	./scripts/test-final-rootfs-verifier.sh
 
 # First build populates mkosi.cache; later builds reuse it for fast iteration.
 rebuild: go-binaries

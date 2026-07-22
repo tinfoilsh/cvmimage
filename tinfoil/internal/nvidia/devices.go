@@ -78,7 +78,8 @@ type charDevice struct {
 	mode  os.FileMode
 }
 
-// HasPCIDevice reports whether sysfs contains a PCI function owned by NVIDIA.
+// HasPCIDevice reports whether sysfs contains a supported NVIDIA GPU or
+// NVSwitch PCI function.
 func HasPCIDevice() (bool, error) {
 	return hasPCIDevice(systemDevicePaths)
 }
@@ -120,16 +121,12 @@ func SetupDeviceNodes() error {
 }
 
 func hasPCIDevice(paths devicePaths) (bool, error) {
-	entries, err := os.ReadDir(paths.pciDevices)
+	devices, err := nvidiaPCIDevices(paths)
 	if err != nil {
-		return false, fmt.Errorf("read PCI devices: %w", err)
+		return false, err
 	}
-	for _, entry := range entries {
-		vendor, err := readHexAttribute(filepath.Join(paths.pciDevices, entry.Name(), "vendor"))
-		if err != nil {
-			return false, fmt.Errorf("read PCI vendor for %s: %w", entry.Name(), err)
-		}
-		if vendor == nvidiaPCIVendor {
+	for _, device := range devices {
+		if isSupportedPCIClass(device.class) {
 			return true, nil
 		}
 	}
@@ -179,6 +176,10 @@ func readHexAttribute(path string) (uint64, error) {
 
 func isGPUClass(class uint64) bool {
 	return class == pciClassVGAController || class == pciClass3DController
+}
+
+func isSupportedPCIClass(class uint64) bool {
+	return isGPUClass(class) || class == pciClassNVSwitch
 }
 
 func holdGPUEnableReferences(paths devicePaths) error {

@@ -121,6 +121,33 @@ func TestPCIDiscoveryAndGPUSetupUseExactClasses(t *testing.T) {
 	}
 }
 
+func TestHasPCIDeviceUsesSupportedGPUAndNVSwitchClasses(t *testing.T) {
+	tests := []struct {
+		name  string
+		class string
+		want  bool
+	}{
+		{name: "VGA controller", class: "0x030000", want: true},
+		{name: "3D controller", class: "0x030200", want: true},
+		{name: "NVSwitch", class: "0x068000", want: true},
+		{name: "HDA controller", class: "0x040300", want: false},
+		{name: "inexact 3D controller", class: "0x030201", want: false},
+		{name: "inexact NVSwitch", class: "0x068001", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paths := testDevicePaths(t)
+			addPCIFixture(t, paths, "0000:01:00.0", "0x10de", test.class, false)
+
+			present, err := hasPCIDevice(paths)
+			if err != nil || present != test.want {
+				t.Fatalf("hasPCIDevice = %v, %v; want %v, nil", present, err, test.want)
+			}
+		})
+	}
+}
+
 func TestNVIDIAPresenceAndNVSwitchErrorsAreReported(t *testing.T) {
 	paths := testDevicePaths(t)
 	present, err := hasPCIDevice(paths)

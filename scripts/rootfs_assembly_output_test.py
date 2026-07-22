@@ -21,7 +21,7 @@ class OutputContractTest(unittest.TestCase):
 
     def test_exact_modules_and_explicit_absence(self):
         entries = rootfs_manifest.parse_manifest(self.manifest)
-        modules = {path for path in entries if path.endswith((".ko", ".ko.xz", ".ko.zst"))}
+        modules = {path for path in entries if path.endswith(rootfs_manifest.MODULE_SUFFIXES)}
         self.assertEqual(modules, rootfs_manifest.REQUIRED_MODULES)
         forbidden = (
             "/usr/lib/modules", "/etc/systemd", "/usr/lib/systemd", "/etc/sysctl.d",

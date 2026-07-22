@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import rootfs_assembly
 
@@ -153,6 +154,19 @@ class RootfsAssemblyTest(unittest.TestCase):
         with self.assertRaises(rootfs_assembly.AssemblyError):
             rootfs_assembly.lock_entries([{"path": "link", "type": "symlink", "mode": "0777", "target": "../../escape"}])
 
+    def test_package_lock_ownership_and_xattrs_are_exact(self):
+        base = {
+            "path": "member", "type": "file", "mode": "0644", "sha256": "a" * 64,
+            "size": 1, "uid": 0, "gid": 0, "xattrs": {},
+        }
+        self.assertEqual(rootfs_assembly.lock_entries([base], True)["member"][:3], ("file", "0644", "a" * 64))
+        for field, value in (("uid", 1), ("uid", False), ("gid", 1), ("gid", False), ("xattrs", {"user.test": "value"})):
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(rootfs_assembly.AssemblyError, "package metadata"):
+                rootfs_assembly.lock_entries([{**base, field: value}], True)
+        for mutation in ({key: value for key, value in base.items() if key != "uid"}, {**base, "extra": 1}):
+            with self.assertRaisesRegex(rootfs_assembly.AssemblyError, "member fields"):
+                rootfs_assembly.lock_entries([mutation], True)
+
     def test_vendor_arguments_and_source_set_are_exact(self):
         sources = [{"id": source_id, "files": []} for source_id in (*rootfs_assembly.VENDOR_IDS, "nvidia-container-toolkit")]
         lock = {"version": 1, "sources": sources}
@@ -214,6 +228,20 @@ class RootfsAssemblyTest(unittest.TestCase):
             rootfs_assembly.write_outputs({"/": rootfs_assembly.Entry("/", "dir", "0755")}, output_tar, output_manifest)
         self.assertFalse(output_tar.exists())
         self.assertFalse(output_manifest.exists())
+
+    def test_output_parent_symlink_is_rejected(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        link = self.root / "link"
+        link.symlink_to(outside, target_is_directory=True)
+        with mock.patch.object(rootfs_assembly.rootfs_manifest, "policy_violations", return_value=[]):
+            with self.assertRaises(OSError):
+                rootfs_assembly.write_outputs(
+                    {"/": rootfs_assembly.Entry("/", "dir", "0755")},
+                    link / "rootfs.tar",
+                    link / "rootfs.tsv",
+                )
+        self.assertEqual(list(outside.iterdir()), [])
 
 
 if __name__ == "__main__":

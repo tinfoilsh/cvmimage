@@ -169,7 +169,7 @@ def safe_link(path, target):
             depth += 1
 
 
-def lock_entries(files):
+def lock_entries(files, package=False):
     if not isinstance(files, list) or not files:
         fail("locked member list must be non-empty")
     result = {}
@@ -181,6 +181,13 @@ def lock_entries(files):
         mode = raw.get("mode")
         if path in result or kind not in ("file", "symlink") or not isinstance(mode, str) or not MODE.fullmatch(mode):
             fail(f"invalid locked member: {path}")
+        expected_fields = {"path", "type", "mode", "sha256", "size"} if kind == "file" else {"path", "type", "mode", "target"}
+        if package:
+            expected_fields.update(("uid", "gid", "xattrs"))
+        if set(raw) != expected_fields:
+            fail(f"invalid locked member fields: {path}")
+        if package and (type(raw["uid"]) is not int or raw["uid"] != 0 or type(raw["gid"]) is not int or raw["gid"] != 0 or raw["xattrs"] != {}):
+            fail(f"invalid locked package metadata: {path}")
         if kind == "file":
             digest, size, link = raw.get("sha256"), raw.get("size"), "-"
             if not isinstance(digest, str) or not SHA256.fullmatch(digest) or not isinstance(size, int) or isinstance(size, bool) or size < 0:
@@ -301,7 +308,7 @@ def archive_entries(inputs, document, package):
         fail("archive arguments differ from fixed source order")
     result = []
     for (source_id, archive_path), (_, source) in zip(inputs, selected, strict=True):
-        locked = lock_entries(source.get("files"))
+        locked = lock_entries(source.get("files"), package)
         inspect_member_archive(archive_path, locked)
         for path, (kind, mode, digest, _, link) in locked.items():
             if not package and source_id == "nvidia-container-toolkit-base" and path == EXCLUDED:
@@ -426,19 +433,106 @@ def manifest_entry(entry):
     return rootfs_manifest.Entry(entry.path, entry.kind, entry.mode, "0", "0", value, "-", "-")
 
 
+def open_output_parent(path):
+    path = Path(path)
+    name = path.name
+    if not name or name in (".", ".."):
+        fail(f"invalid output path: {path}")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor = os.open("/" if path.is_absolute() else ".", flags)
+    components = path.parent.parts[1:] if path.is_absolute() else path.parent.parts
+    try:
+        for component in components:
+            if component in ("", "."):
+                continue
+            if component == "..":
+                fail(f"output path escapes its starting directory: {path}")
+            following = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = following
+        return descriptor, name
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def require_absent(parent, name, path):
+    try:
+        os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    fail(f"output already exists: {path}")
+
+
+def write_all(descriptor, content):
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if not written:
+            fail("output write returned no progress")
+        remaining = remaining[written:]
+
+
+def output_identity(metadata):
+    return metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid, metadata.st_gid, metadata.st_size
+
+
+def publish_output(parent, temporary, destination, descriptor, path):
+    expected = output_identity(os.fstat(descriptor))
+    if output_identity(os.stat(temporary, dir_fd=parent, follow_symlinks=False)) != expected:
+        fail(f"temporary output changed before publication: {path}")
+    linked = False
+    try:
+        os.link(temporary, destination, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+        linked = True
+        if output_identity(os.stat(destination, dir_fd=parent, follow_symlinks=False)) != expected:
+            fail(f"published output identity differs: {path}")
+        os.unlink(temporary, dir_fd=parent)
+    except Exception:
+        if linked:
+            unlink_owned(parent, destination, descriptor)
+        raise
+
+
+def unlink_owned(parent, name, descriptor):
+    with contextlib.suppress(FileNotFoundError):
+        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) == (os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino):
+            os.unlink(name, dir_fd=parent)
+
+
 def write_outputs(entries, output_tar, output_manifest):
     ordered = [entries[path] for path in sorted(entries, key=lambda value: value.encode())]
     manifest_entries = [manifest_entry(entry) for entry in ordered]
     violations = rootfs_manifest.policy_violations({entry.path: entry for entry in manifest_entries})
     if violations:
         fail("rootfs policy rejected assembly: " + "; ".join(f"{path}: {reason}" for path, reason in violations))
-    temporary_tar = Path(str(output_tar) + ".tmp")
-    temporary_manifest = Path(str(output_manifest) + ".tmp")
-    for path in (Path(output_tar), Path(output_manifest), temporary_tar, temporary_manifest):
-        if path.exists() or path.is_symlink():
-            fail(f"output already exists: {path}")
+    output_tar = Path(output_tar)
+    output_manifest = Path(output_manifest)
+    tar_parent, tar_name = open_output_parent(output_tar)
+    manifest_parent, manifest_name = open_output_parent(output_manifest)
+    temporary_tar = tar_name + ".tmp"
+    temporary_manifest = manifest_name + ".tmp"
+    tar_descriptor = manifest_descriptor = None
+    tar_published = manifest_published = False
     try:
-        with temporary_tar.open("xb") as raw, tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        require_absent(tar_parent, tar_name, output_tar)
+        require_absent(tar_parent, temporary_tar, Path(str(output_tar) + ".tmp"))
+        require_absent(manifest_parent, manifest_name, output_manifest)
+        require_absent(manifest_parent, temporary_manifest, Path(str(output_manifest) + ".tmp"))
+        tar_descriptor = os.open(
+            temporary_tar,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=tar_parent,
+        )
+        manifest_descriptor = os.open(
+            temporary_manifest,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=manifest_parent,
+        )
+        with os.fdopen(os.dup(tar_descriptor), "wb") as raw, tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as archive:
             for entry in ordered:
                 member = tarfile.TarInfo("." if entry.path == "/" else entry.path[1:])
                 member.mode, member.uid, member.gid, member.uname, member.gname, member.mtime = int(entry.mode, 8), 0, 0, "", "", 0
@@ -463,20 +557,39 @@ def write_outputs(entries, output_tar, output_manifest):
                         archive.addfile(member, checked)
                         if checked.digest.hexdigest() != entry.digest:
                             fail(f"source changed while assembling: {entry.path}")
-        temporary_manifest.write_bytes(rootfs_manifest.serialize(manifest_entries))
-        verify_output(temporary_tar, manifest_entries)
-        os.replace(temporary_tar, output_tar)
-        os.replace(temporary_manifest, output_manifest)
+        os.fchmod(tar_descriptor, 0o644)
+        os.fsync(tar_descriptor)
+        write_all(manifest_descriptor, rootfs_manifest.serialize(manifest_entries))
+        os.fchmod(manifest_descriptor, 0o644)
+        os.fsync(manifest_descriptor)
+        verify_output(tar_descriptor, manifest_entries)
+        publish_output(tar_parent, temporary_tar, tar_name, tar_descriptor, output_tar)
+        tar_published = True
+        publish_output(manifest_parent, temporary_manifest, manifest_name, manifest_descriptor, output_manifest)
+        manifest_published = True
     except Exception:
-        for path in (temporary_tar, temporary_manifest, Path(output_tar), Path(output_manifest)):
-            with contextlib.suppress(FileNotFoundError):
-                path.unlink()
+        if tar_descriptor is not None:
+            unlink_owned(tar_parent, temporary_tar, tar_descriptor)
+            if tar_published:
+                unlink_owned(tar_parent, tar_name, tar_descriptor)
+        if manifest_descriptor is not None:
+            unlink_owned(manifest_parent, temporary_manifest, manifest_descriptor)
+            if manifest_published:
+                unlink_owned(manifest_parent, manifest_name, manifest_descriptor)
         raise
+    finally:
+        if tar_descriptor is not None:
+            os.close(tar_descriptor)
+        if manifest_descriptor is not None:
+            os.close(manifest_descriptor)
+        os.close(tar_parent)
+        os.close(manifest_parent)
 
 
-def verify_output(path, expected):
+def verify_output(descriptor, expected):
     actual = []
-    with tarfile.open(path, "r:") as archive:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    with os.fdopen(os.dup(descriptor), "rb") as raw, tarfile.open(fileobj=raw, mode="r:") as archive:
         for member in archive.getmembers():
             if member.pax_headers or member.uid or member.gid or member.uname or member.gname or member.mtime:
                 fail(f"non-canonical final archive metadata: {member.name}")

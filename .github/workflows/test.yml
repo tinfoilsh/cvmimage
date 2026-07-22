@@ -70,3 +70,6 @@ jobs:
 
       - name: Verify Docker and NVIDIA source locks
         run: make verify-runtime-sources
+
+      - name: Test nvattest artifact safety
+        run: make test-nvattest-artifacts

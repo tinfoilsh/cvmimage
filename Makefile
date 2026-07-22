@@ -7,16 +7,20 @@ BAZEL ?= bazel
 NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
                 packages/libnvat_$(NVATTEST_VERSION)_amd64.deb
+NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
+                           build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2 \
+                           build/rootfs-artifacts/nvattest/.stamp
 # Pinned ubuntu:26.04 (resolute) builder image. This is the single source of
-# truth for the digest; rotate via `docker buildx imagetools inspect ubuntu:26.04`.
-NVATTEST_BUILDER = ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4
+# truth for the digest; rotate the committed file after inspecting the image.
+override NVATTEST_BUILDER := $(file <scripts/nvattest-builder-image.txt)
 
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
 	builder-initrd additive-initrd verify-additive-initrd \
 	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
 	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
-	verify-runtime-sources update-runtime-locks test-runtime-archives
+	verify-runtime-sources update-runtime-locks test-runtime-archives \
+	test-nvattest-artifacts reproducible-nvattest
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -160,12 +164,16 @@ build: nvattest rebuild
 
 # The CUDA repo's nvattest links libxml2.so.2; resolute ships libxml2.so.16, so
 # we build from source against the system lib. See build-nvattest.sh.
-nvattest: $(NVATTEST_DEBS)
+nvattest: $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS)
 
 # Grouped target (&:): a single build-nvattest.sh run produces both the nvattest
 # and libnvat debs, so make won't consider the build up-to-date when only one of
 # them is present.
-$(NVATTEST_DEBS) &: build-nvattest.sh
+$(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS) &: \
+		build-nvattest.sh \
+		scripts/nvattest-artifacts.sh \
+		scripts/nvattest-regorus-Cargo.lock \
+		scripts/nvattest-builder-image.txt
 	docker run --rm \
 		-v "$(CURDIR)":/workspace -w /workspace \
 		-v nvattest-apt-cache:/var/cache/apt \
@@ -174,6 +182,12 @@ $(NVATTEST_DEBS) &: build-nvattest.sh
 		-e HOST_GID="$${SUDO_GID:-$$(id -g)}" \
 		$(NVATTEST_BUILDER) \
 		bash -c './build-nvattest.sh'
+
+test-nvattest-artifacts:
+	./scripts/test-nvattest-artifacts.sh
+
+reproducible-nvattest:
+	./scripts/reproduce-nvattest.sh
 
 python-lockfile:
 	pip-compile --generate-hashes --allow-unsafe --output-file=mkosi.extra/opt/venv-requirements.txt python-requirements.in

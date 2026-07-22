@@ -13,6 +13,7 @@ packages:
   - "iproute2 (= 6.19.0-1ubuntu1)"
   - "nftables (= 1.1.6-1)"
   - "libc6 (= 2.43-2ubuntu2)"
+  - "libc-bin (= 2.43-2ubuntu2)"
   - "libcap2 (= 1:2.75-10ubuntu2)"
   - "libxml2-16 (= 2.15.2+dfsg-0.1)"
   - "libstdc++6 (= 16-20260322-1ubuntu1)"

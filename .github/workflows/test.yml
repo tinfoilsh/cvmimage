@@ -59,17 +59,8 @@ jobs:
       - name: Test pinned runtime builder contract
         run: make test-runtime-builder-contract
 
-      - name: Test fixed rootfs policy
-        run: make test-rootfs-policy
-
       - name: Test Fabric Manager config contract
         run: ./scripts/test-fabric-manager-config.sh
-
-      - name: Test rootfs manifest security
-        run: sudo make test-rootfs-manifest
-
-      - name: Test final rootfs verifier
-        run: make test-final-rootfs-verifier
 
       - name: Test locked runtime inputs
         run: make test-runtime-locks

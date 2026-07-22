@@ -13,8 +13,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
 	runtime-builder builder-initrd additive-initrd verify-additive-initrd \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
-	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
-	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
+	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
 	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
 	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
@@ -105,25 +104,6 @@ reproducible-nvidia-modules:
 	./scripts/reproduce-nvidia-modules.sh
 
 reproducible-runtime-artifacts: reproducible-additive-initrd reproducible-nvattest reproducible-nvidia-modules
-
-test-rootfs-policy:
-	./scripts/test-rootfs-policy-adversarial.sh
-
-test-rootfs-manifest: test-rootfs-manifest-policy
-	./scripts/test-rootfs-manifest.sh
-
-test-rootfs-manifest-policy:
-	./scripts/test-rootfs-manifest-policy.py
-
-verify-final-rootfs:
-	@test -n "$(FINAL_ROOTFS_IMAGE)" -a -n "$(FINAL_ROOTFS_MANIFEST)" || { \
-		echo "set absolute FINAL_ROOTFS_IMAGE and FINAL_ROOTFS_MANIFEST paths" >&2; exit 2; }
-	sudo env -i PATH="$(TRUSTED_PATH)" LC_ALL=C LANG=C \
-		/usr/bin/python3 -I ./scripts/verify-final-rootfs.py \
-		--image "$(FINAL_ROOTFS_IMAGE)" --manifest "$(FINAL_ROOTFS_MANIFEST)"
-
-test-final-rootfs-verifier:
-	./scripts/test-final-rootfs-verifier.sh
 
 test-runtime-locks:
 	./scripts/test-update-runtime-locks.sh

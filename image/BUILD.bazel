@@ -1,6 +1,15 @@
 package(default_visibility = ["//visibility:public"])
 
 load("@rules_distroless//distroless:defs.bzl", "cacerts")
+load(
+    "@rules_pkg//pkg:mappings.bzl",
+    "pkg_attributes",
+    "pkg_files",
+    "pkg_mkdirs",
+    "pkg_mklink",
+    "strip_prefix",
+)
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 
 cacerts(
     name = "ubuntu-runtime-cacerts",
@@ -33,19 +42,185 @@ filegroup(
 )
 
 filegroup(
-    name = "runtime-source-archives",
+    name = "nvidia-package-layers",
     srcs = [
-        "@runtime_source_docker_static//:archive",
-        "@runtime_source_libnvidia_cfg1//:archive",
-        "@runtime_source_libnvidia_compute//:archive",
-        "@runtime_source_libnvidia_container_tools//:archive",
-        "@runtime_source_libnvidia_container1//:archive",
-        "@runtime_source_libnvidia_gpucomp//:archive",
-        "@runtime_source_libnvidia_nscq//:archive",
-        "@runtime_source_nvidia_container_toolkit//:archive",
-        "@runtime_source_nvidia_container_toolkit_base//:archive",
-        "@runtime_source_nvidia_fabricmanager//:archive",
-        "@runtime_source_nvidia_firmware//:archive",
-        "@runtime_source_nvidia_persistenced//:archive",
+        "@runtime_source_libnvidia_cfg1//:payload",
+        "@runtime_source_libnvidia_compute//:payload",
+        "@runtime_source_libnvidia_container_tools//:payload",
+        "@runtime_source_libnvidia_container1//:payload",
+        "@runtime_source_libnvidia_decode//:payload",
+        "@runtime_source_libnvidia_egl_gbm1//:payload",
+        "@runtime_source_libnvidia_egl_wayland21//:payload",
+        "@runtime_source_libnvidia_egl_xcb1//:payload",
+        "@runtime_source_libnvidia_egl_xlib1//:payload",
+        "@runtime_source_libnvidia_encode//:payload",
+        "@runtime_source_libnvidia_gl//:payload",
+        "@runtime_source_libnvidia_gpucomp//:payload",
+        "@runtime_source_libnvidia_nscq//:payload",
+        "@runtime_source_nvidia_container_toolkit//:payload",
+        "@runtime_source_nvidia_container_toolkit_base//:payload",
+        "@runtime_source_nvidia_fabricmanager//:payload",
+        "@runtime_source_nvidia_firmware//:payload",
+        "@runtime_source_nvidia_kernel_common//:payload",
+        "@runtime_source_nvidia_persistenced//:payload",
     ],
+)
+
+pkg_files(
+    name = "repository-rootfs-0644",
+    srcs = [
+        "rootfs/etc/containerd/config.toml",
+        "rootfs/etc/docker/daemon.json",
+        "rootfs/etc/group",
+        "rootfs/etc/hostname",
+        "rootfs/etc/hosts",
+        "rootfs/etc/nftables.conf",
+        "rootfs/etc/nsswitch.conf",
+        "rootfs/etc/nvidia-container-runtime/config.toml",
+        "rootfs/etc/passwd",
+        "rootfs/etc/resolv.conf",
+        "rootfs/usr/share/nvidia/nvswitch/fabricmanager.cfg",
+    ],
+    attributes = pkg_attributes(mode = "0644", uid = 0, gid = 0),
+    strip_prefix = strip_prefix.from_pkg("rootfs"),
+)
+
+pkg_files(
+    name = "repository-rootfs-0640",
+    srcs = [
+        "rootfs/etc/gshadow",
+        "rootfs/etc/shadow",
+    ],
+    attributes = pkg_attributes(mode = "0640", uid = 0, gid = 0),
+    strip_prefix = strip_prefix.from_pkg("rootfs"),
+)
+
+pkg_files(
+    name = "docker-static-payload",
+    srcs = ["@runtime_source_docker_static//:payload"],
+    attributes = pkg_attributes(mode = "0755", uid = 0, gid = 0),
+    prefix = "usr/bin",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_files(
+    name = "tinfoil-runtime-binaries",
+    srcs = [
+        "//:build/builder-work/output/artifacts/tinfoil-boot",
+        "//:build/builder-work/output/artifacts/tinfoil-container-status",
+        "//:build/builder-work/output/artifacts/tinfoil-egress",
+        "//:build/builder-work/output/artifacts/tinfoil-init",
+        "//:build/builder-work/output/artifacts/tinfoil-shim",
+    ],
+    attributes = pkg_attributes(mode = "0755", uid = 0, gid = 0),
+    prefix = "usr/bin",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_files(
+    name = "nvattest-binary",
+    srcs = ["//:build/rootfs-artifacts/nvattest/usr/bin/nvattest"],
+    attributes = pkg_attributes(mode = "0755", uid = 0, gid = 0),
+    prefix = "usr/bin",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_files(
+    name = "libnvat",
+    srcs = ["//:build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2"],
+    attributes = pkg_attributes(mode = "0644", uid = 0, gid = 0),
+    prefix = "usr/lib/x86_64-linux-gnu",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_files(
+    name = "nvidia-kernel-modules",
+    srcs = [
+        "//:kernel/out/rootfs-artifacts/nvidia-modules/nvidia-modeset.ko",
+        "//:kernel/out/rootfs-artifacts/nvidia-modules/nvidia-uvm.ko",
+        "//:kernel/out/rootfs-artifacts/nvidia-modules/nvidia.ko",
+    ],
+    attributes = pkg_attributes(mode = "0644", uid = 0, gid = 0),
+    prefix = "usr/lib/tinfoil/kernel-modules",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_mkdirs(
+    name = "rootfs-mountpoints",
+    dirs = [
+        "dev",
+        "mnt",
+        "mnt/ramdisk",
+        "proc",
+        "run",
+        "sys",
+        "tmp",
+        "var",
+        "var/tmp",
+    ],
+    attributes = pkg_attributes(mode = "0755", uid = 0, gid = 0),
+)
+
+pkg_mklink(
+    name = "link-lib64",
+    link_name = "lib64",
+    target = "usr/lib64",
+)
+
+pkg_mklink(
+    name = "link-sbin",
+    link_name = "sbin",
+    target = "usr/sbin",
+)
+
+pkg_mklink(
+    name = "link-var-run",
+    link_name = "var/run",
+    target = "../run",
+)
+
+pkg_mklink(
+    name = "link-libnvat-soname",
+    link_name = "usr/lib/x86_64-linux-gnu/libnvat.so.1",
+    target = "libnvat.so.1.2.2",
+)
+
+pkg_tar(
+    name = "runtime-overlay",
+    srcs = [
+        ":docker-static-payload",
+        ":libnvat",
+        ":link-lib64",
+        ":link-libnvat-soname",
+        ":link-sbin",
+        ":link-var-run",
+        ":nvattest-binary",
+        ":nvidia-kernel-modules",
+        ":repository-rootfs-0640",
+        ":repository-rootfs-0644",
+        ":rootfs-mountpoints",
+        ":tinfoil-runtime-binaries",
+    ],
+    allow_duplicates_from_deps = False,
+    create_parents = True,
+    extension = "tar",
+    mtime = 0,
+    out = "runtime-overlay.tar",
+    owner = "0.0",
+    portable_mtime = False,
+    stamp = 0,
+)
+
+pkg_tar(
+    name = "rootfs",
+    deps = [
+        ":nvidia-package-layers",
+        ":runtime-package-layers",
+        ":ubuntu-runtime-cacerts",
+        ":runtime-overlay",
+    ],
+    allow_duplicates_from_deps = True,
+    extension = "tar",
+    out = "bazel-rootfs.tar",
+    stamp = 0,
 )

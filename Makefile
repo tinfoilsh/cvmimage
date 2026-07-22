@@ -12,7 +12,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 
 .PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
 	runtime-builder builder-initrd additive-initrd verify-additive-initrd \
-	test-go-producer test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
+	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
 	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
 	verify-runtime-sources update-runtime-locks test-runtime-archives \
@@ -73,6 +73,9 @@ builder-initrd: runtime-builder
 
 test-go-producer:
 	./scripts/test-go-producer.sh
+
+test-runtime-builder-contract:
+	./scripts/test-runtime-builder-contract.sh
 
 custom-kernel-artifacts: runtime-builder
 	./scripts/run-runtime-builder.sh kernel
@@ -186,7 +189,8 @@ $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS) &: \
 		scripts/nvattest-regorus-Cargo.lock \
 		scripts/build-runtime-builder.sh \
 		scripts/run-runtime-builder.sh \
-		scripts/runtime-builder-base-image.txt | runtime-builder
+		scripts/runtime-builder-base-image.txt \
+		scripts/runtime-builder-snapshot.txt | runtime-builder
 	./scripts/run-runtime-builder.sh nvattest
 
 test-nvattest-artifacts:

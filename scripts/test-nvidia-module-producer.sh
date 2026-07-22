@@ -5,6 +5,7 @@ repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/cvmimage-nvidia-producer-test.XXXXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
 
+TINFOIL_NVIDIA_PACKAGE_CACHE="$scratch/package-cache"
 source "$repo_dir/kernel/build-nvidia-open-local.sh"
 
 release=7.0.0-28-generic
@@ -43,6 +44,16 @@ expect_failure() {
         exit 1
     fi
 }
+
+mkdir -p "$package_cache_dir"
+printf 'corrupt package\n' > "$package_cache_dir/cached.deb"
+expected_sha256="$(printf 'expected package\n' | sha256sum | awk '{print $1}')"
+TINFOIL_OFFLINE=1 expect_failure \
+    "a cached NVIDIA package with a checksum mismatch" \
+    download_deb cached.deb "$expected_sha256"
+test ! -e "$package_cache_dir/cached.deb"
+grep -Fq 'FAILED' "$scratch/failure.log"
+grep -Fq 'removing NVIDIA package with checksum mismatch' "$scratch/failure.log"
 
 validate_nvidia_modules "$source_dir" "$module_dir" "$release"
 

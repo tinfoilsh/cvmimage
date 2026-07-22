@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [ "$#" -ne 6 ]; then
-    echo "usage: $0 KERNEL_SOURCE NVIDIA_SOURCE OUTPUT KERNEL_RELEASE BUILD_UID BUILD_GID" >&2
+if [ "$#" -ne 7 ]; then
+    echo "usage: $0 KERNEL_SOURCE NVIDIA_SOURCE OUTPUT KERNEL_RELEASE BUILD_UID BUILD_GID MODULE_LIST" >&2
     exit 2
 fi
 
@@ -12,6 +12,7 @@ output=$3
 kernel_release=$4
 build_uid=$5
 build_gid=$6
+module_list=$7
 
 if [[ ! "$build_uid" =~ ^[0-9]+$ || ! "$build_gid" =~ ^[0-9]+$ ]]; then
     echo "build uid and gid must be numeric" >&2
@@ -30,8 +31,10 @@ unset MAKEFLAGS MFLAGS ARCH CROSS_COMPILE CC CFLAGS CPPFLAGS KCFLAGS KCPPFLAGS L
 mount --make-rprivate /
 mount -t tmpfs -o mode=0755 tmpfs /mnt
 mkdir -p /mnt/source/kernel /mnt/source/nvidia /mnt/output /mnt/work
+touch /mnt/source/modules
 mount --bind "$kernel_source" /mnt/source/kernel
 mount --bind "$nvidia_source" /mnt/source/nvidia
+mount --bind "$module_list" /mnt/source/modules
 mount --bind "$output" /mnt/output
 chown "$build_uid:$build_gid" /mnt/work /mnt/output
 
@@ -52,9 +55,7 @@ exec setpriv --reuid "$build_uid" --regid "$build_gid" --clear-groups \
             IGNORE_XEN_PRESENCE=1 \
             NV_EXCLUDE_KERNEL_MODULES="nvidia-drm nvidia-peermem" \
             modules
-        install -m 0644 \
-            /mnt/work/nvidia/nvidia.ko \
-            /mnt/work/nvidia/nvidia-uvm.ko \
-            /mnt/work/nvidia/nvidia-modeset.ko \
-            /mnt/output/
+        while IFS= read -r module; do
+            install -m 0644 "/mnt/work/nvidia/$module" "/mnt/output/$module"
+        done < /mnt/source/modules
     ' build "$kernel_release"

@@ -30,7 +30,8 @@ readonly source_deb="nvidia-kernel-source-open_${nvidia_package_version}_amd64.d
 readonly dkms_deb="nvidia-dkms-open_${nvidia_package_version}_amd64.deb"
 readonly source_sha256=823e5d99d43eb51a10b9ef548469a1fa27a87821a18d43799e4086f91ecbc5ca
 readonly dkms_sha256=63931656d1ee42b0522f6180ef292c2d942eeb9f8ce7940882486273a319a994
-readonly -a required_modules=(nvidia.ko nvidia-uvm.ko nvidia-modeset.ko)
+mapfile -t required_modules < "$kernel_dir/nvidia-modules.txt"
+readonly -a required_modules
 
 export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'
 export KBUILD_BUILD_USER=tinfoil
@@ -76,7 +77,11 @@ download_deb() {
             chown "$host_uid:$host_gid" "$destination"
         fi
     fi
-    printf '%s  %s\n' "$sha256" "$destination" | sha256sum -c --status -
+    if ! printf '%s  %s\n' "$sha256" "$destination" | sha256sum -c --strict -; then
+        echo "removing NVIDIA package with checksum mismatch: $destination" >&2
+        rm -f -- "$destination"
+        exit 1
+    fi
     printf '%s\n' "$destination"
 }
 
@@ -164,7 +169,8 @@ chmod 0755 "$nvidia_source_dir/pahole.sh"
     if ! "${unshare_command[@]}" --mount --propagation private \
         "$kernel_dir/build-nvidia-open-canonical.sh" \
         "$kernel_source_dir" "$nvidia_source_dir" "$scratch/built-modules" \
-        "$kernel_release" "$host_uid" "$host_gid" > "$build_log" 2>&1; then
+        "$kernel_release" "$host_uid" "$host_gid" \
+        "$kernel_dir/nvidia-modules.txt" > "$build_log" 2>&1; then
         tail -n 200 "$build_log" >&2
         exit 1
     fi

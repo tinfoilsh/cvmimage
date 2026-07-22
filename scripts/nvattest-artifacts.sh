@@ -51,7 +51,10 @@ nvattest_verify_runtime_artifacts() {
         return 1
     fi
 
-    smoke_directory="$(mktemp -d)"
+    if ! smoke_directory="$(mktemp -d)"; then
+        echo "failed to create nvattest smoke-test directory" >&2
+        return 1
+    fi
     ln -s "${library}" "${smoke_directory}/libnvat.so.1"
     if ! LD_LIBRARY_PATH="${smoke_directory}:${library%/*}" \
         "${binary}" --help >/dev/null; then
@@ -84,5 +87,12 @@ nvattest_install_runtime_artifacts() {
     install -m 0644 -o "${owner_uid}" -g "${owner_gid}" \
         "${source}/usr/lib/x86_64-linux-gnu/libnvat.so.${so_version}" \
         "${library}" || return
-    touch -d "@${source_date_epoch}" "${binary}" "${library}" || return
+    touch -h -d "@${source_date_epoch}" \
+        "${binary}" \
+        "${library}" \
+        "${destination}/usr/lib/x86_64-linux-gnu" \
+        "${destination}/usr/lib" \
+        "${destination}/usr/bin" \
+        "${destination}/usr" \
+        "${destination}" || return
 }

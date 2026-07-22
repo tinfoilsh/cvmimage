@@ -9,7 +9,8 @@ fi
 producer=$1
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 base_image="$(<"$repo_dir/scripts/runtime-builder-base-image.txt")"
-builder_image=cvmimage-runtime-builder:20260721
+snapshot="$(<"$repo_dir/scripts/runtime-builder-snapshot.txt")"
+builder_image="cvmimage-runtime-builder:${snapshot%%T*}"
 host_uid="$(id -u)"
 host_gid="$(id -g)"
 cache_root="${TINFOIL_RUNTIME_BUILDER_CACHE:-$repo_dir/build/runtime-builder-cache}"
@@ -18,14 +19,20 @@ recipe_sha256="$(
     sha256sum \
         builder/Dockerfile \
         builder/build-initrd.sh \
-        scripts/runtime-builder-base-image.txt | sha256sum | awk '{print $1}'
+        scripts/runtime-builder-base-image.txt \
+        scripts/runtime-builder-snapshot.txt | sha256sum | awk '{print $1}'
 )"
+
+if [[ ! "$snapshot" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+    echo "invalid runtime builder snapshot: $snapshot" >&2
+    exit 1
+fi
 
 actual_base="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.base" }}' "$builder_image" 2>/dev/null || true)"
 actual_snapshot="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.snapshot" }}' "$builder_image" 2>/dev/null || true)"
 actual_recipe="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.recipe" }}' "$builder_image" 2>/dev/null || true)"
 if [ "$actual_base" != "$base_image" ] ||
-    [ "$actual_snapshot" != 20260721T000000Z ] ||
+    [ "$actual_snapshot" != "$snapshot" ] ||
     [ "$actual_recipe" != "$recipe_sha256" ]; then
     echo "missing or stale runtime builder; run scripts/build-runtime-builder.sh" >&2
     exit 1
@@ -108,7 +115,7 @@ case "$producer" in
             --env TINFOIL_KERNEL_OUT_DIR=/kernel-output \
             --env "TINFOIL_NVIDIA_OUTPUT_DIR=/nvidia-output-parent/$output_name" \
             --env TINFOIL_NVIDIA_PACKAGE_CACHE=/nvidia-cache \
-            --env TINFOIL_OFFLINE \
+            --env "TINFOIL_OFFLINE=${TINFOIL_OFFLINE:-0}" \
             "$builder_image" \
             /workspace/kernel/build-nvidia-open-local.sh
         ;;

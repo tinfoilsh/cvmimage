@@ -26,9 +26,9 @@ build_once() {
 
 build_once first
 build_once second
-for module in nvidia.ko nvidia-uvm.ko nvidia-modeset.ko; do
+while IFS= read -r module; do
     cmp "$reproduction_dir/first/nvidia-modules/$module" \
         "$reproduction_dir/second/nvidia-modules/$module"
-done
+done < "$repo_dir/kernel/nvidia-modules.txt"
 
 echo "NVIDIA modules are byte-identical across isolated builds"

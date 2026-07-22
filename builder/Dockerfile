@@ -1,7 +1,7 @@
 ARG RUNTIME_BUILDER_BASE_IMAGE
 FROM ${RUNTIME_BUILDER_BASE_IMAGE}
 
-ARG APT_SNAPSHOT_DATE=20260721T000000Z
+ARG APT_SNAPSHOT_DATE
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 \
@@ -73,7 +73,8 @@ RUN set -eux; \
     test "$(dpkg-query -W -f='${Version}' dwarves)" = 1.31-2ubuntu1; \
     test "$(dpkg-query -W -f='${Version}' kmod)" = 34.2-2ubuntu2; \
     test "$(sha256sum /opt/tinfoil-builder/packages/linux-source-7.0.0_7.0.0-28.28_all.deb | awk '{print $1}')" = dd5994b199a1cb06b1f336bb086c5c23a9258fdcfdcbb7dcc8d3afa9a5d92e13; \
-    rm -rf /var/lib/apt/lists/*
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY builder/build-initrd.sh /usr/local/bin/build-initrd
 

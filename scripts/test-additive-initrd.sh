@@ -43,9 +43,14 @@ cmp "$scratch/initrd-a.cpio" "$scratch/initrd-b.cpio"
 cmp "$scratch/initrd-a.cpio.zst" "$scratch/initrd-b.cpio.zst"
 
 bad_manifest="$scratch/bad-manifest.tsv"
-sed 's#/usr/bin/tinfoil-initrd\tfile#/usr/bin/other\tfile#' "$manifest" > "$bad_manifest"
+sed \
+    -e 's#/usr/bin/tinfoil-initrd\tfile#/usr/bin/other\tfile#' \
+    -e 's#\tusr/bin/tinfoil-initrd$#\tusr/bin/other#' \
+    "$manifest" > "$bad_manifest"
 expect_failure "a non-canonical binary destination" \
     "$tool" archive --manifest "$bad_manifest" --binary "$scratch/tinfoil-initrd" --output "$scratch/bad.cpio"
+grep -Fq 'manifest must contain only the fixed /usr/bin/tinfoil-initrd file' \
+    "$scratch/failure.log"
 
 ln -s tinfoil-initrd "$scratch/interposed-binary"
 expect_failure "a symlinked named binary" \

@@ -5,6 +5,8 @@ repo_root="$(git rev-parse --show-toplevel)"
 source "${repo_root}/scripts/nvattest-artifacts.sh"
 readonly SO_VERSION=1.2.2
 
+nvattest_require_tool cc
+
 temporary="$(mktemp -d)"
 cleanup() {
     rm -rf -- "${temporary}"
@@ -53,12 +55,32 @@ nvattest_install_runtime_artifacts \
     "${fixture}" "${output}" "${SO_VERSION}" "$(id -u)" "$(id -g)" 0
 
 cmp "${fixture}/usr/bin/nvattest" "${output}/usr/bin/nvattest"
+test -x "${output}/usr/bin/nvattest"
 cmp \
     "${fixture}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
     "${output}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
 test -f "${output}/unrelated"
 test "$(stat -c %Y "${output}/usr/bin/nvattest")" = 0
 test "$(stat -c %Y "${output}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}")" = 0
+for directory in \
+    "${output}" \
+    "${output}/usr" \
+    "${output}/usr/bin" \
+    "${output}/usr/lib" \
+    "${output}/usr/lib/x86_64-linux-gnu"; do
+    test "$(stat -c %Y "${directory}")" = 0
+done
+
+(
+    mktemp() { return 1; }
+    if nvattest_verify_runtime_artifacts "${fixture}" "${SO_VERSION}" \
+        >"${temporary}/mktemp-failure.log" 2>&1; then
+        echo "verification ignored mktemp failure" >&2
+        exit 1
+    fi
+    grep -Fq 'failed to create nvattest smoke-test directory' \
+        "${temporary}/mktemp-failure.log"
+)
 
 cc -shared -fPIC -Wl,-soname,libnvat.so.2 \
     -L"${fixture}/usr/lib/x86_64-linux-gnu" \

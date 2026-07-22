@@ -28,6 +28,15 @@ def _lower_sha256(value, label):
     return value
 
 
+def _reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ArchiveError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
 def _canonical_path(raw, allow_debian_prefix=False):
     if not isinstance(raw, str) or not raw or "\\" in raw or raw.startswith("/"):
         raise ArchiveError(f"non-canonical archive path: {raw!r}")
@@ -42,11 +51,20 @@ def _canonical_path(raw, allow_debian_prefix=False):
     return "/".join(parts)
 
 
-def _safe_symlink_target(path, target):
-    if not isinstance(target, str) or not target or "\\" in target or target.startswith("/"):
+def _safe_symlink_target(path, target, allow_absolute=False):
+    if not isinstance(target, str) or not target or "\\" in target:
         raise ArchiveError(f"unsafe symlink target for {path}: {target!r}")
+    if target.startswith("/"):
+        if not allow_absolute:
+            raise ArchiveError(f"unsafe symlink target for {path}: {target!r}")
+        target = target[1:]
+        if not target:
+            raise ArchiveError(f"unsafe symlink target for {path}: '/'")
+        base = PurePosixPath()
+    else:
+        base = PurePosixPath(path).parent
     depth = 0
-    for part in PurePosixPath(path).parent.joinpath(target).parts:
+    for part in base.joinpath(target).parts:
         if part in ("", "."):
             continue
         if part == "..":
@@ -57,17 +75,47 @@ def _safe_symlink_target(path, target):
             depth += 1
 
 
-def _load_source_lock(path):
+def _load_source_lock(path, source_id=None):
     try:
-        source = json.loads(Path(path).read_text(encoding="utf-8"))
+        document = json.loads(
+            Path(path).read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
     except (OSError, json.JSONDecodeError) as error:
         raise ArchiveError(f"cannot read source lock: {error}") from error
-    if not isinstance(source, dict):
+    if not isinstance(document, dict):
         raise ArchiveError("source lock must be an object")
+    unified = "sources" in document
+    if unified:
+        if document.get("version") != 1 or set(document) != {"version", "sources"}:
+            raise ArchiveError("unsupported unified source lock")
+        sources = document["sources"]
+        if not isinstance(sources, dict) or not sources:
+            raise ArchiveError("unified source lock sources must be a non-empty object")
+        if source_id is None:
+            raise ArchiveError("source ID is required for a unified source lock")
+        if source_id not in sources:
+            raise ArchiveError(f"source ID is missing from the lock: {source_id}")
+        source = sources[source_id]
+    else:
+        if source_id is not None:
+            raise ArchiveError("source ID is only valid for a unified source lock")
+        source = document
+    if not isinstance(source, dict):
+        raise ArchiveError("source lock entry must be an object")
     kind = source.get("kind")
     if kind not in ("tar", "deb"):
         raise ArchiveError("source lock kind must be tar or deb")
-    if kind == "tar":
+    package_data = source.get("package_data", False)
+    if not isinstance(package_data, bool) or (package_data and kind != "tar"):
+        raise ArchiveError("source lock package_data is invalid")
+    if unified:
+        expected_source_fields = {"kind", "package_data", "files"}
+        if not package_data:
+            expected_source_fields.add("sha256")
+        if set(source) != expected_source_fields:
+            raise ArchiveError("unified source lock fields are invalid")
+    elif kind == "tar":
         _exact_object(source, {"files", "id", "kind", "members", "sha256", "url"}, "tar source lock")
     else:
         required = {"architecture", "control", "files", "id", "kind", "package", "paths", "sha256", "url", "version"}
@@ -79,19 +127,25 @@ def _load_source_lock(path):
         )
         if set(source) not in valid_shapes:
             raise ArchiveError("Debian source lock has an invalid object shape")
-    source_id = source["id"]
-    if (
-        not isinstance(source_id, str)
-        or not source_id
-        or source_id.startswith("-")
-        or source_id.endswith("-")
-        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in source_id)
-    ):
-        raise ArchiveError("source lock id is invalid")
-    if not isinstance(source["url"], str) or not source["url"].startswith("https://"):
-        raise ArchiveError("source lock URL must use HTTPS")
-    archive_sha256 = _lower_sha256(source["sha256"], "source lock archive SHA256")
-    files = source["files"]
+    if not unified:
+        legacy_source_id = source["id"]
+        if (
+            not isinstance(legacy_source_id, str)
+            or not legacy_source_id
+            or legacy_source_id.startswith("-")
+            or legacy_source_id.endswith("-")
+            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in legacy_source_id)
+        ):
+            raise ArchiveError("source lock id is invalid")
+        if not isinstance(source["url"], str) or not source["url"].startswith("https://"):
+            raise ArchiveError("source lock URL must use HTTPS")
+    archive_sha256 = source.get("sha256")
+    if package_data:
+        if archive_sha256 is not None:
+            raise ArchiveError("package-data source locks must not lock the generated archive")
+    else:
+        archive_sha256 = _lower_sha256(archive_sha256, "source lock archive SHA256")
+    files = source.get("files")
     if not isinstance(files, list) or not files:
         raise ArchiveError("source lock files must be a non-empty list")
     locked = {}
@@ -99,12 +153,18 @@ def _load_source_lock(path):
         if not isinstance(entry, dict):
             raise ArchiveError("source lock file entry must be an object")
         entry_type = entry.get("type")
-        if entry_type == "file":
-            _exact_object(entry, {"mode", "path", "sha256", "size", "type"}, "locked file entry")
-        elif entry_type == "symlink":
-            _exact_object(entry, {"mode", "path", "target", "type"}, "locked symlink entry")
-        else:
+        if entry_type not in ("file", "symlink"):
             raise ArchiveError(f"unsupported locked type: {entry_type}")
+        if package_data:
+            expected_fields = {"path", "type", "mode", "uid", "gid", "xattrs"}
+            expected_fields.add("target" if entry_type == "symlink" else "size")
+            if entry_type == "file":
+                expected_fields.add("sha256")
+            _exact_object(entry, expected_fields, "locked package member")
+        elif entry_type == "file":
+            _exact_object(entry, {"mode", "path", "sha256", "size", "type"}, "locked file entry")
+        else:
+            _exact_object(entry, {"mode", "path", "target", "type"}, "locked symlink entry")
         path = _canonical_path(entry["path"])
         if path != entry["path"]:
             raise ArchiveError(f"source lock path is not canonical: {entry['path']!r}")
@@ -119,8 +179,15 @@ def _load_source_lock(path):
             if type(size) is not int or size < 0:
                 raise ArchiveError(f"invalid locked size for {path}")
         else:
-            _safe_symlink_target(path, entry["target"])
+            _safe_symlink_target(path, entry["target"], package_data)
+        if package_data:
+            if any(type(entry[field]) is not int or entry[field] < 0 for field in ("uid", "gid")):
+                raise ArchiveError(f"invalid locked ownership for {path}")
+            if entry["xattrs"] != {}:
+                raise ArchiveError(f"unsupported locked xattrs for {path}")
         locked[path] = entry
+    if unified:
+        return kind, archive_sha256, locked, package_data
     if kind == "tar":
         members = source["members"]
         if not isinstance(members, list) or members != list(locked):
@@ -173,7 +240,7 @@ def _load_source_lock(path):
                 "Debian source lock files differ from selected payload: "
                 f"missing={missing}, unexpected={unexpected}, empty_directories={empty_directories}"
             )
-    return kind, archive_sha256, locked
+    return kind, archive_sha256, locked, package_data
 
 
 def _ar_members(path):
@@ -260,22 +327,27 @@ def _entry_type(member):
     return "unexpected"
 
 
-def _inspect_archive(archive, kind):
+def _inspect_archive(archive, kind, package_data=False):
     entries = {}
     with _open_payload(archive, kind) as payload:
+        if package_data and any("xattr" in key.lower() for key in payload.pax_headers):
+            raise ArchiveError("package archive has unsupported global xattrs")
         for member in payload.getmembers():
             if member.name in (".", "./"):
                 if not member.isdir():
                     raise ArchiveError("archive root marker must be a directory")
                 continue
-            path = _canonical_path(member.name, allow_debian_prefix=(kind == "deb"))
+            path = _canonical_path(
+                member.name,
+                allow_debian_prefix=(kind == "deb" or package_data),
+            )
             if path in entries:
                 raise ArchiveError(f"duplicate normalized archive path: {path}")
             entry_type = _entry_type(member)
             if entry_type == "unexpected":
                 raise ArchiveError(f"unexpected archive type for {path}")
             if entry_type == "symlink":
-                _safe_symlink_target(path, member.linkname)
+                _safe_symlink_target(path, member.linkname, package_data)
             entries[path] = (member, payload.extractfile(member) if entry_type == "file" else None)
 
         symlink_paths = {path for path, (member, _) in entries.items() if member.issym()}
@@ -309,6 +381,17 @@ def _verify_locked(entries, locked):
         actual_mode = f"{stat.S_IMODE(member.mode):04o}"
         if actual_mode != expected["mode"]:
             raise ArchiveError(f"locked member mode mismatch for {path}: {actual_mode}")
+        if "uid" in expected and (member.uid != expected["uid"] or member.gid != expected["gid"]):
+            raise ArchiveError(f"locked member ownership mismatch for {path}")
+        if "xattrs" in expected:
+            xattrs = {}
+            for key, value in member.pax_headers.items():
+                if key.startswith("SCHILY.xattr."):
+                    xattrs[key.removeprefix("SCHILY.xattr.")] = value
+                elif "xattr" in key.lower():
+                    raise ArchiveError(f"unsupported archive xattr representation for {path}: {key}")
+            if xattrs != expected["xattrs"]:
+                raise ArchiveError(f"locked member xattr mismatch for {path}")
         if actual_type == "file":
             if len(data) != expected["size"]:
                 raise ArchiveError(f"locked member size mismatch for {path}")
@@ -401,26 +484,62 @@ def _write_output(path, selected):
         os.close(parent_fd)
 
 
-def extract_locked_archive(archive, source_lock, output):
-    kind, archive_sha256, locked = _load_source_lock(source_lock)
-    digest = hashlib.sha256()
-    with Path(archive).open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != archive_sha256:
-        raise ArchiveError("source archive SHA256 does not match the lock")
-    entries = _inspect_archive(archive, kind)
+def _write_validation_marker(path):
+    _write_output(path, {})
+
+
+def extract_locked_archive(archive, source_lock, output, source_id=None):
+    kind, archive_sha256, locked, package_data = _load_source_lock(source_lock, source_id)
+    if archive_sha256 is not None:
+        digest = hashlib.sha256()
+        with Path(archive).open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != archive_sha256:
+            raise ArchiveError("source archive SHA256 does not match the lock")
+    entries = _inspect_archive(archive, kind, package_data)
     _write_output(output, _verify_locked(entries, locked))
+
+
+def validate_source_ids(source_lock, expected):
+    try:
+        document = json.loads(
+            Path(source_lock).read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise ArchiveError(f"cannot read source lock: {error}") from error
+    if not isinstance(document, dict):
+        raise ArchiveError("unsupported unified source lock")
+    sources = document.get("sources")
+    if document.get("version") != 1 or not isinstance(sources, dict):
+        raise ArchiveError("unsupported unified source lock")
+    actual = set(sources)
+    expected = set(expected)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ArchiveError(f"source lock declarations differ: missing={missing}, extra={extra}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--archive", required=True)
+    parser.add_argument("--archive")
     parser.add_argument("--source-lock", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--source-id")
+    parser.add_argument("--validate-source-id", action="append", default=[])
     args = parser.parse_args()
     try:
-        extract_locked_archive(args.archive, args.source_lock, args.output)
+        if args.validate_source_id:
+            if args.archive or args.source_id:
+                raise ArchiveError("lock validation does not accept archive arguments")
+            validate_source_ids(args.source_lock, args.validate_source_id)
+            _write_validation_marker(args.output)
+        else:
+            if not args.archive:
+                raise ArchiveError("--archive is required for extraction")
+            extract_locked_archive(args.archive, args.source_lock, args.output, args.source_id)
     except (ArchiveError, OSError, tarfile.TarError) as error:
         parser.exit(1, f"runtime_archive.py: {error}\n")
 

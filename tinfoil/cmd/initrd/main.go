@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -268,8 +267,6 @@ func findPartUUID(want string, timeout time.Duration) (string, error) {
 				matches = append(matches, device)
 			}
 		}
-		sort.Strings(matches)
-		matches = compactStrings(matches)
 		switch len(matches) {
 		case 1:
 			return matches[0], nil
@@ -282,19 +279,6 @@ func findPartUUID(want string, timeout time.Duration) (string, error) {
 			return "", fmt.Errorf("PARTUUID %s is ambiguous", want)
 		}
 	}
-}
-
-func compactStrings(values []string) []string {
-	if len(values) < 2 {
-		return values
-	}
-	out := values[:1]
-	for _, value := range values[1:] {
-		if value != out[len(out)-1] {
-			out = append(out, value)
-		}
-	}
-	return out
 }
 
 func readUevent(path string) (map[string]string, error) {

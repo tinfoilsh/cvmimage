@@ -101,6 +101,13 @@ func TestCmdlineValueFromRejectsAmbiguity(t *testing.T) {
 	}
 }
 
+func withSysClassBlock(t *testing.T, root string) {
+	t.Helper()
+	old := sysClassBlock
+	sysClassBlock = root
+	t.Cleanup(func() { sysClassBlock = old })
+}
+
 func TestVerityDataBlocksUsesKernelGeometry(t *testing.T) {
 	root := t.TempDir()
 	sizeDir := filepath.Join(root, "sdb1")
@@ -110,9 +117,7 @@ func TestVerityDataBlocksUsesKernelGeometry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sizeDir, "size"), []byte("6291456\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	old := sysClassBlock
-	sysClassBlock = root
-	t.Cleanup(func() { sysClassBlock = old })
+	withSysClassBlock(t, root)
 
 	got, err := verityDataBlocks("/dev/sdb1")
 	if err != nil {
@@ -152,9 +157,7 @@ func TestBlockDevNumberValidatesSysfs(t *testing.T) {
 	if err := os.MkdirAll(devDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	old := sysClassBlock
-	sysClassBlock = root
-	t.Cleanup(func() { sysClassBlock = old })
+	withSysClassBlock(t, root)
 
 	path := filepath.Join(devDir, "dev")
 	if err := os.WriteFile(path, []byte("8:17\n"), 0644); err != nil {

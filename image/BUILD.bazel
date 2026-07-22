@@ -1,11 +1,30 @@
 package(default_visibility = ["//visibility:public"])
 
-load(":runtime_archive.bzl", "runtime_archive")
+load("@rules_distroless//distroless:defs.bzl", "cacerts")
+load(
+    ":runtime_archive.bzl",
+    "runtime_archive",
+    "runtime_archive_lock_check",
+    "runtime_package_inputs_manifest",
+)
+load(":runtime_package_inputs.bzl", "RUNTIME_PACKAGE_INPUTS")
+
+_CA_CERTIFICATES_SOURCE_ID = "ca-certificates_20260223_amd64"
+
+cacerts(
+    name = "ubuntu-runtime-cacerts",
+    mode = "0644",
+    package = RUNTIME_PACKAGE_INPUTS[_CA_CERTIFICATES_SOURCE_ID],
+)
+
+_RUNTIME_PACKAGE_ARCHIVES = dict(RUNTIME_PACKAGE_INPUTS)
+_RUNTIME_PACKAGE_ARCHIVES[_CA_CERTIFICATES_SOURCE_ID] = ":ubuntu-runtime-cacerts"
 
 # Generated/declarative lock data is intentionally kept separate from build
 # rules so its reviewable size is not confused with executable mechanism.
 exports_files([
     "runtime-packages.lock.json",
+    "runtime-package-members.lock.json",
     "runtime-packages.yaml",
     "runtime-sources.lock.json",
 ])
@@ -51,4 +70,34 @@ _RUNTIME_SOURCES = {
 filegroup(
     name = "runtime-source-member-archives",
     srcs = [":" + name + "_members" for name in _RUNTIME_SOURCES],
+)
+
+runtime_archive_lock_check(
+    name = "runtime-package-member-lock-check",
+    out = "runtime-package-member-lock.validated",
+    source_ids = sorted(RUNTIME_PACKAGE_INPUTS),
+    source_lock = ":runtime-package-members.lock.json",
+)
+
+runtime_package_inputs_manifest(
+    name = "runtime-package-inputs-manifest",
+    out = "runtime-package-inputs.tsv",
+    sources = _RUNTIME_PACKAGE_ARCHIVES,
+)
+
+[
+    runtime_archive(
+        name = source_id + "_members",
+        archive = archive,
+        out = source_id + "-members.tar",
+        source_id = source_id,
+        source_lock = ":runtime-package-members.lock.json",
+        validation = ":runtime-package-member-lock-check",
+    )
+    for source_id, archive in _RUNTIME_PACKAGE_ARCHIVES.items()
+]
+
+filegroup(
+    name = "runtime-package-member-archives",
+    srcs = [":" + source_id + "_members" for source_id in RUNTIME_PACKAGE_INPUTS],
 )

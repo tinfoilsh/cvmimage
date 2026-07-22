@@ -142,6 +142,14 @@ grep -Fq "trap 'exit 130' INT" "$repo_dir/scripts/update-runtime-locks.sh"
 grep -Fq "trap 'exit 143' TERM" "$repo_dir/scripts/update-runtime-locks.sh"
 grep -Fq 'cmp -- "$tree_a/generated/runtime-packages.lock.json" "$tree_b/generated/runtime-packages.lock.json"' "$repo_dir/scripts/update-runtime-locks.sh"
 grep -Fq 'cmp -- "$tree_a/generated/runtime-sources.lock.json" "$repo_dir/image/runtime-sources.lock.json"' "$repo_dir/scripts/update-runtime-locks.sh"
+resolve_once_body=$(sed -n '/^resolve_once() {$/,/^}$/p' "$repo_dir/scripts/update-runtime-locks.sh")
+grep -Fq 'BAZEL="$bazel_bin" python3 "$repo_dir/scripts/update_runtime_package_members.py"' <<< "$resolve_once_body"
+grep -Fq -- '--package-lock "$tree/workspace/image/runtime-packages.lock.json"' <<< "$resolve_once_body"
+grep -Fq -- '--lock "$tree/generated/runtime-package-members.lock.json"' <<< "$resolve_once_body"
+grep -Fq 'cmp -- "$tree_a/generated/runtime-package-members.lock.json" "$tree_b/generated/runtime-package-members.lock.json"' "$repo_dir/scripts/update-runtime-locks.sh"
+grep -Fq 'cmp -- "$tree_a/generated/runtime-package-members.lock.json" \' "$repo_dir/scripts/update-runtime-locks.sh"
+grep -Fq 'atomic-replace \' "$repo_dir/scripts/update-runtime-locks.sh"
+grep -Fq '"$tree_a/generated/runtime-package-members.lock.json" \' "$repo_dir/scripts/update-runtime-locks.sh"
 if grep -Eq 'tail[[:space:]]+-n[[:space:]]+1|--network[=[:space:]]+host|CVMIMAGE.*ROOT|rm -rf -- /tmp/' "$repo_dir/scripts/update-runtime-locks.sh"; then
     echo "unsafe updater mechanism found" >&2
     exit 1

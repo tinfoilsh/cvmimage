@@ -83,6 +83,13 @@ test "$(grep -c '^info$' "$FAKE_BAZEL_LOG")" -eq 2
 printf '%s\n' 'OK: cquery outputs resolve through bazel info execution_root'
 
 printf '%s\n' 'checked-in lock' > "$fixture/image/runtime-packages.lock.json"
+if "$fixture/scripts/update-runtime-locks.sh" --check; then
+    echo 'check unexpectedly accepted a stale runtime package lock' >&2
+    exit 1
+fi
+grep -qx 'checked-in lock' "$fixture/image/runtime-packages.lock.json"
+printf '%s\n' 'OK: check rejects a stale runtime package lock'
+
 if FAKE_MOD_DEPS_FAIL=1 "$fixture/scripts/update-runtime-locks.sh"; then
     echo 'update unexpectedly succeeded after module validation failure' >&2
     exit 1

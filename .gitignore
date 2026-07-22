@@ -1,4 +1,6 @@
 .idea/
+__pycache__/
+*.pyc
 tools/
 tinfoilcvm*
 lib/
@@ -19,3 +21,5 @@ mkosi.extra/usr/bin/tinfoil-boot
 mkosi.extra/usr/bin/tinfoil-container-status
 mkosi.extra/usr/bin/tinfoil-egress
 mkosi.extra/usr/bin/tinfoil-shim
+/build/
+/evidence/

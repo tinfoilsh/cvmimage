@@ -1,0 +1,10 @@
+# Tinfoil additive initrd manifest v1
+# path<TAB>type<TAB>mode<TAB>uid<TAB>gid<TAB>content<TAB>provenance
+/dev	dir	0755	0	0	-	generated:mountpoint
+/proc	dir	0755	0	0	-	generated:mountpoint
+/run	dir	0755	0	0	-	generated:mountpoint
+/sys	dir	0755	0	0	-	generated:mountpoint
+/usr	dir	0755	0	0	-	generated:runtime-prefix
+/usr/bin	dir	0755	0	0	-	generated:runtime-binaries
+/usr/bin/tinfoil-initrd	file	0755	0	0	artifact:tinfoil-initrd	builder:tinfoil-initrd
+/init	symlink	0777	0	0	usr/bin/tinfoil-initrd	generated:entrypoint

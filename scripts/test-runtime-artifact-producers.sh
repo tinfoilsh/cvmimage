@@ -7,6 +7,7 @@ canonical_builder="$repo_dir/kernel/build-nvidia-open-canonical.sh"
 
 grep -Fqx 'verify-rootfs-artifacts: runtime-go-artifacts nvattest nvidia-module-artifacts' "$repo_dir/Makefile"
 grep -Fqx 'nvidia-module-artifacts: custom-kernel-artifacts' "$repo_dir/Makefile"
+grep -Fq 'chmod 0644 "${RUNTIME_OUT_DIR}/rootfs-artifacts.tsv"' "$repo_dir/build-nvattest.sh"
 grep -Fq 'build_uid="$(id -u)"' "$local_builder"
 grep -Fq 'build_gid="$(id -g)"' "$local_builder"
 grep -Fq '"$build_uid" "$build_gid"' "$local_builder"

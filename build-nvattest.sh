@@ -179,6 +179,7 @@ nvattest	libnvat.so.1.2.2	file	usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}
 nvattest	libnvat.so.1	symlink	-	0777	0	0	-	libnvat.so.${SO_VERSION}	/usr/lib/x86_64-linux-gnu/libnvat.so.1	assembly-declaration	${nvattest_source_revision}	${nvattest_build_parameters}
 nvattest	libnvat.so	symlink	-	0777	0	0	-	libnvat.so.1	/usr/lib/x86_64-linux-gnu/libnvat.so	assembly-declaration	${nvattest_source_revision}	${nvattest_build_parameters}
 EOF
+chmod 0644 "${RUNTIME_OUT_DIR}/rootfs-artifacts.tsv"
 touch -d "@${SOURCE_DATE_EPOCH}" "${RUNTIME_OUT_DIR}/rootfs-artifacts.tsv"
 chown "${HOST_UID}:${HOST_GID}" "${RUNTIME_OUT_DIR}/rootfs-artifacts.tsv"
 

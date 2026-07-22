@@ -79,6 +79,7 @@ pkg_files(
         "rootfs/etc/nvidia-container-runtime/config.toml",
         "rootfs/etc/passwd",
         "rootfs/etc/resolv.conf",
+        "rootfs/usr/lib/os-release",
         "rootfs/usr/share/nvidia/nvswitch/fabricmanager.cfg",
     ],
     attributes = pkg_attributes(mode = "0644", uid = 0, gid = 0),

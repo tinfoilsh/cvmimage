@@ -1,6 +1,8 @@
 package dcode
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"math/rand/v2"
 	"strings"
@@ -57,4 +59,51 @@ func TestEncodeRejectsTooManyChunks(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when chunk count exceeds 100")
 	}
+}
+
+func TestEncodeRejectsEmptyPayload(t *testing.T) {
+	if _, err := Encode(nil, "example.com"); err == nil {
+		t.Fatal("Encode accepted an empty payload")
+	}
+}
+
+func TestDecodeRejectsMalformedChunkSets(t *testing.T) {
+	for name, domains := range map[string][]string{
+		"empty":     nil,
+		"too many":  make([]string, maxDomainChunks+1),
+		"duplicate": {"00aa.example.com", "00bb.example.com"},
+		"gap":       {"00aa.example.com", "02bb.example.com"},
+		"bad index": {"xxaa.example.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(domains); err == nil {
+				t.Fatalf("Decode accepted %s", name)
+			}
+		})
+	}
+}
+
+func TestDecodeRejectsDecompressionBomb(t *testing.T) {
+	exact := gzipBytes(t, make([]byte, maxDecompressedAttBytes))
+	if decompressed, err := gzDecompress(exact); err != nil || len(decompressed) != maxDecompressedAttBytes {
+		t.Fatalf("exact decompression limit: len=%d error=%v", len(decompressed), err)
+	}
+
+	compressed := gzipBytes(t, make([]byte, maxDecompressedAttBytes+1))
+	if _, err := gzDecompress(compressed); err == nil || !strings.Contains(err.Error(), "decompressed payload exceeds") {
+		t.Fatalf("decompression bomb error = %v", err)
+	}
+}
+
+func gzipBytes(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return compressed.Bytes()
 }

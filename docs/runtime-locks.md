@@ -1,7 +1,9 @@
 # Runtime source locks
 
 This change defines inputs only. It does not extract packages, assemble a
-rootfs, filter an archive, or switch the image build to Bazel.
+rootfs, filter an archive, or switch the image build to Bazel. Bazel's runtime
+source module extension reads `image/runtime-sources.lock.json` directly, so no
+second editable URL or hash declaration exists.
 
 `image/runtime-packages.yaml` is the small reviewed Ubuntu root set. Bazel and
 `rules_distroless` resolve its complete Debian dependency closure into the
@@ -19,9 +21,23 @@ and `runc`. The legacy NVIDIA container hook libraries remain because current
 container creation still uses Docker `DeviceRequests`. Fabric Manager records
 every file supplied by the pinned vendor topology directory.
 
-The generated lock files are declarative size exceptions. The executable
-mechanism is confined to `scripts/runtime_source_lock.py` and
-`scripts/update-runtime-locks.sh`.
+`runtime_archive` validates every archive path and type, then emits only the
+members named by one source record. Every selected member must occur exactly
+once with its locked type, mode, content hash or symlink target. Output archives
+have sorted paths, zero timestamps, and fixed root ownership. These member
+archives are extraction inputs only; no partial rootfs target consumes them.
+Each Bazel action handles exactly one fixed source and materializes that source's
+payload in memory. For the current lock, the largest compressed input is
+86,681,999 bytes and the largest decompressed Debian data archive is 428,175,360
+bytes (414,761,615 bytes of selected regular-file content); sources are never
+accumulated across one extractor action.
+
+The generated lock files are declarative size exceptions. Lock generation stays
+in `scripts/runtime_source_lock.py` and `scripts/update-runtime-locks.sh`;
+exact-member extraction logic is in `image/runtime_archive.bzl` and
+`scripts/runtime_archive.py`. Repository, action, and tool wiring is in
+`MODULE.bazel`, `image/runtime_sources.bzl`, `image/BUILD.bazel`, and
+`scripts/BUILD.bazel`.
 
 Run `make test-runtime-locks` for offline schema, mutation, Bzlmod graph, and
 checked-lock tests. Run `make verify-runtime-sources` to perform the complete

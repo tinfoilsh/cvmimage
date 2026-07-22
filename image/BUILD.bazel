@@ -1,5 +1,7 @@
 package(default_visibility = ["//visibility:public"])
 
+load(":runtime_archive.bzl", "runtime_archive")
+
 # Generated/declarative lock data is intentionally kept separate from build
 # rules so its reviewable size is not confused with executable mechanism.
 exports_files([
@@ -19,4 +21,34 @@ sh_test(
         ":runtime-packages.lock.json",
         "@@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile",
     ],
+)
+
+_RUNTIME_SOURCES = {
+    "docker_static": "@runtime_source_docker_static",
+    "libnvidia_cfg1": "@runtime_source_libnvidia_cfg1",
+    "libnvidia_compute": "@runtime_source_libnvidia_compute",
+    "libnvidia_container_tools": "@runtime_source_libnvidia_container_tools",
+    "libnvidia_container1": "@runtime_source_libnvidia_container1",
+    "libnvidia_gpucomp": "@runtime_source_libnvidia_gpucomp",
+    "libnvidia_nscq": "@runtime_source_libnvidia_nscq",
+    "nvidia_container_toolkit": "@runtime_source_nvidia_container_toolkit",
+    "nvidia_container_toolkit_base": "@runtime_source_nvidia_container_toolkit_base",
+    "nvidia_fabricmanager": "@runtime_source_nvidia_fabricmanager",
+    "nvidia_firmware": "@runtime_source_nvidia_firmware",
+    "nvidia_persistenced": "@runtime_source_nvidia_persistenced",
+}
+
+[
+    runtime_archive(
+        name = name + "_members",
+        archive = repository + "//:archive",
+        out = name + "-members.tar",
+        source_lock = repository + "//:source.json",
+    )
+    for name, repository in _RUNTIME_SOURCES.items()
+]
+
+filegroup(
+    name = "runtime-source-member-archives",
+    srcs = [":" + name + "_members" for name in _RUNTIME_SOURCES],
 )

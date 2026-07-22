@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/egress"
 )
 
 // Non-public destination ranges blocked even on `egress: open` and
@@ -24,16 +27,32 @@ import (
 //   - RFC 6890 / IANA IPv4 Special-Purpose Address Registry: loopback,
 //     "this network", benchmarking, multicast, reserved, and broadcast space.
 const (
-	nonPublicIPv4Ranges = "{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4, 255.255.255.255/32 }"
-	nonPublicIPv6Ranges = "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
+	nonPublicIPv4Ranges            = "{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4, 255.255.255.255/32 }"
+	nonPublicIPv6Ranges            = "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
+	egressInitialPopulationTimeout = 30 * time.Second
 )
+
+type egressPopulator interface {
+	Populate(context.Context) error
+}
 
 // setupContainerNetworkFirewall installs one bridge's worth of nftables
 // rules per declared network plus the implicit shim-net, in a single
-// transaction, then starts tinfoil-egress if any network needs it.
+// transaction, then synchronously populates any allowlist sets.
 // Must be called after the bridge interfaces exist so iif/oif resolve
 // by index.
-func setupContainerNetworkFirewall(cfg *Config) error {
+func setupContainerNetworkFirewall(ctx context.Context, cfg *Config) error {
+	return setupContainerNetworkFirewallWith(ctx, cfg, runNft, func() (egressPopulator, error) {
+		return egress.Load()
+	})
+}
+
+func setupContainerNetworkFirewallWith(
+	ctx context.Context,
+	cfg *Config,
+	applyNft func(string) error,
+	loadEgress func() (egressPopulator, error),
+) error {
 	names := make([]string, 0, len(cfg.Networks))
 	for k := range cfg.Networks {
 		names = append(names, k)
@@ -47,7 +66,7 @@ func setupContainerNetworkFirewall(cfg *Config) error {
 	if shimUpstreamSet(cfg) {
 		writeBridgeRules(&script, containernet.ShimNetName, &NetworkSpec{Egress: "closed"})
 	}
-	if err := runNft(script.String()); err != nil {
+	if err := applyNft(script.String()); err != nil {
 		return fmt.Errorf("installing container-network firewall rules: %w", err)
 	}
 
@@ -62,12 +81,16 @@ func setupContainerNetworkFirewall(cfg *Config) error {
 		if spec.Egress != "allowlist" {
 			continue
 		}
-		// Type=notify; `systemctl start` blocks until the daemon resolves
-		// the first set of IPs and signals READY=1, so failures here
-		// surface as a boot error.
-		log.Println("Firewall: starting tinfoil-egress for initial IP population")
-		if out, err := exec.Command("systemctl", "start", "tinfoil-egress.service").CombinedOutput(); err != nil {
-			return fmt.Errorf("tinfoil-egress.service failed on initial run: %w (%s)", err, out)
+		engine, err := loadEgress()
+		if err != nil {
+			return fmt.Errorf("loading egress policy: %w", err)
+		}
+		log.Println("Firewall: populating egress allowlists")
+		populationCtx, cancel := context.WithTimeout(ctx, egressInitialPopulationTimeout)
+		err = engine.Populate(populationCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("populating egress allowlists: %w", err)
 		}
 		break
 	}

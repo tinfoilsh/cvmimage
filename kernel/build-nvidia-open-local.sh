@@ -150,7 +150,11 @@ resolve_package() {
         echo "staged NVIDIA package checksum mismatch: $package_name" >&2
         exit 1
     }
-    mv -T -- "$cache_temporary" "$package_path"
+    if ! mv -T -- "$cache_temporary" "$package_path"; then
+        rm -f -- "$cache_temporary"
+        echo "failed to cache NVIDIA package: $package_name" >&2
+        exit 1
+    fi
     printf '%s\n' "$downloaded_path"
 }
 source_package="$(resolve_package "$source_deb" "$source_sha256")"

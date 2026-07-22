@@ -21,6 +21,8 @@ grep -Fq '"$kernel_build_dir" "$kernel_source_dir" "$kernel_out_dir"' "$local_bu
 grep -Fq 'unset MAKEFLAGS MFLAGS ARCH CROSS_COMPILE CC CFLAGS CPPFLAGS KCFLAGS KCPPFLAGS LDFLAGS' "$local_builder"
 grep -Fq 'readonly package_cache_dir="$kernel_build_dir/nvidia-packages"' "$local_builder"
 grep -Fq 'missing pinned offline NVIDIA package:' "$local_builder"
+grep -Fq 'if ! mv -T -- "$cache_temporary" "$package_path"; then' "$local_builder"
+grep -Fq 'failed to cache NVIDIA package: $package_name' "$local_builder"
 grep -Fq 'require_canonical_directory "$output_parent" "rootfs-artifacts output parent"' "$local_builder"
 grep -Fq 'pinned_output_dir="/proc/self/fd/$output_parent_fd/$output_name"' "$local_builder"
 grep -Fq "export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'" "$canonical_builder"

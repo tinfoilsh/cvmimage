@@ -7,14 +7,32 @@ export PATH LC_ALL=C
 repo_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 
+measured_containerd_config=image/rootfs/etc/containerd/config.toml
+installed_containerd_config=mkosi.extra/etc/containerd/config.toml
+if [ -L "$installed_containerd_config" ] || [ ! -f "$installed_containerd_config" ]; then
+    echo "installed containerd configuration is not a regular file: $installed_containerd_config" >&2
+    exit 1
+fi
+if ! cmp -s -- "$measured_containerd_config" "$installed_containerd_config"; then
+    echo "installed containerd configuration differs from measured policy" >&2
+    exit 1
+fi
+
 expected_entries=$(cat <<'EOF'
 .	d
 etc	d
+etc/containerd	d
+etc/containerd/config.toml	f
+etc/docker	d
+etc/docker/daemon.json	f
 etc/group	f
 etc/gshadow	f
 etc/hostname	f
 etc/hosts	f
+etc/nftables.conf	f
 etc/nsswitch.conf	f
+etc/nvidia-container-runtime	d
+etc/nvidia-container-runtime/config.toml	f
 etc/passwd	f
 etc/resolv.conf	f
 etc/shadow	f

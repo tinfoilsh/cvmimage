@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestIoctlConstants(t *testing.T) {
@@ -64,6 +67,22 @@ func TestTableLoadBuffer(t *testing.T) {
 	}
 }
 
+func TestTableLoadBufferRejectsEmbeddedNUL(t *testing.T) {
+	for name, tc := range map[string]struct {
+		targetType string
+		params     string
+	}{
+		"target type": {targetType: "ver\x00ity", params: "valid"},
+		"parameters":  {targetType: "verity", params: "valid\x00ignored"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := tableLoadBuffer("root", 1, tc.targetType, tc.params); err == nil {
+				t.Fatal("embedded NUL accepted")
+			}
+		})
+	}
+}
+
 func TestReadMajorMinor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dev")
 	if err := os.WriteFile(path, []byte("10:236\n"), 0644); err != nil {
@@ -75,6 +94,35 @@ func TestReadMajorMinor(t *testing.T) {
 	}
 	if major != 10 || minor != 236 {
 		t.Fatalf("unexpected major/minor %d:%d", major, minor)
+	}
+}
+
+func TestDeviceNodeMatchesTypeAndDeviceNumber(t *testing.T) {
+	info, err := os.Lstat("/dev/null")
+	if err != nil {
+		t.Skipf("/dev/null unavailable: %v", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("/dev/null stat has unexpected type")
+	}
+	if !deviceNodeMatches("/dev/null", true, stat.Rdev) {
+		t.Fatal("matching character device rejected")
+	}
+	wrongDev := unix.Mkdev(unix.Major(stat.Rdev), unix.Minor(stat.Rdev)+1)
+	if deviceNodeMatches("/dev/null", true, wrongDev) {
+		t.Fatal("wrong device number accepted")
+	}
+	if deviceNodeMatches("/dev/null", false, stat.Rdev) {
+		t.Fatal("character device accepted as block device")
+	}
+
+	link := filepath.Join(t.TempDir(), "null")
+	if err := os.Symlink("/dev/null", link); err != nil {
+		t.Fatal(err)
+	}
+	if deviceNodeMatches(link, true, stat.Rdev) {
+		t.Fatal("symlink accepted as device node")
 	}
 }
 

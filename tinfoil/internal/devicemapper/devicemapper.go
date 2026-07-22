@@ -92,25 +92,28 @@ func OpenControl() (*os.File, error) {
 
 // EnsureControlNode creates /dev/mapper/control from its sysfs device number.
 func EnsureControlNode() error {
-	if isCharDevice(ControlNode) {
-		return nil
-	}
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
 	for {
 		major, minor, err := readMajorMinor(controlDevicePath)
 		if err == nil {
+			dev := unix.Mkdev(major, minor)
+			if deviceNodeMatches(ControlNode, true, dev) {
+				return nil
+			}
 			if err := os.MkdirAll(filepath.Dir(ControlNode), 0755); err != nil {
 				return err
 			}
-			dev := int(unix.Mkdev(major, minor))
-			if err := unix.Mknod(ControlNode, unix.S_IFCHR|0600, dev); err != nil && !errors.Is(err, unix.EEXIST) {
+			if err := removeStaleNode(ControlNode); err != nil {
+				return fmt.Errorf("removing stale %s: %w", ControlNode, err)
+			}
+			if err := unix.Mknod(ControlNode, unix.S_IFCHR|0600, int(dev)); err != nil && !errors.Is(err, unix.EEXIST) {
 				return fmt.Errorf("creating %s: %w", ControlNode, err)
 			}
-			if isCharDevice(ControlNode) {
+			if deviceNodeMatches(ControlNode, true, dev) {
 				return nil
 			}
-			lastErr = fmt.Errorf("%s was created but is not a character device", ControlNode)
+			lastErr = fmt.Errorf("%s does not match device-mapper device %d:%d", ControlNode, major, minor)
 		} else {
 			lastErr = err
 		}
@@ -126,22 +129,17 @@ func EnsureBlockNode(path string, dev uint64) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	if info, err := os.Stat(path); err == nil {
-		if info.Mode()&os.ModeDevice != 0 && info.Mode()&os.ModeCharDevice == 0 {
-			if stat, ok := info.Sys().(*syscall.Stat_t); ok &&
-				unix.Major(stat.Rdev) == unix.Major(dev) &&
-				unix.Minor(stat.Rdev) == unix.Minor(dev) {
-				return nil
-			}
-		}
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("removing stale %s: %w", path, err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	if deviceNodeMatches(path, false, dev) {
+		return nil
+	}
+	if err := removeStaleNode(path); err != nil {
+		return fmt.Errorf("removing stale %s: %w", path, err)
 	}
 	if err := unix.Mknod(path, unix.S_IFBLK|0600, int(dev)); err != nil {
 		return fmt.Errorf("creating %s: %w", path, err)
+	}
+	if !deviceNodeMatches(path, false, dev) {
+		return fmt.Errorf("%s does not match device-mapper block device %d:%d", path, unix.Major(dev), unix.Minor(dev))
 	}
 	return nil
 }
@@ -252,8 +250,11 @@ func baseBuffer(size int, name string) []byte {
 }
 
 func tableLoadBuffer(name string, lengthSectors uint64, targetType, params string) ([]byte, error) {
-	if targetType == "" || len(targetType) >= 16 {
+	if targetType == "" || len(targetType) >= 16 || strings.IndexByte(targetType, 0) >= 0 {
 		return nil, fmt.Errorf("invalid device-mapper target type %q", targetType)
+	}
+	if strings.IndexByte(params, 0) >= 0 {
+		return nil, fmt.Errorf("device-mapper target parameters contain NUL")
 	}
 	targetSize := align(targetSpecSize+len(params)+1, targetSpecAlign)
 	buf := baseBuffer(ioctlSize+targetSize, name)
@@ -302,9 +303,31 @@ func align(value, alignment int) int {
 	return (value + alignment - 1) &^ (alignment - 1)
 }
 
-func isCharDevice(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+func deviceNodeMatches(path string, charDevice bool, dev uint64) bool {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	if charDevice {
+		if info.Mode()&os.ModeCharDevice == 0 {
+			return false
+		}
+	} else if info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok &&
+		unix.Major(stat.Rdev) == unix.Major(dev) &&
+		unix.Minor(stat.Rdev) == unix.Minor(dev)
+}
+
+func removeStaleNode(path string) error {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 func readMajorMinor(path string) (uint32, uint32, error) {

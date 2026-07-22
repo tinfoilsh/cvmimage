@@ -60,6 +60,43 @@ for unsafe in (pathlib.Path("/tmp/.."), pathlib.Path("/etc")):
 PY
 printf 'OK: verifier rejected staging paths outside the build tree\n'
 
+python3 - "$tool" "$manifest" "$artifacts" "$artifact_lock" "$scratch" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+spec = importlib.util.spec_from_file_location("initrd_manifest", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+manifest = pathlib.Path(sys.argv[2])
+artifact_manifest = pathlib.Path(sys.argv[3])
+artifact_lock = pathlib.Path(sys.argv[4])
+scratch = pathlib.Path(sys.argv[5])
+entries = module.parse_manifest(manifest)
+artifacts = module.parse_artifacts(artifact_manifest)
+locks = module.parse_artifact_locks(artifact_lock)
+module.verify_artifact_locks(entries, artifacts, locks)
+visible = scratch / "swapped-stage"
+retained = scratch / "retained-stage"
+
+def swap_visible_root(root):
+    if root != visible:
+        raise AssertionError(f"unexpected root passed to test hook: {root}")
+    root.rename(retained)
+    root.mkdir()
+    (root / "sentinel").write_text("replacement\n")
+
+module._CREATE_STAGE_ROOT_OPENED_HOOK = swap_visible_root
+module.create_stage(visible, entries, artifacts)
+if sorted(path.name for path in visible.iterdir()) != ["sentinel"]:
+    raise SystemExit("stage construction wrote through the swapped visible root")
+if (visible / "sentinel").read_text() != "replacement\n":
+    raise SystemExit("stage construction modified the replacement target")
+module.verify_stage(retained, entries, artifacts)
+PY
+printf 'OK: retained stage descriptor resisted a visible-root swap\n'
+
 unowned_stage="$scratch/unowned-stage"
 mkdir "$unowned_stage"
 printf sentinel > "$unowned_stage/sentinel"

@@ -267,11 +267,30 @@ def stage_path(root: Path, destination: str) -> Path:
     return root / destination[1:]
 
 
-def set_metadata(path: Path, entry: Entry) -> None:
-    if entry.kind != "symlink":
-        os.chmod(path, entry.mode, follow_symlinks=False)
-    os.chown(path, entry.uid, entry.gid, follow_symlinks=False)
-    os.utime(path, (0, 0), follow_symlinks=False)
+def directory_flags() -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def entry_parent(entry: Entry) -> tuple[str, str]:
+    relative = PurePosixPath(entry.path.removeprefix("/"))
+    parent = "/" if relative.parent == PurePosixPath(".") else f"/{relative.parent}"
+    return parent, relative.name
+
+
+def set_descriptor_metadata(descriptor: int, entry: Entry) -> None:
+    os.fchmod(descriptor, entry.mode)
+    os.fchown(descriptor, entry.uid, entry.gid)
+    os.utime(descriptor, (0, 0))
+
+
+def set_symlink_metadata(parent_descriptor: int, name: str, entry: Entry) -> None:
+    os.chown(name, entry.uid, entry.gid, dir_fd=parent_descriptor, follow_symlinks=False)
+    os.utime(name, (0, 0), dir_fd=parent_descriptor, follow_symlinks=False)
 
 
 def normalized_stage_root(root: Path) -> tuple[Path, Path]:
@@ -324,11 +343,15 @@ def claim_stage(parent_descriptor: int, marker_name: str, root: Path) -> None:
         fail(f"staging ownership marker is invalid: {marker_name}")
 
 
+_CREATE_STAGE_ROOT_OPENED_HOOK = None
+
+
 def create_stage(root: Path, entries: dict[str, Entry], artifacts: dict[str, Artifact]) -> None:
     root, marker = normalized_stage_root(root)
     verify_static(artifact_for(entries["/usr/bin/tinfoil-initrd"], artifacts).path)
     parent_descriptor, root_name = open_output_parent(root)
     marker_name = marker.name
+    descriptors = {}
     try:
         try:
             root_metadata = os.stat(root_name, dir_fd=parent_descriptor, follow_symlinks=False)
@@ -345,23 +368,62 @@ def create_stage(root: Path, entries: dict[str, Entry], artifacts: dict[str, Art
         if root_metadata is not None:
             shutil.rmtree(root_name, dir_fd=parent_descriptor)
         os.mkdir(root_name, 0o755, dir_fd=parent_descriptor)
+        descriptors["/"] = os.open(root_name, directory_flags(), dir_fd=parent_descriptor)
+        if _CREATE_STAGE_ROOT_OPENED_HOOK is not None:
+            _CREATE_STAGE_ROOT_OPENED_HOOK(root)
+        for entry in sorted(entries.values(), key=lambda item: (len(PurePosixPath(item.path).parts), item.path)):
+            parent, name = entry_parent(entry)
+            parent_entry_descriptor = descriptors[parent]
+            if entry.kind == "dir":
+                os.mkdir(name, entry.mode, dir_fd=parent_entry_descriptor)
+                descriptors[entry.path] = os.open(name, directory_flags(), dir_fd=parent_entry_descriptor)
+            elif entry.kind == "file":
+                artifact = artifact_for(entry, artifacts)
+                source_flags = os.O_RDONLY
+                destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                if hasattr(os, "O_CLOEXEC"):
+                    source_flags |= os.O_CLOEXEC
+                    destination_flags |= os.O_CLOEXEC
+                if hasattr(os, "O_NOFOLLOW"):
+                    source_flags |= os.O_NOFOLLOW
+                    destination_flags |= os.O_NOFOLLOW
+                source_descriptor = os.open(artifact.path, source_flags)
+                try:
+                    destination_descriptor = os.open(
+                        name,
+                        destination_flags,
+                        entry.mode,
+                        dir_fd=parent_entry_descriptor,
+                    )
+                    try:
+                        with os.fdopen(source_descriptor, "rb", closefd=False) as source:
+                            with os.fdopen(destination_descriptor, "wb", closefd=False) as destination:
+                                shutil.copyfileobj(source, destination)
+                    except Exception:
+                        os.close(destination_descriptor)
+                        raise
+                    descriptors[entry.path] = destination_descriptor
+                finally:
+                    os.close(source_descriptor)
+            else:
+                os.symlink(entry.content, name, dir_fd=parent_entry_descriptor)
+        for entry in sorted(
+            entries.values(),
+            key=lambda item: (len(PurePosixPath(item.path).parts), item.path),
+            reverse=True,
+        ):
+            if entry.kind == "symlink":
+                parent, name = entry_parent(entry)
+                set_symlink_metadata(descriptors[parent], name, entry)
+            else:
+                set_descriptor_metadata(descriptors[entry.path], entry)
+        os.fchown(descriptors["/"], 0, 0)
+        os.fchmod(descriptors["/"], 0o755)
+        os.utime(descriptors["/"], (0, 0))
     finally:
+        for descriptor in descriptors.values():
+            os.close(descriptor)
         os.close(parent_descriptor)
-    for entry in sorted(entries.values(), key=lambda item: (len(PurePosixPath(item.path).parts), item.path)):
-        destination = stage_path(root, entry.path)
-        if entry.kind == "dir":
-            destination.mkdir()
-        elif entry.kind == "file":
-            artifact = artifact_for(entry, artifacts)
-            shutil.copyfile(artifact.path, destination)
-        else:
-            destination.symlink_to(entry.content)
-    for entry in sorted(entries.values(), key=lambda item: (len(PurePosixPath(item.path).parts), item.path), reverse=True):
-        destination = stage_path(root, entry.path)
-        set_metadata(destination, entry)
-    os.chown(root, 0, 0)
-    os.chmod(root, 0o755)
-    os.utime(root, (0, 0))
 
 
 def tree_entries(root: Path) -> dict[str, os.stat_result]:

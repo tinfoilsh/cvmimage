@@ -22,7 +22,7 @@ trap cleanup EXIT
 sudo env PATH="$trusted_path" rm -rf "$scratch"
 mkdir -p "$scratch" "$(dirname "$evidence")"
 
-mkosi_version="$(mkosi --version)"
+mkosi_version="$(sudo env PATH="$trusted_path" mkosi --version)"
 if [ "$mkosi_version" != "mkosi 26" ]; then
     printf 'reproducibility check requires mkosi 26, found: %s\n' \
         "${mkosi_version:-unknown}" >&2

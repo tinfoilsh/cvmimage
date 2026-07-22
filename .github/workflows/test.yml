@@ -11,7 +11,7 @@ permissions: {}
 jobs:
   test:
     name: Build and Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
 
@@ -41,8 +41,37 @@ jobs:
           sudo install -m 0755 "$archive" /usr/local/bin/bazel
           test "$(bazel --version)" = "bazel 8.7.0"
 
-      - name: Install archive gate sandbox
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends --yes bubblewrap
+      - name: Prepare archive gate sandbox
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes apparmor bubblewrap
+          profile=/etc/apparmor.d/bwrap-userns-restrict
+          test -f "$profile"
+          sudo /usr/sbin/apparmor_parser --replace "$profile"
+          host_uid=$(id -u)
+          host_gid=$(id -g)
+          /usr/bin/env -i /usr/bin/bwrap \
+            --clearenv \
+            --unshare-user \
+            --uid 0 \
+            --gid 0 \
+            --unshare-pid \
+            --unshare-ipc \
+            --unshare-uts \
+            --unshare-net \
+            --die-with-parent \
+            --new-session \
+            --ro-bind / / \
+            --proc /proc \
+            --dev /dev \
+            -- /bin/sh -eu -c '
+              read uid_inside uid_outside uid_length < /proc/self/uid_map
+              read gid_inside gid_outside gid_length < /proc/self/gid_map
+              [ "${uid_inside}:${uid_outside}:${uid_length}" = "0:${1}:1" ]
+              [ "${gid_inside}:${gid_outside}:${gid_length}" = "0:${2}:1" ]
+            ' archive-gate-preflight "$host_uid" "$host_gid"
 
       - name: Build
         run: cd tinfoil && go build ./...

@@ -192,12 +192,9 @@ func hasSWManagementVPD(paths devicePaths) (bool, error) {
 			return false, fmt.Errorf("PCI VPD for %s is not a regular file", entry.Name())
 		}
 		swManaged, readErr := scanSWManagementVPD(file)
-		closeErr := file.Close()
+		_ = file.Close()
 		if readErr != nil {
 			return false, fmt.Errorf("read PCI VPD for %s: %w", entry.Name(), readErr)
-		}
-		if closeErr != nil {
-			return false, fmt.Errorf("close PCI VPD for %s: %w", entry.Name(), closeErr)
 		}
 		if swManaged {
 			return true, nil

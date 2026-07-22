@@ -41,6 +41,9 @@ jobs:
           sudo install -m 0755 "$archive" /usr/local/bin/bazel
           test "$(bazel --version)" = "bazel 8.7.0"
 
+      - name: Install archive gate sandbox
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends --yes bubblewrap
+
       - name: Build
         run: cd tinfoil && go build ./...
 
@@ -61,6 +64,9 @@ jobs:
 
       - name: Test final rootfs verifier
         run: make test-final-rootfs-verifier
+
+      - name: Test final rootfs archive gate safety
+        run: bazel test //scripts:rootfs-archive-gate-test
 
       - name: Test runtime source and package-member locks
         run: make test-runtime-locks

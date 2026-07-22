@@ -118,10 +118,6 @@ class ArchiveGateTest(unittest.TestCase):
             with self.subTest(message=message), self.assertRaisesRegex(rootfs_archive_gate.GateError, message):
                 self.materialize(self.write_archive(members), destination, self.fixed_expected())
             self.assertFalse(destination.exists())
-        archive = self.fixed_archive()
-        with tarfile.open(archive, "r:") as bundle:
-            members = bundle.getmembers()
-            members[2].mode = 0o600
         mode_archive = self.write_archive(
             [(".", "dir"), ("dir", "dir"), ("dir/file", "file"), ("link", "symlink", "file")]
         )

@@ -132,11 +132,15 @@ def copy_payload(archive, member, descriptor):
     return digest.hexdigest()
 
 
-def validate_member(member, expected):
+def require_canonical_metadata(member):
     if member.pax_headers or getattr(member, "sparse", None):
         fail(f"extended archive metadata is forbidden: {member.name}")
     if member.uid or member.gid or member.uname or member.gname or member.mtime:
         fail(f"non-canonical archive ownership or timestamp: {member.name}")
+
+
+def validate_member(member, expected):
+    require_canonical_metadata(member)
     if member.islnk():
         fail(f"hardlinks are forbidden: {member.name}")
     if expected.kind == "dir" and not member.isdir():
@@ -159,8 +163,7 @@ def verify_archive(descriptor, expected):
         members = archive.getmembers()
         for member in members:
             require_ustar_header(descriptor, member)
-            if member.pax_headers or member.uid or member.gid or member.uname or member.gname or member.mtime:
-                fail(f"non-canonical final archive metadata: {member.name}")
+            require_canonical_metadata(member)
             destination, _ = member_path(member)
             if member.isdir():
                 actual.append(rootfs_manifest.Entry(destination, "dir", f"{member.mode:04o}", "0", "0", "-", "-", "-"))

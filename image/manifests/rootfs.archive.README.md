@@ -11,9 +11,6 @@ namespace.
 Regenerate both locks from the same clean `//image:rootfs` build whenever an
 authenticated input intentionally changes. Review the manifest diff, replace
 the archive digest, and rerun `//image:final-rootfs-archive-gate`; never update
-one lock without the other.
-
-Current SHA-256 values:
-
-- archive: `9890f3ec91788fb9b5bfdb1d17dcd197ba5352a55b10d6b11b393dc64fc84266`
-- manifest: `ffee35909230835001cb2bb86d99633ad37b5c5a84b37166679df1e4c1fd9d17`
+one lock without the other. Read the authoritative values directly from
+`rootfs.archive.sha256` and `rootfs.expected.tsv`; do not duplicate them in
+documentation.

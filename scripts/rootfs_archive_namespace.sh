@@ -15,8 +15,12 @@ mkdir "${namespace_tmp}"
 chmod 0700 "${namespace_tmp}"
 host_uid=$(id -u)
 host_gid=$(id -g)
+runfiles_dir=${RUNFILES_DIR:?}
+test_srcdir=${TEST_SRCDIR:?}
+test_workspace=${TEST_WORKSPACE:?}
 
-exec /usr/bin/bwrap \
+exec /usr/bin/env -i /usr/bin/bwrap \
+    --clearenv \
     --unshare-user \
     --uid 0 \
     --gid 0 \
@@ -28,6 +32,16 @@ exec /usr/bin/bwrap \
     --new-session \
     --ro-bind / / \
     --bind "${TEST_TMPDIR:?}" "${TEST_TMPDIR}" \
+    --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    --setenv LC_ALL C \
+    --setenv LANG C \
+    --setenv PYTHONHASHSEED 0 \
+    --setenv PYTHONNOUSERSITE 1 \
+    --setenv PYTHONDONTWRITEBYTECODE 1 \
+    --setenv RUNFILES_DIR "${runfiles_dir}" \
+    --setenv TEST_SRCDIR "${test_srcdir}" \
+    --setenv TEST_TMPDIR "${TEST_TMPDIR}" \
+    --setenv TEST_WORKSPACE "${test_workspace}" \
     --setenv TMPDIR "${namespace_tmp}" \
     --proc /proc \
     --dev /dev \

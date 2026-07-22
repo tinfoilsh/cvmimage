@@ -57,10 +57,14 @@ func TestValidateExternalNetwork(t *testing.T) {
 			Version: 1, Address: "::ffff:100.64.0.42/120", Gateway: "::ffff:100.64.0.1",
 		},
 		"missing prefix": {Version: 1, Address: "100.64.0.42", Gateway: valid.Gateway},
-		"subnet":         {Version: 1, Address: valid.Address, Gateway: "192.0.2.1"},
-		"network":        {Version: 1, Address: "100.64.0.0/20", Gateway: valid.Gateway},
-		"broadcast":      {Version: 1, Address: "100.64.15.255/20", Gateway: valid.Gateway},
-		"gateway":        {Version: 1, Address: "100.64.0.1/20", Gateway: valid.Gateway},
+		"point-to-point prefix": {
+			Version: 1, Address: "192.0.2.0/31", Gateway: "192.0.2.1",
+		},
+		"host prefix": {Version: 1, Address: "192.0.2.1/32", Gateway: "192.0.2.1"},
+		"subnet":      {Version: 1, Address: valid.Address, Gateway: "192.0.2.1"},
+		"network":     {Version: 1, Address: "100.64.0.0/20", Gateway: valid.Gateway},
+		"broadcast":   {Version: 1, Address: "100.64.15.255/20", Gateway: valid.Gateway},
+		"gateway":     {Version: 1, Address: "100.64.0.1/20", Gateway: valid.Gateway},
 		"gateway network": {
 			Version: 1, Address: valid.Address, Gateway: "100.64.0.0",
 		},

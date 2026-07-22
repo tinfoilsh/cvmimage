@@ -60,7 +60,7 @@ func runSubcommand(cmd string) error {
 		}
 		log.Println("Setting up registry authentication")
 		if err := setupRegistryAuth(externalConfig); err != nil {
-			log.Printf("Warning: registry auth setup failed: %v", err)
+			return fmt.Errorf("registry auth setup failed: %w", err)
 		}
 		log.Println("Launching containers")
 		return launchContainers(config, externalConfig)
@@ -183,11 +183,10 @@ func run() error {
 	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(externalConfig); err != nil {
-		log.Printf("Warning: registry auth setup failed: %v", err)
-		tracker.Record("registry-auth", boot.StatusWarning, time.Since(start), err.Error())
-	} else {
-		tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
+		tracker.Record("registry-auth", boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("registry auth setup failed: %w", err)
 	}
+	tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 
 	// 9. Firewall
 	start = time.Now()

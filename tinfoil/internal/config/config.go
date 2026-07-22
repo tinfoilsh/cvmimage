@@ -54,14 +54,16 @@ const (
 )
 
 type Metadata struct {
-	ID     string               `yaml:"id"`
-	Domain string               `yaml:"domain"`
-	Image  string               `yaml:"image"`
-	CPU    string               `yaml:"cpu"`
-	GPU    string               `yaml:"gpu"`
-	Repo   string               `yaml:"repo,omitempty"`
-	Digest string               `yaml:"digest,omitempty"`
-	Extra  map[string]yaml.Node `yaml:",inline"`
+	ID     string `yaml:"id"`
+	Domain string `yaml:"domain"`
+	Image  string `yaml:"image"`
+	CPU    string `yaml:"cpu"`
+	GPU    string `yaml:"gpu"`
+	Repo   string `yaml:"repo,omitempty"`
+	Digest string `yaml:"digest,omitempty"`
+	// Extra preserves operator metadata that tinfoild merges into this
+	// unmeasured document. Only the security-sensitive network block is closed.
+	Extra map[string]yaml.Node `yaml:",inline"`
 }
 
 type ExternalNetworkConfig struct {

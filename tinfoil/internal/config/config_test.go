@@ -39,6 +39,7 @@ secrets:
   METRICS_API_KEY: metrics-secret
 metadata:
   cpu: amd
+  operator-label: retained
 operator-extension:
   retained: true
 `))
@@ -53,6 +54,9 @@ operator-extension:
 	}
 	if config.Metadata.CPU != "amd" {
 		t.Fatalf("metadata CPU = %q", config.Metadata.CPU)
+	}
+	if config.Metadata.Extra["operator-label"].Value != "retained" {
+		t.Fatalf("operator metadata not retained: %+v", config.Metadata.Extra)
 	}
 	if config.MetricsAPIKey != "metrics-secret" {
 		t.Fatalf("MetricsAPIKey = %q", config.MetricsAPIKey)

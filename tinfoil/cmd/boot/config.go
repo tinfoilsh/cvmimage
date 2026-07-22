@@ -154,6 +154,9 @@ func validateExternalNetwork(config *shimconfig.ExternalNetworkConfig) error {
 	if err != nil || !prefix.Addr().Is4() {
 		return fmt.Errorf("invalid IPv4 address %q", config.Address)
 	}
+	if prefix.Bits() > 30 {
+		return fmt.Errorf("IPv4 prefix /%d has no distinct guest and gateway addresses", prefix.Bits())
+	}
 	gateway, err := netip.ParseAddr(config.Gateway)
 	if err != nil || !gateway.Is4() {
 		return fmt.Errorf("invalid IPv4 gateway %q", config.Gateway)

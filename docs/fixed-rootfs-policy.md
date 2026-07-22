@@ -13,8 +13,7 @@ The measured daemon policy includes these mode `0644` files:
 
 - `/etc/containerd/config.toml` disables unused containerd service families and
   places mutable daemon state below the private ramdisk. This measured file is
-  the canonical policy owner; the current `mkosi.extra` installation copy must
-  remain byte-identical until the additive rootfs replaces that build input.
+  the canonical policy owner and is installed only by the additive rootfs.
 - `/etc/docker/daemon.json` disables inter-container communication and the
   userland proxy, uses Docker's nftables backend, enables no-new-privileges and
   the containerd snapshotter, and registers only the pinned NVIDIA runtime by

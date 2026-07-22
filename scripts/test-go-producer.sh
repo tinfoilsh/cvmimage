@@ -116,15 +116,4 @@ done < "$scratch/expected"
 
 test "$(find "$output_root/artifacts" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6
 
-make -n --no-print-directory -C "$repo_dir" go-binaries > "$scratch/make-plan"
-if grep -Fq 'go build' "$scratch/make-plan"; then
-    echo 'go-binaries must not use the host Go toolchain' >&2
-    exit 1
-fi
-for name in tinfoil-boot tinfoil-container-status tinfoil-egress tinfoil-init tinfoil-shim; do
-    grep -Fq \
-        "build/builder-work/output/artifacts/$name mkosi.extra/usr/bin/$name" \
-        "$scratch/make-plan"
-done
-
 echo 'go producer contract tests: ok'

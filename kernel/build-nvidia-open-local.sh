@@ -13,7 +13,9 @@ kernel_out_dir="${TINFOIL_KERNEL_OUT_DIR:-$kernel_dir/out}"
 kernel_release="${TINFOIL_KERNEL_RELEASE:-$(tr -d '\n' < "$kernel_out_dir/kernel.release")}"
 kernel_source_dir="${TINFOIL_KERNEL_SOURCE_DIR:-$kernel_dir/build/linux-source-$kernel_source_version}"
 scratch_dir="${TINFOIL_NVIDIA_OPEN_BUILD_DIR:-$kernel_dir/build/nvidia-open-$nvidia_version}"
-stage_dir="${TINFOIL_NVIDIA_OPEN_STAGE_DIR:-$repo_dir/image/rootfs-overlay/usr/lib/modules/$kernel_release/updates/dkms}"
+# finit_module loads by file descriptor, so keep the three measured artifacts
+# at a fixed application-owned path instead of parsing uname at runtime.
+stage_dir="${TINFOIL_NVIDIA_OPEN_STAGE_DIR:-$repo_dir/image/rootfs-overlay/usr/lib/tinfoil/kernel-modules}"
 
 source_deb="nvidia-kernel-source-open_${nvidia_package_version}_amd64.deb"
 dkms_deb="nvidia-dkms-open_${nvidia_package_version}_amd64.deb"

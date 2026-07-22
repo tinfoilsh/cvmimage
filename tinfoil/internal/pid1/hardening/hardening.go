@@ -27,8 +27,9 @@ const (
 )
 
 type servicePolicy struct {
-	noNewPrivileges   bool
-	boundCapabilities []int
+	noNewPrivileges      bool
+	boundCapabilities    []int
+	allowedSocketDomains []uint32
 }
 
 // A nil boundCapabilities list deliberately preserves the inherited bounding
@@ -41,18 +42,21 @@ func policyFor(service Service) (servicePolicy, bool) {
 		return servicePolicy{noNewPrivileges: true}, true
 	case ServiceContainerStatus:
 		return servicePolicy{
-			noNewPrivileges:   true,
-			boundCapabilities: []int{},
+			noNewPrivileges:      true,
+			boundCapabilities:    []int{},
+			allowedSocketDomains: []uint32{unix.AF_UNIX},
 		}, true
 	case ServiceEgress:
 		return servicePolicy{
-			noNewPrivileges:   true,
-			boundCapabilities: []int{unix.CAP_NET_ADMIN},
+			noNewPrivileges:      true,
+			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
+			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		}, true
 	case ServiceShim:
 		return servicePolicy{
-			noNewPrivileges:   true,
-			boundCapabilities: []int{unix.CAP_NET_BIND_SERVICE},
+			noNewPrivileges:      true,
+			boundCapabilities:    []int{unix.CAP_NET_BIND_SERVICE},
+			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6},
 		}, true
 	default:
 		return servicePolicy{}, false
@@ -70,6 +74,7 @@ type serviceKernel interface {
 	dropBoundingCapability(int) error
 	setCapabilities([2]unix.CapUserData) error
 	setNoNewPrivileges() error
+	restrictSocketDomains([]uint32) error
 }
 
 func applyService(kernel serviceKernel, service Service) error {
@@ -105,6 +110,11 @@ func applyService(kernel serviceKernel, service Service) error {
 	if policy.noNewPrivileges {
 		if err := kernel.setNoNewPrivileges(); err != nil {
 			return fmt.Errorf("set no_new_privileges for %s: %w", service, err)
+		}
+	}
+	if policy.allowedSocketDomains != nil {
+		if err := kernel.restrictSocketDomains(policy.allowedSocketDomains); err != nil {
+			return fmt.Errorf("restrict socket domains for %s: %w", service, err)
 		}
 	}
 	return nil

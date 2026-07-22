@@ -91,12 +91,90 @@ func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
 		"/usr/sbin/ip route flush dev ens2",
 		"/usr/sbin/ip addr replace 100.64.0.42/20 dev ens2",
 		"/usr/sbin/ip route replace default via 100.64.0.1 dev ens2",
-		"/usr/bin/resolvectl dns ens2 1.1.1.1 1.0.0.1",
-		"/usr/bin/resolvectl domain ens2 ~.",
-		"/usr/bin/resolvectl default-route ens2 yes",
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestVerifyFixedResolverAcceptsExactRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resolv.conf")
+	if err := os.WriteFile(path, []byte(fixedResolver), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFixedResolver(path); err != nil {
+		t.Fatalf("verifyFixedResolver() = %v", err)
+	}
+}
+
+func TestVerifyFixedResolverFailsClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{
+			name: "missing",
+			setup: func(_ *testing.T, _ string) {
+			},
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				target := filepath.Join(filepath.Dir(path), "target")
+				if err := os.WriteFile(target, []byte(fixedResolver), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "directory",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Mkdir(path, 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "mismatch",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				contents := "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
+				if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "extra bytes",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(fixedResolver+"search example.com\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "resolv.conf")
+			test.setup(t, path)
+			if err := verifyFixedResolver(path); err == nil {
+				t.Fatal("verifyFixedResolver() accepted invalid resolver")
+			}
+		})
+	}
+}
+
+func TestMeasuredResolverAssetMatchesFixedContract(t *testing.T) {
+	path := "../../../mkosi.extra/etc/resolv.conf"
+	if err := verifyFixedResolver(path); err != nil {
+		t.Fatalf("measured resolver asset: %v", err)
 	}
 }
 

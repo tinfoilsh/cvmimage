@@ -105,11 +105,13 @@ test-rootfs-manifest-policy:
 	./scripts/test-rootfs-manifest-policy.py
 
 verify-final-rootfs:
-	@test -n "$(FINAL_ROOTFS_IMAGE)" -a -n "$(FINAL_ROOTFS_MANIFEST)" || { \
-		echo "set absolute FINAL_ROOTFS_IMAGE and FINAL_ROOTFS_MANIFEST paths" >&2; exit 2; }
+	@test -n "$(FINAL_ROOTFS_IMAGE)" -a -n "$(FINAL_ROOTFS_MANIFEST)" \
+		-a -n "$(FINAL_ROOTFS_ROOTHASH)" || { \
+		echo "set absolute FINAL_ROOTFS_IMAGE, FINAL_ROOTFS_MANIFEST, and FINAL_ROOTFS_ROOTHASH paths" >&2; exit 2; }
 	sudo env -i PATH="$(TRUSTED_PATH)" LC_ALL=C LANG=C \
 		/usr/bin/python3 -I ./scripts/verify-final-rootfs.py \
-		--image "$(FINAL_ROOTFS_IMAGE)" --manifest "$(FINAL_ROOTFS_MANIFEST)"
+		--image "$(FINAL_ROOTFS_IMAGE)" --manifest "$(FINAL_ROOTFS_MANIFEST)" \
+		--roothash "$(FINAL_ROOTFS_ROOTHASH)"
 
 test-final-rootfs-verifier:
 	./scripts/test-final-rootfs-verifier.sh

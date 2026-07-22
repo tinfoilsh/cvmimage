@@ -23,6 +23,124 @@ SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 MODE_RE = re.compile(r"[0-7]{4}\Z")
 DECIMAL_RE = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 DEVICE_RE = re.compile(r"dev:(0|[1-9][0-9]*):(0|[1-9][0-9]*)\Z")
+MODULE_DIRECTORY = "/usr/lib/tinfoil/kernel-modules"
+REQUIRED_MODULES = {
+    f"{MODULE_DIRECTORY}/nvidia-modeset.ko",
+    f"{MODULE_DIRECTORY}/nvidia-uvm.ko",
+    f"{MODULE_DIRECTORY}/nvidia.ko",
+}
+FORBIDDEN_TREES = (
+    "/EFI",
+    "/boot",
+    "/efi",
+    "/etc/apt",
+    "/etc/dpkg",
+    "/etc/ld.so.conf.d",
+    "/etc/systemd",
+    "/etc/sysctl.d",
+    "/etc/tinfoil/templates",
+    "/etc/tmpfiles.d",
+    "/home",
+    "/lib/systemd",
+    "/root",
+    "/snap",
+    "/usr/lib/apt",
+    "/usr/lib/debconf",
+    "/usr/lib/dpkg",
+    "/usr/lib/modules",
+    "/usr/lib/snapd",
+    "/usr/lib/systemd",
+    "/usr/lib/sysctl.d",
+    "/usr/lib/tmpfiles.d",
+    "/usr/share/tinfoil/templates",
+    "/var/cache/apt",
+    "/var/cache/debconf",
+    "/var/lib/apt",
+    "/var/lib/debconf",
+    "/var/lib/dpkg",
+    "/var/lib/snapd",
+    "/var/log",
+)
+REQUIRED_EMPTY_MOUNTPOINTS = ("/dev", "/proc", "/run", "/sys")
+OPTIONAL_EMPTY_RUNTIME_DIRECTORIES = (
+    "/mnt/ramdisk",
+    "/var/lib/containerd",
+    "/var/lib/docker",
+)
+FORBIDDEN_PATHS = {
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/shells",
+    "/etc/sysctl.conf",
+    "/sbin/ldconfig",
+    "/sbin/sysctl",
+    "/usr/bin/apt",
+    "/usr/bin/apt-cache",
+    "/usr/bin/apt-cdrom",
+    "/usr/bin/apt-config",
+    "/usr/bin/apt-get",
+    "/usr/bin/apt-mark",
+    "/usr/bin/debconf",
+    "/usr/bin/debconf-apt-progress",
+    "/usr/bin/debconf-communicate",
+    "/usr/bin/debconf-copydb",
+    "/usr/bin/debconf-escape",
+    "/usr/bin/debconf-set-selections",
+    "/usr/bin/debconf-show",
+    "/usr/bin/dpkg",
+    "/usr/bin/dpkg-deb",
+    "/usr/bin/dpkg-divert",
+    "/usr/bin/dpkg-maintscript-helper",
+    "/usr/bin/dpkg-query",
+    "/usr/bin/dpkg-realpath",
+    "/usr/bin/dpkg-split",
+    "/usr/bin/dpkg-statoverride",
+    "/usr/bin/dpkg-trigger",
+    "/usr/bin/docker-init",
+    "/usr/bin/nvidia-smi",
+    "/usr/lib/docker/docker-init",
+    "/usr/libexec/docker/docker-init",
+    "/usr/sbin/ldconfig",
+    "/usr/sbin/sysctl",
+    "/usr/sbin/update-alternatives",
+}
+MODULE_SUFFIXES = (".ko", ".ko.gz", ".ko.xz", ".ko.zst")
+SHELL_NAMES = ("ash", "bash", "busybox", "csh", "dash", "fish", "ksh", "rbash", "sh", "tcsh", "zsh")
+SYSTEMD_TOOLS = (
+    "busctl",
+    "coredumpctl",
+    "hostnamectl",
+    "journalctl",
+    "localectl",
+    "loginctl",
+    "machinectl",
+    "networkctl",
+    "resolvectl",
+    "systemctl",
+    "systemd",
+    "systemd-analyze",
+    "systemd-ask-password",
+    "systemd-cat",
+    "systemd-creds",
+    "systemd-detect-virt",
+    "systemd-escape",
+    "systemd-firstboot",
+    "systemd-id128",
+    "systemd-machine-id-setup",
+    "systemd-mount",
+    "systemd-notify",
+    "systemd-path",
+    "systemd-repart",
+    "systemd-run",
+    "systemd-socket-activate",
+    "systemd-sysusers",
+    "systemd-tmpfiles",
+    "systemd-tty-ask-password-agent",
+    "systemd-umount",
+    "timedatectl",
+)
+FORBIDDEN_PATHS.update(f"{directory}/{name}" for directory in ("/bin", "/usr/bin") for name in SHELL_NAMES)
+FORBIDDEN_PATHS.update(f"/usr/bin/{name}" for name in SYSTEMD_TOOLS)
 
 
 class ManifestError(ValueError):
@@ -674,6 +792,77 @@ def compare_manifests(
     return failures
 
 
+def path_in_tree(path: str, root: str) -> bool:
+    return path == root or path.startswith(root + "/")
+
+
+def capability_xattrs(entry: Entry) -> list[str]:
+    if entry.xattrs == "-":
+        return []
+    attributes = json.loads(entry.xattrs)
+    return sorted(name for name in attributes if "capability" in name.lower())
+
+
+def policy_violations(entries: dict[str, Entry]) -> list[tuple[str, str]]:
+    violations: list[tuple[str, str]] = []
+    for path, entry in entries.items():
+        mode = int(entry.mode, 8)
+        if entry.kind != "symlink" and mode & 0o002:
+            violations.append((path, "world-writable non-symlink object"))
+        if mode & 0o7000:
+            violations.append((path, "setuid, setgid, and sticky bits are forbidden"))
+        for name in capability_xattrs(entry):
+            violations.append((path, f"capability xattr is forbidden: {name}"))
+        if entry.kind in {"char", "block", "fifo", "socket"}:
+            violations.append((path, f"special object is forbidden: {entry.kind}"))
+        if path in FORBIDDEN_PATHS or any(
+            path_in_tree(path, root) for root in FORBIDDEN_TREES
+        ):
+            violations.append((path, "forbidden immutable rootfs path"))
+        if path.endswith(MODULE_SUFFIXES) and path not in REQUIRED_MODULES:
+            violations.append((path, "kernel module is outside the fixed NVIDIA module set"))
+        if (
+            path_in_tree(path, MODULE_DIRECTORY)
+            and path not in REQUIRED_MODULES
+            and path != MODULE_DIRECTORY
+        ):
+            violations.append((path, "extra entry in the fixed NVIDIA module directory"))
+        runtime_directories = (
+            REQUIRED_EMPTY_MOUNTPOINTS
+            + OPTIONAL_EMPTY_RUNTIME_DIRECTORIES
+            + ("/tmp", "/var/tmp")
+        )
+        for directory in runtime_directories:
+            if path == directory and entry.kind != "dir":
+                violations.append((path, "runtime mountpoint must be a directory"))
+            elif path.startswith(directory + "/"):
+                violations.append((path, "runtime state must be created by PID1"))
+
+    for path in REQUIRED_EMPTY_MOUNTPOINTS + ("/tmp", "/var/tmp"):
+        entry = entries.get(path)
+        if entry is None:
+            violations.append((path, "required root-owned 0755 mountpoint is missing"))
+        elif (entry.kind, entry.mode, entry.uid, entry.gid) != ("dir", "0755", "0", "0"):
+            violations.append((path, "mountpoint must be a root-owned 0755 directory"))
+
+    for path in sorted(REQUIRED_MODULES, key=path_bytes):
+        entry = entries.get(path)
+        if entry is None:
+            violations.append((path, "required NVIDIA module is missing"))
+        elif (entry.kind, entry.mode, entry.uid, entry.gid, entry.xattrs, entry.hardlink) != (
+            "file",
+            "0644",
+            "0",
+            "0",
+            "-",
+            "-",
+        ):
+            violations.append(
+                (path, "NVIDIA module must be an unlinked xattr-free root-owned 0644 regular file")
+            )
+    return sorted(violations, key=lambda item: (path_bytes(item[0]), item[1]))
+
+
 def command_inventory(arguments: argparse.Namespace) -> int:
     entries = Inventory(Path(arguments.root)).collect()
     write_output(arguments.output, serialize(entries))
@@ -692,6 +881,14 @@ def command_compare(arguments: argparse.Namespace) -> int:
     for line in failures:
         print(line, file=sys.stderr)
     return 1 if failures else 0
+
+
+def command_policy(arguments: argparse.Namespace) -> int:
+    entries = parse_manifest(Path(arguments.manifest))
+    violations = policy_violations(entries)
+    for path, reason in violations:
+        print(f"policy\t{path}\t{reason}", file=sys.stderr)
+    return 1 if violations else 0
 
 
 def parser() -> argparse.ArgumentParser:
@@ -713,6 +910,10 @@ def parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("--expected", required=True)
     compare_parser.add_argument("--actual", required=True)
     compare_parser.set_defaults(function=command_compare)
+
+    policy_parser = subparsers.add_parser("policy", help="enforce the fixed immutable rootfs policy")
+    policy_parser.add_argument("manifest")
+    policy_parser.set_defaults(function=command_policy)
     return command_parser
 
 

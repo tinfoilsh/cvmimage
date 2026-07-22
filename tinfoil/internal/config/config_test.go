@@ -32,10 +32,8 @@ func TestGetSecret(t *testing.T) {
 func TestDecodeExternalStrictNetwork(t *testing.T) {
 	config, err := DecodeExternal([]byte(`
 network:
-  version: 2
   address: 100.64.0.42/20
   gateway: 100.64.0.1
-  nameservers: [1.1.1.1, 1.0.0.1]
 secrets:
   METRICS_API_KEY: metrics-secret
 metadata:
@@ -48,12 +46,8 @@ operator-extension:
 		t.Fatal(err)
 	}
 	if config.Network == nil ||
-		config.Network.Version != 2 ||
 		config.Network.Address != "100.64.0.42/20" ||
-		config.Network.Gateway != "100.64.0.1" ||
-		len(config.Network.Nameservers) != 2 ||
-		config.Network.Nameservers[0] != "1.1.1.1" ||
-		config.Network.Nameservers[1] != "1.0.0.1" {
+		config.Network.Gateway != "100.64.0.1" {
 		t.Fatalf("unexpected network config: %+v", config.Network)
 	}
 	if config.Metadata.CPU != "amd" {
@@ -73,10 +67,8 @@ operator-extension:
 func TestDecodeExternalRejectsUnknownNetworkField(t *testing.T) {
 	_, err := DecodeExternal([]byte(`
 network:
-  version: 2
-  address: 10.0.2.15/24
-  gateway: 10.0.2.2
-  nameservers: [10.0.2.3]
+  address: 100.64.0.42/20
+  gateway: 100.64.0.1
   unexpected: true
 `))
 	if err == nil {

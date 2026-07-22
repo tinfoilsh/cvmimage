@@ -67,10 +67,8 @@ type Metadata struct {
 }
 
 type ExternalNetworkConfig struct {
-	Version     int      `yaml:"version"`
-	Address     string   `yaml:"address"`
-	Gateway     string   `yaml:"gateway"`
-	Nameservers []string `yaml:"nameservers"`
+	Address string `yaml:"address"`
+	Gateway string `yaml:"gateway"`
 }
 
 type ExternalConfig struct {

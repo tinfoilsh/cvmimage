@@ -19,6 +19,8 @@ const (
 	networkPollInterval = 100 * time.Millisecond
 	ipBinary            = "/usr/sbin/ip"
 	resolvectlBinary    = "/usr/bin/resolvectl"
+	primaryNameserver   = "1.1.1.1"
+	secondaryNameserver = "1.0.0.1"
 )
 
 var sysBusPCIDevices = "/sys/bus/pci/devices"
@@ -48,7 +50,7 @@ func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetwo
 	}
 	return fmt.Sprintf(
 		"static network configured; interface=%s address=%s gateway=%s dns=%s",
-		iface, config.Address, config.Gateway, strings.Join(config.Nameservers, ","),
+		iface, config.Address, config.Gateway, primaryNameserver+","+secondaryNameserver,
 	), nil
 }
 
@@ -122,7 +124,7 @@ func applyStaticNetwork(
 	config *shimconfig.ExternalNetworkConfig,
 	run commandRunner,
 ) error {
-	dnsArgs := append([]string{"dns", iface}, config.Nameservers...)
+	dnsArgs := []string{"dns", iface, primaryNameserver, secondaryNameserver}
 	commands := []struct {
 		name string
 		args []string

@@ -147,9 +147,6 @@ func validateExternalNetwork(config *shimconfig.ExternalNetworkConfig) error {
 	if config == nil {
 		return fmt.Errorf("network section is required")
 	}
-	if config.Version != 2 {
-		return fmt.Errorf("unsupported external network version %d", config.Version)
-	}
 	prefix, err := netip.ParsePrefix(config.Address)
 	if err != nil || !prefix.Addr().Is4() {
 		return fmt.Errorf("invalid IPv4 address %q", config.Address)
@@ -160,20 +157,6 @@ func validateExternalNetwork(config *shimconfig.ExternalNetworkConfig) error {
 	gateway, err := netip.ParseAddr(config.Gateway)
 	if err != nil || !gateway.Is4() {
 		return fmt.Errorf("invalid IPv4 gateway %q", config.Gateway)
-	}
-	if len(config.Nameservers) == 0 || len(config.Nameservers) > 3 {
-		return fmt.Errorf("external network requires 1 to 3 DNS servers")
-	}
-	seenNameservers := make(map[netip.Addr]struct{}, len(config.Nameservers))
-	for _, value := range config.Nameservers {
-		nameserver, err := netip.ParseAddr(value)
-		if err != nil || !nameserver.Is4() {
-			return fmt.Errorf("invalid IPv4 DNS server %q", value)
-		}
-		if _, duplicate := seenNameservers[nameserver]; duplicate {
-			return fmt.Errorf("duplicate DNS server %q", value)
-		}
-		seenNameservers[nameserver] = struct{}{}
 	}
 	if !prefix.Contains(gateway) {
 		return fmt.Errorf("gateway %s is outside address subnet %s", config.Gateway, config.Address)

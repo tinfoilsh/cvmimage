@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+pin_fabric_manager_config() {
+    local config="$1"
+    local assignment='^[[:space:]]*FM_CMD_UNIX_SOCKET_PATH[[:space:]]*='
+
+    if [[ $(grep -Ec "$assignment" "$config") -ne 1 ]] ||
+        [[ $(grep -Fxc 'FM_CMD_UNIX_SOCKET_PATH=' "$config") -ne 1 ]]; then
+        echo "ERROR: pinned Fabric Manager config no longer has the expected command socket default" >&2
+        return 1
+    fi
+    sed -i 's|^FM_CMD_UNIX_SOCKET_PATH=$|FM_CMD_UNIX_SOCKET_PATH=/run/nvidia-fabricmanager/socket|' "$config"
+    if [[ $(grep -Ec "$assignment" "$config") -ne 1 ]] ||
+        [[ $(grep -Fxc 'FM_CMD_UNIX_SOCKET_PATH=/run/nvidia-fabricmanager/socket' "$config") -ne 1 ]]; then
+        echo "ERROR: failed to pin the Fabric Manager command socket" >&2
+        return 1
+    fi
+}
+
 # Disable login management.
 systemctl mask systemd-logind.service
 systemctl mask systemd-logind.socket
@@ -23,6 +40,13 @@ systemctl mask rescue.target
 systemctl mask nvidia-powerd.service
 
 systemctl mask systemd-networkd-persistent-storage.service
+
+FABRIC_MANAGER_CONFIG=/usr/share/nvidia/nvswitch/fabricmanager.cfg
+if [[ $(grep -Fxc 'DAEMONIZE=1' "$FABRIC_MANAGER_CONFIG") -ne 1 ]]; then
+    echo "ERROR: pinned Fabric Manager config no longer has the expected daemon contract" >&2
+    exit 1
+fi
+pin_fabric_manager_config "$FABRIC_MANAGER_CONFIG"
 
 echo "export DOCKER_CONFIG=/mnt/ramdisk/private/docker-config" >> /root/.bashrc
 

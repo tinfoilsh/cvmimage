@@ -22,6 +22,7 @@ override NVATTEST_BUILDER := $(file <scripts/nvattest-builder-image.txt)
 	verify-runtime-sources update-runtime-locks test-runtime-archives \
 	test-nvattest-artifacts reproducible-nvattest \
 	runtime-go-artifacts custom-kernel-artifacts nvidia-module-artifacts verify-rootfs-artifacts \
+	prepare-runtime-artifacts test-runtime-artifact-bridge \
 	test-rootfs-artifacts reproducible-nvidia-modules reproducible-runtime-artifacts
 
 # tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
@@ -98,6 +99,12 @@ verify-rootfs-artifacts: runtime-go-artifacts nvattest nvidia-module-artifacts
 		--manifest go=build/builder-work/output/rootfs-artifacts.tsv \
 		--manifest nvattest=build/rootfs-artifacts/nvattest/rootfs-artifacts.tsv \
 		--manifest nvidia-modules=kernel/out/rootfs-artifacts/nvidia-modules/rootfs-artifacts.tsv
+
+prepare-runtime-artifacts: verify-rootfs-artifacts
+	python3 -m scripts.runtime_artifact_bridge prepare
+
+test-runtime-artifact-bridge: prepare-runtime-artifacts
+	python3 -m unittest scripts.runtime_artifact_bridge_test
 
 test-rootfs-artifacts:
 	python3 -m unittest scripts.rootfs_artifacts_test

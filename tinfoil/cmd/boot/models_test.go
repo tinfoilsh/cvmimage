@@ -82,16 +82,6 @@ func TestModelPackRefForModel(t *testing.T) {
 	}
 }
 
-func TestDiskLocators(t *testing.T) {
-	id := "0eefa619-50b7-588f-a072-d405fb439d36"
-	if got := diskByUUID(id); got != "/dev/disk/by-uuid/"+id {
-		t.Fatalf("disk by UUID mismatch: %s", got)
-	}
-	if got := diskByPARTUUID(id); got != "/dev/disk/by-partuuid/"+id {
-		t.Fatalf("disk by PARTUUID mismatch: %s", got)
-	}
-}
-
 func TestEncryptedModelKey(t *testing.T) {
 	key := strings.Repeat("k", modelwrap.EMWPMasterKeyBytes)
 	spec := &modelPackRef{

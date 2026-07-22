@@ -10,6 +10,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/device"
 )
 
 // mountModels mounts all model packs from the config
@@ -21,7 +22,7 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 
 	log.Printf("Mounting %d model packs", len(config.Models))
 	seen := map[string]struct{}{}
-	for _, model := range config.Models {
+	for index, model := range config.Models {
 		ref, kind, err := modelPackRefForModel(model)
 		if err != nil {
 			return err
@@ -33,11 +34,19 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 
 		switch kind {
 		case modelKindPlaintext:
-			if err := mountModelPack(ref); err != nil {
+			sourceDevice, err := device.ModelDisk(index)
+			if err != nil {
+				return fmt.Errorf("finding model disk %d: %w", index, err)
+			}
+			if err := mountModelPack(ref, sourceDevice); err != nil {
 				return fmt.Errorf("mounting model pack %s: %w", ref.raw, err)
 			}
 		case modelKindEncrypted:
-			if err := mountEncryptedModelPack(model, externalConfig); err != nil {
+			sourceDevice, err := device.ModelPartition(index, device.EMWPPayloadPartition)
+			if err != nil {
+				return fmt.Errorf("finding encrypted model partition %d: %w", index, err)
+			}
+			if err := mountEncryptedModelPack(model, externalConfig, sourceDevice); err != nil {
 				return fmt.Errorf("mounting encrypted model pack %q: %w", model.Name, err)
 			}
 		}
@@ -47,7 +56,7 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 }
 
 // mountModelPack mounts a plaintext model wrap using dm-verity.
-func mountModelPack(spec *modelPackRef) error {
+func mountModelPack(spec *modelPackRef, sourceDevice string) error {
 	deviceName := spec.mapperName()
 	mountPoint := spec.mountPoint()
 
@@ -55,7 +64,7 @@ func mountModelPack(spec *modelPackRef) error {
 	if err := createLegacyModelPackAlias(spec); err != nil {
 		return err
 	}
-	if err := openAndMountVerity(diskByUUID(spec.UUID), deviceName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
+	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
 		removeLegacyModelPackAlias(spec)
 		return err
 	}
@@ -67,7 +76,11 @@ func mountModelPack(spec *modelPackRef) error {
 // mountEncryptedModelPack mounts an encrypted model wrap using dm-crypt below
 // dm-verity. The decrypted mapper contains the same plaintext layout as an MWP:
 // a read-only filesystem followed by its dm-verity hash tree.
-func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.ExternalConfig) error {
+func mountEncryptedModelPack(
+	model ModelSpec,
+	externalConfig *shimconfig.ExternalConfig,
+	sourceDevice string,
+) error {
 	spec, err := parseModelPackRef(model.EMWP)
 	if err != nil {
 		return fmt.Errorf("invalid EMWP format: %s: %w", model.EMWP, err)
@@ -91,7 +104,7 @@ func mountEncryptedModelPack(model ModelSpec, externalConfig *shimconfig.Externa
 	if err := createLegacyModelPackAlias(spec); err != nil {
 		return err
 	}
-	if err := unwrap.OpenCrypt(diskByPARTUUID(spec.UUID), cryptName, keyFile); err != nil {
+	if err := unwrap.OpenCrypt(sourceDevice, cryptName, keyFile); err != nil {
 		removeLegacyModelPackAlias(spec)
 		return err
 	}
@@ -247,14 +260,6 @@ func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset, mountPoi
 		return err
 	}
 	return nil
-}
-
-func diskByUUID(uuid string) string {
-	return fmt.Sprintf("/dev/disk/by-uuid/%s", uuid)
-}
-
-func diskByPARTUUID(uuid string) string {
-	return fmt.Sprintf("/dev/disk/by-partuuid/%s", uuid)
 }
 
 func modelLogName(name, rootHash string) string {

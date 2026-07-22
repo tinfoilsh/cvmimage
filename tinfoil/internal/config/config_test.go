@@ -1,13 +1,15 @@
 package config
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestGetSecret(t *testing.T) {
 	tests := []struct {
-		name    string
-		config  *ExternalConfig
-		key     string
-		want    string
+		name   string
+		config *ExternalConfig
+		key    string
+		want   string
 	}{
 		{"nil receiver", nil, "KEY", ""},
 		{"nil secrets map", &ExternalConfig{}, "KEY", ""},
@@ -24,5 +26,57 @@ func TestGetSecret(t *testing.T) {
 				t.Errorf("GetSecret(%q) = %q, want %q", tt.key, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDecodeExternalStrictNetwork(t *testing.T) {
+	config, err := DecodeExternal([]byte(`
+network:
+  version: 1
+  address: 100.64.0.42/20
+  gateway: 100.64.0.1
+secrets:
+  METRICS_API_KEY: metrics-secret
+metadata:
+  cpu: amd
+operator-extension:
+  retained: true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Network == nil ||
+		config.Network.Version != 1 ||
+		config.Network.Address != "100.64.0.42/20" ||
+		config.Network.Gateway != "100.64.0.1" {
+		t.Fatalf("unexpected network config: %+v", config.Network)
+	}
+	if config.Metadata.CPU != "amd" {
+		t.Fatalf("metadata CPU = %q", config.Metadata.CPU)
+	}
+	if config.MetricsAPIKey != "metrics-secret" {
+		t.Fatalf("MetricsAPIKey = %q", config.MetricsAPIKey)
+	}
+	if _, ok := config.Extra["operator-extension"]; !ok {
+		t.Fatal("operator-owned top-level extension was not retained")
+	}
+}
+
+func TestDecodeExternalRejectsUnknownNetworkField(t *testing.T) {
+	_, err := DecodeExternal([]byte(`
+network:
+  version: 1
+  address: 10.0.2.15/24
+  gateway: 10.0.2.2
+  dns: 10.0.2.3
+`))
+	if err == nil {
+		t.Fatal("DecodeExternal accepted an unknown network field")
+	}
+}
+
+func TestDecodeExternalRejectsMultipleDocuments(t *testing.T) {
+	if _, err := DecodeExternal([]byte("{}\n---\n{}\n")); err == nil {
+		t.Fatal("DecodeExternal accepted multiple YAML documents")
 	}
 }

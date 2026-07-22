@@ -65,6 +65,7 @@ download_deb() {
     local name=$1
     local sha256=$2
     local destination="$package_cache_dir/$name"
+    local checksum_output
 
     mkdir -p "$package_cache_dir"
     if [ ! -f "$destination" ]; then
@@ -77,7 +78,8 @@ download_deb() {
             chown "$host_uid:$host_gid" "$destination"
         fi
     fi
-    if ! printf '%s  %s\n' "$sha256" "$destination" | sha256sum -c --strict --status -; then
+    if ! checksum_output="$(printf '%s  %s\n' "$sha256" "$destination" | sha256sum -c --strict - 2>&1)"; then
+        printf '%s\n' "$checksum_output" >&2
         echo "removing NVIDIA package with checksum mismatch: $destination" >&2
         rm -f -- "$destination"
         exit 1

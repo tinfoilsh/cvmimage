@@ -174,12 +174,14 @@ func CreateReadOnly(control *os.File, name string) (Info, error) {
 	return infoFromBuffer(buf), nil
 }
 
-// LoadReadOnlyTable loads one read-only target covering lengthSectors.
-func LoadReadOnlyTable(control *os.File, name string, lengthSectors uint64, targetType, params string) error {
+// LoadReadOnlyVerityTable loads one read-only verity target covering
+// lengthSectors. The target type is fixed so callers cannot select a broader
+// device-mapper surface.
+func LoadReadOnlyVerityTable(control *os.File, name string, lengthSectors uint64, params string) error {
 	if err := validateName(name); err != nil {
 		return err
 	}
-	buf, err := tableLoadBuffer(name, lengthSectors, targetType, params)
+	buf, err := tableLoadBuffer(name, lengthSectors, "verity", params)
 	if err != nil {
 		return err
 	}

@@ -96,24 +96,24 @@ sed -i 's/--build-id=sha1/--build-id=none/g' \
 echo "Kernel source: $source_dir"
 echo "Kernel source tarball: $source_tarball"
 echo "Tinfoil defconfig: $defconfig"
+shopt -s nullglob
+policy_fragments=("$kernel_dir"/config.d/*.config)
+if [ "${#policy_fragments[@]}" -eq 0 ]; then
+    echo "no kernel policy fragments found under $kernel_dir/config.d" >&2
+    exit 1
+fi
 echo "Policy fragments:"
-find "$kernel_dir/config.d" -maxdepth 1 -type f -name '*.config' -print | sort | sed 's/^/  /'
+printf '  %s\n' "${policy_fragments[@]}"
 
 (
     cd "$source_dir"
     install -m 0644 "$defconfig" arch/x86/configs/tinfoil_cvm_defconfig
     make "${make_version_args[@]}" tinfoil_cvm_defconfig
-    shopt -s nullglob
-    fragments=("$kernel_dir"/config.d/*.config)
-    if [ "${#fragments[@]}" -eq 0 ]; then
-        echo "no kernel policy fragments found under $kernel_dir/config.d" >&2
-        exit 1
-    fi
-    ./scripts/kconfig/merge_config.sh -m .config "${fragments[@]}"
+    ./scripts/kconfig/merge_config.sh -m .config "${policy_fragments[@]}"
     make "${make_version_args[@]}" olddefconfig
 )
 
-"$kernel_dir/check-config.sh" "$source_dir/.config"
+"$kernel_dir/check-config.sh" "$source_dir/.config" "${policy_fragments[@]}"
 
 export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(date -u -d @0)}"
 export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-tinfoil}"

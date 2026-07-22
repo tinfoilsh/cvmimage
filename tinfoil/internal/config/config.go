@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 
 	"github.com/creasty/defaults"
@@ -99,6 +98,9 @@ func (e *ExternalConfig) GetSecret(key string) string {
 // DecodeExternal strictly decodes typed external-config sections. Unknown
 // operator-owned top-level keys remain opaque through ExternalConfig.Extra.
 func DecodeExternal(data []byte) (*ExternalConfig, error) {
+	if _, err := decodeYAMLDocument(data); err != nil {
+		return nil, fmt.Errorf("failed to decode external config: %v", err)
+	}
 	var config ExternalConfig
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
@@ -115,6 +117,9 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 	if err := defaults.Set(&config); err != nil {
 		return nil, fmt.Errorf("failed to set external config defaults: %v", err)
 	}
+	if err := config.validateBounds(); err != nil {
+		return nil, fmt.Errorf("invalid external config: %v", err)
+	}
 
 	config.MetricsAPIKey = config.GetSecret(SecretMetricsAPIKey)
 	config.ACPIAPIKey = config.GetSecret(SecretACPIAPIKey)
@@ -125,6 +130,9 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 // applies defaults, and validates. Used by boot, which has already parsed
 // the parent config and needs to type the `shim:` subsection.
 func Decode(n *yaml.Node) (*Config, error) {
+	if err := validateYAMLTree(n); err != nil {
+		return nil, fmt.Errorf("failed to decode config: %v", err)
+	}
 	var config Config
 	if err := defaults.Set(&config); err != nil {
 		return nil, fmt.Errorf("failed to set defaults: %v", err)
@@ -159,20 +167,20 @@ func (c *Config) Validate() error {
 
 // Load reads and parses both config files from disk.
 func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, error) {
-	configBytes, err := os.ReadFile(configFile)
+	configBytes, err := readConfigFile(configFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read config file: %v", err)
 	}
-	var node yaml.Node
-	if err := yaml.Unmarshal(configBytes, &node); err != nil {
+	node, err := decodeYAMLDocument(configBytes)
+	if err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal config: %v", err)
 	}
-	config, err := Decode(&node)
+	config, err := Decode(node)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	externalConfigBytes, err := os.ReadFile(externalConfigFile)
+	externalConfigBytes, err := readConfigFile(externalConfigFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read external config file: %v", err)
 	}

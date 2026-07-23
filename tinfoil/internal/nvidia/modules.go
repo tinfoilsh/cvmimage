@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -23,23 +22,23 @@ const (
 
 type modulePolicy struct {
 	kernelName string
-	candidates [2]string
+	fileName   string
 	parameters string
 }
 
 var (
 	coreModule = modulePolicy{
 		kernelName: "nvidia",
-		candidates: [2]string{"nvidia.ko.zst", "nvidia.ko"},
+		fileName:   "nvidia.ko",
 		parameters: nvidiaCoreParameters,
 	}
 	uvmModule = modulePolicy{
 		kernelName: "nvidia_uvm",
-		candidates: [2]string{"nvidia-uvm.ko.zst", "nvidia-uvm.ko"},
+		fileName:   "nvidia-uvm.ko",
 	}
 	modesetModule = modulePolicy{
 		kernelName: "nvidia_modeset",
-		candidates: [2]string{"nvidia-modeset.ko.zst", "nvidia-modeset.ko"},
+		fileName:   "nvidia-modeset.ko",
 	}
 )
 
@@ -92,37 +91,19 @@ func loadModule(policy modulePolicy, deps dependencies) error {
 		return nil
 	}
 
-	var missing []string
-	for _, candidate := range policy.candidates {
-		path, err := fixedModulePath(deps.moduleRoot, candidate)
-		if err != nil {
-			return fmt.Errorf("resolve fixed candidate for %s: %w", policy.kernelName, err)
-		}
-		if _, err := deps.stat(path); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				missing = append(missing, path)
-				continue
-			}
-			return fmt.Errorf("%s stat %s: %w", policy.kernelName, path, err)
-		}
-
-		flags := 0
-		if strings.HasSuffix(candidate, ".ko.zst") {
-			flags = unix.MODULE_INIT_COMPRESSED_FILE
-		}
-		err = deps.finitModule(path, policy.parameters, flags)
-		if err == nil || errors.Is(err, unix.EEXIST) {
-			return nil
-		}
-		return fmt.Errorf("%s finit_module %s: %w", policy.kernelName, path, err)
+	path, err := fixedModulePath(deps.moduleRoot, policy.fileName)
+	if err != nil {
+		return fmt.Errorf("resolve fixed path for %s: %w", policy.kernelName, err)
+	}
+	if _, err := deps.stat(path); err != nil {
+		return fmt.Errorf("%s stat %s: %w", policy.kernelName, path, err)
 	}
 
-	return fmt.Errorf(
-		"no fixed NVIDIA module candidate for %s under %s (missing: %s)",
-		policy.kernelName,
-		deps.moduleRoot,
-		strings.Join(missing, ", "),
-	)
+	err = deps.finitModule(path, policy.parameters, 0)
+	if err == nil || errors.Is(err, unix.EEXIST) {
+		return nil
+	}
+	return fmt.Errorf("%s finit_module %s: %w", policy.kernelName, path, err)
 }
 
 func fixedModulePath(root, candidate string) (string, error) {
@@ -146,9 +127,7 @@ func fixedModulePath(root, candidate string) (string, error) {
 
 func fixedNVIDIACandidate(candidate string) bool {
 	switch candidate {
-	case "nvidia.ko.zst", "nvidia.ko",
-		"nvidia-uvm.ko.zst", "nvidia-uvm.ko",
-		"nvidia-modeset.ko.zst", "nvidia-modeset.ko":
+	case "nvidia.ko", "nvidia-uvm.ko", "nvidia-modeset.ko":
 		return true
 	default:
 		return false

@@ -21,7 +21,9 @@ type Service string
 
 const (
 	ServiceBoot            Service = "tinfoil-boot"
+	ServiceContainerd      Service = "containerd"
 	ServiceContainerStatus Service = "tinfoil-container-status"
+	ServiceDocker          Service = "dockerd"
 	ServiceEgress          Service = "tinfoil-egress"
 	ServiceShim            Service = "tinfoil-shim"
 )
@@ -39,6 +41,8 @@ type servicePolicy struct {
 func policyFor(service Service) (servicePolicy, bool) {
 	switch service {
 	case ServiceBoot:
+		return servicePolicy{noNewPrivileges: true}, true
+	case ServiceContainerd, ServiceDocker:
 		return servicePolicy{noNewPrivileges: true}, true
 	case ServiceContainerStatus:
 		return servicePolicy{

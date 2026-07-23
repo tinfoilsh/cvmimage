@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -434,6 +435,39 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	containerd := slices.Index(events, containerdName)
 	if loopback < 0 || bootstrap != loopback+1 || containerd <= bootstrap {
 		t.Fatalf("startup events = %v", events)
+	}
+}
+
+func TestLifecycleHardensContainerDaemons(t *testing.T) {
+	harness := newLifecycleHarness()
+	parent, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runLifecycle(parent, harness.deps, harness.readiness) }()
+	if ready := receiveTest(t, harness.ready); !ready {
+		t.Fatal("lifecycle did not become ready")
+	}
+	cancel()
+	if err := receiveTest(t, result); err != nil {
+		t.Fatal(err)
+	}
+
+	harness.services.mu.Lock()
+	defer harness.services.mu.Unlock()
+	want := map[string]supervisor.Command{
+		containerdName: hardenedCommand(hardening.ServiceContainerd, "/usr/bin/containerd"),
+		dockerName: hardenedCommand(hardening.ServiceDocker, "/usr/bin/dockerd",
+			"-H", "unix://"+dockerSocket, "--containerd="+containerdSocket),
+	}
+	for _, service := range harness.services.started {
+		if command, ok := want[service.Name]; ok {
+			if !reflect.DeepEqual(service.Command, command) {
+				t.Errorf("%s command = %#v, want %#v", service.Name, service.Command, command)
+			}
+			delete(want, service.Name)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("container services not started: %v", want)
 	}
 }
 

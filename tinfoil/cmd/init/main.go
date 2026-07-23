@@ -183,14 +183,14 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containerdName, Required: true, Restart: true,
-		Command: command(containerdName, "/usr/bin/containerd"),
+		Command: hardenedCommand(hardening.ServiceContainerd, "/usr/bin/containerd"),
 		Ready:   endpointReady("unix", containerdSocket, containerdReadyLimit),
 	}); err != nil {
 		return err
 	}
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: dockerName, Required: true, Restart: true,
-		Command: command(dockerName, "/usr/bin/dockerd",
+		Command: hardenedCommand(hardening.ServiceDocker, "/usr/bin/dockerd",
 			"-H", "unix://"+dockerSocket, "--containerd="+containerdSocket),
 		Ready: endpointReady("unix", dockerSocket, dockerReadyLimit),
 	}); err != nil {

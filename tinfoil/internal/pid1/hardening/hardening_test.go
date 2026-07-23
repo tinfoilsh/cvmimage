@@ -15,10 +15,16 @@ func TestServicePoliciesAreExact(t *testing.T) {
 		ServiceBoot: {
 			noNewPrivileges: true,
 		},
+		ServiceContainerd: {
+			noNewPrivileges: true,
+		},
 		ServiceContainerStatus: {
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{},
 			allowedSocketDomains: []uint32{unix.AF_UNIX},
+		},
+		ServiceDocker: {
+			noNewPrivileges: true,
 		},
 		ServiceEgress: {
 			noNewPrivileges:      true,
@@ -103,19 +109,23 @@ func TestApplyServiceAppliesCapabilitiesThenNoNewPrivilegesThenSocketPolicy(t *t
 	}
 }
 
-func TestApplyServiceBootOnlySetsNoNewPrivileges(t *testing.T) {
-	kernel := &fakeServiceKernel{last: 63}
-	if err := applyService(kernel, ServiceBoot); err != nil {
-		t.Fatalf("applyService: %v", err)
-	}
-	if want := []string{"no-new-privileges"}; !reflect.DeepEqual(kernel.calls, want) {
-		t.Fatalf("calls = %v, want %v", kernel.calls, want)
+func TestApplyServiceNoNewPrivilegesOnlyPolicies(t *testing.T) {
+	for _, service := range []Service{ServiceBoot, ServiceContainerd, ServiceDocker} {
+		t.Run(string(service), func(t *testing.T) {
+			kernel := &fakeServiceKernel{last: 63}
+			if err := applyService(kernel, service); err != nil {
+				t.Fatalf("applyService: %v", err)
+			}
+			if want := []string{"no-new-privileges"}; !reflect.DeepEqual(kernel.calls, want) {
+				t.Fatalf("calls = %v, want %v", kernel.calls, want)
+			}
+		})
 	}
 }
 
 func TestApplyServiceRejectsUnknownPolicyWithoutKernelChanges(t *testing.T) {
 	kernel := &fakeServiceKernel{last: 63}
-	err := applyService(kernel, Service("containerd"))
+	err := applyService(kernel, Service("unknown"))
 	if err == nil || !strings.Contains(err.Error(), "unknown service hardening policy") {
 		t.Fatalf("applyService error = %v, want unknown-policy error", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -515,6 +516,12 @@ func execService(
 	apply func(hardening.Service) error,
 	execFn func(string, []string, []string) error,
 ) error {
+	// Mount namespaces belong to the calling OS thread. Keep this self-exec
+	// child pinned from before policy application through the final exec so
+	// every later hardening step and the service inherit the restricted view.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if len(args) < 3 || args[1] != "--" {
 		return errors.New("usage: --exec-service <policy> -- <path> [args...]")
 	}

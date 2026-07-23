@@ -165,6 +165,9 @@ func TestSysctlPolicyHardensPinnedKernelInterfaces(t *testing.T) {
 	}
 
 	for _, setting := range sysctlPolicy {
+		if setting.path == "kernel/sysrq" {
+			t.Error("runtime sysrq policy present even though CONFIG_MAGIC_SYSRQ is disabled")
+		}
 		if value, ok := want[setting.path]; ok {
 			if setting.value != value {
 				t.Errorf("sysctl %s = %q, want %q", setting.path, setting.value, value)

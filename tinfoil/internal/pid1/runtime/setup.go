@@ -48,7 +48,6 @@ var sysctlPolicy = []sysctlSetting{
 	{path: "kernel/panic_on_warn", value: "0"},
 	{path: "kernel/perf_event_paranoid", value: "4"},
 	{path: "kernel/printk", value: "4 4 1 7"},
-	{path: "kernel/sysrq", value: "0"},
 	{path: "kernel/unprivileged_bpf_disabled", value: "1"},
 	{path: "kernel/unprivileged_userns_clone", value: "0"},
 	{path: "kernel/warn_limit", value: "10"},

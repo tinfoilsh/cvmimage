@@ -23,7 +23,6 @@ const (
 	ExternalConfigPath = PrivateDir + "/external-config.yml"
 	DockerConfigDir    = PrivateDir + "/docker-config"
 	DockerConfigPath   = DockerConfigDir + "/config.json"
-	ModelKeyDir        = PrivateDir + "/model-keys"
 	GCloudKeyPath      = PrivateDir + "/gcloud_key.json"
 	CacheDir           = PrivateDir + "/tfshim-cache"
 	StatePath          = PrivateDir + "/boot-state.json"

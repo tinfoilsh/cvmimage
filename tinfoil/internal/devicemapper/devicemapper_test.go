@@ -3,6 +3,7 @@ package devicemapper
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,8 +81,8 @@ func TestBlockDeviceInfoRejectsIndirectAndNonBlockPaths(t *testing.T) {
 	if err := os.Symlink(regularPath, symlinkPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := BlockDeviceInfo(symlinkPath); err == nil {
-		t.Fatal("symlink accepted as a direct block device")
+	if _, _, err := BlockDeviceInfo(symlinkPath); !errors.Is(err, unix.ELOOP) {
+		t.Fatalf("symlink error = %v, want O_NOFOLLOW ELOOP", err)
 	}
 }
 

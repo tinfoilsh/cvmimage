@@ -5,8 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
+)
+
+const (
+	failureStageLimit  = 64
+	failureDetailLimit = 512
 )
 
 type State struct {
@@ -181,6 +188,38 @@ func (s *State) HasFailed() bool {
 		}
 	}
 	return false
+}
+
+// FailureSummary returns the first failed fixed boot stage as bounded,
+// log-safe text. It is diagnostic only and must not replace readiness checks.
+func (s *State) FailureSummary() (string, bool) {
+	for _, stage := range s.Stages {
+		if stage.Status != StatusFailed {
+			continue
+		}
+		name := boundedStateText(stage.Name, failureStageLimit)
+		if name == "" {
+			return "", false
+		}
+		summary := "boot stage " + strconv.Quote(name) + " failed"
+		if detail := boundedStateText(stage.Detail, failureDetailLimit); detail != "" {
+			summary += ": " + strconv.Quote(detail)
+		}
+		return summary, true
+	}
+	return "", false
+}
+
+func boundedStateText(value string, limit int) string {
+	value = string([]rune(value))
+	if len(value) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end] + "..."
 }
 
 // RecordStage loads the current state from disk, updates or appends a stage,

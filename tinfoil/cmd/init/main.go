@@ -531,7 +531,7 @@ func runOneShot(ctx context.Context, manager *supervisor.Manager, cmd supervisor
 	}
 	exit, waitErr := process.Wait(ctx)
 	if waitErr == nil {
-		return exit.Err()
+		return annotateOneShotFailure(cmd.Name, exit.Err(), boot.Load)
 	}
 	_ = process.Signal(syscall.SIGTERM)
 	timer := time.NewTimer(grace)
@@ -543,6 +543,25 @@ func runOneShot(ctx context.Context, manager *supervisor.Manager, cmd supervisor
 		_, _ = process.Wait(context.Background())
 	}
 	return fmt.Errorf("%s interrupted: %w", cmd.Name, waitErr)
+}
+
+func annotateOneShotFailure(
+	commandName string,
+	failure error,
+	loadState func() (*boot.State, error),
+) error {
+	if failure == nil || commandName != string(hardening.ServiceBoot) {
+		return failure
+	}
+	state, err := loadState()
+	if err != nil {
+		return failure
+	}
+	summary, ok := state.FailureSummary()
+	if !ok {
+		return failure
+	}
+	return fmt.Errorf("%w; %s", failure, summary)
 }
 
 func endpointReady(network, address string, limit time.Duration) func(context.Context) error {

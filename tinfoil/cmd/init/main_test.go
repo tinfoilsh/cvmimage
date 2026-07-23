@@ -488,6 +488,64 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 	}
 }
 
+func TestAnnotateOneShotFailureIncludesFixedBootStage(t *testing.T) {
+	failure := errors.New("boot child exited")
+	state := &boot.State{Stages: []boot.Stage{{
+		Name:   boot.StageNetwork,
+		Status: boot.StatusFailed,
+		Detail: "route rejected",
+	}}}
+
+	got := annotateOneShotFailure(string(hardening.ServiceBoot), failure, func() (*boot.State, error) {
+		return state, nil
+	})
+	if !errors.Is(got, failure) {
+		t.Fatalf("annotated error = %v, want wrapped failure", got)
+	}
+	if want := `boot stage "network" failed: "route rejected"`; !strings.Contains(got.Error(), want) {
+		t.Fatalf("annotated error = %q, want %q", got, want)
+	}
+}
+
+func TestAnnotateOneShotFailureFallsBackToChildError(t *testing.T) {
+	failure := errors.New("child exited")
+	loadFailure := errors.New("state unavailable")
+	for _, test := range []struct {
+		name        string
+		commandName string
+		load        func() (*boot.State, error)
+	}{
+		{
+			name:        "other command",
+			commandName: "nftables",
+			load: func() (*boot.State, error) {
+				t.Fatal("non-boot command loaded boot state")
+				return nil, nil
+			},
+		},
+		{
+			name:        "missing state",
+			commandName: string(hardening.ServiceBoot),
+			load: func() (*boot.State, error) {
+				return nil, loadFailure
+			},
+		},
+		{
+			name:        "no failed stage",
+			commandName: string(hardening.ServiceBoot),
+			load: func() (*boot.State, error) {
+				return &boot.State{Stages: []boot.Stage{{Name: boot.StageConfig, Status: boot.StatusOK}}}, nil
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := annotateOneShotFailure(test.commandName, failure, test.load); got != failure {
+				t.Fatalf("annotateOneShotFailure = %v, want original failure", got)
+			}
+		})
+	}
+}
+
 func TestBootDeadlineDoesNotEndSupervisionAndRequiredDeathFailsClosed(t *testing.T) {
 	harness := newLifecycleHarness()
 	parent, cancel := context.WithCancel(context.Background())

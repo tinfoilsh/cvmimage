@@ -3,6 +3,7 @@ package boot
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,51 @@ func TestWriteStateAtomic(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != "boot-state.json" {
 			t.Fatalf("leftover temp file %q in state dir", e.Name())
+		}
+	}
+}
+
+func TestFailureSummaryReturnsFirstFailedStage(t *testing.T) {
+	state := &State{Stages: []Stage{
+		{Name: StageNetwork, Status: StatusOK},
+		{Name: StageCertificate, Status: StatusFailed, Detail: "issuer\nrejected request"},
+		{Name: StageContainers, Status: StatusFailed, Detail: "later failure"},
+	}}
+
+	got, ok := state.FailureSummary()
+	if !ok {
+		t.Fatal("FailureSummary did not report a failed stage")
+	}
+	want := `boot stage "certificate" failed: "issuer\nrejected request"`
+	if got != want {
+		t.Fatalf("FailureSummary = %q, want %q", got, want)
+	}
+}
+
+func TestFailureSummaryBoundsDetail(t *testing.T) {
+	state := &State{Stages: []Stage{{
+		Name:   StageNetwork,
+		Status: StatusFailed,
+		Detail: strings.Repeat("x", failureDetailLimit+100),
+	}}}
+
+	got, ok := state.FailureSummary()
+	if !ok {
+		t.Fatal("FailureSummary did not report a failed stage")
+	}
+	want := `boot stage "network" failed: "` + strings.Repeat("x", failureDetailLimit) + `..."`
+	if got != want {
+		t.Fatalf("FailureSummary = %q, want %q", got, want)
+	}
+}
+
+func TestFailureSummaryRejectsMissingFailureIdentity(t *testing.T) {
+	for _, state := range []*State{
+		{Stages: []Stage{{Name: StageNetwork, Status: StatusOK}}},
+		{Stages: []Stage{{Status: StatusFailed, Detail: "no stage"}}},
+	} {
+		if got, ok := state.FailureSummary(); ok || got != "" {
+			t.Fatalf("FailureSummary = %q, %v; want empty, false", got, ok)
 		}
 	}
 }

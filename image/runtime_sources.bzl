@@ -21,6 +21,19 @@ filegroup(
 )
 """
 
+_DOCKER_STATIC_PAYLOAD_BUILD = """package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "payload",
+    srcs = [
+        "containerd",
+        "containerd-shim-runc-v2",
+        "dockerd",
+        "runc",
+    ],
+)
+"""
+
 
 def _repository_name(source_id):
     return "runtime_source_" + source_id.replace("-", "_")
@@ -88,9 +101,12 @@ def _runtime_sources_impl(module_ctx):
             strip_prefix = source.get("strip_prefix", "")
             if type(strip_prefix) != "string":
                 fail("runtime tar source %s has a non-string strip_prefix" % source_id)
+            payload_build = _TAR_PAYLOAD_BUILD
+            if source_id == "docker-static":
+                payload_build = _DOCKER_STATIC_PAYLOAD_BUILD
             http_archive(
                 name = repository_name,
-                build_file_content = _TAR_PAYLOAD_BUILD,
+                build_file_content = payload_build,
                 sha256 = sha256,
                 strip_prefix = strip_prefix,
                 urls = [url],

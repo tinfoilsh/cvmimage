@@ -312,7 +312,7 @@ func isBlockDevice(path string) bool {
 	return info.Mode()&os.ModeDevice != 0 && info.Mode()&os.ModeCharDevice == 0
 }
 
-func createMeasuredRoot(lengthSectors uint64, params string) (devicemapper.Info, error) {
+func createMeasuredRoot(lengthSectors uint64, params string) (result devicemapper.Info, resultErr error) {
 	control, err := devicemapper.OpenControl()
 	if err != nil {
 		return devicemapper.Info{}, err
@@ -325,6 +325,14 @@ func createMeasuredRoot(lengthSectors uint64, params string) (devicemapper.Info,
 	if _, err := devicemapper.CreateReadOnly(control, dmName); err != nil {
 		return devicemapper.Info{}, err
 	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			if err := devicemapper.Remove(control, dmName); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("cleaning up measured root device: %w", err))
+			}
+		}
+	}()
 	if err := devicemapper.LoadReadOnlyVerityTable(control, dmName, lengthSectors, params); err != nil {
 		return devicemapper.Info{}, err
 	}
@@ -345,6 +353,7 @@ func createMeasuredRoot(lengthSectors uint64, params string) (devicemapper.Info,
 	if err := devicemapper.EnsureBlockNode(dmRootNode, info.Dev); err != nil {
 		return devicemapper.Info{}, err
 	}
+	cleanup = false
 	return info, nil
 }
 

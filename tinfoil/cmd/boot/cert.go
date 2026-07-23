@@ -5,12 +5,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
@@ -103,20 +101,22 @@ func obtainCertificate(id *NodeIdentity, att *verifier.Document, shimCfg *shimco
 		if shimCfg.TLSChallengeMode == "http" {
 			httpChallengeDomains = []string{id.Domain}
 			listenPort = boot.HTTPChallengePort
-			closeFW, err := openHTTP01Firewall(listenPort)
+		}
+		requestCertificate := func() (*tls.Certificate, error) {
+			mgr, err := tlsutil.NewCertProxyManager(
+				domains, boot.CacheDir, shimCfg.ControlPlane, id.TLSKey,
+				httpChallengeDomains, listenPort, certAuthToken,
+			)
 			if err != nil {
-				return fmt.Errorf("opening HTTP-01 firewall: %w", err)
+				return nil, fmt.Errorf("creating cert proxy manager: %w", err)
 			}
-			defer closeFW()
+			return retryCertificate(mgr.Certificate, certProxyRetryInterval)
 		}
-		mgr, err := tlsutil.NewCertProxyManager(
-			domains, boot.CacheDir, shimCfg.ControlPlane, id.TLSKey,
-			httpChallengeDomains, listenPort, certAuthToken,
-		)
-		if err != nil {
-			return fmt.Errorf("creating cert proxy manager: %w", err)
+		if shimCfg.TLSChallengeMode == "http" {
+			cert, err = withHTTP01Firewall(requestCertificate)
+		} else {
+			cert, err = requestCertificate()
 		}
-		cert, err = retryCertificate(mgr.Certificate, certProxyRetryInterval)
 		if err != nil {
 			return fmt.Errorf("obtaining cert via cert-proxy: %w", err)
 		}
@@ -181,24 +181,19 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 	return nil
 }
 
-var nftHandleRE = regexp.MustCompile(`# handle (\d+)`)
+func withHTTP01Firewall(requestCertificate func() (*tls.Certificate, error)) (*tls.Certificate, error) {
+	return withHTTP01FirewallWith(runNft, requestCertificate)
+}
 
-func openHTTP01Firewall(port int) (func(), error) {
-	// nft delete rule wants a handle, not a match expression.
-	args := []string{"--echo", "--handle", "add", "rule", "inet", "tinfoil", "input", "tcp", "dport", strconv.Itoa(port), "accept"}
-	out, err := exec.Command("nft", args...).CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("nft %v: %w (%s)", args, err, out)
+func withHTTP01FirewallWith(run func(string) error, requestCertificate func() (*tls.Certificate, error)) (cert *tls.Certificate, retErr error) {
+	if err := run("add rule inet tinfoil http01 tcp dport 80 accept\n"); err != nil {
+		return nil, fmt.Errorf("opening HTTP-01 firewall: %w", err)
 	}
-	m := nftHandleRE.FindSubmatch(out)
-	if m == nil {
-		return nil, fmt.Errorf("nft add rule returned no handle: %s", out)
-	}
-	handle := string(m[1])
-	return func() {
-		del := []string{"delete", "rule", "inet", "tinfoil", "input", "handle", handle}
-		if out, err := exec.Command("nft", del...).CombinedOutput(); err != nil {
-			log.Printf("warning: nft delete HTTP-01 rule (handle %s) failed: %v (%s)", handle, err, out)
+	defer func() {
+		if err := run("flush chain inet tinfoil http01\n"); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("closing HTTP-01 firewall: %w", err))
 		}
-	}, nil
+	}()
+
+	return requestCertificate()
 }

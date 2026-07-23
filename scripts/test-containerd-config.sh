@@ -15,7 +15,7 @@ fi
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 containerd="$1"
-config="$repo_dir/mkosi.extra/etc/containerd/config.toml"
+config="$repo_dir/image/rootfs/etc/containerd/config.toml"
 scratch="$(mktemp -d /tmp/tinfoil-containerd-policy.XXXXXX)"
 active_pid=""
 
@@ -51,7 +51,7 @@ if [[ "$actual_config_sha256" != "$expected_config_digest" ]]; then
     echo "containerd config digest mismatch" >&2
     exit 1
 fi
-if [[ -e "$repo_dir/mkosi.extra/etc/containerd/conf.d" ]]; then
+if [[ -e "$repo_dir/image/rootfs/etc/containerd/conf.d" ]]; then
     echo "containerd drop-in directory is not part of the measured policy" >&2
     exit 1
 fi

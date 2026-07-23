@@ -37,7 +37,7 @@ func TestIoctlConstants(t *testing.T) {
 
 func TestCryptTable(t *testing.T) {
 	key := bytes.Repeat([]byte{0xa5}, 64)
-	params, err := CryptTable("8:17", "aes-xts-plain64", key, 4096, 8192)
+	params, err := CryptTable("8:17", key, 8192)
 	if err != nil {
 		t.Fatalf("CryptTable: %v", err)
 	}
@@ -51,22 +51,37 @@ func TestCryptTable(t *testing.T) {
 
 	for name, tc := range map[string]struct {
 		device string
-		cipher string
 		key    []byte
-		sector uint32
 		length uint64
 	}{
-		"device":    {device: "8:17 bad", cipher: "aes-xts-plain64", key: key, sector: 4096, length: 8192},
-		"cipher":    {device: "8:17", cipher: "aes xts", key: key, sector: 4096, length: 8192},
-		"key":       {device: "8:17", cipher: "aes-xts-plain64", key: key[:32], sector: 4096, length: 8192},
-		"sector":    {device: "8:17", cipher: "aes-xts-plain64", key: key, sector: 1024 + 512, length: 8192},
-		"alignment": {device: "8:17", cipher: "aes-xts-plain64", key: key, sector: 4096, length: 8191},
+		"device":    {device: "8:17 bad", key: key, length: 8192},
+		"key":       {device: "8:17", key: key[:32], length: 8192},
+		"alignment": {device: "8:17", key: key, length: 8191},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := CryptTable(tc.device, tc.cipher, tc.key, tc.sector, tc.length); err == nil {
+			if _, err := CryptTable(tc.device, tc.key, tc.length); err == nil {
 				t.Fatal("invalid dm-crypt table accepted")
 			}
 		})
+	}
+}
+
+func TestBlockDeviceInfoRejectsIndirectAndNonBlockPaths(t *testing.T) {
+	dir := t.TempDir()
+	regularPath := filepath.Join(dir, "regular")
+	if err := os.WriteFile(regularPath, []byte("not a block device"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BlockDeviceInfo(regularPath); err == nil || !strings.Contains(err.Error(), "not a direct block device") {
+		t.Fatalf("regular file error = %v", err)
+	}
+
+	symlinkPath := filepath.Join(dir, "symlink")
+	if err := os.Symlink(regularPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BlockDeviceInfo(symlinkPath); err == nil {
+		t.Fatal("symlink accepted as a direct block device")
 	}
 }
 

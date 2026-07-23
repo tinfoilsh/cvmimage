@@ -29,6 +29,11 @@ const (
 	devOffset         = 40
 	targetSpecAlign   = 8
 	maxNameLen        = 127
+	dmSectorSizeBytes = 512
+
+	encryptedModelCipher          = "aes-xts-plain64"
+	encryptedModelKeyBytes        = 64
+	encryptedModelSectorSizeBytes = 4096
 
 	versionMajor = 4
 	versionMinor = 0
@@ -264,69 +269,58 @@ func MapperNode(name string) string {
 	return filepath.Join("/dev/mapper", name)
 }
 
-// BlockDeviceNumber returns the kernel major:minor identity for a direct block
-// device. Symlinks and non-block files are rejected.
-func BlockDeviceNumber(path string) (string, error) {
-	info, err := os.Lstat(path)
+// BlockDeviceInfo returns the kernel major:minor identity and size of a direct
+// block device from the same opened descriptor. Symlinks and non-block files
+// are rejected.
+func BlockDeviceInfo(path string) (string, uint64, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return "", fmt.Errorf("stat block device %s: %w", path, err)
+		return "", 0, fmt.Errorf("opening direct block device %s: %w", path, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 {
-		return "", fmt.Errorf("%s is not a direct block device", path)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return "", fmt.Errorf("%s has unexpected stat data", path)
-	}
-	return fmt.Sprintf("%d:%d", unix.Major(stat.Rdev), unix.Minor(stat.Rdev)), nil
-}
+	defer unix.Close(fd)
 
-// BlockDeviceSectors returns a block device size in 512-byte sectors.
-func BlockDeviceSectors(path string) (uint64, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, fmt.Errorf("opening block device %s: %w", path, err)
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return "", 0, fmt.Errorf("stat opened block device %s: %w", path, err)
 	}
-	defer file.Close()
+	if stat.Mode&unix.S_IFMT != unix.S_IFBLK {
+		return "", 0, fmt.Errorf("%s is not a direct block device", path)
+	}
+
 	var size uint64
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, file.Fd(), unix.BLKGETSIZE64, uintptr(unsafe.Pointer(&size)))
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.BLKGETSIZE64, uintptr(unsafe.Pointer(&size)))
 	if errno != 0 {
-		return 0, fmt.Errorf("reading block device size %s: %w", path, errno)
+		return "", 0, fmt.Errorf("reading block device size %s: %w", path, errno)
 	}
-	if size == 0 || size%512 != 0 {
-		return 0, fmt.Errorf("invalid block device size %d for %s", size, path)
+	if size == 0 || size%dmSectorSizeBytes != 0 {
+		return "", 0, fmt.Errorf("invalid block device size %d for %s", size, path)
 	}
-	return size / 512, nil
+	return fmt.Sprintf("%d:%d", unix.Major(stat.Rdev), unix.Minor(stat.Rdev)), size / dmSectorSizeBytes, nil
 }
 
 // CryptTable builds the fixed dm-crypt parameters used for encrypted model
 // volumes. The returned buffer contains key material and must be erased after
 // table loading.
-func CryptTable(deviceNumber, cipher string, key []byte, sectorSize uint32, lengthSectors uint64) ([]byte, error) {
+func CryptTable(deviceNumber string, key []byte, lengthSectors uint64) ([]byte, error) {
 	if deviceNumber == "" || strings.IndexByte(deviceNumber, 0) >= 0 || strings.ContainsAny(deviceNumber, " \t\r\n") {
 		return nil, fmt.Errorf("invalid dm-crypt device number %q", deviceNumber)
 	}
-	if cipher == "" || len(cipher) > 127 || strings.IndexFunc(cipher, func(char rune) bool { return char <= ' ' || char == 0x7f }) >= 0 {
-		return nil, fmt.Errorf("invalid dm-crypt cipher %q", cipher)
-	}
-	if len(key) != 64 {
+	if len(key) != encryptedModelKeyBytes {
 		return nil, fmt.Errorf("invalid dm-crypt key length %d bytes", len(key))
 	}
-	if sectorSize < 512 || sectorSize > 4096 || sectorSize%512 != 0 || sectorSize&(sectorSize-1) != 0 {
-		return nil, fmt.Errorf("unsupported dm-crypt sector size %d", sectorSize)
-	}
-	if lengthSectors == 0 || lengthSectors%(uint64(sectorSize)/512) != 0 {
-		return nil, fmt.Errorf("dm-crypt length %d sectors is not aligned to sector size %d", lengthSectors, sectorSize)
+	sectorMultiple := uint64(encryptedModelSectorSizeBytes / dmSectorSizeBytes)
+	if lengthSectors == 0 || lengthSectors%sectorMultiple != 0 {
+		return nil, fmt.Errorf("dm-crypt length %d sectors is not aligned to sector size %d", lengthSectors, encryptedModelSectorSizeBytes)
 	}
 
-	params := make([]byte, 0, len(cipher)+hex.EncodedLen(len(key))+len(deviceNumber)+32)
-	params = append(params, cipher...)
+	params := make([]byte, 0, len(encryptedModelCipher)+hex.EncodedLen(len(key))+len(deviceNumber)+32)
+	params = append(params, encryptedModelCipher...)
 	params = append(params, ' ')
 	params = hex.AppendEncode(params, key)
 	params = append(params, " 0 "...)
 	params = append(params, deviceNumber...)
 	params = append(params, " 0 1 sector_size:"...)
-	params = strconv.AppendUint(params, uint64(sectorSize), 10)
+	params = strconv.AppendUint(params, encryptedModelSectorSizeBytes, 10)
 	return params, nil
 }
 

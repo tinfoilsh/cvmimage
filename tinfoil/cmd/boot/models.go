@@ -279,15 +279,11 @@ func (directModelVolumeOps) openVerity(sourceDevice, name, rootHash, hashOffset 
 }
 
 func (directModelVolumeOps) openCrypt(sourceDevice, name string, key []byte) (string, error) {
-	deviceNumber, err := devicemapper.BlockDeviceNumber(sourceDevice)
+	deviceNumber, lengthSectors, err := devicemapper.BlockDeviceInfo(sourceDevice)
 	if err != nil {
 		return "", err
 	}
-	lengthSectors, err := devicemapper.BlockDeviceSectors(sourceDevice)
-	if err != nil {
-		return "", err
-	}
-	params, err := devicemapper.CryptTable(deviceNumber, modelwrap.EMWPCipher, key, modelwrap.EMWPSectorSize, lengthSectors)
+	params, err := devicemapper.CryptTable(deviceNumber, key, lengthSectors)
 	if err != nil {
 		return "", err
 	}
@@ -402,13 +398,7 @@ func activateReadOnlyMapping(
 }
 
 func fixedVerityTable(sourceDevice, rootHash string, hashOffset uint64, salt []byte) (uint64, string, error) {
-	if hashOffset == 0 || hashOffset%modelwrap.VerityDataBlockSize != 0 {
-		return 0, "", fmt.Errorf("verity hash offset %d is not a positive multiple of %d", hashOffset, modelwrap.VerityDataBlockSize)
-	}
-	if len(salt) != veritySaltSize {
-		return 0, "", fmt.Errorf("verity salt is %d bytes, want %d", len(salt), veritySaltSize)
-	}
-	deviceNumber, err := devicemapper.BlockDeviceNumber(sourceDevice)
+	deviceNumber, _, err := devicemapper.BlockDeviceInfo(sourceDevice)
 	if err != nil {
 		return 0, "", err
 	}
@@ -419,8 +409,8 @@ func verityTable(deviceNumber, rootHash string, hashOffset uint64, salt []byte) 
 	if deviceNumber == "" || strings.ContainsAny(deviceNumber, " \t\r\n\x00") {
 		return 0, "", fmt.Errorf("invalid verity device number %q", deviceNumber)
 	}
-	if hashOffset == 0 || hashOffset%modelwrap.VerityDataBlockSize != 0 {
-		return 0, "", fmt.Errorf("verity hash offset %d is not a positive multiple of %d", hashOffset, modelwrap.VerityDataBlockSize)
+	if err := validateVerityHashOffset(hashOffset); err != nil {
+		return 0, "", err
 	}
 	if len(salt) != veritySaltSize {
 		return 0, "", fmt.Errorf("verity salt is %d bytes, want %d", len(salt), veritySaltSize)
@@ -452,8 +442,8 @@ func verityTable(deviceNumber, rootHash string, hashOffset uint64, salt []byte) 
 }
 
 func readFixedVeritySalt(sourceDevice string, hashOffset uint64) ([]byte, error) {
-	if hashOffset == 0 || hashOffset%modelwrap.VerityDataBlockSize != 0 {
-		return nil, fmt.Errorf("verity hash offset %d is not a positive multiple of %d", hashOffset, modelwrap.VerityDataBlockSize)
+	if err := validateVerityHashOffset(hashOffset); err != nil {
+		return nil, err
 	}
 	if hashOffset > uint64(1<<63-modelwrap.VerityHashBlockSize) {
 		return nil, fmt.Errorf("verity hash offset %d exceeds supported file offset", hashOffset)
@@ -484,6 +474,13 @@ func readFixedVeritySalt(sourceDevice string, hashOffset uint64) ([]byte, error)
 	salt := append([]byte(nil), superblock[88:88+veritySaltSize]...)
 	zeroBytes(superblock)
 	return salt, nil
+}
+
+func validateVerityHashOffset(hashOffset uint64) error {
+	if hashOffset == 0 || hashOffset%modelwrap.VerityDataBlockSize != 0 {
+		return fmt.Errorf("verity hash offset %d is not a positive multiple of %d", hashOffset, modelwrap.VerityDataBlockSize)
+	}
+	return nil
 }
 
 func zeroBytes(buf []byte) {

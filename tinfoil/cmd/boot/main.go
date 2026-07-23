@@ -13,27 +13,18 @@ import (
 	"tinfoil/internal/nvidia"
 )
 
-type notifyContextFunc func(context.Context, ...os.Signal) (context.Context, context.CancelFunc)
-
 func init() {
 	log.SetFlags(0)
 }
 
 func main() {
-	command := ""
-	if len(os.Args) > 1 {
-		command = os.Args[1]
+	if err := validateInvocation(os.Args); err != nil {
+		log.Printf("Failed: %v", err)
+		os.Exit(1)
 	}
-	ctx, stop := commandContext(command, signal.NotifyContext)
-	defer stop()
 
-	if len(os.Args) > 1 {
-		if err := runSubcommand(ctx, os.Args[1]); err != nil {
-			log.Printf("Failed: %v", err)
-			os.Exit(1)
-		}
-		return
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
 	log.Println("Tinfoil boot starting")
 
@@ -45,51 +36,9 @@ func main() {
 	log.Println("Tinfoil boot complete")
 }
 
-func commandContext(command string, notify notifyContextFunc) (context.Context, context.CancelFunc) {
-	if command == "models" {
-		return context.Background(), func() {}
-	}
-	return notify(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-}
-
-func runSubcommand(ctx context.Context, cmd string) error {
-	switch cmd {
-	case "containers", "models":
-	default:
-		return fmt.Errorf("unknown command: %s\nUsage: tinfoil-boot [containers|models]", cmd)
-	}
-
-	config, err := loadConfigFromRamdisk()
-	if err != nil {
-		return fmt.Errorf("loading config from ramdisk: %w", err)
-	}
-
-	switch cmd {
-	case "containers":
-		externalConfig, err := getExternalConfig()
-		if err != nil {
-			return fmt.Errorf("loading external config: %w", err)
-		}
-		// Manual re-run must fetch vault secrets, they're not persisted on disk.
-		if config.VaultURL != "" {
-			log.Println("Fetching vault secrets")
-			if err := fetchVaultSecrets(config, externalConfig); err != nil {
-				return fmt.Errorf("vault secret fetch failed: %w", err)
-			}
-		}
-		log.Println("Setting up registry authentication")
-		if err := setupRegistryAuth(externalConfig); err != nil {
-			return fmt.Errorf("registry auth setup failed: %w", err)
-		}
-		log.Println("Launching containers")
-		return launchContainers(ctx, config, externalConfig)
-	case "models":
-		externalConfig, err := getExternalConfig()
-		if err != nil {
-			return fmt.Errorf("loading external config: %w", err)
-		}
-		log.Println("Mounting models")
-		return mountModels(config, externalConfig)
+func validateInvocation(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("tinfoil-boot does not accept arguments; reboot or redeploy to relaunch containers or remount models")
 	}
 	return nil
 }

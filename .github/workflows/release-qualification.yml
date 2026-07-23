@@ -88,7 +88,9 @@ jobs:
           git -C qualification/build-a/source fetch --no-tags origin \
             "refs/tags/$VERSION:refs/tags/$VERSION"
           test "$(git -C qualification/build-a/source rev-parse "$VERSION^{commit}")" = "$SOURCE_COMMIT"
-          test "$(gh release view "$VERSION" --repo "$REPOSITORY" --json isPrerelease --jq .isPrerelease)" = false
+          test "$(gh release view "$VERSION" --repo "$REPOSITORY" \
+            --json isPrerelease,isDraft \
+            --jq '(.isPrerelease == false) and (.isDraft == false)')" = true
 
       - name: Install build dependencies
         run: |

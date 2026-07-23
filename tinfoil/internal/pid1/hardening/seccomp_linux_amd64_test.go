@@ -116,6 +116,8 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 			_, _, errno = unix.RawSyscall(unix.SYS_FINIT_MODULE, ^uintptr(0), 0, 0)
 		case "mount":
 			_, _, errno = unix.RawSyscall6(unix.SYS_MOUNT, 0, 0, 0, 0, 0, 0)
+		case "io-uring":
+			_, _, errno = unix.RawSyscall(unix.SYS_IO_URING_SETUP, 0, 0, 0)
 		case "namespace-clone":
 			_, _, errno = unix.RawSyscall6(unix.SYS_CLONE, uintptr(unix.CLONE_NEWNS), 0, 0, 0, 0, 0)
 		case "x32":
@@ -140,6 +142,8 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 		operation string
 	}{
 		{name: "boot-cannot-load-modules", service: ServiceBoot, operation: "finit-module"},
+		{name: "boot-cannot-io-uring", service: ServiceBoot, operation: "io-uring"},
+		{name: "shim-cannot-io-uring", service: ServiceShim, operation: "io-uring"},
 		{name: "shim-cannot-mount", service: ServiceShim, operation: "mount"},
 		{name: "egress-cannot-clone-namespace", service: ServiceEgress, operation: "namespace-clone"},
 		{name: "status-rejects-x32", service: ServiceContainerStatus, operation: "x32"},

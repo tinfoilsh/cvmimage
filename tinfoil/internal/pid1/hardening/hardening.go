@@ -35,6 +35,15 @@ type servicePolicy struct {
 	allowedSocketDomains []uint32
 }
 
+// kernelManagementSyscalls are denied for every hardened service, including
+// the privileged one-shot boot helper. Most are a deliberate second layer over
+// controls enforced elsewhere (module loading via kernel.modules_disabled, bpf/
+// perf via sysctl, mount/kexec via dropped capabilities): denying them keeps
+// each service protected even if another mechanism regresses. Three are the
+// sole control at this layer and are load-bearing on their own: the keyring
+// syscalls (add_key/request_key/keyctl) and io_uring, which is denied because
+// its ring submits file and socket operations the kernel executes without a
+// syscall the rest of this filter could inspect.
 var kernelManagementSyscalls = []uint32{
 	unix.SYS_ACCT,
 	unix.SYS_ADD_KEY,
@@ -42,6 +51,9 @@ var kernelManagementSyscalls = []uint32{
 	unix.SYS_DELETE_MODULE,
 	unix.SYS_FINIT_MODULE,
 	unix.SYS_INIT_MODULE,
+	unix.SYS_IO_URING_ENTER,
+	unix.SYS_IO_URING_REGISTER,
+	unix.SYS_IO_URING_SETUP,
 	unix.SYS_IOPERM,
 	unix.SYS_IOPL,
 	unix.SYS_KEXEC_FILE_LOAD,

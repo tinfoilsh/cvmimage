@@ -98,3 +98,87 @@ func TestRefreshThreadsCancellationIntoResolution(t *testing.T) {
 		t.Fatalf("Refresh() error = %v, want context cancellation", err)
 	}
 }
+
+func TestRunClearsAllSetsAndReturnsRefreshFailure(t *testing.T) {
+	wantErr := errors.New("DNS unavailable")
+	applyCalls := 0
+	engine := &Engine{
+		config: &config{Networks: map[string]network{
+			"zeta":  {Allow: []string{"zeta.example"}},
+			"alpha": {Allow: []string{"alpha.example"}},
+		}},
+		resolve: func(context.Context, []string) ([]string, error) {
+			return nil, wantErr
+		},
+		nft: nftClient{apply: func(script string) ([]byte, error) {
+			applyCalls++
+			want := "flush set inet tinfoil allow-alpha\n" +
+				"flush set inet tinfoil allow-zeta\n"
+			if script != want {
+				t.Fatalf("nft script = %q, want %q", script, want)
+			}
+			return nil, nil
+		}},
+		interval: time.Nanosecond,
+	}
+
+	err := engine.Run(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run() error = %v, want %v", err, wantErr)
+	}
+	if applyCalls != 1 {
+		t.Fatalf("nft apply calls = %d, want 1", applyCalls)
+	}
+}
+
+func TestRunReturnsRefreshAndClearFailures(t *testing.T) {
+	refreshErr := errors.New("DNS unavailable")
+	clearErr := errors.New("exit status 1")
+	engine := &Engine{
+		config: &config{Networks: map[string]network{
+			"control": {Allow: []string{"api.example"}},
+		}},
+		resolve: func(context.Context, []string) ([]string, error) {
+			return nil, refreshErr
+		},
+		nft: nftClient{apply: func(string) ([]byte, error) {
+			return []byte("permission denied"), clearErr
+		}},
+		interval: time.Nanosecond,
+	}
+
+	err := engine.Run(context.Background())
+	if !errors.Is(err, refreshErr) {
+		t.Fatalf("Run() error = %v, want refresh failure", err)
+	}
+	if !errors.Is(err, clearErr) {
+		t.Fatalf("Run() error = %v, want clear failure", err)
+	}
+	if !strings.Contains(err.Error(), "clearing egress allow sets") ||
+		!strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("Run() error = %v, want clear context and nft output", err)
+	}
+}
+
+func TestRunCancellationDoesNotChangeNftState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	engine := &Engine{
+		config: &config{Networks: map[string]network{
+			"control": {Allow: []string{"api.example"}},
+		}},
+		resolve: func(context.Context, []string) ([]string, error) {
+			t.Fatal("resolve called after cancellation")
+			return nil, nil
+		},
+		nft: nftClient{apply: func(string) ([]byte, error) {
+			t.Fatal("nft called after cancellation")
+			return nil, nil
+		}},
+		interval: time.Hour,
+	}
+
+	if err := engine.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}

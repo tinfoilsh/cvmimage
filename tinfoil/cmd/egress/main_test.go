@@ -9,15 +9,29 @@ import (
 type fakeRunner struct {
 	configured bool
 	runCalls   int
+	runErr     error
 }
 
 func (f *fakeRunner) Configured() bool {
 	return f.configured
 }
 
-func (f *fakeRunner) Run(ctx context.Context, _ func(error)) {
+func (f *fakeRunner) Run(ctx context.Context) error {
 	f.runCalls++
+	if f.runErr != nil {
+		return f.runErr
+	}
 	<-ctx.Done()
+	return nil
+}
+
+func TestRunWithPropagatesRefreshFailure(t *testing.T) {
+	wantErr := errors.New("refresh failed")
+	runner := &fakeRunner{configured: true, runErr: wantErr}
+	err := runWith(context.Background(), func() (egressRunner, error) { return runner, nil })
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runWith error = %v, want %v", err, wantErr)
+	}
 }
 
 func TestRunWithStartsRefreshLoopWithoutInitialPopulation(t *testing.T) {

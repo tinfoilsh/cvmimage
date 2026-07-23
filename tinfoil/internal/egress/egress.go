@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -98,20 +99,47 @@ func (e *Engine) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Run refreshes at the daemon interval until ctx is canceled.
-func (e *Engine) Run(ctx context.Context, refreshFailed func(error)) {
+// Run refreshes at the daemon interval until ctx is canceled. A failed
+// periodic refresh clears every configured allow set in one nft transaction
+// before returning the failure to the daemon.
+func (e *Engine) Run(ctx context.Context) error {
 	ticker := time.NewTicker(e.interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
-			if err := e.Refresh(ctx); err != nil && refreshFailed != nil {
-				refreshFailed(err)
+			if err := e.Refresh(ctx); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				if clearErr := e.clear(); clearErr != nil {
+					return errors.Join(err, clearErr)
+				}
+				return err
 			}
 		}
 	}
+}
+
+func (e *Engine) clear() error {
+	names := make([]string, 0, len(e.config.Networks))
+	for name := range e.config.Networks {
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	var script strings.Builder
+	for _, name := range names {
+		fmt.Fprintf(&script, "flush set inet tinfoil %s%s\n", containernet.AllowSetPrefix, name)
+	}
+	if out, err := e.nft.apply(script.String()); err != nil {
+		return fmt.Errorf("clearing egress allow sets: %w (%s)", err, out)
+	}
+	return nil
 }
 
 func loadConfig(path string) (*config, error) {

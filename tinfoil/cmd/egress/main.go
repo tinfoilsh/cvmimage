@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -12,7 +13,7 @@ import (
 
 type egressRunner interface {
 	Configured() bool
-	Run(context.Context, func(error))
+	Run(context.Context) error
 }
 
 func init() {
@@ -45,9 +46,9 @@ func runWith(ctx context.Context, load func() (egressRunner, error)) error {
 	}
 	// Boot owns the readiness-gating initial population. This service only
 	// refreshes the already-populated sets at the fixed engine interval.
-	engine.Run(ctx, func(err error) {
-		log.Printf("refresh failed: %v", err)
-	})
+	if err := engine.Run(ctx); err != nil {
+		return fmt.Errorf("refreshing allow sets: %w", err)
+	}
 	log.Println("shutting down")
 	return nil
 }

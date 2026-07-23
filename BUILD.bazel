@@ -9,7 +9,4 @@ exports_files([
     "build/builder-work/output/artifacts/tinfoil-shim",
     "build/rootfs-artifacts/nvattest/usr/bin/nvattest",
     "build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2",
-    "kernel/out/rootfs-artifacts/nvidia-modules/nvidia-modeset.ko",
-    "kernel/out/rootfs-artifacts/nvidia-modules/nvidia-uvm.ko",
-    "kernel/out/rootfs-artifacts/nvidia-modules/nvidia.ko",
 ])

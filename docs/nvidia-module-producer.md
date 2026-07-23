@@ -22,6 +22,9 @@ exposing host devices to the container.
 By default, the modules are written beneath
 `kernel/out/rootfs-artifacts/nvidia-modules`. A later rootfs assembly step is
 responsible for installing them at `/usr/lib/tinfoil/kernel-modules`.
+The producer also writes a deterministic Bazel package in that output directory
+from the same `kernel/nvidia-modules.txt` contract, so rootfs assembly cannot
+drift onto an independent hard-coded module list.
 Downloaded source packages are retained in `kernel/build/nvidia-packages` and
 are verified against the pinned hashes before every build.
 

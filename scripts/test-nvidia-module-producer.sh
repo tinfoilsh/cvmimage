@@ -62,6 +62,23 @@ grep -Fq 'removing NVIDIA package with checksum mismatch' "$scratch/failure.log"
 
 validate_nvidia_modules "$source_dir" "$module_dir" "$release"
 
+bazel_package="$scratch/bazel-package"
+mkdir -p "$bazel_package"
+write_bazel_module_package "$bazel_package"
+cat > "$scratch/expected-BUILD.bazel" <<'EOF'
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "modules",
+    srcs = [
+        "nvidia.ko",
+        "nvidia-uvm.ko",
+        "nvidia-modeset.ko",
+    ],
+)
+EOF
+cmp "$scratch/expected-BUILD.bazel" "$bazel_package/BUILD.bazel"
+
 for module in "${required_modules[@]}"; do
     mv "$module_dir/$module" "$module_dir/$module.missing"
     expect_failure "missing $module" validate_nvidia_modules "$source_dir" "$module_dir" "$release"

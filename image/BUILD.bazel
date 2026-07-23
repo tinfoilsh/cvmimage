@@ -145,11 +145,7 @@ pkg_files(
 
 pkg_files(
     name = "nvidia-kernel-modules",
-    srcs = [
-        "//:kernel/out/rootfs-artifacts/nvidia-modules/nvidia-modeset.ko",
-        "//:kernel/out/rootfs-artifacts/nvidia-modules/nvidia-uvm.ko",
-        "//:kernel/out/rootfs-artifacts/nvidia-modules/nvidia.ko",
-    ],
+    srcs = ["//kernel/out/rootfs-artifacts/nvidia-modules:modules"],
     attributes = pkg_attributes(mode = "0644", uid = 0, gid = 0),
     prefix = "usr/lib/tinfoil/kernel-modules",
     strip_prefix = strip_prefix.files_only(),

@@ -54,6 +54,7 @@ var sysctlPolicy = []sysctlSetting{
 	{path: "kernel/yama/ptrace_scope", value: "1"},
 	{path: "net/core/bpf_jit_harden", value: "2"},
 	{path: "net/core/default_qdisc", value: "fq_codel", optional: true},
+	{path: "net/ipv4/ip_forward", value: "1"},
 	{path: "net/ipv4/conf/default/rp_filter", value: "2"},
 	{path: "net/ipv4/conf/all/rp_filter", value: "2"},
 	{path: "vm/max_map_count", value: "1048576"},

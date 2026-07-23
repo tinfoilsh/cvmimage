@@ -162,6 +162,7 @@ func TestSysctlPolicyHardensPinnedKernelInterfaces(t *testing.T) {
 		"kernel/unprivileged_userns_clone": "0",
 		"kernel/warn_limit":                "10",
 		"net/core/bpf_jit_harden":          "2",
+		"net/ipv4/ip_forward":              "1",
 	}
 
 	for _, setting := range sysctlPolicy {

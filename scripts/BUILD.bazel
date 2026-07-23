@@ -1,3 +1,6 @@
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["compare_runtime_package_lock.sh"])
+exports_files([
+    "compare_runtime_package_lock.sh",
+    "test-container-runtime-rootfs.sh",
+])

@@ -18,6 +18,8 @@ func (c *Container) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.MappingNode {
 		for index := 0; index < len(node.Content); index += 2 {
 			switch node.Content[index].Value {
+			case "<<":
+				return fmt.Errorf("container YAML merge keys are unsupported")
 			case "privileged":
 				fields.privileged = true
 			case "cap_drop":

@@ -66,6 +66,28 @@ func TestContainerInputPolicyRejectsUnsupportedInputs(t *testing.T) {
 	}
 }
 
+func TestContainerInputPolicyRejectsYAMLMergeKeysBeforeDecode(t *testing.T) {
+	tests := []struct {
+		name  string
+		merge string
+	}{
+		{name: "privileged", merge: "{privileged: true}"},
+		{name: "cap drop", merge: "{cap_drop: [NET_RAW]}"},
+		{name: "security opt", merge: "{security_opt: [seccomp=unconfined]}"},
+		{name: "otherwise supported fields", merge: "{ipc: host}"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := "containers:\n  - name: workload\n    image: example.invalid/workload\n    <<: " + test.merge + "\n"
+			var config Config
+			err := yaml.Unmarshal([]byte(data), &config)
+			if err == nil || !strings.Contains(err.Error(), "container YAML merge keys are unsupported") {
+				t.Fatalf("yaml.Unmarshal error = %v, want merge-key rejection", err)
+			}
+		})
+	}
+}
+
 func TestValidNamedVolume(t *testing.T) {
 	for _, name := range []string{"execsock", "a", "model-cache.v2", "cache_1"} {
 		if !validNamedVolume(name) {

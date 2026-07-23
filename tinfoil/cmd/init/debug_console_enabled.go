@@ -3,73 +3,52 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"syscall"
-
-	"golang.org/x/sys/unix"
+	"time"
 
 	"tinfoil/internal/pid1/supervisor"
 )
 
 const (
-	debugConsoleArg = "--tinfoil-debug-console"
 	debugConsoleTTY = "/dev/hvc0"
 	debugShellPath  = "/usr/bin/busybox"
 )
 
-func dispatchDebugConsole(args []string) (bool, error) {
-	if len(args) != 2 || args[1] != debugConsoleArg {
-		return false, nil
-	}
-	return true, execDebugConsole()
+type debugConsole struct {
+	process *supervisor.Process
 }
 
-func startDebugConsole(manager *supervisor.Manager) error {
+func startDebugConsole(_ context.Context, manager *supervisor.Manager) (*debugConsole, error) {
+	console, err := os.OpenFile(debugConsoleTTY, os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", debugConsoleTTY, err)
+	}
+	defer console.Close()
+
 	initLogf("debug image: starting static shell on %s", debugConsoleTTY)
-	_, err := manager.Start(debugConsoleCommand())
-	return err
+	process, err := manager.StartConsole(debugConsoleCommand(), console)
+	if err != nil {
+		return nil, err
+	}
+	return &debugConsole{process: process}, nil
+}
+
+func (console *debugConsole) stop(termGrace, killGrace time.Duration) error {
+	return console.process.StopConsole(termGrace, killGrace)
 }
 
 func debugConsoleCommand() supervisor.Command {
-	return command("tinfoil-debug-console", selfExecPath, debugConsoleArg)
-}
-
-func execDebugConsole() error {
-	if err := unix.Setpgid(0, os.Getppid()); err != nil {
-		return fmt.Errorf("join PID1 process group: %w", err)
+	return supervisor.Command{
+		Name: "tinfoil-debug-console",
+		Path: debugShellPath,
+		Args: []string{"ash", "-i"},
+		Env: []string{
+			"HOME=/root",
+			"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+			"TERM=linux",
+		},
+		Dir: "/",
 	}
-	if _, err := unix.Setsid(); err != nil {
-		return fmt.Errorf("create console session: %w", err)
-	}
-	console, err := unix.Open(debugConsoleTTY, unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", debugConsoleTTY, err)
-	}
-	defer unix.Close(console)
-	if err := unix.IoctlSetInt(console, unix.TIOCSCTTY, 0); err != nil {
-		return fmt.Errorf("acquire %s: %w", debugConsoleTTY, err)
-	}
-	if err := unix.IoctlSetPointerInt(console, unix.TIOCSPGRP, os.Getpid()); err != nil {
-		return fmt.Errorf("foreground %s: %w", debugConsoleTTY, err)
-	}
-	for descriptor := 0; descriptor <= 2; descriptor++ {
-		if err := unix.Dup3(console, descriptor, 0); err != nil {
-			return fmt.Errorf("attach %s to fd %d: %w", debugConsoleTTY, descriptor, err)
-		}
-	}
-	if console > 2 {
-		if err := unix.Close(console); err != nil {
-			return fmt.Errorf("close console descriptor: %w", err)
-		}
-		console = -1
-	}
-	if err := unix.Chdir("/"); err != nil {
-		return fmt.Errorf("chdir root: %w", err)
-	}
-	return syscall.Exec(debugShellPath, []string{"ash", "-i"}, []string{
-		"HOME=/root",
-		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-		"TERM=linux",
-	})
 }

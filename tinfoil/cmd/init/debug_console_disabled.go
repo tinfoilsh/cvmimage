@@ -2,8 +2,17 @@
 
 package main
 
-import "tinfoil/internal/pid1/supervisor"
+import (
+	"context"
+	"time"
 
-func dispatchDebugConsole([]string) (bool, error) { return false, nil }
+	"tinfoil/internal/pid1/supervisor"
+)
 
-func startDebugConsole(*supervisor.Manager) error { return nil }
+type debugConsole struct{}
+
+func startDebugConsole(context.Context, *supervisor.Manager) (*debugConsole, error) {
+	return &debugConsole{}, nil
+}
+
+func (*debugConsole) stop(time.Duration, time.Duration) error { return nil }

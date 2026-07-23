@@ -13,21 +13,32 @@ import (
 func TestServicePoliciesAreExact(t *testing.T) {
 	want := map[Service]servicePolicy{
 		ServiceBoot: {
-			noNewPrivileges: true,
+			noNewPrivileges:   true,
+			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD},
+			deniedSyscalls:    kernelManagementSyscalls,
 		},
 		ServiceContainerStatus: {
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{},
+			restrictFilesystems:  true,
+			deniedSyscalls:       restrictedServiceSyscalls,
+			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX},
 		},
 		ServiceEgress: {
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
+			restrictFilesystems:  true,
+			deniedSyscalls:       restrictedServiceSyscalls,
+			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		},
 		ServiceShim: {
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{unix.CAP_NET_BIND_SERVICE},
+			restrictFilesystems:  true,
+			deniedSyscalls:       restrictedServiceSyscalls,
+			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6},
 		},
 	}
@@ -78,7 +89,7 @@ func TestPackCapabilitiesRejectsOutOfRangeValues(t *testing.T) {
 	}
 }
 
-func TestApplyServiceAppliesCapabilitiesThenNoNewPrivilegesThenSocketPolicy(t *testing.T) {
+func TestApplyServiceAppliesFilesystemsCapabilitiesAndSeccompInOrder(t *testing.T) {
 	kernel := &fakeServiceKernel{last: 13}
 	if err := applyService(kernel, ServiceEgress); err != nil {
 		t.Fatalf("applyService: %v", err)
@@ -95,21 +106,40 @@ func TestApplyServiceAppliesCapabilitiesThenNoNewPrivilegesThenSocketPolicy(t *t
 	if kernel.capabilityData != wantData {
 		t.Fatalf("capability data = %#v, want %#v", kernel.capabilityData, wantData)
 	}
-	if got := kernel.calls[len(kernel.calls)-1]; got != "restrict-sockets" {
-		t.Fatalf("last call = %q, want restrict-sockets; all calls: %v", got, kernel.calls)
+	if kernel.calls[0] != "restrict-filesystems" {
+		t.Fatalf("first call = %q, want restrict-filesystems; all calls: %v", kernel.calls[0], kernel.calls)
+	}
+	if got := kernel.calls[len(kernel.calls)-1]; got != "restrict-syscalls" {
+		t.Fatalf("last call = %q, want restrict-syscalls; all calls: %v", got, kernel.calls)
 	}
 	if want := []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK}; !reflect.DeepEqual(kernel.socketDomains, want) {
 		t.Fatalf("socket domains = %v, want %v", kernel.socketDomains, want)
 	}
+	if !reflect.DeepEqual(kernel.deniedSyscalls, restrictedServiceSyscalls) || !kernel.restrictNamespaceOps {
+		t.Fatalf("seccomp policy = denied %v namespaces %t", kernel.deniedSyscalls, kernel.restrictNamespaceOps)
+	}
 }
 
-func TestApplyServiceBootOnlySetsNoNewPrivileges(t *testing.T) {
+func TestApplyServiceBootUsesOnlyRequiredCapabilitiesAndKernelDenylist(t *testing.T) {
 	kernel := &fakeServiceKernel{last: 63}
 	if err := applyService(kernel, ServiceBoot); err != nil {
 		t.Fatalf("applyService: %v", err)
 	}
-	if want := []string{"no-new-privileges"}; !reflect.DeepEqual(kernel.calls, want) {
-		t.Fatalf("calls = %v, want %v", kernel.calls, want)
+	wantData, err := packCapabilities([]int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kernel.capabilityData != wantData {
+		t.Fatalf("capability data = %#v, want %#v", kernel.capabilityData, wantData)
+	}
+	if kernel.calls[0] == "restrict-filesystems" {
+		t.Fatalf("boot unexpectedly restricted filesystems: %v", kernel.calls)
+	}
+	if got := kernel.calls[len(kernel.calls)-1]; got != "restrict-syscalls" {
+		t.Fatalf("last call = %q, want restrict-syscalls", got)
+	}
+	if !reflect.DeepEqual(kernel.deniedSyscalls, kernelManagementSyscalls) || kernel.restrictNamespaceOps {
+		t.Fatalf("boot seccomp policy = denied %v namespaces %t", kernel.deniedSyscalls, kernel.restrictNamespaceOps)
 	}
 }
 
@@ -136,28 +166,28 @@ func TestApplyServiceStopsAtFirstKernelFailure(t *testing.T) {
 	if !errors.Is(err, dropErr) {
 		t.Fatalf("applyService error = %v, want %v", err, dropErr)
 	}
-	want := []string{"drop:0"}
+	want := []string{"restrict-filesystems", "drop:0"}
 	if !reflect.DeepEqual(kernel.calls, want) {
 		t.Fatalf("calls after failure = %v, want %v", kernel.calls, want)
 	}
 }
 
-func TestApplyServiceStopsAtSocketRestrictionFailure(t *testing.T) {
+func TestApplyServiceStopsAtSyscallRestrictionFailure(t *testing.T) {
 	restrictErr := errors.New("seccomp denied")
 	kernel := &fakeServiceKernel{
-		last:               unix.CAP_NET_BIND_SERVICE,
-		restrictSocketsErr: restrictErr,
+		last:                unix.CAP_NET_BIND_SERVICE,
+		restrictSyscallsErr: restrictErr,
 	}
 	err := applyService(kernel, ServiceShim)
 	if !errors.Is(err, restrictErr) {
 		t.Fatalf("applyService error = %v, want %v", err, restrictErr)
 	}
-	if got := kernel.calls[len(kernel.calls)-1]; got != "restrict-sockets" {
-		t.Fatalf("last call after socket restriction failure = %q, want restrict-sockets", got)
+	if got := kernel.calls[len(kernel.calls)-1]; got != "restrict-syscalls" {
+		t.Fatalf("last call after syscall restriction failure = %q, want restrict-syscalls", got)
 	}
 }
 
-func TestApplyServiceDoesNotRestrictSocketsAfterNoNewPrivilegesFailure(t *testing.T) {
+func TestApplyServiceDoesNotRestrictSyscallsAfterNoNewPrivilegesFailure(t *testing.T) {
 	noNewPrivilegesErr := errors.New("prctl denied")
 	kernel := &fakeServiceKernel{
 		last:               unix.CAP_NET_BIND_SERVICE,
@@ -270,17 +300,25 @@ func TestApplyRuntimeLimitsFailsWhenVerificationStaysBelowFloor(t *testing.T) {
 }
 
 type fakeServiceKernel struct {
-	last               int
-	dropFailureAt      *int
-	dropCapabilityErr  error
-	capabilityErr      error
-	noNewPrivilegesErr error
-	restrictSocketsErr error
+	last                   int
+	dropFailureAt          *int
+	dropCapabilityErr      error
+	capabilityErr          error
+	noNewPrivilegesErr     error
+	restrictFilesystemsErr error
+	restrictSyscallsErr    error
 
-	calls          []string
-	dropped        []int
-	capabilityData [2]unix.CapUserData
-	socketDomains  []uint32
+	calls                []string
+	dropped              []int
+	capabilityData       [2]unix.CapUserData
+	deniedSyscalls       []uint32
+	restrictNamespaceOps bool
+	socketDomains        []uint32
+}
+
+func (kernel *fakeServiceKernel) restrictFilesystems() error {
+	kernel.calls = append(kernel.calls, "restrict-filesystems")
+	return kernel.restrictFilesystemsErr
 }
 
 func (kernel *fakeServiceKernel) dropBoundingCapability(capability int) error {
@@ -306,10 +344,16 @@ func (kernel *fakeServiceKernel) setNoNewPrivileges() error {
 	return kernel.noNewPrivilegesErr
 }
 
-func (kernel *fakeServiceKernel) restrictSocketDomains(domains []uint32) error {
-	kernel.calls = append(kernel.calls, "restrict-sockets")
+func (kernel *fakeServiceKernel) restrictSyscalls(
+	denied []uint32,
+	restrictNamespaceOps bool,
+	domains []uint32,
+) error {
+	kernel.calls = append(kernel.calls, "restrict-syscalls")
+	kernel.deniedSyscalls = append([]uint32(nil), denied...)
+	kernel.restrictNamespaceOps = restrictNamespaceOps
 	kernel.socketDomains = append([]uint32(nil), domains...)
-	return kernel.restrictSocketsErr
+	return kernel.restrictSyscallsErr
 }
 
 type rlimitSet struct {

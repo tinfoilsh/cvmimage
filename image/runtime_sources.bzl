@@ -6,15 +6,11 @@ def _source_repository_impl(repository_ctx):
         sha256 = repository_ctx.attr.sha256,
         url = repository_ctx.attr.url,
     )
-    repository_ctx.file("source.json", repository_ctx.attr.source_json + "\n")
     repository_ctx.file(
         "BUILD.bazel",
         """package(default_visibility = [\"//visibility:public\"])
 
-exports_files([
-    \"archive\",
-    \"source.json\",
-])
+exports_files([\"archive\"])
 """,
     )
 
@@ -23,7 +19,6 @@ _source_repository = repository_rule(
     implementation = _source_repository_impl,
     attrs = {
         "sha256": attr.string(mandatory = True),
-        "source_json": attr.string(mandatory = True),
         "url": attr.string(mandatory = True),
     },
 )
@@ -72,6 +67,9 @@ def _runtime_sources_impl(module_ctx):
         if repository_name in seen_repositories:
             fail("runtime source repository-name collision: %s and %s" % (seen_repositories[repository_name], source_id))
         seen_repositories[repository_name] = source_id
+        kind = source.get("kind")
+        if kind not in ["deb", "tar"]:
+            fail("runtime source %s has an unsupported kind" % source_id)
         url = source.get("url")
         sha256 = source.get("sha256")
         if type(url) != "string" or not url.startswith("https://"):
@@ -81,7 +79,6 @@ def _runtime_sources_impl(module_ctx):
         _source_repository(
             name = repository_name,
             sha256 = sha256,
-            source_json = json.encode(source),
             url = url,
         )
 

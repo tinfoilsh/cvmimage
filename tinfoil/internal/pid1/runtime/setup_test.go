@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -57,6 +59,33 @@ func TestRamdiskSizeGB(t *testing.T) {
 	}
 	if _, _, err := ramdiskSizeGB(0); err == nil {
 		t.Fatal("ramdiskSizeGB(0) succeeded")
+	}
+}
+
+func TestRuntimeMountPolicyRequiresHardenedConfigFS(t *testing.T) {
+	wantFlags := uintptr(syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC)
+	for _, mount := range runtimeMounts {
+		if mount.target != "/sys/kernel/config" {
+			continue
+		}
+		if mount.source != "configfs" || mount.fstype != "configfs" || mount.flags != wantFlags || mount.data != "" || !mount.fatal {
+			t.Fatalf("configfs mount = %+v", mount)
+		}
+		return
+	}
+	t.Fatal("configfs runtime mount is missing")
+}
+
+func TestRuntimeMountPolicyPropagatesConfigFSFailure(t *testing.T) {
+	want := errors.New("configfs unavailable")
+	err := mountRuntimeFilesystems(runtimeMounts, func(_, target, _ string, _ uintptr, _ string, _ LogFunc) error {
+		if target == "/sys/kernel/config" {
+			return want
+		}
+		return nil
+	}, nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("mountRuntimeFilesystems error = %v, want %v", err, want)
 	}
 }
 

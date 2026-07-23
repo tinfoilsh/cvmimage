@@ -23,12 +23,14 @@ const (
 
 	controlDevicePath = "/sys/class/misc/device-mapper/dev"
 	ioctlSize         = 312
+	ioctlDataOffset   = 305
 	ioctlDataStart    = ioctlSize
 	targetSpecSize    = 40
 	nameOffset        = 48
 	devOffset         = 40
 	targetSpecAlign   = 8
 	maxNameLen        = 127
+	maxIOCTLSize      = 16 * 1024
 	dmSectorSizeBytes = 512
 
 	encryptedModelCipher          = "aes-xts-plain64"
@@ -155,8 +157,11 @@ func EnsureBlockNode(path string, dev uint64) error {
 
 // CheckVersion verifies and returns the kernel's ioctl protocol version.
 func CheckVersion(control *os.File) (Version, error) {
-	buf := baseBuffer(ioctlSize, "")
-	if err := ioctl(control, versionIOCTL, buf); err != nil {
+	buf, err := baseBuffer(ioctlSize, "")
+	if err != nil {
+		return Version{}, err
+	}
+	if err := ioctl(control, versionIOCTL, buf, 0); err != nil {
 		return Version{}, fmt.Errorf("device-mapper version ioctl failed: %w", err)
 	}
 	version := Version{
@@ -175,9 +180,12 @@ func CreateReadOnly(control *os.File, name string) (Info, error) {
 	if err := validateName(name); err != nil {
 		return Info{}, err
 	}
-	buf := baseBuffer(16*1024, name)
+	buf, err := baseBuffer(maxIOCTLSize, name)
+	if err != nil {
+		return Info{}, err
+	}
 	setFlags(buf, readOnlyFlag|existsFlag)
-	if err := ioctl(control, devCreateIOCTL, buf); err != nil {
+	if err := ioctl(control, devCreateIOCTL, buf, 0); err != nil {
 		return Info{}, fmt.Errorf("device-mapper create %s failed: %w", name, err)
 	}
 	return infoFromBuffer(buf), nil
@@ -194,7 +202,7 @@ func LoadReadOnlyVerityTable(control *os.File, name string, lengthSectors uint64
 	if err != nil {
 		return err
 	}
-	if err := ioctl(control, tableLoadIOCTL, buf); err != nil {
+	if err := ioctl(control, tableLoadIOCTL, buf, 1); err != nil {
 		return fmt.Errorf("device-mapper table load %s failed: %w", name, err)
 	}
 	return nil
@@ -212,7 +220,7 @@ func LoadReadOnlyCryptTable(control *os.File, name string, lengthSectors uint64,
 		return err
 	}
 	defer zeroBytes(buf)
-	if err := ioctl(control, tableLoadIOCTL, buf); err != nil {
+	if err := ioctl(control, tableLoadIOCTL, buf, 1); err != nil {
 		return fmt.Errorf("device-mapper table load %s failed: %w", name, err)
 	}
 	return nil
@@ -223,9 +231,12 @@ func ResumeReadOnly(control *os.File, name string) error {
 	if err := validateName(name); err != nil {
 		return err
 	}
-	buf := baseBuffer(2*1024, name)
+	buf, err := baseBuffer(2*1024, name)
+	if err != nil {
+		return err
+	}
 	setFlags(buf, readOnlyFlag|existsFlag)
-	if err := ioctl(control, devSuspendIOCTL, buf); err != nil {
+	if err := ioctl(control, devSuspendIOCTL, buf, 1); err != nil {
 		return fmt.Errorf("device-mapper resume %s failed: %w", name, err)
 	}
 	return nil
@@ -236,9 +247,12 @@ func Status(control *os.File, name string) (Info, error) {
 	if err := validateName(name); err != nil {
 		return Info{}, err
 	}
-	buf := baseBuffer(16*1024, name)
+	buf, err := baseBuffer(maxIOCTLSize, name)
+	if err != nil {
+		return Info{}, err
+	}
 	setFlags(buf, existsFlag)
-	if err := ioctl(control, devStatusIOCTL, buf); err != nil {
+	if err := ioctl(control, devStatusIOCTL, buf, 1); err != nil {
 		return Info{}, fmt.Errorf("device-mapper status %s failed: %w", name, err)
 	}
 	info := infoFromBuffer(buf)
@@ -253,9 +267,12 @@ func Remove(control *os.File, name string) error {
 	if err := validateName(name); err != nil {
 		return err
 	}
-	buf := baseBuffer(ioctlSize, name)
+	buf, err := baseBuffer(ioctlSize, name)
+	if err != nil {
+		return err
+	}
 	setFlags(buf, existsFlag)
-	if err := ioctl(control, devRemoveIOCTL, buf); err != nil {
+	if err := ioctl(control, devRemoveIOCTL, buf, 0); err != nil {
 		return fmt.Errorf("device-mapper remove %s failed: %w", name, err)
 	}
 	if err := os.Remove(MapperNode(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -340,9 +357,9 @@ func validateName(name string) error {
 	return nil
 }
 
-func baseBuffer(size int, name string) []byte {
-	if size < ioctlSize {
-		size = ioctlSize
+func baseBuffer(size int, name string) ([]byte, error) {
+	if size < ioctlSize || size > maxIOCTLSize || size%targetSpecAlign != 0 {
+		return nil, fmt.Errorf("invalid device-mapper ioctl buffer size %d", size)
 	}
 	buf := make([]byte, size)
 	binary.LittleEndian.PutUint32(buf[0:4], versionMajor)
@@ -351,7 +368,7 @@ func baseBuffer(size int, name string) []byte {
 	binary.LittleEndian.PutUint32(buf[12:16], uint32(len(buf)))
 	binary.LittleEndian.PutUint32(buf[16:20], ioctlDataStart)
 	putCString(buf[nameOffset:nameOffset+128], name)
-	return buf
+	return buf, nil
 }
 
 func tableLoadBuffer(name string, lengthSectors uint64, targetType, params string) ([]byte, error) {
@@ -359,14 +376,24 @@ func tableLoadBuffer(name string, lengthSectors uint64, targetType, params strin
 }
 
 func tableLoadBufferBytes(name string, lengthSectors uint64, targetType string, params []byte) ([]byte, error) {
+	if lengthSectors == 0 {
+		return nil, fmt.Errorf("invalid zero-length device-mapper target")
+	}
 	if targetType == "" || len(targetType) >= 16 || strings.IndexByte(targetType, 0) >= 0 {
 		return nil, fmt.Errorf("invalid device-mapper target type %q", targetType)
 	}
 	if bytesIndexByte(params, 0) >= 0 {
 		return nil, fmt.Errorf("device-mapper target parameters contain NUL")
 	}
+	maxParamsSize := maxIOCTLSize - ioctlSize - targetSpecSize - 1
+	if len(params) > maxParamsSize {
+		return nil, fmt.Errorf("device-mapper target parameters are too large: %d bytes", len(params))
+	}
 	targetSize := align(targetSpecSize+len(params)+1, targetSpecAlign)
-	buf := baseBuffer(ioctlSize+targetSize, name)
+	buf, err := baseBuffer(ioctlSize+targetSize, name)
+	if err != nil {
+		return nil, err
+	}
 	setFlags(buf, readOnlyFlag|existsFlag)
 	binary.LittleEndian.PutUint32(buf[20:24], 1)
 
@@ -392,10 +419,47 @@ func infoFromBuffer(buf []byte) Info {
 	}
 }
 
-func ioctl(control *os.File, request uintptr, buf []byte) error {
+func ioctl(control *os.File, request uintptr, buf []byte, maxTargetCount uint32) error {
+	if err := validateIOCTLRequest(buf, maxTargetCount); err != nil {
+		return fmt.Errorf("invalid device-mapper ioctl request: %w", err)
+	}
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, control.Fd(), request, uintptr(unsafe.Pointer(&buf[0])))
 	if errno != 0 {
 		return errno
+	}
+	return validateIOCTLResponse(buf, maxTargetCount)
+}
+
+func validateIOCTLRequest(buf []byte, maxTargetCount uint32) error {
+	if err := validateIOCTLBuffer(buf, maxTargetCount); err != nil {
+		return err
+	}
+	dataSize := binary.LittleEndian.Uint32(buf[12:16])
+	if uint64(dataSize) != uint64(len(buf)) {
+		return fmt.Errorf("invalid ioctl request data size %d for %d-byte buffer", dataSize, len(buf))
+	}
+	return nil
+}
+
+func validateIOCTLResponse(buf []byte, maxTargetCount uint32) error {
+	return validateIOCTLBuffer(buf, maxTargetCount)
+}
+
+func validateIOCTLBuffer(buf []byte, maxTargetCount uint32) error {
+	if len(buf) < ioctlSize || len(buf) > maxIOCTLSize || len(buf)%targetSpecAlign != 0 {
+		return fmt.Errorf("invalid ioctl buffer size %d", len(buf))
+	}
+	dataSize := binary.LittleEndian.Uint32(buf[12:16])
+	if dataSize < ioctlDataOffset || uint64(dataSize) > uint64(len(buf)) {
+		return fmt.Errorf("invalid ioctl data size %d for %d-byte buffer", dataSize, len(buf))
+	}
+	dataStart := binary.LittleEndian.Uint32(buf[16:20])
+	if dataStart != ioctlDataStart {
+		return fmt.Errorf("invalid ioctl data start %d for data size %d", dataStart, dataSize)
+	}
+	targetCount := binary.LittleEndian.Uint32(buf[20:24])
+	if targetCount > maxTargetCount {
+		return fmt.Errorf("invalid ioctl target count %d, maximum %d", targetCount, maxTargetCount)
 	}
 	return nil
 }

@@ -26,20 +26,25 @@ type Command struct {
 
 // Exit is the wait status collected for a child.
 type Exit struct {
+	Name   string
 	PID    int
 	Status syscall.WaitStatus
 }
 
 func (e Exit) Err() error {
+	identity := fmt.Sprintf("pid %d", e.PID)
+	if e.Name != "" {
+		identity = fmt.Sprintf("%s (pid %d)", e.Name, e.PID)
+	}
 	switch {
 	case e.Status.Exited() && e.Status.ExitStatus() == 0:
 		return nil
 	case e.Status.Exited():
-		return fmt.Errorf("pid %d exited with status %d", e.PID, e.Status.ExitStatus())
+		return fmt.Errorf("%s exited with status %d", identity, e.Status.ExitStatus())
 	case e.Status.Signaled():
-		return fmt.Errorf("pid %d killed by %s", e.PID, e.Status.Signal())
+		return fmt.Errorf("%s killed by %s", identity, e.Status.Signal())
 	default:
-		return fmt.Errorf("pid %d ended with wait status %#x", e.PID, uint32(e.Status))
+		return fmt.Errorf("%s ended with wait status %#x", identity, uint32(e.Status))
 	}
 }
 
@@ -59,6 +64,7 @@ type processBackend interface {
 // multiple observers; all receive the same result.
 type Process struct {
 	pid   int
+	name  string
 	child backendProcess
 	done  chan struct{}
 	exit  Exit
@@ -137,7 +143,7 @@ func (m *Manager) Start(command Command) (*Process, error) {
 			return
 		}
 		pid := child.pid()
-		process := &Process{pid: pid, child: child, done: make(chan struct{})}
+		process := &Process{pid: pid, name: command.Name, child: child, done: make(chan struct{})}
 		children[pid] = process
 		reply <- startResponse{process: process}
 	}
@@ -177,6 +183,7 @@ func (m *Manager) reapChildren(children map[int]*Process) {
 			m.logf("reaped adopted child pid=%d status=%#x", pid, uint32(status))
 			continue
 		}
+		exit.Name = process.name
 		delete(children, pid)
 		process.complete(exit)
 		if err := process.child.release(); err != nil {

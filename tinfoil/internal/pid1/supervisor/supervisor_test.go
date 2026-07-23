@@ -151,6 +151,12 @@ func TestManagerOwnsDirectWaitsAndReapsOrphans(t *testing.T) {
 	if err != nil || oneShotExit.Status.ExitStatus() != 3 {
 		t.Fatalf("one-shot wait = (%+v, %v)", oneShotExit, err)
 	}
+	if oneShotExit.Name != "one-shot" {
+		t.Fatalf("one-shot exit name = %q", oneShotExit.Name)
+	}
+	if got := oneShotExit.Err().Error(); !strings.Contains(got, "one-shot (pid ") {
+		t.Fatalf("one-shot error lacks command identity: %q", got)
+	}
 	if oneShot.PID() != oneShotExit.PID {
 		t.Fatalf("released one-shot pid = %d, want %d", oneShot.PID(), oneShotExit.PID)
 	}

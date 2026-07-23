@@ -3,13 +3,11 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/tinfoilsh/modelwrap/unwrap"
+	"golang.org/x/sys/unix"
 
 	shimconfig "tinfoil/internal/config"
 )
@@ -55,8 +53,9 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 }
 
 func cleanupEMWPIntegration(spec *modelPackRef) {
-	_ = exec.Command("umount", spec.mountPoint()).Run()
-	unwrap.CloseVerity(spec.mapperName())
-	unwrap.CloseCrypt(fmt.Sprintf("emwp-%s-crypt", spec.RootHash))
+	_ = unix.Unmount(spec.mountPoint(), 0)
+	ops := directModelVolumeOps{}
+	_ = ops.remove(spec.mapperName())
+	_ = ops.remove("emwp-" + spec.RootHash + "-crypt")
 	removeLegacyModelPackAlias(spec)
 }

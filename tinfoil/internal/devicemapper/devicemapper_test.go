@@ -22,6 +22,7 @@ func TestIoctlConstants(t *testing.T) {
 	}{
 		"version":    {versionIOCTL, 0xc138fd00},
 		"create":     {devCreateIOCTL, 0xc138fd03},
+		"remove":     {devRemoveIOCTL, 0xc138fd04},
 		"resume":     {devSuspendIOCTL, 0xc138fd06},
 		"status":     {devStatusIOCTL, 0xc138fd07},
 		"table load": {tableLoadIOCTL, 0xc138fd09},
@@ -29,6 +30,41 @@ func TestIoctlConstants(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if tc.got != tc.want {
 				t.Fatalf("unexpected ioctl number: got %#x want %#x", tc.got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCryptTable(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa5}, 64)
+	params, err := CryptTable("8:17", "aes-xts-plain64", key, 4096, 8192)
+	if err != nil {
+		t.Fatalf("CryptTable: %v", err)
+	}
+	want := "aes-xts-plain64 " + strings.Repeat("a5", 64) + " 0 8:17 0 1 sector_size:4096"
+	if string(params) != want {
+		t.Fatalf("params = %q, want %q", params, want)
+	}
+	if !bytes.Equal(key, bytes.Repeat([]byte{0xa5}, 64)) {
+		t.Fatal("CryptTable modified caller key")
+	}
+
+	for name, tc := range map[string]struct {
+		device string
+		cipher string
+		key    []byte
+		sector uint32
+		length uint64
+	}{
+		"device":    {device: "8:17 bad", cipher: "aes-xts-plain64", key: key, sector: 4096, length: 8192},
+		"cipher":    {device: "8:17", cipher: "aes xts", key: key, sector: 4096, length: 8192},
+		"key":       {device: "8:17", cipher: "aes-xts-plain64", key: key[:32], sector: 4096, length: 8192},
+		"sector":    {device: "8:17", cipher: "aes-xts-plain64", key: key, sector: 1024 + 512, length: 8192},
+		"alignment": {device: "8:17", cipher: "aes-xts-plain64", key: key, sector: 4096, length: 8191},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := CryptTable(tc.device, tc.cipher, tc.key, tc.sector, tc.length); err == nil {
+				t.Fatal("invalid dm-crypt table accepted")
 			}
 		})
 	}

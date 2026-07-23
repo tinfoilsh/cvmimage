@@ -4,10 +4,12 @@ package devicemapper
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +36,7 @@ const (
 
 	versionCmd    = 0
 	devCreateCmd  = 3
+	devRemoveCmd  = 4
 	devSuspendCmd = 6
 	devStatusCmd  = 7
 	tableLoadCmd  = 9
@@ -48,6 +51,7 @@ const (
 const (
 	versionIOCTL    = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | versionCmd)
 	devCreateIOCTL  = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | devCreateCmd)
+	devRemoveIOCTL  = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | devRemoveCmd)
 	devSuspendIOCTL = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | devSuspendCmd)
 	devStatusIOCTL  = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | devStatusCmd)
 	tableLoadIOCTL  = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | tableLoadCmd)
@@ -191,6 +195,24 @@ func LoadReadOnlyVerityTable(control *os.File, name string, lengthSectors uint64
 	return nil
 }
 
+// LoadReadOnlyCryptTable loads one read-only crypt target covering
+// lengthSectors. Parameters are bytes so embedded key material can be erased
+// immediately after the ioctl completes.
+func LoadReadOnlyCryptTable(control *os.File, name string, lengthSectors uint64, params []byte) error {
+	if err := validateName(name); err != nil {
+		return err
+	}
+	buf, err := tableLoadBufferBytes(name, lengthSectors, "crypt", params)
+	if err != nil {
+		return err
+	}
+	defer zeroBytes(buf)
+	if err := ioctl(control, tableLoadIOCTL, buf); err != nil {
+		return fmt.Errorf("device-mapper table load %s failed: %w", name, err)
+	}
+	return nil
+}
+
 // ResumeReadOnly activates a loaded read-only table.
 func ResumeReadOnly(control *os.File, name string) error {
 	if err := validateName(name); err != nil {
@@ -219,6 +241,93 @@ func Status(control *os.File, name string) (Info, error) {
 		return Info{}, fmt.Errorf("device-mapper device %s does not exist", name)
 	}
 	return info, nil
+}
+
+// Remove deletes a device-mapper device and its userspace block node.
+func Remove(control *os.File, name string) error {
+	if err := validateName(name); err != nil {
+		return err
+	}
+	buf := baseBuffer(ioctlSize, name)
+	setFlags(buf, existsFlag)
+	if err := ioctl(control, devRemoveIOCTL, buf); err != nil {
+		return fmt.Errorf("device-mapper remove %s failed: %w", name, err)
+	}
+	if err := os.Remove(MapperNode(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing mapper node %s: %w", MapperNode(name), err)
+	}
+	return nil
+}
+
+// MapperNode returns the fixed block-node path for a mapping.
+func MapperNode(name string) string {
+	return filepath.Join("/dev/mapper", name)
+}
+
+// BlockDeviceNumber returns the kernel major:minor identity for a direct block
+// device. Symlinks and non-block files are rejected.
+func BlockDeviceNumber(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat block device %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice != 0 {
+		return "", fmt.Errorf("%s is not a direct block device", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", fmt.Errorf("%s has unexpected stat data", path)
+	}
+	return fmt.Sprintf("%d:%d", unix.Major(stat.Rdev), unix.Minor(stat.Rdev)), nil
+}
+
+// BlockDeviceSectors returns a block device size in 512-byte sectors.
+func BlockDeviceSectors(path string) (uint64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("opening block device %s: %w", path, err)
+	}
+	defer file.Close()
+	var size uint64
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, file.Fd(), unix.BLKGETSIZE64, uintptr(unsafe.Pointer(&size)))
+	if errno != 0 {
+		return 0, fmt.Errorf("reading block device size %s: %w", path, errno)
+	}
+	if size == 0 || size%512 != 0 {
+		return 0, fmt.Errorf("invalid block device size %d for %s", size, path)
+	}
+	return size / 512, nil
+}
+
+// CryptTable builds the fixed dm-crypt parameters used for encrypted model
+// volumes. The returned buffer contains key material and must be erased after
+// table loading.
+func CryptTable(deviceNumber, cipher string, key []byte, sectorSize uint32, lengthSectors uint64) ([]byte, error) {
+	if deviceNumber == "" || strings.IndexByte(deviceNumber, 0) >= 0 || strings.ContainsAny(deviceNumber, " \t\r\n") {
+		return nil, fmt.Errorf("invalid dm-crypt device number %q", deviceNumber)
+	}
+	if cipher == "" || len(cipher) > 127 || strings.IndexFunc(cipher, func(char rune) bool { return char <= ' ' || char == 0x7f }) >= 0 {
+		return nil, fmt.Errorf("invalid dm-crypt cipher %q", cipher)
+	}
+	if len(key) != 64 {
+		return nil, fmt.Errorf("invalid dm-crypt key length %d bytes", len(key))
+	}
+	if sectorSize < 512 || sectorSize > 4096 || sectorSize%512 != 0 || sectorSize&(sectorSize-1) != 0 {
+		return nil, fmt.Errorf("unsupported dm-crypt sector size %d", sectorSize)
+	}
+	if lengthSectors == 0 || lengthSectors%(uint64(sectorSize)/512) != 0 {
+		return nil, fmt.Errorf("dm-crypt length %d sectors is not aligned to sector size %d", lengthSectors, sectorSize)
+	}
+
+	params := make([]byte, 0, len(cipher)+hex.EncodedLen(len(key))+len(deviceNumber)+32)
+	params = append(params, cipher...)
+	params = append(params, ' ')
+	params = hex.AppendEncode(params, key)
+	params = append(params, " 0 "...)
+	params = append(params, deviceNumber...)
+	params = append(params, " 0 1 sector_size:"...)
+	params = strconv.AppendUint(params, uint64(sectorSize), 10)
+	return params, nil
 }
 
 func validateName(name string) error {
@@ -252,10 +361,14 @@ func baseBuffer(size int, name string) []byte {
 }
 
 func tableLoadBuffer(name string, lengthSectors uint64, targetType, params string) ([]byte, error) {
+	return tableLoadBufferBytes(name, lengthSectors, targetType, []byte(params))
+}
+
+func tableLoadBufferBytes(name string, lengthSectors uint64, targetType string, params []byte) ([]byte, error) {
 	if targetType == "" || len(targetType) >= 16 || strings.IndexByte(targetType, 0) >= 0 {
 		return nil, fmt.Errorf("invalid device-mapper target type %q", targetType)
 	}
-	if strings.IndexByte(params, 0) >= 0 {
+	if bytesIndexByte(params, 0) >= 0 {
 		return nil, fmt.Errorf("device-mapper target parameters contain NUL")
 	}
 	targetSize := align(targetSpecSize+len(params)+1, targetSpecAlign)
@@ -268,7 +381,7 @@ func tableLoadBuffer(name string, lengthSectors uint64, targetType, params strin
 	binary.LittleEndian.PutUint64(spec[8:16], lengthSectors)
 	binary.LittleEndian.PutUint32(spec[20:24], uint32(targetSize))
 	putCString(spec[24:40], targetType)
-	putCString(buf[ioctlSize+targetSpecSize:ioctlSize+targetSize], params)
+	putBytesCString(buf[ioctlSize+targetSpecSize:ioctlSize+targetSize], params)
 	return buf, nil
 }
 
@@ -294,11 +407,30 @@ func ioctl(control *os.File, request uintptr, buf []byte) error {
 }
 
 func putCString(dst []byte, value string) {
+	putBytesCString(dst, []byte(value))
+}
+
+func putBytesCString(dst, value []byte) {
 	if len(dst) == 0 {
 		return
 	}
 	n := copy(dst[:len(dst)-1], value)
 	dst[n] = 0
+}
+
+func zeroBytes(buf []byte) {
+	for index := range buf {
+		buf[index] = 0
+	}
+}
+
+func bytesIndexByte(buf []byte, value byte) int {
+	for index, current := range buf {
+		if current == value {
+			return index
+		}
+	}
+	return -1
 }
 
 func align(value, alignment int) int {

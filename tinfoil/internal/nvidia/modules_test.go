@@ -44,11 +44,11 @@ func testDependencies(
 
 func loadedName(path string) string {
 	switch filepath.Base(path) {
-	case "nvidia.ko", "nvidia.ko.zst":
+	case "nvidia.ko":
 		return "nvidia"
-	case "nvidia-uvm.ko", "nvidia-uvm.ko.zst":
+	case "nvidia-uvm.ko":
 		return "nvidia_uvm"
-	case "nvidia-modeset.ko", "nvidia-modeset.ko.zst":
+	case "nvidia-modeset.ko":
 		return "nvidia_modeset"
 	default:
 		return ""
@@ -69,9 +69,8 @@ func TestFixedInventoriesLoadOnlyOrderedNVIDIAModules(t *testing.T) {
 			name:      "core",
 			inventory: []modulePolicy{coreModule},
 			want: []finitCall{{
-				path:       "/modules/nvidia.ko.zst",
+				path:       "/modules/nvidia.ko",
 				parameters: coreParameters,
-				flags:      unix.MODULE_INIT_COMPRESSED_FILE,
 			}},
 		},
 		{
@@ -79,13 +78,11 @@ func TestFixedInventoriesLoadOnlyOrderedNVIDIAModules(t *testing.T) {
 			inventory: []modulePolicy{coreModule, uvmModule},
 			want: []finitCall{
 				{
-					path:       "/modules/nvidia.ko.zst",
+					path:       "/modules/nvidia.ko",
 					parameters: coreParameters,
-					flags:      unix.MODULE_INIT_COMPRESSED_FILE,
 				},
 				{
-					path:  "/modules/nvidia-uvm.ko.zst",
-					flags: unix.MODULE_INIT_COMPRESSED_FILE,
+					path: "/modules/nvidia-uvm.ko",
 				},
 			},
 		},
@@ -94,13 +91,11 @@ func TestFixedInventoriesLoadOnlyOrderedNVIDIAModules(t *testing.T) {
 			inventory: []modulePolicy{coreModule, modesetModule},
 			want: []finitCall{
 				{
-					path:       "/modules/nvidia.ko.zst",
+					path:       "/modules/nvidia.ko",
 					parameters: coreParameters,
-					flags:      unix.MODULE_INIT_COMPRESSED_FILE,
 				},
 				{
-					path:  "/modules/nvidia-modeset.ko.zst",
-					flags: unix.MODULE_INIT_COMPRESSED_FILE,
+					path: "/modules/nvidia-modeset.ko",
 				},
 			},
 		},
@@ -110,10 +105,10 @@ func TestFixedInventoriesLoadOnlyOrderedNVIDIAModules(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			loaded := map[string]bool{}
 			files := map[string]bool{
-				"/modules/nvidia.ko.zst":         true,
-				"/modules/nvidia-uvm.ko.zst":     true,
-				"/modules/nvidia-modeset.ko.zst": true,
-				"/modules/not-nvidia.ko.zst":     true,
+				"/modules/nvidia.ko":         true,
+				"/modules/nvidia-uvm.ko":     true,
+				"/modules/nvidia-modeset.ko": true,
+				"/modules/not-nvidia.ko":     true,
 			}
 			var got []finitCall
 			deps := testDependencies(loaded, files, func(path, parameters string, flags int) error {
@@ -136,75 +131,31 @@ func TestFixedInventoriesLoadOnlyOrderedNVIDIAModules(t *testing.T) {
 	}
 }
 
-func TestFinitModuleCompressionFlagAndCandidateOrder(t *testing.T) {
-	tests := []struct {
-		name      string
-		files     map[string]bool
-		wantPath  string
-		wantFlags int
-		wantStats []string
-	}{
-		{
-			name: "compressed preferred",
-			files: map[string]bool{
-				"/modules/nvidia.ko.zst": true,
-				"/modules/nvidia.ko":     true,
-			},
-			wantPath:  "/modules/nvidia.ko.zst",
-			wantFlags: unix.MODULE_INIT_COMPRESSED_FILE,
-			wantStats: []string{
-				"/modules/nvidia.ko.zst",
-			},
-		},
-		{
-			name: "uncompressed fallback",
-			files: map[string]bool{
-				"/modules/nvidia.ko": true,
-			},
-			wantPath:  "/modules/nvidia.ko",
-			wantFlags: 0,
-			wantStats: []string{
-				"/modules/nvidia.ko.zst",
-				"/modules/nvidia.ko",
-			},
-		},
+func TestFinitModuleUsesExactUncompressedPath(t *testing.T) {
+	files := map[string]bool{
+		"/modules/nvidia.ko":     true,
+		"/modules/nvidia.ko.zst": true,
 	}
+	var gotCall finitCall
+	deps := testDependencies(map[string]bool{}, files, func(path, parameters string, flags int) error {
+		gotCall = finitCall{path: path, parameters: parameters, flags: flags}
+		return nil
+	})
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var gotCall finitCall
-			var gotStats []string
-			deps := testDependencies(map[string]bool{}, test.files, func(path, parameters string, flags int) error {
-				gotCall = finitCall{path: path, parameters: parameters, flags: flags}
-				return nil
-			})
-			stat := deps.stat
-			deps.stat = func(path string) (os.FileInfo, error) {
-				if !strings.HasPrefix(path, "/sys/module/") {
-					gotStats = append(gotStats, path)
-				}
-				return stat(path)
-			}
-
-			if err := loadInventory("core", deps, coreModule); err != nil {
-				t.Fatalf("loadInventory: %v", err)
-			}
-			if gotCall.path != test.wantPath || gotCall.flags != test.wantFlags {
-				t.Fatalf("finit_module call = %#v, want path %q flags %d", gotCall, test.wantPath, test.wantFlags)
-			}
-			if !reflect.DeepEqual(gotStats, test.wantStats) {
-				t.Fatalf("candidate stat order = %q, want %q", gotStats, test.wantStats)
-			}
-		})
+	if err := loadInventory("core", deps, coreModule); err != nil {
+		t.Fatalf("loadInventory: %v", err)
+	}
+	if gotCall.path != "/modules/nvidia.ko" || gotCall.flags != 0 {
+		t.Fatalf("finit_module call = %#v, want exact uncompressed module with no flags", gotCall)
 	}
 }
 
 func TestFixedModulePathAllowsOnlyMeasuredInventory(t *testing.T) {
-	path, err := fixedModulePath(nvidiaModuleRoot, "nvidia-uvm.ko.zst")
+	path, err := fixedModulePath(nvidiaModuleRoot, "nvidia-uvm.ko")
 	if err != nil {
 		t.Fatalf("fixedModulePath: %v", err)
 	}
-	const want = "/usr/lib/tinfoil/kernel-modules/nvidia-uvm.ko.zst"
+	const want = "/usr/lib/tinfoil/kernel-modules/nvidia-uvm.ko"
 	if path != want {
 		t.Fatalf("fixedModulePath = %q, want %q", path, want)
 	}
@@ -214,6 +165,9 @@ func TestFixedModulePathAllowsOnlyMeasuredInventory(t *testing.T) {
 		"../nvidia.ko",
 		"updates/dkms/nvidia.ko",
 		"nvidia-drm.ko",
+		"nvidia.ko.zst",
+		"nvidia-uvm.ko.zst",
+		"nvidia-modeset.ko.zst",
 		"nvidia-peermem.ko.zst",
 	} {
 		t.Run(fmt.Sprintf("candidate_%q", candidate), func(t *testing.T) {
@@ -254,8 +208,8 @@ func TestAlreadyLoadedModulesAreSafe(t *testing.T) {
 func TestLoadInventoryPropagatesFailuresInOrder(t *testing.T) {
 	loadErr := errors.New("bad vermagic")
 	files := map[string]bool{
-		"/modules/nvidia.ko.zst":     true,
-		"/modules/nvidia-uvm.ko.zst": true,
+		"/modules/nvidia.ko":     true,
+		"/modules/nvidia-uvm.ko": true,
 	}
 	var calls []string
 	deps := testDependencies(map[string]bool{}, files, func(path, _ string, _ int) error {
@@ -276,7 +230,7 @@ func TestLoadInventoryPropagatesFailuresInOrder(t *testing.T) {
 		}
 	}
 	wantCalls := []string{
-		"/modules/nvidia.ko.zst",
+		"/modules/nvidia.ko",
 	}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("finit_module calls after failure = %q, want %q", calls, wantCalls)

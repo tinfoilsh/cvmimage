@@ -8,6 +8,13 @@ fi
 
 source_root=$1
 output_root=$2
+case "$source_root:$output_root" in
+    /*:/*) ;;
+    *)
+        echo "source and output roots must be absolute paths" >&2
+        exit 2
+        ;;
+esac
 artifact_dir="$output_root/artifacts"
 go_bin=/usr/lib/go-1.25/bin/go
 gcc_bin=/usr/bin/gcc

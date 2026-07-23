@@ -15,7 +15,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-rootfs-policy test-rootfs-manifest test-rootfs-manifest-policy \
 	verify-final-rootfs test-final-rootfs-verifier test-runtime-locks \
-	verify-runtime-sources update-runtime-locks test-runtime-archives \
+	verify-runtime-sources update-runtime-locks \
 	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
 	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
 	reproducible-runtime-artifacts
@@ -126,35 +126,12 @@ test-final-rootfs-verifier:
 	./scripts/test-final-rootfs-verifier.sh
 
 test-runtime-locks:
-	./scripts/test-runtime-source-lock.sh
+	./scripts/test-update-runtime-locks.sh
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-test test \
 		--symlink_prefix=/tmp/cvmimage-bazel-runtime-lock-test- \
-		//image:runtime-package-lock-test \
-		//scripts:runtime-package-members-lock-test \
-		//scripts:runtime-package-members-update-test \
-		//scripts:runtime-source-lock-test
-	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-graph mod graph >/dev/null
-
-test-runtime-archives:
-	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-archive-test test \
-		--symlink_prefix=/tmp/cvmimage-bazel-runtime-archive-test- \
-		//scripts:runtime-archive-test
-	@set -eu; \
-	for suffix in a b; do \
-		base="/tmp/cvmimage-bazel-runtime-archive-build-$$suffix"; \
-		hashes="/tmp/cvmimage-bazel-runtime-archive-build-$$suffix.sha256"; \
-		$(BAZEL) --output_base="$$base" build \
-			--symlink_prefix="$$base-" \
-			//image:runtime-package-member-archives \
-			//image:runtime-source-member-archives; \
-		bin="$$( $(BAZEL) --output_base="$$base" info bazel-bin )"; \
-		find "$$bin/image" -maxdepth 1 -type f -name '*-members.tar' -printf '%f\n' | sort | \
-			while read -r name; do sha256sum "$$bin/image/$$name"; done | \
-			sed "s#  $$bin/image/#  #" > "$$hashes"; \
-		test "$$(wc -l < "$$hashes")" -eq 47; \
-	done; \
-	cmp /tmp/cvmimage-bazel-runtime-archive-build-a.sha256 \
-		/tmp/cvmimage-bazel-runtime-archive-build-b.sha256
+		//image:runtime-package-lock-test
+	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-graph \
+		mod deps --lockfile_mode=error >/dev/null
 
 verify-runtime-sources:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check

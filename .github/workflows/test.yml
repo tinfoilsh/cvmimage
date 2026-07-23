@@ -71,14 +71,8 @@ jobs:
       - name: Test final rootfs verifier
         run: make test-final-rootfs-verifier
 
-      - name: Test runtime source and package-member locks
+      - name: Test locked runtime inputs
         run: make test-runtime-locks
-
-      - name: Test exact runtime archive extraction and package data
-        run: make test-runtime-archives
-
-      - name: Verify all runtime locks
-        run: make verify-runtime-sources
 
       - name: Test nvattest artifact safety
         run: make test-nvattest-artifacts

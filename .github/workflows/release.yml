@@ -15,7 +15,6 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-      actions: write
 
     steps:
       - name: Check if prerelease
@@ -36,54 +35,55 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          # Use Ubuntu snapshot to pin packages
-          SNAPSHOT_DATE="20260525T000000Z"
+          set -Eeuo pipefail
+          SNAPSHOT_DATE="20260721T000000Z"
           echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute main restricted universe multiverse" | sudo tee /etc/apt/sources.list
           echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
           echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-    
+
           sudo apt-get update
-          sudo apt-get install -y pipx ubuntu-keyring debian-archive-keyring make jq binutils
-          sudo pipx install git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2 #v26
-          sudo pipx ensurepath
-          mkdir -p packages mkosi.extra/usr/bin
+          sudo apt-get install -y \
+            binutils \
+            cpio \
+            curl \
+            debian-archive-keyring \
+            dosfstools \
+            e2fsprogs \
+            jq \
+            make \
+            pipx \
+            systemd \
+            ubuntu-keyring \
+            zstd
+          sudo env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+            pipx install git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2 #v26
+          test "$(mkosi --version)" = "mkosi 26"
 
-      - name: Setup Go
-        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
-        with:
-          go-version: '1.25'
-          cache: false
-
-      - name: Build tinfoil binaries
+      - name: Install Bazel 8.7.0
         run: |
-          mkdir -p mkosi.extra/usr/bin
-          cd tinfoil
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-boot ./cmd/boot
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-egress ./cmd/egress
-          go build -ldflags="-s -w" -o ../mkosi.extra/usr/bin/tinfoil-shim ./cmd/shim
-          sha256sum ../mkosi.extra/usr/bin/tinfoil-boot \
-                    ../mkosi.extra/usr/bin/tinfoil-egress \
-                    ../mkosi.extra/usr/bin/tinfoil-shim
-
-      # The CUDA repo's nvattest links libxml2.so.2, but resolute ships
-      # libxml2.so.16, so we build from source. The builder image digest and
-      # docker invocation live solely in the Makefile to avoid drift.
-      - name: Build nvattest from source (in resolute container)
-        run: |
-          make nvattest
-          ls -la packages/
+          set -Eeuo pipefail
+          directory=$(mktemp -d /tmp/cvmimage-bazel-install.XXXXXXXX)
+          archive="$directory/bazel"
+          trap 'rm -f -- "$archive"; rmdir -- "$directory"' EXIT
+          curl -fsSL --retry 3 \
+            https://github.com/bazelbuild/bazel/releases/download/8.7.0/bazel-8.7.0-linux-x86_64 \
+            -o "$archive"
+          printf '%s  %s\n' \
+            d7606e679b78067c811096fb3d6cf135225b528835ca396e3a4dddf957859544 \
+            "$archive" | sha256sum -c --strict -
+          sudo install -m 0755 "$archive" /usr/local/bin/bazel
+          test "$(bazel --version)" = "bazel 8.7.0"
 
       - name: Build image
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          sudo /opt/pipx_bin/mkosi --image-version "$REF_NAME"
+        run: make shipping-image
 
-      - name: Fix permissions
+      - name: Check release artifacts
         run: |
+          set -Eeuo pipefail
           mkdir -p /tmp/out
-          sudo chmod 644 tinfoilcvm.*
-          sudo chown $USER:$USER tinfoilcvm.*
+          test -s tinfoilcvm.raw
+          test -s tinfoilcvm.initrd
+          test -s tinfoilcvm.vmlinuz
           test "$(wc -c < tinfoilcvm.roothash)" -eq 64
           grep -Eq '^[a-f0-9]{64}$' tinfoilcvm.roothash
 
@@ -92,6 +92,7 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
+          set -Eeuo pipefail
           # Generate manifest JSON
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
           {
@@ -161,15 +162,3 @@ jobs:
           \`\`\`" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256"
-
-      - name: Trigger config repo updates
-        if: steps.check-prerelease.outputs.is_prerelease == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          # Strip 'v' prefix for version
-          VERSION="${REF_NAME#v}"
-
-          # Trigger the update workflow
-          gh workflow run update-config-repos.yml --field version="$VERSION"

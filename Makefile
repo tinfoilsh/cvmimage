@@ -3,6 +3,8 @@ all: build
 TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 BAZEL ?= bazel
+SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
+SHIPPING_INITRD = initrd.cpio.zst
 
 NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
@@ -10,7 +12,7 @@ NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
 NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
                            build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
-.PHONY: all build rebuild clean deepclean hash nvattest go-binaries \
+.PHONY: all build rebuild shipping-image clean deepclean hash nvattest \
 	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-runtime-locks \
@@ -19,7 +21,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
 	reproducible-runtime-artifacts
 
-# tinfoilcvm.hash is the compatibility copy written by `rebuild`; mkosi's
+# tinfoilcvm.hash is the compatibility copy written by `shipping-image`; mkosi's
 # direct roothash split artifact is the source contract.
 hash:
 	@if [ ! -f tinfoilcvm.roothash ]; then \
@@ -53,16 +55,7 @@ clean:
 
 deepclean:
 	$(MKOSI) clean
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf mkosi.cache/*
 	sudo env PATH="$(TRUSTED_PATH)" rm -f packages/nvattest_*.deb packages/libnvat_*.deb
-
-go-binaries: builder-initrd
-	mkdir -p mkosi.extra/usr/bin
-	install -m 0755 build/builder-work/output/artifacts/tinfoil-boot mkosi.extra/usr/bin/tinfoil-boot
-	install -m 0755 build/builder-work/output/artifacts/tinfoil-container-status mkosi.extra/usr/bin/tinfoil-container-status
-	install -m 0755 build/builder-work/output/artifacts/tinfoil-egress mkosi.extra/usr/bin/tinfoil-egress
-	install -m 0755 build/builder-work/output/artifacts/tinfoil-init mkosi.extra/usr/bin/tinfoil-init
-	install -m 0755 build/builder-work/output/artifacts/tinfoil-shim mkosi.extra/usr/bin/tinfoil-shim
 
 runtime-builder:
 	./scripts/build-runtime-builder.sh
@@ -124,17 +117,25 @@ verify-runtime-sources:
 update-runtime-locks:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh
 
-# First build populates mkosi.cache; later builds reuse it for fast iteration.
-rebuild: go-binaries
-	mkdir -p mkosi.cache packages
+shipping-image: bazel-rootfs additive-initrd
+	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
+		tinfoilcvm.vmlinuz tinfoilcvm.initrd
 	$(MKOSI) --force
-	rm -f tinfoilcvm
+	sudo env PATH="$(TRUSTED_PATH)" chmod 0644 tinfoilcvm.raw tinfoilcvm.roothash
+	sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" tinfoilcvm.raw tinfoilcvm.roothash
+	install -m 0644 "$(SHIPPING_KERNEL)" tinfoilcvm.vmlinuz
+	install -m 0644 "$(SHIPPING_INITRD)" tinfoilcvm.initrd
+	test -s tinfoilcvm.raw
+	test -s tinfoilcvm.vmlinuz
+	test -s tinfoilcvm.initrd
 	test "$$(wc -c < tinfoilcvm.roothash)" -eq 64
 	grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.roothash
 	cp tinfoilcvm.roothash tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
-build: nvattest rebuild
+rebuild: shipping-image
+
+build: shipping-image
 
 # The CUDA repo's nvattest links libxml2.so.2; resolute ships libxml2.so.16, so
 # we build from source against the system lib. See build-nvattest.sh.
@@ -160,6 +161,3 @@ test-nvattest-artifacts:
 
 reproducible-nvattest:
 	./scripts/reproduce-nvattest.sh
-
-python-lockfile:
-	pip-compile --generate-hashes --allow-unsafe --output-file=mkosi.extra/opt/venv-requirements.txt python-requirements.in

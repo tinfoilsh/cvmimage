@@ -7,8 +7,6 @@ lib/
 /bin/
 packages/
 tinfoil-inference-*
-mkosi.cache/*
-!mkosi.cache/.gitkeep
 venv/
 mkosi.tools/
 mkosi.tools.manifest
@@ -17,9 +15,5 @@ initrd.cpio.zst
 tinfoil-boot/tinfoil-boot
 tinfoil/boot
 tinfoil/shim
-mkosi.extra/usr/bin/tinfoil-boot
-mkosi.extra/usr/bin/tinfoil-container-status
-mkosi.extra/usr/bin/tinfoil-egress
-mkosi.extra/usr/bin/tinfoil-shim
 /build/
 /evidence/

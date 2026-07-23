@@ -84,7 +84,12 @@ bazel-debug-layer: builder-debug-init
 	mkdir -p build/stage
 	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
 
+
 test-debug-image-contract:
+	@test -s build/stage/bazel-rootfs.tar -a -s build/stage/bazel-debug-layer.tar || { \
+		echo 'missing staged rootfs layers; run make bazel-rootfs bazel-debug-layer explicitly' >&2; \
+		exit 1; \
+	}
 	./scripts/test-debug-image-contract.sh \
 		build/stage/bazel-rootfs.tar \
 		build/stage/bazel-debug-layer.tar

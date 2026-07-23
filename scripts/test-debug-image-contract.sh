@@ -27,8 +27,10 @@ done
 
 mkdir "$scratch/release"
 tar -xf "$release_rootfs" -C "$scratch/release" usr/bin/tinfoil-init
-if [ ! -f "$scratch/release/usr/bin/tinfoil-init" ] || [ -L "$scratch/release/usr/bin/tinfoil-init" ]; then
-    echo 'shipping rootfs tinfoil-init is not a regular file' >&2
+if [ ! -f "$scratch/release/usr/bin/tinfoil-init" ] ||
+    [ -L "$scratch/release/usr/bin/tinfoil-init" ] ||
+    [ ! -x "$scratch/release/usr/bin/tinfoil-init" ]; then
+    echo 'shipping rootfs tinfoil-init is not a regular executable' >&2
     exit 1
 fi
 strings "$scratch/release/usr/bin/tinfoil-init" > "$scratch/release-strings"
@@ -54,8 +56,10 @@ mkdir "$scratch/debug"
 tar -xf "$debug_layer" -C "$scratch/debug" usr/bin/tinfoil-init
 tar -xf "$debug_layer" -C "$scratch/debug" ./usr/bin/busybox
 for artifact in usr/bin/tinfoil-init usr/bin/busybox; do
-    if [ ! -f "$scratch/debug/$artifact" ] || [ -L "$scratch/debug/$artifact" ]; then
-        echo "debug layer $artifact is not a regular file" >&2
+    if [ ! -f "$scratch/debug/$artifact" ] ||
+        [ -L "$scratch/debug/$artifact" ] ||
+        [ ! -x "$scratch/debug/$artifact" ]; then
+        echo "debug layer $artifact is not a regular executable" >&2
         exit 1
     fi
 done

@@ -4,8 +4,13 @@ umask 022
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 kernel_dir="$repo_dir/kernel"
-kernel_build_dir="${TINFOIL_KERNEL_BUILD_ROOT:-$kernel_dir/build}"
-kernel_out_dir="${TINFOIL_KERNEL_OUT_DIR:-$kernel_dir/out}"
+source "$kernel_dir/profile.sh"
+select_tinfoil_kernel_profile
+if [ "$kernel_profile" != release ]; then
+    echo "NVIDIA modules are not defined for kernel profile: $kernel_profile" >&2
+    exit 2
+fi
+kernel_build_dir="$kernel_build_root"
 kernel_source_dir="$kernel_build_dir/linux-source-7.0.0"
 kernel_release_file="$kernel_out_dir/kernel.release"
 output_dir="${TINFOIL_NVIDIA_OUTPUT_DIR:-$kernel_out_dir/rootfs-artifacts/nvidia-modules}"

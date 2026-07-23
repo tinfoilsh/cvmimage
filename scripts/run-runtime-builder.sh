@@ -8,6 +8,7 @@ fi
 
 producer=$1
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+kernel_dir="$repo_dir/kernel"
 base_image="$(<"$repo_dir/scripts/runtime-builder-base-image.txt")"
 snapshot="$(<"$repo_dir/scripts/runtime-builder-snapshot.txt")"
 builder_image="cvmimage-runtime-builder:${snapshot%%T*}"
@@ -77,8 +78,10 @@ case "$producer" in
                 --runtime-output /output/runtime
         ;;
     kernel)
-        build_root="${TINFOIL_KERNEL_BUILD_ROOT:-$repo_dir/kernel/build}"
-        output="${TINFOIL_KERNEL_OUT_DIR:-$repo_dir/kernel/out}"
+        source "$kernel_dir/profile.sh"
+        select_tinfoil_kernel_profile
+        build_root="$kernel_build_root"
+        output="$kernel_out_dir"
         mkdir -p "$build_root" "$output"
         docker run --rm \
             --user "$host_uid:$host_gid" \
@@ -87,14 +90,21 @@ case "$producer" in
             --mount "type=bind,src=$output,dst=/kernel-output" \
             --env TINFOIL_KERNEL_BUILD_ROOT=/kernel-build \
             --env TINFOIL_KERNEL_OUT_DIR=/kernel-output \
+            --env "TINFOIL_KERNEL_PROFILE=$kernel_profile" \
             --env TINFOIL_KERNEL_SOURCE_DEB=/opt/tinfoil-builder/packages/linux-source-7.0.0_7.0.0-28.28_all.deb \
             --env TINFOIL_OFFLINE=1 \
             "$builder_image" \
             /workspace/kernel/build-local.sh
         ;;
     nvidia)
-        build_root="${TINFOIL_KERNEL_BUILD_ROOT:-$repo_dir/kernel/build}"
-        kernel_output="${TINFOIL_KERNEL_OUT_DIR:-$repo_dir/kernel/out}"
+        source "$kernel_dir/profile.sh"
+        select_tinfoil_kernel_profile
+        if [ "$kernel_profile" != release ]; then
+            echo "NVIDIA modules are not defined for kernel profile: $kernel_profile" >&2
+            exit 2
+        fi
+        build_root="$kernel_build_root"
+        kernel_output="$kernel_out_dir"
         output="${TINFOIL_NVIDIA_OUTPUT_DIR:-$kernel_output/rootfs-artifacts/nvidia-modules}"
         output_parent="$(dirname -- "$output")"
         output_name="$(basename -- "$output")"
@@ -113,6 +123,7 @@ case "$producer" in
             --env "HOST_GID=$host_gid" \
             --env TINFOIL_KERNEL_BUILD_ROOT=/kernel-build \
             --env TINFOIL_KERNEL_OUT_DIR=/kernel-output \
+            --env "TINFOIL_KERNEL_PROFILE=$kernel_profile" \
             --env "TINFOIL_NVIDIA_OUTPUT_DIR=/nvidia-output-parent/$output_name" \
             --env TINFOIL_NVIDIA_PACKAGE_CACHE=/nvidia-cache \
             --env "TINFOIL_OFFLINE=${TINFOIL_OFFLINE:-0}" \

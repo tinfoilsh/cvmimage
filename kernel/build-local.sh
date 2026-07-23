@@ -7,12 +7,14 @@ kernel_dir="$repo_dir/kernel"
 kernel_source_version="7.0.0"
 kernel_package_version="7.0.0-28.28"
 kernel_source_deb_sha256="dd5994b199a1cb06b1f336bb086c5c23a9258fdcfdcbb7dcc8d3afa9a5d92e13"
-base_release="7.0.0-28-generic"
 kernel_version_override="$kernel_source_version"
 defconfig="$kernel_dir/tinfoil-cvm-7.0.defconfig"
 
-build_root="${TINFOIL_KERNEL_BUILD_ROOT:-$kernel_dir/build}"
-out_dir="${TINFOIL_KERNEL_OUT_DIR:-$kernel_dir/out}"
+source "$kernel_dir/profile.sh"
+select_tinfoil_kernel_profile
+
+build_root="$kernel_build_root"
+out_dir="$kernel_out_dir"
 source_dir="$build_root/linux-source-${kernel_source_version}"
 source_package_root="$build_root/source-package"
 make_version_args=(KERNELVERSION="$kernel_version_override")
@@ -96,12 +98,14 @@ sed -i 's/--build-id=sha1/--build-id=none/g' \
 echo "Kernel source: $source_dir"
 echo "Kernel source tarball: $source_tarball"
 echo "Tinfoil defconfig: $defconfig"
+echo "Kernel profile: $kernel_profile"
 shopt -s nullglob
 policy_fragments=("$kernel_dir"/config.d/*.config)
 if [ "${#policy_fragments[@]}" -eq 0 ]; then
     echo "no kernel policy fragments found under $kernel_dir/config.d" >&2
     exit 1
 fi
+policy_fragments+=("$kernel_profile_fragment")
 echo "Policy fragments:"
 printf '  %s\n' "${policy_fragments[@]}"
 
@@ -124,11 +128,11 @@ make -C "$source_dir" "${make_version_args[@]}" \
 make -C "$source_dir" "${make_version_args[@]}" modules_prepare
 
 kernel_release="$(make -s -C "$source_dir" "${make_version_args[@]}" kernelrelease)"
-if [ "$kernel_release" != "$base_release" ]; then
+if [ "$kernel_release" != "$kernel_expected_release" ]; then
     cat >&2 <<EOF
 kernel release mismatch
   built:    $kernel_release
-  expected: $base_release
+  expected: $kernel_expected_release
 
 Keep the custom kernel release aligned with the external NVIDIA module tree.
 EOF
@@ -137,6 +141,7 @@ fi
 install -m 0644 "$source_dir/arch/x86/boot/bzImage" "$out_dir/tinfoil-custom.vmlinuz"
 install -m 0644 "$source_dir/.config" "$out_dir/config"
 printf '%s\n' "$kernel_release" > "$out_dir/kernel.release"
+printf '%s\n' "$kernel_profile" > "$out_dir/profile"
 if [ ! -s "$source_dir/vmlinux.symvers" ]; then
     echo "missing required kernel symbol versions: $source_dir/vmlinux.symvers" >&2
     exit 1
@@ -149,11 +154,12 @@ if [ ! -s "$source_dir/modules.builtin" ]; then
 fi
 install -m 0644 "$source_dir/modules.builtin" "$out_dir/modules.builtin"
 
-sha256sum "$out_dir/tinfoil-custom.vmlinuz" "$out_dir/config" "$out_dir/modules.builtin" "$out_dir/Module.symvers" > "$out_dir/checksums.sha256"
+sha256sum "$out_dir/tinfoil-custom.vmlinuz" "$out_dir/config" "$out_dir/modules.builtin" "$out_dir/Module.symvers" "$out_dir/profile" > "$out_dir/checksums.sha256"
 
 cat <<EOF
 custom kernel build complete
   release: $kernel_release
+  profile: $kernel_profile
   kernel:  $out_dir/tinfoil-custom.vmlinuz
   config:  $out_dir/config
   builtins:$out_dir/modules.builtin

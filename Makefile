@@ -4,6 +4,7 @@ TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
+SHIPPING_KERNEL_PROFILE = kernel/out/profile
 SHIPPING_INITRD = initrd.cpio.zst
 
 NVATTEST_VERSION = 1.2.2.1780962352-1
@@ -19,7 +20,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 	verify-runtime-sources update-runtime-locks \
 	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
 	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
-	reproducible-runtime-artifacts
+	reproducible-runtime-artifacts test-kernel-profiles
 
 # tinfoilcvm.hash is the compatibility copy written by `shipping-image`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -83,6 +84,9 @@ nvidia-module-artifacts: custom-kernel-artifacts
 test-nvidia-module-producer:
 	./scripts/test-nvidia-module-producer.sh
 
+test-kernel-profiles:
+	./scripts/test-kernel-profiles.sh
+
 additive-initrd: builder-initrd
 	TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
 
@@ -118,6 +122,7 @@ update-runtime-locks:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh
 
 shipping-image: bazel-rootfs additive-initrd
+	test "$$(cat "$(SHIPPING_KERNEL_PROFILE)")" = release
 	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 		tinfoilcvm.vmlinuz tinfoilcvm.initrd
 	$(MKOSI) --force

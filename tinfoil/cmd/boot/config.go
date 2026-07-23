@@ -312,38 +312,6 @@ type egressFileEntry struct {
 	Allow []string `yaml:"allow"`
 }
 
-// loadConfigFromRamdisk reads config directly from ramdisk without verification (for debugging)
-func loadConfigFromRamdisk() (*Config, error) {
-	data, err := os.ReadFile(boot.ConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading config from ramdisk: %w", err)
-	}
-
-	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
-	if err := validateConfigShape(&config); err != nil {
-		return nil, err
-	}
-	if err := validateModelCount(len(config.Models)); err != nil {
-		return nil, err
-	}
-
-	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
-	if err != nil {
-		return nil, fmt.Errorf("parsing shim config: %w", err)
-	}
-	shimCfg.ExpectedGPUs = config.GPUs
-	config.ShimCfg = shimCfg
-
-	if err := validateNetwork(&config); err != nil {
-		return nil, fmt.Errorf("network config: %w", err)
-	}
-
-	return &config, nil
-}
-
 func loadExternalConfig() error {
 	externalDiskPath, err := device.ExternalConfigDisk()
 	if err != nil {

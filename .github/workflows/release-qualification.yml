@@ -1,0 +1,527 @@
+name: Qualify and Promote Release Measurement
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing stable release tag to qualify (for example v0.12.0)"
+        required: true
+        type: string
+      source_commit:
+        description: "Exact 40-character source commit selected for qualification"
+        required: true
+        type: string
+      separate_host_evidence:
+        description: "Evidence URL or run identifier for reproduction on a separate host"
+        required: true
+        type: string
+      boot_workload_attestation_evidence:
+        description: "Evidence URL or run identifier for boot, workload, and attestation tests"
+        required: true
+        type: string
+      h200_evidence:
+        description: "H200 evidence, or a documented not-applicable decision"
+        required: true
+        type: string
+      b300_evidence:
+        description: "B300 evidence, or a documented not-applicable decision"
+        required: true
+        type: string
+      nvswitch_evidence:
+        description: "NVSwitch evidence, or a documented not-applicable decision"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  reproduce:
+    name: Reproduce Candidate in Two Isolated Roots
+    runs-on: large
+    timeout-minutes: 360
+    environment: cvm-release-reproducibility
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.hashes.outputs.source_commit }}
+      rootfs_sha256: ${{ steps.hashes.outputs.rootfs_sha256 }}
+      raw_sha256: ${{ steps.hashes.outputs.raw_sha256 }}
+      kernel_sha256: ${{ steps.hashes.outputs.kernel_sha256 }}
+      initrd_sha256: ${{ steps.hashes.outputs.initrd_sha256 }}
+      roothash: ${{ steps.hashes.outputs.roothash }}
+      roothash_file_sha256: ${{ steps.hashes.outputs.roothash_file_sha256 }}
+      release_manifest_sha256: ${{ steps.hashes.outputs.release_manifest_sha256 }}
+      input_locks_sha256: ${{ steps.hashes.outputs.input_locks_sha256 }}
+    steps:
+      - name: Validate fixed release selection
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          ref: ${{ inputs.source_commit }}
+          path: qualification/build-a/source
+          persist-credentials: false
+
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          ref: ${{ inputs.source_commit }}
+          path: qualification/build-b/source
+          persist-credentials: false
+
+      - name: Verify tag and stable release bind to the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          actual_commit=$(git -C qualification/build-a/source rev-parse HEAD)
+          test "$actual_commit" = "$SOURCE_COMMIT"
+          test "$(git -C qualification/build-b/source rev-parse HEAD)" = "$SOURCE_COMMIT"
+          git -C qualification/build-a/source fetch --no-tags origin \
+            "refs/tags/$VERSION:refs/tags/$VERSION"
+          test "$(git -C qualification/build-a/source rev-parse "$VERSION^{commit}")" = "$SOURCE_COMMIT"
+          test "$(gh release view "$VERSION" --repo "$REPOSITORY" --json isPrerelease --jq .isPrerelease)" = false
+
+      - name: Install build dependencies
+        run: |
+          set -Eeuo pipefail
+          SNAPSHOT_DATE="20260721T000000Z"
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute main restricted universe multiverse" | sudo tee /etc/apt/sources.list
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            cpio \
+            curl \
+            debian-archive-keyring \
+            dosfstools \
+            e2fsprogs \
+            jq \
+            make \
+            pipx \
+            systemd \
+            ubuntu-keyring \
+            zstd
+          sudo env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+            pipx install git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+          test "$(mkosi --version)" = "mkosi 26"
+
+      - name: Install Bazel 8.7.0
+        run: |
+          set -Eeuo pipefail
+          directory=$(mktemp -d /tmp/cvmimage-bazel-install.XXXXXXXX)
+          archive="$directory/bazel"
+          trap 'rm -f -- "$archive"; rmdir -- "$directory"' EXIT
+          curl -fsSL --retry 3 \
+            https://github.com/bazelbuild/bazel/releases/download/8.7.0/bazel-8.7.0-linux-x86_64 \
+            -o "$archive"
+          printf '%s  %s\n' \
+            d7606e679b78067c811096fb3d6cf135225b528835ca396e3a4dddf957859544 \
+            "$archive" | sha256sum -c --strict -
+          sudo install -m 0755 "$archive" /usr/local/bin/bazel
+          test "$(bazel --version)" = "bazel 8.7.0"
+
+      - name: Build candidate A
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/cvm-release-qualification/build-a"
+          mkdir -p "$root/home" "$root/tmp" "$root/cache"
+          cd qualification/build-a/source
+          env \
+            HOME="$root/home" \
+            TMPDIR="$root/tmp" \
+            XDG_CACHE_HOME="$root/cache" \
+            make shipping-image
+
+      - name: Build candidate B
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/cvm-release-qualification/build-b"
+          mkdir -p "$root/home" "$root/tmp" "$root/cache"
+          cd qualification/build-b/source
+          env \
+            HOME="$root/home" \
+            TMPDIR="$root/tmp" \
+            XDG_CACHE_HOME="$root/cache" \
+            make shipping-image
+
+      - name: Compare fixed release artifacts
+        run: |
+          set -Eeuo pipefail
+          a=qualification/build-a/source
+          b=qualification/build-b/source
+
+          sha256sum "$a/build/stage/bazel-rootfs.tar" "$b/build/stage/bazel-rootfs.tar"
+          if ! cmp "$a/build/stage/bazel-rootfs.tar" "$b/build/stage/bazel-rootfs.tar"; then
+            command -v diffoscope >/dev/null && diffoscope "$a/build/stage/bazel-rootfs.tar" "$b/build/stage/bazel-rootfs.tar" || true
+            exit 1
+          fi
+
+          sha256sum "$a/tinfoilcvm.raw" "$b/tinfoilcvm.raw"
+          if ! cmp "$a/tinfoilcvm.raw" "$b/tinfoilcvm.raw"; then
+            command -v diffoscope >/dev/null && diffoscope "$a/tinfoilcvm.raw" "$b/tinfoilcvm.raw" || true
+            exit 1
+          fi
+
+          sha256sum "$a/tinfoilcvm.vmlinuz" "$b/tinfoilcvm.vmlinuz"
+          if ! cmp "$a/tinfoilcvm.vmlinuz" "$b/tinfoilcvm.vmlinuz"; then
+            command -v diffoscope >/dev/null && diffoscope "$a/tinfoilcvm.vmlinuz" "$b/tinfoilcvm.vmlinuz" || true
+            exit 1
+          fi
+
+          sha256sum "$a/tinfoilcvm.initrd" "$b/tinfoilcvm.initrd"
+          if ! cmp "$a/tinfoilcvm.initrd" "$b/tinfoilcvm.initrd"; then
+            command -v diffoscope >/dev/null && diffoscope "$a/tinfoilcvm.initrd" "$b/tinfoilcvm.initrd" || true
+            exit 1
+          fi
+
+          sha256sum "$a/tinfoilcvm.roothash" "$b/tinfoilcvm.roothash"
+          if ! cmp "$a/tinfoilcvm.roothash" "$b/tinfoilcvm.roothash"; then
+            command -v diffoscope >/dev/null && diffoscope "$a/tinfoilcvm.roothash" "$b/tinfoilcvm.roothash" || true
+            exit 1
+          fi
+
+      - name: Verify candidate release manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          source=qualification/build-a/source
+          manifest="$RUNNER_TEMP/tinfoil-inference-${VERSION}-manifest.json"
+          gh release download "$VERSION" \
+            --repo "$REPOSITORY" \
+            --pattern "tinfoil-inference-${VERSION}-manifest.json" \
+            --dir "$RUNNER_TEMP"
+
+          test "$(jq -r .version "$manifest")" = "$VERSION"
+          test "$(jq -r .source_commit "$manifest")" = "$SOURCE_COMMIT"
+          test "$(jq -r .root "$manifest")" = "$(cat "$source/tinfoilcvm.roothash")"
+          test "$(jq -r .rootfs "$manifest")" = "$(sha256sum "$source/build/stage/bazel-rootfs.tar" | cut -d ' ' -f1)"
+          test "$(jq -r .raw "$manifest")" = "$(sha256sum "$source/tinfoilcvm.raw" | cut -d ' ' -f1)"
+          test "$(jq -r .kernel "$manifest")" = "$(sha256sum "$source/tinfoilcvm.vmlinuz" | cut -d ' ' -f1)"
+          test "$(jq -r .initrd "$manifest")" = "$(sha256sum "$source/tinfoilcvm.initrd" | cut -d ' ' -f1)"
+
+      - name: Verify distributed candidate artifacts
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          source=qualification/build-a/source
+          distributed="$RUNNER_TEMP/distributed-candidate"
+          mkdir -p "$distributed"
+
+          for artifact in raw vmlinuz initrd; do
+            curl -fsSL --retry 3 \
+              "https://images.tinfoil.sh/cvm/tinfoil-inference-${VERSION}.${artifact}" \
+              -o "$distributed/tinfoilcvm.${artifact}"
+            cmp "$source/tinfoilcvm.${artifact}" "$distributed/tinfoilcvm.${artifact}"
+          done
+
+          sha256sum \
+            "$distributed/tinfoilcvm.raw" \
+            "$distributed/tinfoilcvm.vmlinuz" \
+            "$distributed/tinfoilcvm.initrd"
+
+      - name: Record qualified hashes
+        id: hashes
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          source=qualification/build-a/source
+          manifest="$RUNNER_TEMP/tinfoil-inference-${VERSION}-manifest.json"
+          locks="$RUNNER_TEMP/runtime-input-locks.sha256"
+          (
+            cd "$source"
+            sha256sum \
+              .bazelversion \
+              MODULE.bazel.lock \
+              image/runtime-packages.yaml \
+              image/runtime-packages.lock.json \
+              image/runtime-sources.lock.json \
+              scripts/nvattest-regorus-Cargo.lock
+          ) > "$locks"
+
+          echo "source_commit=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "rootfs_sha256=$(sha256sum "$source/build/stage/bazel-rootfs.tar" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "raw_sha256=$(sha256sum "$source/tinfoilcvm.raw" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "kernel_sha256=$(sha256sum "$source/tinfoilcvm.vmlinuz" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "initrd_sha256=$(sha256sum "$source/tinfoilcvm.initrd" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "roothash=$(cat "$source/tinfoilcvm.roothash")" >> "$GITHUB_OUTPUT"
+          echo "roothash_file_sha256=$(sha256sum "$source/tinfoilcvm.roothash" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "release_manifest_sha256=$(sha256sum "$manifest" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "input_locks_sha256=$(sha256sum "$locks" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+
+  external-qualification:
+    name: Approve Functional and Hardware Qualification
+    needs: reproduce
+    runs-on: ubuntu-latest
+    environment: cvm-release-hardware-qualification
+    permissions: {}
+    steps:
+      - name: Require external qualification evidence
+        env:
+          B300_EVIDENCE: ${{ inputs.b300_evidence }}
+          BOOT_WORKLOAD_ATTESTATION_EVIDENCE: ${{ inputs.boot_workload_attestation_evidence }}
+          H200_EVIDENCE: ${{ inputs.h200_evidence }}
+          NVSWITCH_EVIDENCE: ${{ inputs.nvswitch_evidence }}
+          SEPARATE_HOST_EVIDENCE: ${{ inputs.separate_host_evidence }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$SEPARATE_HOST_EVIDENCE"
+          test -n "$BOOT_WORKLOAD_ATTESTATION_EVIDENCE"
+          test -n "$H200_EVIDENCE"
+          test -n "$B300_EVIDENCE"
+          test -n "$NVSWITCH_EVIDENCE"
+          {
+            echo '## External qualification evidence'
+            echo
+            printf -- '- Separate-host reproduction: `%s`\n' "$SEPARATE_HOST_EVIDENCE"
+            printf -- '- Boot, workload, and attestation: `%s`\n' "$BOOT_WORKLOAD_ATTESTATION_EVIDENCE"
+            printf -- '- H200: `%s`\n' "$H200_EVIDENCE"
+            printf -- '- B300: `%s`\n' "$B300_EVIDENCE"
+            printf -- '- NVSwitch: `%s`\n' "$NVSWITCH_EVIDENCE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prepare-promotion:
+    name: Approve Exact Measurement Promotion
+    needs:
+      - reproduce
+      - external-qualification
+    runs-on: ubuntu-latest
+    environment: cvm-measurement-promotion
+    permissions:
+      contents: write
+    outputs:
+      evidence_asset: ${{ steps.evidence.outputs.evidence_asset }}
+      evidence_sha256: ${{ steps.evidence.outputs.evidence_sha256 }}
+      initrd_sha256: ${{ needs.reproduce.outputs.initrd_sha256 }}
+      input_locks_sha256: ${{ needs.reproduce.outputs.input_locks_sha256 }}
+      kernel_sha256: ${{ needs.reproduce.outputs.kernel_sha256 }}
+      raw_sha256: ${{ needs.reproduce.outputs.raw_sha256 }}
+      release_manifest_sha256: ${{ needs.reproduce.outputs.release_manifest_sha256 }}
+      repositories: ${{ steps.repositories.outputs.repositories }}
+      roothash: ${{ needs.reproduce.outputs.roothash }}
+      roothash_file_sha256: ${{ needs.reproduce.outputs.roothash_file_sha256 }}
+      rootfs_sha256: ${{ needs.reproduce.outputs.rootfs_sha256 }}
+      source_commit: ${{ needs.reproduce.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+
+      - name: Write content-addressed qualification evidence
+        id: evidence
+        env:
+          B300_EVIDENCE: ${{ inputs.b300_evidence }}
+          BOOT_WORKLOAD_ATTESTATION_EVIDENCE: ${{ inputs.boot_workload_attestation_evidence }}
+          H200_EVIDENCE: ${{ inputs.h200_evidence }}
+          INITRD_SHA256: ${{ needs.reproduce.outputs.initrd_sha256 }}
+          INPUT_LOCKS_SHA256: ${{ needs.reproduce.outputs.input_locks_sha256 }}
+          KERNEL_SHA256: ${{ needs.reproduce.outputs.kernel_sha256 }}
+          NVSWITCH_EVIDENCE: ${{ inputs.nvswitch_evidence }}
+          RAW_SHA256: ${{ needs.reproduce.outputs.raw_sha256 }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.reproduce.outputs.release_manifest_sha256 }}
+          ROOTHASH: ${{ needs.reproduce.outputs.roothash }}
+          ROOTHASH_FILE_SHA256: ${{ needs.reproduce.outputs.roothash_file_sha256 }}
+          ROOTFS_SHA256: ${{ needs.reproduce.outputs.rootfs_sha256 }}
+          SEPARATE_HOST_EVIDENCE: ${{ inputs.separate_host_evidence }}
+          SOURCE_COMMIT: ${{ needs.reproduce.outputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          short_commit=${SOURCE_COMMIT:0:12}
+          prefix="tinfoil-inference-${VERSION}-qualification-${short_commit}"
+          locks="$RUNNER_TEMP/runtime-input-locks.sha256"
+          evidence="$RUNNER_TEMP/$prefix.txt"
+
+          sha256sum \
+            .bazelversion \
+            MODULE.bazel.lock \
+            image/runtime-packages.yaml \
+            image/runtime-packages.lock.json \
+            image/runtime-sources.lock.json \
+            scripts/nvattest-regorus-Cargo.lock > "$locks"
+          test "$(sha256sum "$locks" | cut -d ' ' -f1)" = "$INPUT_LOCKS_SHA256"
+
+          {
+            printf 'version=%s\n' "$VERSION"
+            printf 'source_commit=%s\n' "$SOURCE_COMMIT"
+            printf 'workflow_run=%s/actions/runs/%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'release_manifest_sha256=%s\n' "$RELEASE_MANIFEST_SHA256"
+            printf 'rootfs_sha256=%s\n' "$ROOTFS_SHA256"
+            printf 'raw_sha256=%s\n' "$RAW_SHA256"
+            printf 'kernel_sha256=%s\n' "$KERNEL_SHA256"
+            printf 'initrd_sha256=%s\n' "$INITRD_SHA256"
+            printf 'roothash=%s\n' "$ROOTHASH"
+            printf 'roothash_file_sha256=%s\n' "$ROOTHASH_FILE_SHA256"
+            printf 'input_locks_sha256=%s\n' "$INPUT_LOCKS_SHA256"
+            printf 'separate_host_evidence=%s\n' "$SEPARATE_HOST_EVIDENCE"
+            printf 'boot_workload_attestation_evidence=%s\n' "$BOOT_WORKLOAD_ATTESTATION_EVIDENCE"
+            printf 'h200_evidence=%s\n' "$H200_EVIDENCE"
+            printf 'b300_evidence=%s\n' "$B300_EVIDENCE"
+            printf 'nvswitch_evidence=%s\n' "$NVSWITCH_EVIDENCE"
+            echo 'runtime_input_locks:'
+            cat "$locks"
+          } > "$evidence"
+
+          evidence_sha256=$(sha256sum "$evidence" | cut -d ' ' -f1)
+          asset="${prefix}-sha256-${evidence_sha256}.txt"
+          mv "$evidence" "$RUNNER_TEMP/$asset"
+          echo "evidence_asset=$asset" >> "$GITHUB_OUTPUT"
+          echo "evidence_sha256=$evidence_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Publish qualification evidence without replacement
+        env:
+          ASSET: ${{ steps.evidence.outputs.evidence_asset }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          evidence="$RUNNER_TEMP/$ASSET"
+          existing="$RUNNER_TEMP/existing"
+          mkdir -p "$existing"
+          if gh release download "$VERSION" --repo "$REPOSITORY" --pattern "$ASSET" --dir "$existing" 2>/dev/null; then
+            cmp "$evidence" "$existing/$ASSET"
+          else
+            gh release upload "$VERSION" "$evidence" --repo "$REPOSITORY"
+          fi
+
+      - name: Load protected configuration repository allowlist
+        id: repositories
+        env:
+          REPOSITORIES: ${{ vars.CVM_CONFIG_REPOSITORIES }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$REPOSITORIES"
+          echo "$REPOSITORIES" | jq -e \
+            'type == "array" and length > 0 and all(.[]; type == "string" and test("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$"))' \
+            >/dev/null
+          echo "repositories=$(echo "$REPOSITORIES" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+  update-config:
+    name: Open Protected Measurement Promotion Pull Request
+    needs: prepare-promotion
+    runs-on: ubuntu-latest
+    environment: cvm-measurement-promotion
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        repository: ${{ fromJson(needs.prepare-promotion.outputs.repositories) }}
+    steps:
+      - name: Parse fixed repository name
+        id: repository
+        env:
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          set -Eeuo pipefail
+          echo "owner=${REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.VERSION_UPDATER_APP_ID }}
+          private-key: ${{ secrets.VERSION_UPDATER_PRIVATE_KEY }}
+          owner: ${{ steps.repository.outputs.owner }}
+          repositories: ${{ steps.repository.outputs.name }}
+
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: config-repo
+          persist-credentials: false
+
+      - name: Bind configuration update to qualification evidence
+        env:
+          CVMIMAGE_REPOSITORY: ${{ github.repository }}
+          EVIDENCE_ASSET: ${{ needs.prepare-promotion.outputs.evidence_asset }}
+          EVIDENCE_SHA256: ${{ needs.prepare-promotion.outputs.evidence_sha256 }}
+          INITRD_SHA256: ${{ needs.prepare-promotion.outputs.initrd_sha256 }}
+          INPUT_LOCKS_SHA256: ${{ needs.prepare-promotion.outputs.input_locks_sha256 }}
+          KERNEL_SHA256: ${{ needs.prepare-promotion.outputs.kernel_sha256 }}
+          RAW_SHA256: ${{ needs.prepare-promotion.outputs.raw_sha256 }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.prepare-promotion.outputs.release_manifest_sha256 }}
+          ROOTHASH: ${{ needs.prepare-promotion.outputs.roothash }}
+          ROOTHASH_FILE_SHA256: ${{ needs.prepare-promotion.outputs.roothash_file_sha256 }}
+          ROOTFS_SHA256: ${{ needs.prepare-promotion.outputs.rootfs_sha256 }}
+          SOURCE_COMMIT: ${{ needs.prepare-promotion.outputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          test "$(grep -c '^cvm-version:' config-repo/tinfoil-config.yml)" -eq 1
+          sed -i "s|^cvm-version:.*|cvm-version: ${VERSION#v}|" config-repo/tinfoil-config.yml
+          evidence_url="https://github.com/$CVMIMAGE_REPOSITORY/releases/download/$VERSION/$EVIDENCE_ASSET"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg input_locks_sha256 "$INPUT_LOCKS_SHA256" \
+            --arg release_manifest_sha256 "$RELEASE_MANIFEST_SHA256" \
+            --arg rootfs_sha256 "$ROOTFS_SHA256" \
+            --arg raw_sha256 "$RAW_SHA256" \
+            --arg kernel_sha256 "$KERNEL_SHA256" \
+            --arg initrd_sha256 "$INITRD_SHA256" \
+            --arg roothash "$ROOTHASH" \
+            --arg roothash_file_sha256 "$ROOTHASH_FILE_SHA256" \
+            --arg evidence_url "$evidence_url" \
+            --arg evidence_sha256 "$EVIDENCE_SHA256" \
+            '{
+              schema_version: 1,
+              version: $version,
+              source_commit: $source_commit,
+              input_locks_sha256: $input_locks_sha256,
+              release_manifest_sha256: $release_manifest_sha256,
+              rootfs_sha256: $rootfs_sha256,
+              raw_sha256: $raw_sha256,
+              kernel_sha256: $kernel_sha256,
+              initrd_sha256: $initrd_sha256,
+              roothash: $roothash,
+              roothash_file_sha256: $roothash_file_sha256,
+              qualification_evidence: {
+                url: $evidence_url,
+                sha256: $evidence_sha256
+              }
+            }' > config-repo/cvm-release-qualification.json
+          cat > "$RUNNER_TEMP/qualification-pr.md" <<EOF
+          Promotes only the release measurement qualified by the protected cvmimage release process.
+
+          - Release: \`$VERSION\`
+          - Source commit: \`$SOURCE_COMMIT\`
+          - Qualification evidence: \`$evidence_url\`
+          - Qualification evidence SHA-256: \`$EVIDENCE_SHA256\`
+
+          The committed \`cvm-release-qualification.json\` record binds this
+          configuration change to the exact qualified source, locks, image
+          artifacts, roothash, release manifest, and evidence digest.
+
+          Runtime attestation remains the enforcement point and must reject the
+          candidate measurement until this protected configuration change is merged.
+          EOF
+
+      - uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c  # v6.1.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          path: config-repo
+          commit-message: "chore: promote qualified cvm ${{ inputs.version }}"
+          title: "Promote qualified cvm ${{ inputs.version }}"
+          body-path: ${{ runner.temp }}/qualification-pr.md
+          branch: promote-cvm-${{ inputs.version }}
+          base: main

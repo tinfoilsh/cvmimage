@@ -34,6 +34,7 @@ type fakeBackend struct {
 type fakeProcess struct {
 	backend      *fakeBackend
 	id           int
+	pgid         int
 	name         string
 	exited       bool
 	groupRunning bool
@@ -59,7 +60,7 @@ func (b *fakeBackend) start(command Command) (backendProcess, error) {
 		return nil, err
 	}
 	b.nextPID++
-	child := &fakeProcess{backend: b, id: b.nextPID, name: command.Name, groupRunning: true}
+	child := &fakeProcess{backend: b, id: b.nextPID, pgid: b.nextPID, name: command.Name, groupRunning: true}
 	b.children[child.id] = child
 	b.started <- child.id
 	return child, nil
@@ -89,8 +90,11 @@ func (b *fakeBackend) exit(pid int, status syscall.WaitStatus) {
 	b.sigchld <- syscall.SIGCHLD
 }
 
-func (p *fakeProcess) pid() int       { return p.id }
-func (p *fakeProcess) release() error { return nil }
+func (p *fakeProcess) pid() int { return p.id }
+func (p *fakeProcess) release() error {
+	p.id = -1
+	return nil
+}
 func (p *fakeProcess) signal(signal syscall.Signal) error {
 	p.backend.signaled <- fmt.Sprintf("%s:%s", p.name, signal)
 	p.backend.mu.Lock()
@@ -105,7 +109,7 @@ func (p *fakeProcess) signal(signal syscall.Signal) error {
 		return os.ErrProcessDone
 	}
 	if !exited && (signal == syscall.SIGKILL || (signal == syscall.SIGTERM && exitOnTERM)) {
-		p.backend.exit(p.id, syscall.WaitStatus(uint32(signal)&0x7f))
+		p.backend.exit(p.pgid, syscall.WaitStatus(uint32(signal)&0x7f))
 	}
 	return nil
 }
@@ -146,6 +150,9 @@ func TestManagerOwnsDirectWaitsAndReapsOrphans(t *testing.T) {
 	oneShotExit, err := oneShot.Wait(context.Background())
 	if err != nil || oneShotExit.Status.ExitStatus() != 3 {
 		t.Fatalf("one-shot wait = (%+v, %v)", oneShotExit, err)
+	}
+	if oneShot.PID() != oneShotExit.PID {
+		t.Fatalf("released one-shot pid = %d, want %d", oneShot.PID(), oneShotExit.PID)
 	}
 	logsMu.Lock()
 	defer logsMu.Unlock()

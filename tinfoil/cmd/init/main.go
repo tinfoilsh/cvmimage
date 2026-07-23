@@ -94,18 +94,19 @@ type serviceControl interface {
 }
 
 type lifecycleDeps struct {
-	services serviceControl
-	oneShot  func(context.Context, supervisor.Command) error
-	nvidia   func(context.Context) error
-	setupFS  func(pidruntime.LogFunc) error
-	sysctls  func(pidruntime.LogFunc) error
-	ramdisk  func(pidruntime.LogFunc) error
-	limits   func() error
-	syslog   func(context.Context)
-	exists   func(string) (bool, error)
-	timeout  time.Duration
-	term     time.Duration
-	kill     time.Duration
+	services    serviceControl
+	oneShot     func(context.Context, supervisor.Command) error
+	nvidia      func(context.Context) error
+	lockModules func() error
+	setupFS     func(pidruntime.LogFunc) error
+	sysctls     func(pidruntime.LogFunc) error
+	ramdisk     func(pidruntime.LogFunc) error
+	limits      func() error
+	syslog      func(context.Context)
+	exists      func(string) (bool, error)
+	timeout     time.Duration
+	term        time.Duration
+	kill        time.Duration
 }
 
 func run(parent context.Context) error {
@@ -129,15 +130,16 @@ func run(parent context.Context) error {
 				},
 			)
 		},
-		setupFS: pidruntime.SetupFilesystems,
-		sysctls: pidruntime.ApplySysctls,
-		ramdisk: pidruntime.SetupRamdisk,
-		limits:  hardening.ApplyRuntimeLimits,
-		syslog:  startOptionalSyslogSink,
-		exists:  pathExists,
-		timeout: bootTimeout,
-		term:    serviceTermGrace,
-		kill:    serviceKillGrace,
+		lockModules: hardening.LockKernelModules,
+		setupFS:     pidruntime.SetupFilesystems,
+		sysctls:     pidruntime.ApplySysctls,
+		ramdisk:     pidruntime.SetupRamdisk,
+		limits:      hardening.ApplyRuntimeLimits,
+		syslog:      startOptionalSyslogSink,
+		exists:      pathExists,
+		timeout:     bootTimeout,
+		term:        serviceTermGrace,
+		kill:        serviceKillGrace,
 	}
 	return runLifecycle(parent, deps, readiness)
 }
@@ -175,6 +177,9 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}
 	if err := deps.nvidia(bootCtx); err != nil {
 		return err
+	}
+	if err := deps.lockModules(); err != nil {
+		return fmt.Errorf("lock kernel modules: %w", err)
 	}
 	if err := deps.oneShot(bootCtx, command("nftables", "/usr/sbin/nft", "-f", "/etc/nftables.conf")); err != nil {
 		return err

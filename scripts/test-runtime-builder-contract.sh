@@ -12,6 +12,7 @@ recipe_sha256="$(
     cd "$repo_dir"
     sha256sum \
         builder/Dockerfile \
+        builder/build-debug-init.sh \
         builder/build-initrd.sh \
         scripts/runtime-builder-base-image.txt \
         scripts/runtime-builder-snapshot.txt | sha256sum | awk '{print $1}'

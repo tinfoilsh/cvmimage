@@ -54,6 +54,13 @@ var consoleMu sync.Mutex
 
 func main() {
 	log.SetFlags(0)
+	if handled, err := dispatchDebugConsole(os.Args); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tinfoil-init: debug console: %v\n", err)
+			os.Exit(127)
+		}
+		panic("debug console exec returned without an error")
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--exec-service" {
 		if err := execService(os.Args[2:], hardening.ApplyService, syscall.Exec); err != nil {
 			fmt.Fprintf(os.Stderr, "tinfoil-init: exec-service: %v\n", err)
@@ -113,6 +120,9 @@ type lifecycleDeps struct {
 func run(parent context.Context) error {
 	readiness := newReadiness(requiredServiceNames(), setReady)
 	manager := supervisor.NewManager(initLogf)
+	if err := startDebugConsole(manager); err != nil {
+		return fmt.Errorf("start debug console: %w", err)
+	}
 	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
 	deps := lifecycleDeps{
 		services: services,

@@ -146,6 +146,20 @@ pkg_files(
 )
 
 pkg_files(
+    name = "debug-tinfoil-init",
+    srcs = ["//:build/debug-work/output/artifacts/tinfoil-init"],
+    attributes = pkg_attributes(mode = "0755", uid = 0, gid = 0),
+    prefix = "usr/bin",
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_mkdirs(
+    name = "debug-root-home",
+    dirs = ["root"],
+    attributes = pkg_attributes(mode = "0700", uid = 0, gid = 0),
+)
+
+pkg_files(
     name = "nvattest-binary",
     srcs = ["//:build/rootfs-artifacts/nvattest/usr/bin/nvattest"],
     attributes = pkg_attributes(mode = "0755", uid = 0, gid = 0),
@@ -247,5 +261,33 @@ pkg_tar(
     allow_duplicates_from_deps = True,
     extension = "tar",
     out = "bazel-rootfs.tar",
+    stamp = 0,
+)
+
+pkg_tar(
+    name = "debug-overlay",
+    srcs = [
+        ":debug-root-home",
+        ":debug-tinfoil-init",
+    ],
+    allow_duplicates_from_deps = False,
+    create_parents = True,
+    extension = "tar",
+    mtime = 0,
+    out = "debug-overlay.tar",
+    owner = "0.0",
+    portable_mtime = False,
+    stamp = 0,
+)
+
+pkg_tar(
+    name = "debug-layer",
+    deps = [
+        "@runtime_source_debug_busybox//:payload",
+        ":debug-overlay",
+    ],
+    allow_duplicates_from_deps = True,
+    extension = "tar",
+    out = "bazel-debug-layer.tar",
     stamp = 0,
 )

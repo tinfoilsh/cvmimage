@@ -5,6 +5,7 @@ MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
 SHIPPING_INITRD = initrd.cpio.zst
+DEBUG_IMAGE = tinfoilcvm-debug
 
 NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
@@ -14,6 +15,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 
 .PHONY: all build rebuild shipping-image clean deepclean hash nvattest \
 	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
+	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
@@ -49,6 +51,7 @@ test-roothash-artifacts:
 
 clean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf $(DEBUG_IMAGE) $(DEBUG_IMAGE).*
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd.cpio.zst
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/stage build/artifacts
@@ -63,6 +66,9 @@ runtime-builder:
 builder-initrd: runtime-builder
 	./scripts/run-runtime-builder.sh initrd
 
+builder-debug-init: runtime-builder
+	./scripts/run-runtime-builder.sh debug-init
+
 test-go-producer:
 	./scripts/test-go-producer.sh
 
@@ -73,6 +79,16 @@ bazel-rootfs: builder-initrd nvattest nvidia-module-artifacts
 	$(BAZEL) build --lockfile_mode=error //image:rootfs
 	mkdir -p build/stage
 	install -m 0644 bazel-bin/image/bazel-rootfs.tar build/stage/bazel-rootfs.tar
+
+bazel-debug-layer: builder-debug-init
+	$(BAZEL) build --lockfile_mode=error //image:debug-layer
+	mkdir -p build/stage
+	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
+
+test-debug-image-contract: bazel-rootfs bazel-debug-layer
+	./scripts/test-debug-image-contract.sh \
+		build/stage/bazel-rootfs.tar \
+		build/stage/bazel-debug-layer.tar
 
 custom-kernel-artifacts: runtime-builder
 	./scripts/run-runtime-builder.sh kernel
@@ -132,6 +148,24 @@ shipping-image: bazel-rootfs additive-initrd
 	grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.roothash
 	cp tinfoilcvm.roothash tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
+
+debug-image: bazel-rootfs bazel-debug-layer additive-initrd custom-kernel-artifacts
+	rm -f $(DEBUG_IMAGE) $(DEBUG_IMAGE).raw $(DEBUG_IMAGE).roothash \
+		$(DEBUG_IMAGE).hash $(DEBUG_IMAGE).vmlinuz $(DEBUG_IMAGE).initrd
+	$(MKOSI) --force --output=$(DEBUG_IMAGE) \
+		--base-tree="$(CURDIR)/build/stage/bazel-debug-layer.tar"
+	sudo env PATH="$(TRUSTED_PATH)" chmod 0644 $(DEBUG_IMAGE).raw $(DEBUG_IMAGE).roothash
+	sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" \
+		$(DEBUG_IMAGE).raw $(DEBUG_IMAGE).roothash
+	install -m 0644 "$(SHIPPING_KERNEL)" $(DEBUG_IMAGE).vmlinuz
+	install -m 0644 "$(SHIPPING_INITRD)" $(DEBUG_IMAGE).initrd
+	cmp -s "$(SHIPPING_KERNEL)" $(DEBUG_IMAGE).vmlinuz
+	cmp -s "$(SHIPPING_INITRD)" $(DEBUG_IMAGE).initrd
+	test -s $(DEBUG_IMAGE).raw
+	test "$$(wc -c < $(DEBUG_IMAGE).roothash)" -eq 64
+	grep -Eq '^[a-f0-9]{64}$$' $(DEBUG_IMAGE).roothash
+	cp $(DEBUG_IMAGE).roothash $(DEBUG_IMAGE).hash
+	@echo "debug image hash: $$(cat $(DEBUG_IMAGE).hash)"
 
 rebuild: shipping-image
 

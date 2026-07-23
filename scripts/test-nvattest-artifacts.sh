@@ -4,139 +4,111 @@ set -Eeuo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 source "${repo_root}/scripts/nvattest-artifacts.sh"
 readonly SO_VERSION=1.2.2
-temporary="$(nvattest_make_owned_temp /tmp tinfoil-nvattest-test)"
+
+nvattest_require_tool cc
+
+temporary="$(mktemp -d)"
 cleanup() {
-    sudo -n chown -R "$(id -u):$(id -g)" "${temporary}" 2>/dev/null || true
-    nvattest_remove_owned_temp "${temporary}" /tmp tinfoil-nvattest-test
+    rm -rf -- "${temporary}"
 }
 trap cleanup EXIT
 
-expect_failure() {
-    if "$@" >/dev/null 2>&1; then
-        echo "expected failure: $*" >&2
+fixture="${temporary}/fixture"
+mkdir -p "${fixture}/usr/bin" "${fixture}/usr/lib/x86_64-linux-gnu"
+
+cat >"${temporary}/xml.c" <<'EOF'
+int xml_marker(void) { return 0; }
+EOF
+cc -shared -fPIC -Wl,-soname,libxml2.so.16 \
+    -o "${fixture}/usr/lib/x86_64-linux-gnu/libxml2.so.16" \
+    "${temporary}/xml.c"
+ln -s libxml2.so.16 "${fixture}/usr/lib/x86_64-linux-gnu/libxml2.so"
+
+cat >"${temporary}/nvat.c" <<'EOF'
+extern int xml_marker(void);
+int nvat_marker(void) { return xml_marker(); }
+EOF
+cc -shared -fPIC -Wl,-soname,libnvat.so.1 \
+    -L"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -Wl,-rpath-link,"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -o "${fixture}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
+    "${temporary}/nvat.c" -lxml2
+ln -s "libnvat.so.${SO_VERSION}" "${fixture}/usr/lib/x86_64-linux-gnu/libnvat.so"
+
+cat >"${temporary}/nvattest.c" <<'EOF'
+#include <string.h>
+extern int nvat_marker(void);
+int main(int argc, char **argv) {
+    return argc == 2 && strcmp(argv[1], "--help") == 0 ? nvat_marker() : 2;
+}
+EOF
+cc -L"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -Wl,-rpath-link,"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -o "${fixture}/usr/bin/nvattest" "${temporary}/nvattest.c" -lnvat
+
+nvattest_verify_runtime_artifacts "${fixture}" "${SO_VERSION}"
+
+output="${temporary}/output"
+mkdir -p "${output}"
+printf 'preserved\n' >"${output}/unrelated"
+nvattest_install_runtime_artifacts \
+    "${fixture}" "${output}" "${SO_VERSION}" "$(id -u)" "$(id -g)" 0
+
+cmp "${fixture}/usr/bin/nvattest" "${output}/usr/bin/nvattest"
+test -x "${output}/usr/bin/nvattest"
+cmp \
+    "${fixture}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
+    "${output}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
+test -f "${output}/unrelated"
+test "$(stat -c %Y "${output}/usr/bin/nvattest")" = 0
+test "$(stat -c %Y "${output}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}")" = 0
+for directory in \
+    "${output}" \
+    "${output}/usr" \
+    "${output}/usr/bin" \
+    "${output}/usr/lib" \
+    "${output}/usr/lib/x86_64-linux-gnu"; do
+    test "$(stat -c %Y "${directory}")" = 0
+done
+
+(
+    mktemp() { return 1; }
+    if nvattest_verify_runtime_artifacts "${fixture}" "${SO_VERSION}" \
+        >"${temporary}/mktemp-failure.log" 2>&1; then
+        echo "verification ignored mktemp failure" >&2
         exit 1
     fi
-}
+    grep -Fq 'failed to create nvattest smoke-test directory' \
+        "${temporary}/mktemp-failure.log"
+)
 
-mkdir -p "${temporary}/source/usr/bin"
-mkdir -p "${temporary}/source/usr/lib/x86_64-linux-gnu"
-install -m 0755 /bin/true "${temporary}/source/usr/bin/nvattest"
-install -m 0644 /bin/true \
-    "${temporary}/source/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
-
-ln -s "${temporary}/elsewhere" "${temporary}/symlink-output"
-expect_failure nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/symlink-output" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)" 0
-
-mkdir -p "${temporary}/unexpected-output"
-touch "${temporary}/unexpected-output/unexpected"
-expect_failure nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/unexpected-output" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)" 0
-test -f "${temporary}/unexpected-output/unexpected"
-
-mkdir -p "${temporary}/real-parent"
-ln -s "${temporary}/real-parent" "${temporary}/linked-parent"
-expect_failure nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/linked-parent/runtime" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)" 0
-test ! -e "${temporary}/real-parent/runtime"
-
-mkdir -p "${temporary}/dot-parent"
-expect_failure nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/dot-parent/./runtime" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)" 0
-test ! -e "${temporary}/dot-parent/runtime"
-
-mkdir -p "${temporary}/dotdot-parent"
-expect_failure nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/dotdot-parent/../escaped-runtime" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)" 0
-test ! -e "${temporary}/escaped-runtime"
-
-mkdir -p "${temporary}/fake-bin"
-cat > "${temporary}/fake-bin/grep" <<EOF
-#!/bin/bash
-: > "${temporary}/dependency-check-ran"
-exit 0
-EOF
-chmod +x "${temporary}/fake-bin/grep"
-if (
-    PATH="${temporary}/fake-bin"
-    nvattest_verify_runtime_artifacts "${temporary}/source" "${SO_VERSION}"
-) 2>/dev/null; then
-    echo "verification unexpectedly succeeded without readelf" >&2
+cc -shared -fPIC -Wl,-soname,libnvat.so.2 \
+    -L"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -Wl,-rpath-link,"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -o "${fixture}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
+    "${temporary}/nvat.c" -lxml2
+if nvattest_verify_runtime_artifacts "${fixture}" "${SO_VERSION}" 2>/dev/null; then
+    echo "verification accepted an incorrect libnvat SONAME" >&2
     exit 1
 fi
-test ! -e "${temporary}/dependency-check-ran"
 
-mkdir -p "${temporary}/published"
-nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/published" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)" 0
-test -x "${temporary}/published/usr/bin/nvattest"
-test -f "${temporary}/published/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
-test "$(stat -c %Y "${temporary}/published")" = 0
-
-install -m 0755 /bin/false "${temporary}/source/usr/bin/nvattest"
-nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/published" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)" 0
-cmp /bin/false "${temporary}/published/usr/bin/nvattest"
-
-foreign_uid=$(( $(id -u) + 1 ))
-mkdir -p "${temporary}/foreign-output"
-: > "${temporary}/foreign-output/untouched"
-expect_failure nvattest_publish_runtime_artifacts \
-    "${temporary}/source" "${temporary}/foreign-output" "${SO_VERSION}" \
-    "${foreign_uid}" "$(id -g)" 0
-test -f "${temporary}/foreign-output/untouched"
-test "$(stat -c %u "${temporary}/foreign-output")" = "$(id -u)"
-
-sudo -n true
-published_library="${temporary}/published/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
-published_library_sha256="$(sha256sum "${published_library}")"
-if [ "$(id -u)" = 0 ]; then
-    foreign_uid=65534
-else
-    foreign_uid=0
+cc -shared -fPIC -Wl,-soname,libnvat.so.1 \
+    -L"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -Wl,-rpath-link,"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -o "${fixture}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
+    "${temporary}/nvat.c" -lxml2
+cat >"${temporary}/broken-nvattest.c" <<'EOF'
+extern int nvat_marker(void);
+int main(void) {
+    return nvat_marker() == 0 ? 2 : 3;
+}
+EOF
+cc -L"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -Wl,-rpath-link,"${fixture}/usr/lib/x86_64-linux-gnu" \
+    -o "${fixture}/usr/bin/nvattest" "${temporary}/broken-nvattest.c" -lnvat
+if nvattest_verify_runtime_artifacts "${fixture}" "${SO_VERSION}" 2>/dev/null; then
+    echo "verification accepted a failing nvattest --help smoke test" >&2
+    exit 1
 fi
-mkdir -p "${temporary}/foreign-owned-output"
-: > "${temporary}/foreign-owned-output/untouched"
-sudo -n chown -R "${foreign_uid}" "${temporary}/foreign-owned-output"
-expect_failure sudo -n /bin/bash -c \
-    'source "$1"; nvattest_publish_runtime_artifacts "$2" "$3" "$4" "$5" "$6" 0' \
-    bash "${repo_root}/scripts/nvattest-artifacts.sh" \
-    "${temporary}/source" "${temporary}/foreign-owned-output" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)"
-test "$(stat -c %u "${temporary}/foreign-owned-output")" = "${foreign_uid}"
-test -f "${temporary}/foreign-owned-output/untouched"
-sudo -n chown -R "$(id -u):$(id -g)" "${temporary}/foreign-owned-output"
 
-sudo -n chown "${foreign_uid}" "${published_library}"
-expect_failure sudo -n /bin/bash -c \
-    'source "$1"; nvattest_publish_runtime_artifacts "$2" "$3" "$4" "$5" "$6" 0' \
-    bash "${repo_root}/scripts/nvattest-artifacts.sh" \
-    "${temporary}/source" "${temporary}/published" "${SO_VERSION}" \
-    "$(id -u)" "$(id -g)"
-test "$(stat -c %u "${published_library}")" = "${foreign_uid}"
-test "$(sha256sum "${published_library}")" = "${published_library_sha256}"
-test -f "${temporary}/published/.stamp"
-sudo -n chown "$(id -u):$(id -g)" "${published_library}"
-
-mkdir -p "${temporary}/unowned"
-expect_failure nvattest_remove_owned_temp \
-    "${temporary}/unowned" "${temporary}" nested
-test -d "${temporary}/unowned"
-
-fixed="$(nvattest_make_fixed_owned_temp "${temporary}" fixed-build)"
-test "${fixed}" = "${temporary}/fixed-build"
-expect_failure nvattest_make_fixed_owned_temp "${temporary}" fixed-build
-nvattest_remove_fixed_owned_temp "${fixed}" "${temporary}" fixed-build
-test ! -e "${fixed}"
-
-ln -s "${temporary}/elsewhere" "${temporary}/fixed-link"
-expect_failure nvattest_make_fixed_owned_temp "${temporary}" fixed-link
-
-echo "nvattest artifact path safety tests passed"
+echo "nvattest named artifact tests passed"

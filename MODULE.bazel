@@ -3,8 +3,13 @@ module(
     version = "0.0.0",
 )
 
+bazel_dep(name = "bazel_lib", version = "3.0.0-rc.0")
 bazel_dep(name = "rules_distroless", version = "0.8.0")
+bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "rules_python", version = "2.2.0")
+
+bazel_lib_toolchains = use_extension("@bazel_lib//lib:extensions.bzl", "toolchains")
+use_repo(bazel_lib_toolchains, "zstd_toolchains")
 
 apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
 apt.install(
@@ -23,11 +28,19 @@ use_repo(
     "runtime_source_libnvidia_compute",
     "runtime_source_libnvidia_container_tools",
     "runtime_source_libnvidia_container1",
+    "runtime_source_libnvidia_decode",
+    "runtime_source_libnvidia_egl_gbm1",
+    "runtime_source_libnvidia_egl_wayland21",
+    "runtime_source_libnvidia_egl_xcb1",
+    "runtime_source_libnvidia_egl_xlib1",
+    "runtime_source_libnvidia_encode",
+    "runtime_source_libnvidia_gl",
     "runtime_source_libnvidia_gpucomp",
     "runtime_source_libnvidia_nscq",
     "runtime_source_nvidia_container_toolkit",
     "runtime_source_nvidia_container_toolkit_base",
     "runtime_source_nvidia_fabricmanager",
     "runtime_source_nvidia_firmware",
+    "runtime_source_nvidia_kernel_common",
     "runtime_source_nvidia_persistenced",
 )

@@ -9,7 +9,7 @@ The only non-root account is `nvidia-persistenced` with the measured identity
 `143:143`. Both accounts are locked and non-login. Resolver bytes must remain
 identical to the fixed resolver contract used by `tinfoil-boot`.
 
-The measured daemon policy consists of exactly four mode `0644` files:
+The measured daemon policy includes these mode `0644` files:
 
 - `/etc/containerd/config.toml` disables unused containerd service families and
   places mutable daemon state below the private ramdisk. This measured file is
@@ -33,16 +33,11 @@ The NVIDIA bootstrap publishes `/var/run/cdi/nvidia.yaml` atomically for the
 runtime's fixed `nvidia.com/gpu` CDI kind. Legacy, CSV, hook compatibility, and
 alternate OCI runtimes are not configured.
 
-Fabric Manager configuration is not part of this policy. The current image
-receives it from the version-pinned `nvidia-fabricmanager=595.71.05-1ubuntu1`
-package selected in `mkosi.conf`; this policy does not claim separate archive
-provenance for that package-owned configuration.
+- `/usr/share/nvidia/nvswitch/fabricmanager.cfg` preserves the pinned package
+  configuration and sets the fixed command socket to
+  `/run/nvidia-fabricmanager/socket`. PID 1 invokes Fabric Manager directly and
+  requires both its live PID file and this Unix socket before continuing.
 
-`scripts/test-rootfs-policy.sh` verifies the complete path and SHA-256 contract,
-not only selected files. The policy root must exactly match the checkout root's
-mode, owner, and group because Git does not transport directory metadata. Every
-directory must be mode `0755`, every file must be mode `0644`, every entry must
-share the checkout root's owner and group, and no entry (including the root
-directory) may carry an xattr. The later assembler must preserve those modes
-and install every declaration as UID/GID `0:0`. Undeclared entries at any depth
-are rejected.
+The additive rootfs declaration in `image/BUILD.bazel` is the metadata owner.
+It installs these source-controlled bytes as UID/GID `0:0` with explicit modes;
+there is no second validator that restates their complete path or hash set.

@@ -205,3 +205,94 @@ func cString(buf []byte) string {
 	}
 	return string(buf)
 }
+
+func TestTableLoadBufferBounds(t *testing.T) {
+	maxParamsSize := maxIOCTLSize - ioctlSize - targetSpecSize - 1
+	buf, err := tableLoadBuffer("root", 1, "verity", strings.Repeat("x", maxParamsSize))
+	if err != nil {
+		t.Fatalf("maximum target parameters rejected: %v", err)
+	}
+	if len(buf) != maxIOCTLSize {
+		t.Fatalf("maximum table buffer size = %d, want %d", len(buf), maxIOCTLSize)
+	}
+
+	for name, tc := range map[string]struct {
+		length uint64
+		params string
+	}{
+		"zero length":      {length: 0, params: "valid"},
+		"oversized params": {length: 1, params: strings.Repeat("x", maxParamsSize+1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := tableLoadBuffer("root", tc.length, "verity", tc.params); err == nil {
+				t.Fatal("invalid table geometry accepted")
+			}
+		})
+	}
+}
+
+func TestBaseBufferBounds(t *testing.T) {
+	for _, size := range []int{ioctlSize, 2 * 1024, maxIOCTLSize} {
+		if _, err := baseBuffer(size, "root"); err != nil {
+			t.Fatalf("valid buffer size %d rejected: %v", size, err)
+		}
+	}
+	for _, size := range []int{ioctlSize - 1, ioctlSize + 1, maxIOCTLSize + targetSpecAlign} {
+		if _, err := baseBuffer(size, "root"); err == nil {
+			t.Fatalf("invalid buffer size %d accepted", size)
+		}
+	}
+}
+
+func TestValidateIOCTLResponseBounds(t *testing.T) {
+	valid, err := baseBuffer(ioctlSize, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateIOCTLResponse(valid, 0); err != nil {
+		t.Fatalf("valid response rejected: %v", err)
+	}
+	kernelEmpty := append([]byte(nil), valid...)
+	binary.LittleEndian.PutUint32(kernelEmpty[12:16], ioctlDataOffset)
+	if err := validateIOCTLResponse(kernelEmpty, 0); err != nil {
+		t.Fatalf("kernel empty response rejected: %v", err)
+	}
+	if err := validateIOCTLRequest(kernelEmpty, 0); err == nil {
+		t.Fatal("short kernel response accepted as a request")
+	}
+
+	for name, mutate := range map[string]func([]byte){
+		"short data size": func(buf []byte) {
+			binary.LittleEndian.PutUint32(buf[12:16], ioctlDataOffset-1)
+		},
+		"oversized data size": func(buf []byte) {
+			binary.LittleEndian.PutUint32(buf[12:16], ioctlSize+targetSpecAlign)
+		},
+		"short data start": func(buf []byte) {
+			binary.LittleEndian.PutUint32(buf[16:20], ioctlDataStart-targetSpecAlign)
+		},
+		"oversized data start": func(buf []byte) {
+			binary.LittleEndian.PutUint32(buf[16:20], ioctlDataStart+targetSpecAlign)
+		},
+		"too many targets": func(buf []byte) {
+			binary.LittleEndian.PutUint32(buf[20:24], 2)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			buf := append([]byte(nil), valid...)
+			mutate(buf)
+			if err := validateIOCTLResponse(buf, 1); err == nil {
+				t.Fatal("invalid ioctl response accepted")
+			}
+		})
+	}
+
+	oneTarget := append([]byte(nil), valid...)
+	binary.LittleEndian.PutUint32(oneTarget[20:24], 1)
+	if err := validateIOCTLResponse(oneTarget, 1); err != nil {
+		t.Fatalf("single-target response rejected: %v", err)
+	}
+	if err := validateIOCTLResponse(oneTarget, 0); err == nil {
+		t.Fatal("unexpected target accepted for zero-target response")
+	}
+}

@@ -3,6 +3,7 @@ package devicemapper
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ func TestIoctlConstants(t *testing.T) {
 	}{
 		"version":    {versionIOCTL, 0xc138fd00},
 		"create":     {devCreateIOCTL, 0xc138fd03},
+		"remove":     {devRemoveIOCTL, 0xc138fd04},
 		"resume":     {devSuspendIOCTL, 0xc138fd06},
 		"status":     {devStatusIOCTL, 0xc138fd07},
 		"table load": {tableLoadIOCTL, 0xc138fd09},
@@ -31,6 +33,56 @@ func TestIoctlConstants(t *testing.T) {
 				t.Fatalf("unexpected ioctl number: got %#x want %#x", tc.got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCryptTable(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa5}, 64)
+	params, err := CryptTable("8:17", key, 8192)
+	if err != nil {
+		t.Fatalf("CryptTable: %v", err)
+	}
+	want := "aes-xts-plain64 " + strings.Repeat("a5", 64) + " 0 8:17 0 1 sector_size:4096"
+	if string(params) != want {
+		t.Fatalf("params = %q, want %q", params, want)
+	}
+	if !bytes.Equal(key, bytes.Repeat([]byte{0xa5}, 64)) {
+		t.Fatal("CryptTable modified caller key")
+	}
+
+	for name, tc := range map[string]struct {
+		device string
+		key    []byte
+		length uint64
+	}{
+		"device":    {device: "8:17 bad", key: key, length: 8192},
+		"key":       {device: "8:17", key: key[:32], length: 8192},
+		"alignment": {device: "8:17", key: key, length: 8191},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := CryptTable(tc.device, tc.key, tc.length); err == nil {
+				t.Fatal("invalid dm-crypt table accepted")
+			}
+		})
+	}
+}
+
+func TestBlockDeviceInfoRejectsIndirectAndNonBlockPaths(t *testing.T) {
+	dir := t.TempDir()
+	regularPath := filepath.Join(dir, "regular")
+	if err := os.WriteFile(regularPath, []byte("not a block device"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BlockDeviceInfo(regularPath); err == nil || !strings.Contains(err.Error(), "not a direct block device") {
+		t.Fatalf("regular file error = %v", err)
+	}
+
+	symlinkPath := filepath.Join(dir, "symlink")
+	if err := os.Symlink(regularPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := BlockDeviceInfo(symlinkPath); !errors.Is(err, unix.ELOOP) {
+		t.Fatalf("symlink error = %v, want O_NOFOLLOW ELOOP", err)
 	}
 }
 

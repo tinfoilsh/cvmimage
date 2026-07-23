@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -38,6 +40,164 @@ func TestModelPackRefLayout(t *testing.T) {
 	if _, err := parseModelPackRef("not-a-ref"); err == nil {
 		t.Fatal("expected validation error to propagate from modelwrap")
 	}
+}
+
+func TestVerityTableUsesFixedModelwrapContract(t *testing.T) {
+	rootHash := strings.Repeat("a", 64)
+	salt := bytes.Repeat([]byte{0x5a}, veritySaltSize)
+	length, params, err := verityTable("8:17", rootHash, 8192, salt)
+	if err != nil {
+		t.Fatalf("verityTable: %v", err)
+	}
+	if length != 16 {
+		t.Fatalf("length sectors = %d, want 16", length)
+	}
+	want := fmt.Sprintf("1 8:17 8:17 4096 4096 2 3 sha256 %s %s", rootHash, strings.Repeat("5a", veritySaltSize))
+	if params != want {
+		t.Fatalf("params = %q, want %q", params, want)
+	}
+
+	for name, tc := range map[string]struct {
+		device string
+		offset uint64
+		salt   []byte
+	}{
+		"missing device":   {offset: 4096, salt: salt},
+		"unaligned offset": {device: "8:17", offset: 4097, salt: salt},
+		"short salt":       {device: "8:17", offset: 4096, salt: salt[:31]},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := verityTable(tc.device, rootHash, tc.offset, tc.salt); err == nil {
+				t.Fatal("invalid table accepted")
+			}
+		})
+	}
+}
+
+func TestModelSalt(t *testing.T) {
+	salt, err := modelSalt(ModelSpec{Name: "m", Repo: "org/model@rev"})
+	if err != nil {
+		t.Fatalf("modelSalt: %v", err)
+	}
+	if !bytes.Equal(salt, modelwrap.VeritySalt("org/model@rev")) {
+		t.Fatal("salt does not match the modelwrap identity derivation")
+	}
+	if _, err := modelSalt(ModelSpec{Name: "m"}); err == nil {
+		t.Fatal("missing repo accepted")
+	}
+}
+
+func TestOpenAndMountVerityCleansUpMountFailure(t *testing.T) {
+	ops := &fakeModelVolumeOps{mountErr: errors.New("mount failed")}
+	err := openAndMountVerityWithOps(ops, "/dev/source", "mwp-test", strings.Repeat("a", 64), "4096", testSalt(), "/mnt/model")
+	if err == nil || !strings.Contains(err.Error(), "mount failed") {
+		t.Fatalf("error = %v, want mount failure", err)
+	}
+	wantCalls := []string{"verity:mwp-test", "mount:/dev/mapper/mwp-test", "remove:mwp-test"}
+	if fmt.Sprint(ops.calls) != fmt.Sprint(wantCalls) {
+		t.Fatalf("calls = %v, want %v", ops.calls, wantCalls)
+	}
+}
+
+func TestOpenEncryptedAndMountZeroesKeyAndCleansUp(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa5}, modelwrap.EMWPKeyBytes)
+	ops := &fakeModelVolumeOps{verityErr: errors.New("verity failed")}
+	err := openEncryptedAndMount(
+		ops,
+		"/dev/source",
+		"emwp-test-crypt",
+		"mwp-test",
+		strings.Repeat("a", 64),
+		"4096",
+		testSalt(),
+		"/mnt/model",
+		key,
+	)
+	if err == nil || !strings.Contains(err.Error(), "verity failed") {
+		t.Fatalf("error = %v, want verity failure", err)
+	}
+	if !bytes.Equal(ops.openCryptKey, bytes.Repeat([]byte{0xa5}, modelwrap.EMWPKeyBytes)) {
+		t.Fatal("dm-crypt did not receive the derived key")
+	}
+	if !bytes.Equal(key, make([]byte, modelwrap.EMWPKeyBytes)) {
+		t.Fatalf("derived key was not zeroed: %x", key)
+	}
+	wantCalls := []string{"crypt:emwp-test-crypt", "verity:mwp-test", "remove:emwp-test-crypt"}
+	if fmt.Sprint(ops.calls) != fmt.Sprint(wantCalls) {
+		t.Fatalf("calls = %v, want %v", ops.calls, wantCalls)
+	}
+}
+
+func TestOpenEncryptedAndMountCleansBothMappingsAfterMountFailure(t *testing.T) {
+	key := bytes.Repeat([]byte{0x3c}, modelwrap.EMWPKeyBytes)
+	ops := &fakeModelVolumeOps{mountErr: errors.New("mount failed")}
+	err := openEncryptedAndMount(
+		ops,
+		"/dev/source",
+		"emwp-test-crypt",
+		"mwp-test",
+		strings.Repeat("a", 64),
+		"4096",
+		testSalt(),
+		"/mnt/model",
+		key,
+	)
+	if err == nil || !strings.Contains(err.Error(), "mount failed") {
+		t.Fatalf("error = %v, want mount failure", err)
+	}
+	wantCalls := []string{
+		"crypt:emwp-test-crypt",
+		"verity:mwp-test",
+		"mount:/dev/mapper/mwp-test",
+		"remove:mwp-test",
+		"remove:emwp-test-crypt",
+	}
+	if fmt.Sprint(ops.calls) != fmt.Sprint(wantCalls) {
+		t.Fatalf("calls = %v, want %v", ops.calls, wantCalls)
+	}
+	if !bytes.Equal(key, make([]byte, modelwrap.EMWPKeyBytes)) {
+		t.Fatalf("derived key was not zeroed: %x", key)
+	}
+}
+
+func testSalt() []byte {
+	return bytes.Repeat([]byte{0x5a}, veritySaltSize)
+}
+
+type fakeModelVolumeOps struct {
+	calls        []string
+	openCryptKey []byte
+	cryptErr     error
+	verityErr    error
+	mountErr     error
+	removeErr    error
+}
+
+func (ops *fakeModelVolumeOps) openVerity(_ string, name, _, _ string, _ []byte) (string, error) {
+	ops.calls = append(ops.calls, "verity:"+name)
+	if ops.verityErr != nil {
+		return "", ops.verityErr
+	}
+	return "/dev/mapper/" + name, nil
+}
+
+func (ops *fakeModelVolumeOps) openCrypt(_ string, name string, key []byte) (string, error) {
+	ops.calls = append(ops.calls, "crypt:"+name)
+	ops.openCryptKey = append([]byte(nil), key...)
+	if ops.cryptErr != nil {
+		return "", ops.cryptErr
+	}
+	return "/dev/mapper/" + name, nil
+}
+
+func (ops *fakeModelVolumeOps) remove(name string) error {
+	ops.calls = append(ops.calls, "remove:"+name)
+	return ops.removeErr
+}
+
+func (ops *fakeModelVolumeOps) mount(sourceDevice, _ string) error {
+	ops.calls = append(ops.calls, "mount:"+sourceDevice)
+	return ops.mountErr
 }
 
 func TestModelPackRefForModel(t *testing.T) {

@@ -86,7 +86,8 @@ func (n *NetworkSpec) UnmarshalYAML(node *yaml.Node) error {
 // ModelSpec represents a model pack specification.
 type ModelSpec struct {
 	Name      string `yaml:"name,omitempty"`
-	MPK       string `yaml:"mpk,omitempty"` // Legacy alias for mwp.
+	Repo      string `yaml:"repo,omitempty"`
+	MPK       string `yaml:"mpk,omitempty"`
 	MWP       string `yaml:"mwp,omitempty"`
 	EMWP      string `yaml:"emwp,omitempty"`
 	KeySecret string `yaml:"key-secret,omitempty"`

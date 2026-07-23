@@ -3,13 +3,11 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/tinfoilsh/modelwrap/unwrap"
+	"golang.org/x/sys/unix"
 
 	shimconfig "tinfoil/internal/config"
 )
@@ -21,9 +19,10 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 
 	ref := os.Getenv("TINFOIL_EMWP_REF")
 	key := os.Getenv("TINFOIL_EMWP_KEY_B64")
+	repo := os.Getenv("TINFOIL_EMWP_REPO")
 	device := os.Getenv("TINFOIL_EMWP_DEVICE")
-	if ref == "" || key == "" || device == "" {
-		t.Fatal("TINFOIL_EMWP_REF, TINFOIL_EMWP_KEY_B64, and TINFOIL_EMWP_DEVICE are required")
+	if ref == "" || key == "" || repo == "" || device == "" {
+		t.Fatal("TINFOIL_EMWP_REF, TINFOIL_EMWP_KEY_B64, TINFOIL_EMWP_REPO, and TINFOIL_EMWP_DEVICE are required")
 	}
 
 	spec, err := parseModelPackRef(ref)
@@ -37,6 +36,7 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 
 	err = mountEncryptedModelPack(ModelSpec{
 		Name:      "emwp-integration",
+		Repo:      repo,
 		EMWP:      ref,
 		KeySecret: "PRIVATE_MODEL_KEY",
 	}, &shimconfig.ExternalConfig{
@@ -55,8 +55,9 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 }
 
 func cleanupEMWPIntegration(spec *modelPackRef) {
-	_ = exec.Command("umount", spec.mountPoint()).Run()
-	unwrap.CloseVerity(spec.mapperName())
-	unwrap.CloseCrypt(fmt.Sprintf("emwp-%s-crypt", spec.RootHash))
+	_ = unix.Unmount(spec.mountPoint(), 0)
+	ops := directModelVolumeOps{}
+	_ = ops.remove(spec.mapperName())
+	_ = ops.remove("emwp-" + spec.RootHash + "-crypt")
 	removeLegacyModelPackAlias(spec)
 }

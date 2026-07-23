@@ -109,15 +109,14 @@ type Container struct {
 	// Secrets: list of keys to lookup from external-config.yml (sensitive)
 	Secrets []string `yaml:"secrets,omitempty"`
 
-	Volumes     []string    `yaml:"volumes,omitempty"` // "source:target[:opts]"
-	Devices     []string    `yaml:"devices,omitempty"`
-	CapAdd      []string    `yaml:"cap_add,omitempty"`
-	SecurityOpt []string    `yaml:"security_opt,omitempty"`
-	Runtime     string      `yaml:"runtime,omitempty"`  // e.g., "nvidia"
-	Networks    []string    `yaml:"networks,omitempty"` // names of entries in top-level `networks:`
-	IPC         string      `yaml:"ipc,omitempty"`      // e.g., "host"
-	PidMode     string      `yaml:"pid,omitempty"`      // "host" for host PID namespace
-	GPUs        interface{} `yaml:"gpus,omitempty"`     // "all", "0,1,2,3", or count (int)
+	Volumes  []string    `yaml:"volumes,omitempty"` // "source:target[:opts]"
+	Devices  []string    `yaml:"devices,omitempty"`
+	CapAdd   []string    `yaml:"cap_add,omitempty"`
+	Runtime  string      `yaml:"runtime,omitempty"`  // e.g., "nvidia"
+	Networks []string    `yaml:"networks,omitempty"` // names of entries in top-level `networks:`
+	IPC      string      `yaml:"ipc,omitempty"`      // e.g., "host"
+	PidMode  string      `yaml:"pid,omitempty"`      // "host" for host PID namespace
+	GPUs     interface{} `yaml:"gpus,omitempty"`     // "all", "0,1,2,3", or count (int)
 
 	// Resource limits
 	ShmSize string            `yaml:"shm_size,omitempty"` // "2g"
@@ -134,6 +133,8 @@ type Container struct {
 	StopSignal  string       `yaml:"stop_signal,omitempty"`  // "SIGTERM", "SIGQUIT"
 	StopTimeout *int         `yaml:"stop_timeout,omitempty"` // seconds
 	Healthcheck *Healthcheck `yaml:"healthcheck,omitempty"`
+
+	inputFields containerInputFields
 }
 
 // Healthcheck defines container health monitoring

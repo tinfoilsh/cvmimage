@@ -490,11 +490,15 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 
 func TestAnnotateOneShotFailureIncludesFixedBootStage(t *testing.T) {
 	failure := errors.New("boot child exited")
-	state := &boot.State{Stages: []boot.Stage{{
-		Name:   boot.StageNetwork,
-		Status: boot.StatusFailed,
-		Detail: "route rejected",
-	}}}
+	state := &boot.State{Stages: make([]boot.Stage, len(boot.InitialStages))}
+	for index, name := range boot.InitialStages {
+		state.Stages[index] = boot.Stage{Name: name, Status: boot.StatusOK}
+		if name == boot.StageNetwork {
+			state.Stages[index] = boot.Stage{
+				Name: boot.StageNetwork, Status: boot.StatusFailed, Detail: "route rejected",
+			}
+		}
+	}
 
 	got := annotateOneShotFailure(string(hardening.ServiceBoot), failure, func() (*boot.State, error) {
 		return state, nil

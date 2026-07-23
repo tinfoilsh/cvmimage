@@ -193,6 +193,14 @@ func (s *State) HasFailed() bool {
 // FailureSummary returns the first failed fixed boot stage as bounded,
 // log-safe text. It is diagnostic only and must not replace readiness checks.
 func (s *State) FailureSummary() (string, bool) {
+	if len(s.Stages) != len(InitialStages) {
+		return "", false
+	}
+	for index, name := range InitialStages {
+		if s.Stages[index].Name != name {
+			return "", false
+		}
+	}
 	for _, stage := range s.Stages {
 		if stage.Status != StatusFailed {
 			continue
@@ -211,13 +219,16 @@ func (s *State) FailureSummary() (string, bool) {
 }
 
 func boundedStateText(value string, limit int) string {
-	value = string([]rune(value))
 	if len(value) <= limit {
 		return value
 	}
-	end := limit
-	for end > 0 && !utf8.RuneStart(value[end]) {
-		end--
+	end := 0
+	for end < len(value) {
+		_, size := utf8.DecodeRuneInString(value[end:])
+		if end+size > limit {
+			break
+		}
+		end += size
 	}
 	return value[:end] + "..."
 }

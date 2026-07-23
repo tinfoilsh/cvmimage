@@ -30,7 +30,7 @@ const (
 	defaultPidsLimit   int64 = 65536
 )
 
-func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config) error {
+func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config, debug bool) error {
 	for name := range cfg.Networks {
 		if err := ensureNetwork(cli, name); err != nil {
 			return err
@@ -41,7 +41,7 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config)
 			return err
 		}
 	}
-	return setupContainerNetworkFirewall(ctx, cfg)
+	return setupContainerNetworkFirewall(ctx, cfg, debug)
 }
 
 func ensureNetwork(cli *client.Client, name string) error {
@@ -124,7 +124,7 @@ func launchContainersWithMode(ctx context.Context, config *Config, extConfig *sh
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(ctx, cli, config); err != nil {
+	if err := setupContainerNetwork(ctx, cli, config, debug); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
 	}
 
@@ -169,7 +169,7 @@ func launchContainersAndWaitHealthyWithMode(ctx context.Context, tracker *boot.T
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(ctx, cli, config); err != nil {
+	if err := setupContainerNetwork(ctx, cli, config, debug); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
 	}
 

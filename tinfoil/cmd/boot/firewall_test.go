@@ -28,6 +28,7 @@ func TestFirewall_AllowlistPopulationFollowsNftOnce(t *testing.T) {
 	err := setupContainerNetworkFirewallWith(
 		context.Background(),
 		cfg,
+		false,
 		func(string) error {
 			events = append(events, "nft")
 			return nil
@@ -57,6 +58,7 @@ func TestFirewall_NoAllowlistSkipsPopulation(t *testing.T) {
 	err := setupContainerNetworkFirewallWith(
 		context.Background(),
 		cfg,
+		false,
 		func(string) error { return nil },
 		func() (egressPopulator, error) {
 			loaded = true
@@ -80,6 +82,7 @@ func TestFirewall_PopulationFailureAbortsSetup(t *testing.T) {
 	err := setupContainerNetworkFirewallWith(
 		context.Background(),
 		cfg,
+		false,
 		func(string) error { return nil },
 		func() (egressPopulator, error) {
 			return fakeEgressPopulator{populate: func(context.Context) error {
@@ -103,6 +106,7 @@ func TestFirewall_PopulationHasFixedBootDeadline(t *testing.T) {
 	err := setupContainerNetworkFirewallWith(
 		context.Background(),
 		cfg,
+		false,
 		func(string) error { return nil },
 		func() (egressPopulator, error) {
 			return fakeEgressPopulator{populate: func(ctx context.Context) error {
@@ -132,6 +136,7 @@ func TestFirewall_PopulationInheritsBootCancellation(t *testing.T) {
 	err := setupContainerNetworkFirewallWith(
 		ctx,
 		cfg,
+		false,
 		func(string) error { return nil },
 		func() (egressPopulator, error) {
 			return fakeEgressPopulator{populate: func(ctx context.Context) error {
@@ -154,6 +159,7 @@ func TestFirewall_PopulationHonorsEarlierBootDeadline(t *testing.T) {
 	err := setupContainerNetworkFirewallWith(
 		ctx,
 		cfg,
+		false,
 		func(string) error { return nil },
 		func() (egressPopulator, error) {
 			return fakeEgressPopulator{populate: func(ctx context.Context) error {
@@ -169,13 +175,16 @@ func TestFirewall_PopulationHonorsEarlierBootDeadline(t *testing.T) {
 
 // renderFirewallScript returns the nft script setupContainerNetworkFirewall
 // would commit, minus the runNft call.
-func renderFirewallScript(cfg *Config) string {
+func renderFirewallScript(cfg *Config, debug bool) string {
 	var s strings.Builder
 	for name, spec := range cfg.Networks {
 		writeBridgeRules(&s, name, spec)
 	}
 	if shimUpstreamSet(cfg) {
 		writeBridgeRules(&s, "shim-net", &NetworkSpec{Egress: "closed"})
+	}
+	if debug && hasReservedDebugContainer(cfg) {
+		writeReservedDebugForwardRules(&s)
 	}
 	return s.String()
 }
@@ -184,7 +193,7 @@ func TestFirewall_ClosedBridgeHasNoEgressRule(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{
 		"ipc-exec": {Egress: "closed"},
 	}}
-	script := renderFirewallScript(cfg)
+	script := renderFirewallScript(cfg, false)
 	if !strings.Contains(script, `iif "ipc-exec" oif "ipc-exec" accept`) {
 		t.Error("closed bridge should still allow intra-bridge traffic")
 	}
@@ -203,7 +212,7 @@ func TestFirewall_OpenBridgeEmitsPublicAccept(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{
 		"web": {Egress: "open"},
 	}}
-	script := renderFirewallScript(cfg)
+	script := renderFirewallScript(cfg, false)
 	if !strings.Contains(script, `iif "web" ip daddr != {`) {
 		t.Errorf("open bridge should accept public v4; got:\n%s", script)
 	}
@@ -216,7 +225,7 @@ func TestFirewall_OpenBridgeBlocksNonPublicIPv4Ranges(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{
 		"web": {Egress: "open"},
 	}}
-	script := renderFirewallScript(cfg)
+	script := renderFirewallScript(cfg, false)
 	for _, cidr := range []string{
 		"100.64.0.0/10",   // RFC 6598 shared address space.
 		"198.18.0.0/15",   // RFC 6890 benchmarking.
@@ -235,7 +244,7 @@ func TestFirewall_AllowlistEmitsSetAndAcceptRule(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{
 		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
 	}}
-	script := renderFirewallScript(cfg)
+	script := renderFirewallScript(cfg, false)
 	if !strings.Contains(script, `add set inet tinfoil allow-control`) {
 		t.Errorf("allowlist must declare its set; got:\n%s", script)
 	}
@@ -251,7 +260,7 @@ func TestFirewall_AllowlistDropsNonPublicBeforeAllowSet(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{
 		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
 	}}
-	script := renderFirewallScript(cfg)
+	script := renderFirewallScript(cfg, false)
 	dropRule := `iif "control" ip daddr {`
 	dropIdx := strings.Index(script, dropRule)
 	allowIdx := strings.Index(script, `iif "control" ip daddr @allow-control accept`)
@@ -275,12 +284,51 @@ func TestFirewall_ShimNetAlwaysClosed(t *testing.T) {
 			"web": {Egress: "open"},
 		},
 	}
-	script := renderFirewallScript(cfg)
+	script := renderFirewallScript(cfg, false)
 	if !strings.Contains(script, `iif "shim-net" oif "shim-net" accept`) {
 		t.Errorf("shim-net should emit intra-bridge accept; got:\n%s", script)
 	}
 	if strings.Contains(script, `iif "shim-net" ip daddr !`) {
 		t.Error("shim-net must not get an egress-open rule")
+	}
+}
+
+func TestFirewall_DebugInstallerAllowsOnlyPublishedSSHForward(t *testing.T) {
+	cfg := &Config{
+		Networks: map[string]*NetworkSpec{},
+		Containers: []Container{{
+			Name: reservedDebugContainerName,
+		}},
+	}
+	script := renderFirewallScript(cfg, true)
+	for _, rule := range []string{
+		`oifname "docker0" ct status dnat tcp dport 2222 accept`,
+		`iifname "docker0" ct state established,related accept`,
+	} {
+		if !strings.Contains(script, rule) {
+			t.Errorf("debug installer rule %q missing from:\n%s", rule, script)
+		}
+	}
+}
+
+func TestFirewall_ProductionAndGenericContainersKeepDockerBridgeClosed(t *testing.T) {
+	reserved := &Config{
+		Networks:   map[string]*NetworkSpec{},
+		Containers: []Container{{Name: reservedDebugContainerName}},
+	}
+	generic := &Config{
+		Networks:   map[string]*NetworkSpec{},
+		Containers: []Container{{Name: "workload"}},
+	}
+	for name, script := range map[string]string{
+		"production": renderFirewallScript(reserved, false),
+		"generic":    renderFirewallScript(generic, true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(script, `docker0`) {
+				t.Fatalf("unexpected docker0 forwarding rule:\n%s", script)
+			}
+		})
 	}
 }
 

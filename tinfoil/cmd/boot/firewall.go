@@ -41,8 +41,8 @@ type egressPopulator interface {
 // transaction, then synchronously populates any allowlist sets.
 // Must be called after the bridge interfaces exist so iif/oif resolve
 // by index.
-func setupContainerNetworkFirewall(ctx context.Context, cfg *Config) error {
-	return setupContainerNetworkFirewallWith(ctx, cfg, runNft, func() (egressPopulator, error) {
+func setupContainerNetworkFirewall(ctx context.Context, cfg *Config, debug bool) error {
+	return setupContainerNetworkFirewallWith(ctx, cfg, debug, runNft, func() (egressPopulator, error) {
 		return egress.Load()
 	})
 }
@@ -50,6 +50,7 @@ func setupContainerNetworkFirewall(ctx context.Context, cfg *Config) error {
 func setupContainerNetworkFirewallWith(
 	ctx context.Context,
 	cfg *Config,
+	debug bool,
 	applyNft func(string) error,
 	loadEgress func() (egressPopulator, error),
 ) error {
@@ -65,6 +66,9 @@ func setupContainerNetworkFirewallWith(
 	}
 	if shimUpstreamSet(cfg) {
 		writeBridgeRules(&script, containernet.ShimNetName, &NetworkSpec{Egress: "closed"})
+	}
+	if debug && hasReservedDebugContainer(cfg) {
+		writeReservedDebugForwardRules(&script)
 	}
 	if err := applyNft(script.String()); err != nil {
 		return fmt.Errorf("installing container-network firewall rules: %w", err)
@@ -95,6 +99,11 @@ func setupContainerNetworkFirewallWith(
 		break
 	}
 	return nil
+}
+
+func writeReservedDebugForwardRules(script *strings.Builder) {
+	fmt.Fprintf(script, "add rule inet tinfoil forward oifname %q ct status dnat tcp dport %d accept\n", "docker0", reservedDebugHostPort)
+	fmt.Fprintf(script, "add rule inet tinfoil forward iifname %q ct state established,related accept\n", "docker0")
 }
 
 func writeBridgeRules(script *strings.Builder, bridge string, spec *NetworkSpec) {

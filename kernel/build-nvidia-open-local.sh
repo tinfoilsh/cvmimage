@@ -1,88 +1,157 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 022
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 kernel_dir="$repo_dir/kernel"
-
-nvidia_version="${TINFOIL_NVIDIA_OPEN_VERSION:-595.71.05}"
-nvidia_package_version="${TINFOIL_NVIDIA_OPEN_PACKAGE_VERSION:-595.71.05-1ubuntu1}"
-nvidia_repo_url="${TINFOIL_NVIDIA_OPEN_REPO_URL:-https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64}"
-kernel_source_version="${TINFOIL_KERNEL_SOURCE_VERSION:-7.0.0}"
-kernel_version_override="${TINFOIL_KERNEL_VERSION_OVERRIDE:-$kernel_source_version}"
+kernel_build_dir="${TINFOIL_KERNEL_BUILD_ROOT:-$kernel_dir/build}"
 kernel_out_dir="${TINFOIL_KERNEL_OUT_DIR:-$kernel_dir/out}"
-kernel_release="${TINFOIL_KERNEL_RELEASE:-$(tr -d '\n' < "$kernel_out_dir/kernel.release")}"
-kernel_source_dir="${TINFOIL_KERNEL_SOURCE_DIR:-$kernel_dir/build/linux-source-$kernel_source_version}"
-scratch_dir="${TINFOIL_NVIDIA_OPEN_BUILD_DIR:-$kernel_dir/build/nvidia-open-$nvidia_version}"
-# finit_module loads by file descriptor, so keep the three measured artifacts
-# at a fixed application-owned path instead of parsing uname at runtime.
-stage_dir="${TINFOIL_NVIDIA_OPEN_STAGE_DIR:-$repo_dir/image/rootfs-overlay/usr/lib/tinfoil/kernel-modules}"
+kernel_source_dir="$kernel_build_dir/linux-source-7.0.0"
+kernel_release_file="$kernel_out_dir/kernel.release"
+output_dir="${TINFOIL_NVIDIA_OUTPUT_DIR:-$kernel_out_dir/rootfs-artifacts/nvidia-modules}"
+package_cache_dir="${TINFOIL_NVIDIA_PACKAGE_CACHE:-$kernel_dir/build/nvidia-packages}"
+host_uid="${HOST_UID:-$(id -u)}"
+host_gid="${HOST_GID:-$(id -g)}"
 
-source_deb="nvidia-kernel-source-open_${nvidia_package_version}_amd64.deb"
-dkms_deb="nvidia-dkms-open_${nvidia_package_version}_amd64.deb"
-source_sha256="823e5d99d43eb51a10b9ef548469a1fa27a87821a18d43799e4086f91ecbc5ca"
-dkms_sha256="63931656d1ee42b0522f6180ef292c2d942eeb9f8ce7940882486273a319a994"
+if [[ ! "$host_uid" =~ ^[0-9]+$ || ! "$host_gid" =~ ^[0-9]+$ ]]; then
+    echo "HOST_UID and HOST_GID must be numeric" >&2
+    exit 2
+fi
+if [ "$(id -u)" -ne 0 ] &&
+    { [ "$host_uid" != "$(id -u)" ] || [ "$host_gid" != "$(id -g)" ]; }; then
+    echo "non-root NVIDIA builds must use the current uid and gid" >&2
+    exit 2
+fi
 
-required_modules=(
-    nvidia.ko
-    nvidia-uvm.ko
-    nvidia-modeset.ko
-)
-make_version_args=(KERNELVERSION="$kernel_version_override")
+readonly nvidia_version=595.71.05
+readonly nvidia_package_version=595.71.05-1ubuntu1
+readonly nvidia_repo_url=https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64
+readonly source_deb="nvidia-kernel-source-open_${nvidia_package_version}_amd64.deb"
+readonly dkms_deb="nvidia-dkms-open_${nvidia_package_version}_amd64.deb"
+readonly source_sha256=823e5d99d43eb51a10b9ef548469a1fa27a87821a18d43799e4086f91ecbc5ca
+readonly dkms_sha256=63931656d1ee42b0522f6180ef292c2d942eeb9f8ce7940882486273a319a994
+mapfile -t required_modules < "$kernel_dir/nvidia-modules.txt"
+readonly -a required_modules
 
-export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(date -u -d @0)}"
-export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-tinfoil}"
-export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-tinfoil-builder}"
+export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'
+export KBUILD_BUILD_USER=tinfoil
+export KBUILD_BUILD_HOST=tinfoil-builder
+export SOURCE_DATE_EPOCH=0
+export TZ=UTC
+export LC_ALL=C
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+unset MAKEFLAGS MFLAGS ARCH CROSS_COMPILE CC CFLAGS CPPFLAGS KCFLAGS KCPPFLAGS LDFLAGS
 
-download_deb() {
-    local name="$1"
-    local sha="$2"
-    local dest="$scratch_dir/debs/$name"
-
-    mkdir -p "$scratch_dir/debs"
-    if [ ! -f "$dest" ]; then
-        if [ "${TINFOIL_OFFLINE:-0}" = 1 ]; then
-            echo "missing pinned offline NVIDIA package: $dest" >&2
-            exit 1
-        fi
-        curl -fL --retry 3 --retry-delay 2 "$nvidia_repo_url/$name" -o "$dest"
+check_toolchain() {
+    if [ "$(dpkg-query -W -f='${Version}' gcc)" != '4:15.2.0-5ubuntu1' ] ||
+        [ "$(dpkg-query -W -f='${Version}' binutils)" != '2.46-3ubuntu2' ] ||
+        [ "$(dpkg-query -W -f='${Version}' dwarves)" != '1.31-2ubuntu1' ] ||
+        [ "$(dpkg-query -W -f='${Version}' kmod)" != '34.2-2ubuntu2' ]; then
+        echo "non-canonical NVIDIA module toolchain" >&2
+        exit 1
     fi
-    printf '%s  %s\n' "$sha" "$dest" | sha256sum -c -
 }
 
 require_file() {
-    local path="$1"
-    local label="$2"
+    local path=$1
+    local label=$2
     if [ ! -s "$path" ]; then
         echo "missing $label: $path" >&2
         exit 1
     fi
 }
 
-require_file "$kernel_out_dir/kernel.release" "custom kernel release"
-require_file "$kernel_source_dir/.config" "custom kernel config"
-require_file "$kernel_source_dir/arch/x86/boot/bzImage" "custom kernel image"
-require_file "$kernel_source_dir/vmlinux.symvers" "custom kernel symbol versions"
+download_deb() {
+    local name=$1
+    local sha256=$2
+    local destination="$package_cache_dir/$name"
+    local checksum_output
 
-actual_release="$(make -s -C "$kernel_source_dir" "${make_version_args[@]}" kernelrelease)"
+    mkdir -p "$package_cache_dir"
+    if [ ! -f "$destination" ]; then
+        if [ "${TINFOIL_OFFLINE:-0}" = 1 ]; then
+            echo "missing pinned offline NVIDIA package: $destination" >&2
+            exit 1
+        fi
+        curl -fL --retry 3 --retry-delay 2 "$nvidia_repo_url/$name" -o "$destination"
+        if [ "$(id -u)" -eq 0 ]; then
+            chown "$host_uid:$host_gid" "$destination"
+        fi
+    fi
+    if ! checksum_output="$(printf '%s  %s\n' "$sha256" "$destination" | sha256sum -c --strict - 2>&1)"; then
+        printf '%s\n' "$checksum_output" >&2
+        echo "removing NVIDIA package with checksum mismatch: $destination" >&2
+        rm -f -- "$destination"
+        exit 1
+    fi
+    printf '%s\n' "$destination"
+}
+
+module_vermagic() {
+    modinfo -F vermagic "$1"
+}
+
+module_versions() {
+    modprobe --dump-modversions "$1"
+}
+
+validate_nvidia_modules() {
+    local source_dir=$1
+    local module_dir=$2
+    local release=$3
+    local module vermagic module_version_data symbol expected actual
+
+    for module in "${required_modules[@]}"; do
+        require_file "$module_dir/$module" "built NVIDIA module"
+        vermagic="$(module_vermagic "$module_dir/$module")"
+        case "$vermagic" in
+            "$release "*) ;;
+            *)
+                echo "module $module has unexpected vermagic: $vermagic" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    module_version_data="$(module_versions "$module_dir/nvidia.ko")"
+    for symbol in pci_iounmap iterate_fd init_pid_ns pci_restore_state; do
+        expected="$(awk -v symbol="$symbol" '$2 == symbol { print $1; exit }' "$source_dir/vmlinux.symvers")"
+        actual="$(awk -v symbol="$symbol" '$2 == symbol { print $1; exit }' <<< "$module_version_data")"
+        if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+            echo "module CRC mismatch for $symbol: expected ${expected:-<missing>} got ${actual:-<missing>}" >&2
+            exit 1
+        fi
+    done
+}
+
+main() {
+    check_toolchain
+
+    require_file "$kernel_release_file" "custom kernel release"
+    require_file "$kernel_source_dir/.config" "custom kernel config"
+    require_file "$kernel_source_dir/arch/x86/boot/bzImage" "custom kernel image"
+    require_file "$kernel_source_dir/vmlinux.symvers" "custom kernel symbol versions"
+    require_file "$kernel_source_dir/include/config/kernel.release" "custom kernel release metadata"
+
+kernel_release="$(tr -d '\n' < "$kernel_release_file")"
+actual_release="$(tr -d '\n' < "$kernel_source_dir/include/config/kernel.release")"
 if [ "$actual_release" != "$kernel_release" ]; then
-    cat >&2 <<EOF
-kernel release mismatch
-  kernel/out: $kernel_release
-  source:     $actual_release
-EOF
+    echo "kernel release mismatch: $kernel_release != $actual_release" >&2
     exit 1
 fi
 
-download_deb "$source_deb" "$source_sha256"
-download_deb "$dkms_deb" "$dkms_sha256"
+source_package="$(download_deb "$source_deb" "$source_sha256")"
+dkms_package="$(download_deb "$dkms_deb" "$dkms_sha256")"
 
-rm -rf "$scratch_dir/extract"
-mkdir -p "$scratch_dir/extract/source" "$scratch_dir/extract/dkms"
-dpkg-deb -x "$scratch_dir/debs/$source_deb" "$scratch_dir/extract/source"
-dpkg-deb -x "$scratch_dir/debs/$dkms_deb" "$scratch_dir/extract/dkms"
+mkdir -p "$kernel_build_dir"
+scratch="$(mktemp -d "$kernel_build_dir/.nvidia-open.XXXXXXXX")"
+trap 'rm -rf -- "$scratch"' EXIT
+mkdir -p "$scratch/source" "$scratch/dkms" "$scratch/built-modules"
+dpkg-deb -x "$source_package" "$scratch/source"
+dpkg-deb -x "$dkms_package" "$scratch/dkms"
 
-nvidia_source_dir="$scratch_dir/extract/source/usr/src/nvidia-$nvidia_version"
-patch_file="$scratch_dir/extract/dkms/usr/src/nvidia-$nvidia_version/patches/disable_fstack-clash-protection_fcf-protection.patch"
+nvidia_source_dir="$scratch/source/usr/src/nvidia-$nvidia_version"
+patch_file="$scratch/dkms/usr/src/nvidia-$nvidia_version/patches/disable_fstack-clash-protection_fcf-protection.patch"
 require_file "$nvidia_source_dir/Makefile" "NVIDIA open module Makefile"
 require_file "$patch_file" "NVIDIA DKMS compiler flag patch"
 
@@ -90,61 +159,39 @@ patch --forward --batch -p1 -d "$nvidia_source_dir" < "$patch_file"
 printf '%s\n' '#!/bin/sh' 'exec /usr/bin/pahole "$@"' > "$nvidia_source_dir/pahole.sh"
 chmod 0755 "$nvidia_source_dir/pahole.sh"
 
-install -m 0644 "$kernel_source_dir/vmlinux.symvers" "$kernel_source_dir/Module.symvers"
-make -C "$kernel_source_dir" "${make_version_args[@]}" modules_prepare > "$scratch_dir/modules-prepare.log" 2>&1
-
-build_log="$scratch_dir/build.log"
-if ! sudo env \
-        TINFOIL_BUILD_UID="$(id -u)" \
-        TINFOIL_BUILD_GID="$(id -g)" \
-        unshare --mount --propagation private \
-        "$kernel_dir/build-nvidia-open-canonical.sh" \
-        "$kernel_source_dir" "$nvidia_source_dir" "$kernel_release" \
-        "${TINFOIL_NVIDIA_OPEN_JOBS:-$(nproc)}" > "$build_log" 2>&1; then
-    tail -n 200 "$build_log" >&2
-    exit 1
-fi
-
-for module in "${required_modules[@]}"; do
-    require_file "$nvidia_source_dir/$module" "built NVIDIA module"
-    case "$(modinfo -F vermagic "$nvidia_source_dir/$module")" in
-        "$kernel_release "*) ;;
-        *)
-            echo "module $module has unexpected vermagic: $(modinfo -F vermagic "$nvidia_source_dir/$module")" >&2
+    build_log="$scratch/build.log"
+    unshare_command=(unshare)
+    if [ "$(id -u)" -ne 0 ]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            echo "non-root NVIDIA builds require sudo for the mount namespace" >&2
             exit 1
-            ;;
-    esac
-done
-
-module_versions="$(modprobe --dump-modversions "$nvidia_source_dir/nvidia.ko")"
-for symbol in pci_iounmap iterate_fd init_pid_ns pci_restore_state; do
-    expected="$(awk -v symbol="$symbol" '$2 == symbol { print $1; exit }' "$kernel_source_dir/Module.symvers")"
-    actual="$(awk -v symbol="$symbol" '$2 == symbol { print $1; exit }' <<<"$module_versions")"
-    if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
-        echo "module CRC mismatch for $symbol: expected ${expected:-<missing>} got ${actual:-<missing>}" >&2
+        fi
+        unshare_command=(sudo unshare)
+    fi
+    if ! "${unshare_command[@]}" --mount --propagation private \
+        "$kernel_dir/build-nvidia-open-canonical.sh" \
+        "$kernel_source_dir" "$nvidia_source_dir" "$scratch/built-modules" \
+        "$kernel_release" "$host_uid" "$host_gid" \
+        "$kernel_dir/nvidia-modules.txt" > "$build_log" 2>&1; then
+        tail -n 200 "$build_log" >&2
         exit 1
     fi
-done
 
-install -d -m 0755 "$stage_dir"
-rm -f "$stage_dir"/nvidia*.ko "$stage_dir"/nvidia*.ko.zst
-for module in "${required_modules[@]}"; do
-    install -m 0644 "$nvidia_source_dir/$module" "$stage_dir/$module"
-done
+    validate_nvidia_modules "$kernel_source_dir" "$scratch/built-modules" "$kernel_release"
 
-out_dir="$kernel_out_dir/nvidia-open"
-rm -rf "$out_dir"
-install -d -m 0755 "$out_dir"
-sha256sum "$stage_dir"/nvidia*.ko > "$out_dir/checksums.sha256"
-for module in "${required_modules[@]}"; do
-    printf '%s %s\n' "$module" "$(modinfo -F vermagic "$stage_dir/$module")"
-done > "$out_dir/vermagic.txt"
-modprobe --dump-modversions "$stage_dir/nvidia.ko" > "$out_dir/nvidia.modversions"
+    rm -rf "$output_dir"
+    install -d -m 0755 "$output_dir"
+    for module in "${required_modules[@]}"; do
+        install -m 0644 "$scratch/built-modules/$module" "$output_dir/$module"
+        touch -d @0 "$output_dir/$module"
+    done
+    if [ "$(id -u)" -eq 0 ]; then
+        chown -R "$host_uid:$host_gid" "$output_dir"
+    fi
 
-cat <<EOF
-custom NVIDIA open modules staged
-  release:  $kernel_release
-  source:   $nvidia_package_version
-  stage:    $stage_dir
-  checksums:$out_dir/checksums.sha256
-EOF
+    printf 'NVIDIA modules: %s (%s)\n' "$output_dir" "$kernel_release"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

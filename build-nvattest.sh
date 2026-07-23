@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Builds nvattest + libnvat debs for mkosi and exports the two runtime artifacts
-# needed by the future additive rootfs. Always runs inside the pinned container
-# selected by the Makefile.
+# Builds nvattest + libnvat debs for mkosi and exports the two named runtime
+# artifacts needed by the additive rootfs. Always runs inside the shared pinned
+# runtime builder selected by the Makefile.
 # The cuda-ubuntu2604 repo now ships nvattest, but its libnvat links
 # libxml2.so.2 while Ubuntu resolute ships only libxml2.so.16 (libxml2 2.14
 # bumped the SONAME). So we keep building from source against system libxml2-16.
@@ -14,7 +14,6 @@ source "${repo_dir}/scripts/nvattest-artifacts.sh"
 readonly UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
 readonly UPSTREAM_TAG=2026.06.09
 readonly UPSTREAM_SHA=9d12801cea8a198ea0f29640dfaf8a4017c841c5
-readonly APT_SNAPSHOT_DATE=20260525T000000Z
 
 # Transitive CMake FetchContent deps. We pre-fetch each at the expected SHA
 # *before* cmake runs and pass FETCHCONTENT_SOURCE_DIR_<NAME>, so a moved
@@ -65,19 +64,17 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-nvattest_require_absolute_output "${DEB_OUT_DIR}"
-nvattest_require_absolute_output "${RUNTIME_OUT_DIR}"
-
-WORK="$(nvattest_make_fixed_owned_temp /tmp tinfoil-nvattest-build)"
+WORK=/tmp/tinfoil-nvattest-build
 SRC="${WORK}/src"
 BUILD="${WORK}/build"
 INSTALL="${WORK}/install"
-RUNTIME_STAGE="${WORK}/runtime"
 cleanup() {
-    nvattest_remove_fixed_owned_temp "${WORK}" /tmp tinfoil-nvattest-build
+    rm -rf -- "${WORK}"
 }
 trap cleanup EXIT
 
+rm -rf -- "${WORK}"
+mkdir -p "${WORK}"
 mkdir -p "${DEB_OUT_DIR}"
 
 export SOURCE_DATE_EPOCH=0
@@ -90,26 +87,6 @@ export CXXFLAGS="${prefix_map} ${portable_target}"
 export CARGO_INCREMENTAL=0
 export RUSTFLAGS="--remap-path-prefix=${WORK}=/usr/src/tinfoil-nvattest -C target-cpu=x86-64 -C codegen-units=1"
 export CARGO_BUILD_JOBS=1
-
-# Bootstrap toolchain from snapshot.ubuntu.com (reproducible). ca-certificates
-# first so apt can do TLS to snapshot; integrity is enforced by GPG either way.
-# Drop docker-clean so /var/cache/apt/archives survives across container runs
-export DEBIAN_FRONTEND=noninteractive
-rm -f /etc/apt/apt.conf.d/docker-clean
-apt-get update -q
-apt-get install -y --no-install-recommends ca-certificates
-cat > /etc/apt/sources.list.d/ubuntu.sources <<EOF
-Types: deb
-URIs: https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT_DATE}
-Suites: resolute resolute-updates resolute-security
-Components: main universe restricted multiverse
-Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-Check-Valid-Until: no
-EOF
-apt-get update -q
-apt-get install -y --no-install-recommends \
-    binutils build-essential cmake git perl pkg-config rustc cargo \
-    libxml2-dev curl xz-utils
 
 # Clone upstream and verify SHA.
 git clone --depth=1 --branch "${UPSTREAM_TAG}" "${UPSTREAM_URL}" "${SRC}"
@@ -158,13 +135,8 @@ DESTDIR="${INSTALL}" cmake --install "${BUILD}/nv-attestation-sdk-build"
     "${INSTALL}/usr/bin/nvattest" \
     "${INSTALL}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
 
-install -D -m 0755 "${INSTALL}/usr/bin/nvattest" \
-    "${RUNTIME_STAGE}/usr/bin/nvattest"
-install -D -m 0644 "${INSTALL}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
-    "${RUNTIME_STAGE}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
-nvattest_verify_runtime_artifacts "${RUNTIME_STAGE}" "${SO_VERSION}"
-nvattest_publish_runtime_artifacts \
-    "${RUNTIME_STAGE}" "${RUNTIME_OUT_DIR}" "${SO_VERSION}" \
+nvattest_install_runtime_artifacts \
+    "${INSTALL}" "${RUNTIME_OUT_DIR}" "${SO_VERSION}" \
     "${HOST_UID}" "${HOST_GID}" "${SOURCE_DATE_EPOCH}"
 
 make_deb() {
@@ -205,7 +177,9 @@ make_deb "${nvattest}" nvattest devel \
 for package in \
     "${DEB_OUT_DIR}/libnvat_${PKG_VERSION}_${ARCH}.deb" \
     "${DEB_OUT_DIR}/nvattest_${PKG_VERSION}_${ARCH}.deb"; do
-    chown "${HOST_UID}:${HOST_GID}" "${package}"
+    if [ "$(id -u)" -eq 0 ]; then
+        chown "${HOST_UID}:${HOST_GID}" "${package}"
+    fi
     touch -d "@${SOURCE_DATE_EPOCH}" "${package}"
 done
 

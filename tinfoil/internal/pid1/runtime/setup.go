@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -42,9 +43,17 @@ var sysctlPolicy = []sysctlSetting{
 	{path: "fs/protected_fifos", value: "1"},
 	{path: "kernel/dmesg_restrict", value: "1"},
 	{path: "kernel/kptr_restrict", value: "1"},
+	{path: "kernel/oops_limit", value: "1"},
+	{path: "kernel/panic_on_oops", value: "1"},
+	{path: "kernel/panic_on_warn", value: "0"},
+	{path: "kernel/perf_event_paranoid", value: "4"},
 	{path: "kernel/printk", value: "4 4 1 7"},
 	{path: "kernel/sysrq", value: "0"},
+	{path: "kernel/unprivileged_bpf_disabled", value: "1"},
+	{path: "kernel/unprivileged_userns_clone", value: "0"},
+	{path: "kernel/warn_limit", value: "10"},
 	{path: "kernel/yama/ptrace_scope", value: "1"},
+	{path: "net/core/bpf_jit_harden", value: "2"},
 	{path: "net/core/default_qdisc", value: "fq_codel", optional: true},
 	{path: "net/ipv4/conf/default/rp_filter", value: "2"},
 	{path: "net/ipv4/conf/all/rp_filter", value: "2"},
@@ -246,9 +255,20 @@ func applySysctls(procSysRoot string, policy []sysctlSetting, log LogFunc) error
 			}
 			return fmt.Errorf("setting sysctl %s: %w", setting.path, err)
 		}
+		actual, err := os.ReadFile(procPath)
+		if err != nil {
+			return fmt.Errorf("verifying sysctl %s: %w", setting.path, err)
+		}
+		if normalizeSysctlValue(string(actual)) != normalizeSysctlValue(setting.value) {
+			return fmt.Errorf("verifying sysctl %s: read %q after writing %q", setting.path, strings.TrimSpace(string(actual)), setting.value)
+		}
 	}
 	logf(log, "applied sysctl policy")
 	return nil
+}
+
+func normalizeSysctlValue(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func logf(log LogFunc, format string, args ...any) {

@@ -131,3 +131,51 @@ func TestApplySysctlsFailsClosed(t *testing.T) {
 		t.Fatal("applySysctls accepted missing required key")
 	}
 }
+
+func TestApplySysctlsVerifiesKernelState(t *testing.T) {
+	procRoot := t.TempDir()
+	path := filepath.Join(procRoot, "kernel", "kptr_restrict")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", path); err != nil {
+		t.Fatal(err)
+	}
+
+	err := applySysctls(
+		procRoot,
+		[]sysctlSetting{{path: "kernel/kptr_restrict", value: "1"}},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("applySysctls accepted a value that did not persist")
+	}
+}
+
+func TestSysctlPolicyHardensPinnedKernelInterfaces(t *testing.T) {
+	want := map[string]string{
+		"kernel/oops_limit":                "1",
+		"kernel/panic_on_oops":             "1",
+		"kernel/panic_on_warn":             "0",
+		"kernel/perf_event_paranoid":       "4",
+		"kernel/unprivileged_bpf_disabled": "1",
+		"kernel/unprivileged_userns_clone": "0",
+		"kernel/warn_limit":                "10",
+		"net/core/bpf_jit_harden":          "2",
+	}
+
+	for _, setting := range sysctlPolicy {
+		if value, ok := want[setting.path]; ok {
+			if setting.value != value {
+				t.Errorf("sysctl %s = %q, want %q", setting.path, setting.value, value)
+			}
+			if setting.optional {
+				t.Errorf("security sysctl %s is optional", setting.path)
+			}
+			delete(want, setting.path)
+		}
+	}
+	for path := range want {
+		t.Errorf("security sysctl %s is missing", path)
+	}
+}

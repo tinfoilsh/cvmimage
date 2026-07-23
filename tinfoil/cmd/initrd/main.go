@@ -162,11 +162,15 @@ func mountInitrdFilesystems() error {
 }
 
 func mountIfNeeded(source, target, fstype string, flags uintptr, data string) error {
-	if isMountPoint(target) {
-		return nil
-	}
 	if err := os.MkdirAll(target, 0755); err != nil {
 		return err
+	}
+	mounted, err := isMountPoint(target, unix.Statx)
+	if err != nil {
+		return fmt.Errorf("check mount point %s: %w", target, err)
+	}
+	if mounted {
+		return nil
 	}
 	if err := unix.Mount(source, target, fstype, flags, data); err != nil {
 		if errors.Is(err, unix.EBUSY) {
@@ -177,21 +181,22 @@ func mountIfNeeded(source, target, fstype string, flags uintptr, data string) er
 	return nil
 }
 
-func isMountPoint(target string) bool {
-	file, err := os.Open("/proc/self/mountinfo")
-	if err != nil {
-		return false
-	}
-	defer file.Close()
+type statxFunc func(int, string, int, int, *unix.Statx_t) error
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) >= 5 && fields[4] == target {
-			return true
-		}
+func isMountPoint(target string, statx statxFunc) (bool, error) {
+	target = filepath.Clean(target)
+	parent := filepath.Dir(target)
+	var targetStat, parentStat unix.Statx_t
+	if err := statx(unix.AT_FDCWD, target, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &targetStat); err != nil {
+		return false, err
 	}
-	return false
+	if err := statx(unix.AT_FDCWD, parent, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &parentStat); err != nil {
+		return false, err
+	}
+	if targetStat.Mask&unix.STATX_MNT_ID == 0 || parentStat.Mask&unix.STATX_MNT_ID == 0 {
+		return false, errors.New("kernel omitted STATX_MNT_ID")
+	}
+	return targetStat.Mnt_id != parentStat.Mnt_id, nil
 }
 
 func cmdlineValue(name string) (string, error) {

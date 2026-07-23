@@ -26,20 +26,25 @@ type Command struct {
 
 // Exit is the wait status collected for a child.
 type Exit struct {
+	Name   string
 	PID    int
 	Status syscall.WaitStatus
 }
 
 func (e Exit) Err() error {
+	identity := fmt.Sprintf("pid %d", e.PID)
+	if e.Name != "" {
+		identity = fmt.Sprintf("%s (pid %d)", e.Name, e.PID)
+	}
 	switch {
 	case e.Status.Exited() && e.Status.ExitStatus() == 0:
 		return nil
 	case e.Status.Exited():
-		return fmt.Errorf("pid %d exited with status %d", e.PID, e.Status.ExitStatus())
+		return fmt.Errorf("%s exited with status %d", identity, e.Status.ExitStatus())
 	case e.Status.Signaled():
-		return fmt.Errorf("pid %d killed by %s", e.PID, e.Status.Signal())
+		return fmt.Errorf("%s killed by %s", identity, e.Status.Signal())
 	default:
-		return fmt.Errorf("pid %d ended with wait status %#x", e.PID, uint32(e.Status))
+		return fmt.Errorf("%s ended with wait status %#x", identity, uint32(e.Status))
 	}
 }
 
@@ -58,12 +63,14 @@ type processBackend interface {
 // Process is a child whose status is owned by Manager. Wait may be called by
 // multiple observers; all receive the same result.
 type Process struct {
+	pid   int
+	name  string
 	child backendProcess
 	done  chan struct{}
 	exit  Exit
 }
 
-func (p *Process) PID() int              { return p.child.pid() }
+func (p *Process) PID() int              { return p.pid }
 func (p *Process) Done() <-chan struct{} { return p.done }
 
 func (p *Process) Wait(ctx context.Context) (Exit, error) {
@@ -135,8 +142,9 @@ func (m *Manager) Start(command Command) (*Process, error) {
 			reply <- startResponse{err: err}
 			return
 		}
-		process := &Process{child: child, done: make(chan struct{})}
-		children[child.pid()] = process
+		pid := child.pid()
+		process := &Process{pid: pid, name: command.Name, child: child, done: make(chan struct{})}
+		children[pid] = process
 		reply <- startResponse{process: process}
 	}
 	response := <-reply
@@ -175,6 +183,7 @@ func (m *Manager) reapChildren(children map[int]*Process) {
 			m.logf("reaped adopted child pid=%d status=%#x", pid, uint32(status))
 			continue
 		}
+		exit.Name = process.name
 		delete(children, pid)
 		process.complete(exit)
 		if err := process.child.release(); err != nil {
@@ -205,7 +214,7 @@ func (osBackend) start(command Command) (backendProcess, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", command.Name, err)
 	}
-	return osChild{process: process}, nil
+	return osChild{process: process, processID: process.Pid}, nil
 }
 
 func (osBackend) waitNoHang() (int, syscall.WaitStatus, error) {
@@ -214,18 +223,21 @@ func (osBackend) waitNoHang() (int, syscall.WaitStatus, error) {
 	return pid, status, err
 }
 
-type osChild struct{ process *os.Process }
+type osChild struct {
+	process   *os.Process
+	processID int
+}
 
-func (p osChild) pid() int { return p.process.Pid }
+func (p osChild) pid() int { return p.processID }
 func (p osChild) signal(sig syscall.Signal) error {
-	err := syscall.Kill(-p.process.Pid, sig)
+	err := syscall.Kill(-p.processID, sig)
 	if errors.Is(err, syscall.ESRCH) {
 		return os.ErrProcessDone
 	}
 	return err
 }
 func (p osChild) groupAlive() (bool, error) {
-	err := syscall.Kill(-p.process.Pid, 0)
+	err := syscall.Kill(-p.processID, 0)
 	if errors.Is(err, syscall.ESRCH) {
 		return false, nil
 	}

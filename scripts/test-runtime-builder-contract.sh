@@ -65,8 +65,8 @@ run_nvidia() {
         environment+=("TINFOIL_OFFLINE=$requested")
     fi
     environment+=(
-        "TINFOIL_KERNEL_BUILD_ROOT=$scratch/kernel-build"
-        "TINFOIL_KERNEL_OUT_DIR=$scratch/kernel-output"
+        "TINFOIL_KERNEL_BUILD_ROOT=$scratch/kernel-build/release"
+        "TINFOIL_KERNEL_OUT_DIR=$scratch/kernel-output/release"
         "TINFOIL_NVIDIA_OUTPUT_DIR=$scratch/nvidia-output"
         "TINFOIL_NVIDIA_PACKAGE_CACHE=$scratch/nvidia-cache"
         "TINFOIL_RUNTIME_BUILDER_CACHE=$scratch/cache"

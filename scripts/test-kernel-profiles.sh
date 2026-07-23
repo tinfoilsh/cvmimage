@@ -42,29 +42,57 @@ expect_failure "an unknown kernel profile" bash -c \
     'set -Eeuo pipefail; kernel_dir=$1; TINFOIL_KERNEL_PROFILE=unknown; source "$kernel_dir/profile.sh"; select_tinfoil_kernel_profile' \
     bash "$kernel_dir"
 
-ln -s "$kernel_dir" "$scratch/kernel-link"
-for alias in \
-    "$kernel_dir/out/." \
-    "$kernel_dir/out/" \
-    "$kernel_dir/build/../out" \
-    "$scratch/kernel-link/out"; do
-    expect_failure "qualification output alias $alias" env \
-        TINFOIL_KERNEL_PROFILE=qualification-ibt \
-        "TINFOIL_KERNEL_OUT_DIR=$alias" \
+ln -s "$scratch" "$scratch/root-link"
+for profile in release qualification-ibt debug; do
+    for other_profile in release qualification-ibt debug; do
+        [ "$other_profile" != "$profile" ] || continue
+        for root in \
+            "$scratch/$other_profile" \
+            "$scratch/$other_profile/." \
+            "$scratch/root-link/$other_profile"; do
+            expect_failure "$profile output root $root" env \
+                "TINFOIL_KERNEL_PROFILE=$profile" \
+                "TINFOIL_KERNEL_OUT_DIR=$root" \
+                bash -c 'set -Eeuo pipefail; kernel_dir=$1; source "$kernel_dir/profile.sh"; select_tinfoil_kernel_profile' \
+                bash "$kernel_dir"
+            expect_failure "$profile build root $root" env \
+                "TINFOIL_KERNEL_PROFILE=$profile" \
+                "TINFOIL_KERNEL_BUILD_ROOT=$root" \
+                bash -c 'set -Eeuo pipefail; kernel_dir=$1; source "$kernel_dir/profile.sh"; select_tinfoil_kernel_profile' \
+                bash "$kernel_dir"
+        done
+    done
+    env \
+        "TINFOIL_KERNEL_PROFILE=$profile" \
+        "TINFOIL_KERNEL_BUILD_ROOT=$scratch/build/$profile" \
+        "TINFOIL_KERNEL_OUT_DIR=$scratch/out/$profile" \
         bash -c 'set -Eeuo pipefail; kernel_dir=$1; source "$kernel_dir/profile.sh"; select_tinfoil_kernel_profile' \
         bash "$kernel_dir"
 done
-for alias in \
-    "$kernel_dir/build/." \
-    "$kernel_dir/build/" \
-    "$kernel_dir/out/../build" \
-    "$scratch/kernel-link/build"; do
-    expect_failure "qualification build alias $alias" env \
-        TINFOIL_KERNEL_PROFILE=qualification-ibt \
-        "TINFOIL_KERNEL_BUILD_ROOT=$alias" \
-        bash -c 'set -Eeuo pipefail; kernel_dir=$1; source "$kernel_dir/profile.sh"; select_tinfoil_kernel_profile' \
-        bash "$kernel_dir"
-done
+
+expect_failure "shared kernel roots" env \
+    TINFOIL_KERNEL_PROFILE=debug \
+    "TINFOIL_KERNEL_BUILD_ROOT=$scratch/shared/debug" \
+    "TINFOIL_KERNEL_OUT_DIR=$scratch/shared/debug" \
+    bash -c 'set -Eeuo pipefail; kernel_dir=$1; source "$kernel_dir/profile.sh"; select_tinfoil_kernel_profile' \
+    bash "$kernel_dir"
+
+kernel_profile=release
+kernel_expected_release=7.0.0-28-generic
+mkdir -p "$scratch/artifact"
+printf '%s\n' release > "$scratch/artifact/profile"
+printf '%s\n' 7.0.0-28-generic > "$scratch/artifact/kernel.release"
+require_tinfoil_kernel_artifact_profile \
+    "$scratch/artifact/profile" "$scratch/artifact/kernel.release"
+printf '%s\n' debug > "$scratch/artifact/profile"
+expect_failure "a debug artifact labeled as release" \
+    require_tinfoil_kernel_artifact_profile \
+    "$scratch/artifact/profile" "$scratch/artifact/kernel.release"
+printf '%s\n' release > "$scratch/artifact/profile"
+printf '%s\n' 7.0.0-28-tinfoil-debug > "$scratch/artifact/kernel.release"
+expect_failure "a debug release labeled as release" \
+    require_tinfoil_kernel_artifact_profile \
+    "$scratch/artifact/profile" "$scratch/artifact/kernel.release"
 
 grep -Fqx 'CONFIG_LOCALVERSION="-28-generic"' "$kernel_dir/profiles/release.config"
 grep -Fqx '# CONFIG_X86_KERNEL_IBT is not set' "$kernel_dir/profiles/release.config"

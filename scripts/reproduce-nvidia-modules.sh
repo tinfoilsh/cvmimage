@@ -12,12 +12,12 @@ build_once() {
     local root="$reproduction_dir/$name"
 
     mkdir -p "$root"
-    TINFOIL_KERNEL_BUILD_ROOT="$root/kernel-build" \
-        TINFOIL_KERNEL_OUT_DIR="$root/kernel-output" \
+    TINFOIL_KERNEL_BUILD_ROOT="$root/kernel-build/release" \
+        TINFOIL_KERNEL_OUT_DIR="$root/kernel-output/release" \
         TINFOIL_RUNTIME_BUILDER_CACHE="$root/cache" \
         "$repo_dir/scripts/run-runtime-builder.sh" kernel
-    TINFOIL_KERNEL_BUILD_ROOT="$root/kernel-build" \
-        TINFOIL_KERNEL_OUT_DIR="$root/kernel-output" \
+    TINFOIL_KERNEL_BUILD_ROOT="$root/kernel-build/release" \
+        TINFOIL_KERNEL_OUT_DIR="$root/kernel-output/release" \
         TINFOIL_NVIDIA_OUTPUT_DIR="$root/nvidia-modules" \
         TINFOIL_NVIDIA_PACKAGE_CACHE="$root/nvidia-packages" \
         TINFOIL_RUNTIME_BUILDER_CACHE="$root/cache" \

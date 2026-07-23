@@ -2,7 +2,7 @@
 
 select_tinfoil_kernel_profile() {
     local requested_profile="${TINFOIL_KERNEL_PROFILE:-release}"
-    local default_build_root default_out_dir release_build_root release_out_dir
+    local default_build_root default_out_dir
 
     case "$requested_profile" in
         release)
@@ -32,21 +32,44 @@ select_tinfoil_kernel_profile() {
             ;;
     esac
 
-    release_build_root="$(realpath -m -- "$kernel_dir/build")"
-    release_out_dir="$(realpath -m -- "$kernel_dir/out")"
     kernel_build_root="$(realpath -m -- "${TINFOIL_KERNEL_BUILD_ROOT:-$default_build_root}")"
     kernel_out_dir="$(realpath -m -- "${TINFOIL_KERNEL_OUT_DIR:-$default_out_dir}")"
 
-    if [ "$kernel_profile" != release ]; then
-        if [ "$kernel_build_root" = "$release_build_root" ] ||
-            [ "$kernel_out_dir" = "$release_out_dir" ]; then
-            echo "$kernel_profile artifacts may not use the release build or output root" >&2
-            return 2
-        fi
+    if [ -n "${TINFOIL_KERNEL_BUILD_ROOT:-}" ] &&
+        [ "${kernel_build_root##*/}" != "$kernel_profile" ]; then
+        echo "overridden kernel build root must end in /$kernel_profile" >&2
+        return 2
+    fi
+    if [ -n "${TINFOIL_KERNEL_OUT_DIR:-}" ] &&
+        [ "${kernel_out_dir##*/}" != "$kernel_profile" ]; then
+        echo "overridden kernel output root must end in /$kernel_profile" >&2
+        return 2
+    fi
+    if [ "$kernel_build_root" = "$kernel_out_dir" ]; then
+        echo "kernel build and output roots must be distinct" >&2
+        return 2
     fi
 
     if [ ! -f "$kernel_profile_fragment" ]; then
         echo "missing kernel profile fragment: $kernel_profile_fragment" >&2
         return 2
+    fi
+}
+
+require_tinfoil_kernel_artifact_profile() {
+    local artifact_profile_file=$1
+    local artifact_release_file=$2
+    local artifact_profile artifact_release
+
+    if [ ! -f "$artifact_profile_file" ] || [ ! -f "$artifact_release_file" ]; then
+        echo "missing kernel artifact identity" >&2
+        return 1
+    fi
+    IFS= read -r artifact_profile < "$artifact_profile_file" || true
+    IFS= read -r artifact_release < "$artifact_release_file" || true
+    if [ "$artifact_profile" != "$kernel_profile" ] ||
+        [ "$artifact_release" != "$kernel_expected_release" ]; then
+        echo "kernel artifact identity mismatch" >&2
+        return 1
     fi
 }

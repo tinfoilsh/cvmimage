@@ -20,12 +20,15 @@ TINFOIL_KERNEL_PROFILE=debug make custom-kernel-artifacts
 ```
 
 Unknown profiles fail closed. Non-release profiles cannot write the default
-release roots, and the shipping target requires `kernel/out/profile` to contain
-exactly `release`. Qualification and debug kernels are test evidence only and
-must never be promoted, published, or used as production measurements.
+release roots. Explicit build and output root overrides must end in the exact
+selected profile name, and the two roots must remain distinct. This keeps
+release, qualification, and debug artifacts disjoint even when a caller moves
+their parent directories. The shipping target requires `kernel/out/profile`
+to contain exactly `release`. Qualification and debug kernels are test evidence
+only and must never be promoted, published, or used as production measurements.
 
 NVIDIA modules are currently defined only for the release profile. The module
-producer rejects qualification and debug profiles so a release-built module
-cannot be mistaken for a profile-qualified artifact. IBT-aware NVIDIA module
-production and hardware qualification are separate prerequisites before any
-shipping IBT change.
+producer rejects qualification and debug profiles and verifies both the stored
+kernel profile and exact kernel release before consuming a kernel artifact.
+IBT-aware NVIDIA module production and hardware qualification are separate
+prerequisites before any shipping IBT change.

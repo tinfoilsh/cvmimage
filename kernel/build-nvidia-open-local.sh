@@ -13,6 +13,7 @@ fi
 kernel_build_dir="$kernel_build_root"
 kernel_source_dir="$kernel_build_dir/linux-source-7.0.0"
 kernel_release_file="$kernel_out_dir/kernel.release"
+kernel_profile_file="$kernel_out_dir/profile"
 output_dir="${TINFOIL_NVIDIA_OUTPUT_DIR:-$kernel_out_dir/rootfs-artifacts/nvidia-modules}"
 package_cache_dir="${TINFOIL_NVIDIA_PACKAGE_CACHE:-$kernel_dir/build/nvidia-packages}"
 host_uid="${HOST_UID:-$(id -u)}"
@@ -166,6 +167,7 @@ main() {
     require_file "$kernel_source_dir/arch/x86/boot/bzImage" "custom kernel image"
     require_file "$kernel_source_dir/vmlinux.symvers" "custom kernel symbol versions"
     require_file "$kernel_source_dir/include/config/kernel.release" "custom kernel release metadata"
+    require_tinfoil_kernel_artifact_profile "$kernel_profile_file" "$kernel_release_file"
 
 kernel_release="$(tr -d '\n' < "$kernel_release_file")"
 actual_release="$(tr -d '\n' < "$kernel_source_dir/include/config/kernel.release")"

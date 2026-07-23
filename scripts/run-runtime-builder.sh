@@ -86,10 +86,10 @@ case "$producer" in
         docker run --rm \
             --user "$host_uid:$host_gid" \
             --mount "$repo_mount" \
-            --mount "type=bind,src=$build_root,dst=/kernel-build" \
-            --mount "type=bind,src=$output,dst=/kernel-output" \
-            --env TINFOIL_KERNEL_BUILD_ROOT=/kernel-build \
-            --env TINFOIL_KERNEL_OUT_DIR=/kernel-output \
+            --mount "type=bind,src=$build_root,dst=/kernel-build/$kernel_profile" \
+            --mount "type=bind,src=$output,dst=/kernel-output/$kernel_profile" \
+            --env "TINFOIL_KERNEL_BUILD_ROOT=/kernel-build/$kernel_profile" \
+            --env "TINFOIL_KERNEL_OUT_DIR=/kernel-output/$kernel_profile" \
             --env "TINFOIL_KERNEL_PROFILE=$kernel_profile" \
             --env TINFOIL_KERNEL_SOURCE_DEB=/opt/tinfoil-builder/packages/linux-source-7.0.0_7.0.0-28.28_all.deb \
             --env TINFOIL_OFFLINE=1 \
@@ -115,14 +115,14 @@ case "$producer" in
             --security-opt apparmor=unconfined \
             --security-opt seccomp=unconfined \
             --mount "$repo_mount" \
-            --mount "type=bind,src=$build_root,dst=/kernel-build" \
-            --mount "type=bind,src=$kernel_output,dst=/kernel-output" \
+            --mount "type=bind,src=$build_root,dst=/kernel-build/$kernel_profile" \
+            --mount "type=bind,src=$kernel_output,dst=/kernel-output/$kernel_profile" \
             --mount "type=bind,src=$output_parent,dst=/nvidia-output-parent" \
             --mount "type=bind,src=$package_cache,dst=/nvidia-cache" \
             --env "HOST_UID=$host_uid" \
             --env "HOST_GID=$host_gid" \
-            --env TINFOIL_KERNEL_BUILD_ROOT=/kernel-build \
-            --env TINFOIL_KERNEL_OUT_DIR=/kernel-output \
+            --env "TINFOIL_KERNEL_BUILD_ROOT=/kernel-build/$kernel_profile" \
+            --env "TINFOIL_KERNEL_OUT_DIR=/kernel-output/$kernel_profile" \
             --env "TINFOIL_KERNEL_PROFILE=$kernel_profile" \
             --env "TINFOIL_NVIDIA_OUTPUT_DIR=/nvidia-output-parent/$output_name" \
             --env TINFOIL_NVIDIA_PACKAGE_CACHE=/nvidia-cache \

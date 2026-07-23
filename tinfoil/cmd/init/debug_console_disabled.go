@@ -16,3 +16,5 @@ func startDebugConsole(context.Context, *supervisor.Manager) (*debugConsole, err
 }
 
 func (*debugConsole) stop(time.Duration, time.Duration) error { return nil }
+
+func parkDebugFailure(error) {}

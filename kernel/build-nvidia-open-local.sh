@@ -124,6 +124,35 @@ validate_nvidia_modules() {
     done
 }
 
+write_bazel_module_package() {
+    local destination=$1
+    local module temporary
+
+    for module in "${required_modules[@]}"; do
+        if [[ ! "$module" =~ ^[a-z0-9-]+\.ko$ ]]; then
+            echo "invalid NVIDIA module contract entry: $module" >&2
+            return 1
+        fi
+    done
+
+    temporary="$(mktemp "$destination/.BUILD.bazel.XXXXXXXX")"
+
+    if ! {
+        printf '%s\n' 'package(default_visibility = ["//visibility:public"])' ''
+        printf '%s\n' 'filegroup(' '    name = "modules",' '    srcs = ['
+        for module in "${required_modules[@]}"; do
+            printf '        "%s",\n' "$module"
+        done
+        printf '%s\n' '    ],' ')'
+    } > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    chmod 0644 "$temporary"
+    touch -d @0 "$temporary"
+    mv -f -- "$temporary" "$destination/BUILD.bazel"
+}
+
 main() {
     check_toolchain
 
@@ -185,6 +214,7 @@ chmod 0755 "$nvidia_source_dir/pahole.sh"
         install -m 0644 "$scratch/built-modules/$module" "$output_dir/$module"
         touch -d @0 "$output_dir/$module"
     done
+    write_bazel_module_package "$output_dir"
     if [ "$(id -u)" -eq 0 ]; then
         chown -R "$host_uid:$host_gid" "$output_dir"
     fi

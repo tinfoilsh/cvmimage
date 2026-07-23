@@ -1,27 +1,25 @@
 """Repositories derived directly from the canonical runtime source lock."""
 
-def _source_repository_impl(repository_ctx):
-    repository_ctx.download(
-        output = "archive",
-        sha256 = repository_ctx.attr.sha256,
-        url = repository_ctx.attr.url,
-    )
-    repository_ctx.file(
-        "BUILD.bazel",
-        """package(default_visibility = [\"//visibility:public\"])
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-exports_files([\"archive\"])
-""",
-    )
+_DEB_PAYLOAD_BUILD = """load("@rules_distroless//apt/private:deb_postfix.bzl", "deb_postfix")
 
-
-_source_repository = repository_rule(
-    implementation = _source_repository_impl,
-    attrs = {
-        "sha256": attr.string(mandatory = True),
-        "url": attr.string(mandatory = True),
-    },
+deb_postfix(
+    name = "payload",
+    srcs = glob(["data.tar*"]),
+    outs = ["layer.tar.gz"],
+    mergedusr = False,
+    visibility = ["//visibility:public"],
 )
+"""
+
+_TAR_PAYLOAD_BUILD = """package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "payload",
+    srcs = glob(["**"], exclude = ["BUILD.bazel", "REPO.bazel"]),
+)
+"""
 
 
 def _repository_name(source_id):
@@ -76,11 +74,27 @@ def _runtime_sources_impl(module_ctx):
             fail("runtime source %s must use an HTTPS URL" % source_id)
         if type(sha256) != "string" or len(sha256) != 64:
             fail("runtime source %s has an invalid SHA256" % source_id)
-        _source_repository(
-            name = repository_name,
-            sha256 = sha256,
-            url = url,
-        )
+        if kind == "deb":
+            if source.get("strip_prefix") != None:
+                fail("runtime DEB source %s may not set strip_prefix" % source_id)
+            http_archive(
+                name = repository_name,
+                build_file_content = _DEB_PAYLOAD_BUILD,
+                sha256 = sha256,
+                type = ".deb",
+                urls = [url],
+            )
+        else:
+            strip_prefix = source.get("strip_prefix", "")
+            if type(strip_prefix) != "string":
+                fail("runtime tar source %s has a non-string strip_prefix" % source_id)
+            http_archive(
+                name = repository_name,
+                build_file_content = _TAR_PAYLOAD_BUILD,
+                sha256 = sha256,
+                strip_prefix = strip_prefix,
+                urls = [url],
+            )
 
 
 _from_lock = tag_class(

@@ -178,7 +178,7 @@
   "moduleExtensions": {
     "//image:runtime_sources.bzl%runtime_sources": {
       "general": {
-        "bzlTransitiveDigest": "IU+1YKnwwtvV77a4qcfDIYj77tUf+pAiIMVbIswxZ0o=",
+        "bzlTransitiveDigest": "mF2eV4slSMEbCIO+MjMBgMciOSkZb9UUI2fFj3BPwNA=",
         "usagesDigest": "ZhxnUxFkNDXMRlHkZ0sEOIsJVy8V8BOOqt1yt9cZEgI=",
         "recordedFileInputs": {
           "@@//image/runtime-sources.lock.json": "b577d13cc0b5e0b433b758ae761594039cf0ffa20724a1c1387d8503ab3e3c36"
@@ -189,7 +189,7 @@
           "runtime_source_docker_static": {
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
-              "build_file_content": "package(default_visibility = [\"//visibility:public\"])\n\nfilegroup(\n    name = \"payload\",\n    srcs = glob([\"**\"], exclude = [\"BUILD.bazel\", \"REPO.bazel\"]),\n)\n",
+              "build_file_content": "package(default_visibility = [\"//visibility:public\"])\n\nfilegroup(\n    name = \"payload\",\n    srcs = [\n        \"containerd\",\n        \"containerd-shim-runc-v2\",\n        \"dockerd\",\n        \"runc\",\n    ],\n)\n",
               "sha256": "34eea64e9c3435f5af1b760827a56a561cd67fc2d6e9cd1813b8bb1e3ff7930b",
               "strip_prefix": "docker",
               "urls": [

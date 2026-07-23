@@ -165,6 +165,8 @@ debug-image: bazel-rootfs bazel-debug-layer additive-initrd custom-kernel-artifa
 	cmp -s "$(SHIPPING_KERNEL)" tinfoilcvm-debug.vmlinuz
 	cmp -s "$(SHIPPING_INITRD)" tinfoilcvm-debug.initrd
 	test -s tinfoilcvm-debug.raw
+	test -s tinfoilcvm-debug.vmlinuz
+	test -s tinfoilcvm-debug.initrd
 	test "$$(wc -c < tinfoilcvm-debug.roothash)" -eq 64
 	grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm-debug.roothash
 	cp tinfoilcvm-debug.roothash tinfoilcvm-debug.hash

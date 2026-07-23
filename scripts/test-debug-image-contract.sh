@@ -27,6 +27,10 @@ done
 
 mkdir "$scratch/release"
 tar -xf "$release_rootfs" -C "$scratch/release" usr/bin/tinfoil-init
+if [ ! -f "$scratch/release/usr/bin/tinfoil-init" ] || [ -L "$scratch/release/usr/bin/tinfoil-init" ]; then
+    echo 'shipping rootfs tinfoil-init is not a regular file' >&2
+    exit 1
+fi
 strings "$scratch/release/usr/bin/tinfoil-init" > "$scratch/release-strings"
 if grep -Eq '/dev/hvc0|/usr/bin/busybox|debug console|debug image' "$scratch/release-strings"; then
     echo 'release PID1 contains debug-console infrastructure' >&2
@@ -49,6 +53,12 @@ fi
 mkdir "$scratch/debug"
 tar -xf "$debug_layer" -C "$scratch/debug" usr/bin/tinfoil-init
 tar -xf "$debug_layer" -C "$scratch/debug" ./usr/bin/busybox
+for artifact in usr/bin/tinfoil-init usr/bin/busybox; do
+    if [ ! -f "$scratch/debug/$artifact" ] || [ -L "$scratch/debug/$artifact" ]; then
+        echo "debug layer $artifact is not a regular file" >&2
+        exit 1
+    fi
+done
 printf '%s  %s\n' "$busybox_sha256" "$scratch/debug/usr/bin/busybox" | sha256sum -c --strict
 if cmp -s "$scratch/release/usr/bin/tinfoil-init" "$scratch/debug/usr/bin/tinfoil-init"; then
     echo 'debug PID1 is byte-identical to release PID1' >&2

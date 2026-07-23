@@ -3,11 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,35 +74,22 @@ func TestVerityTableUsesFixedModelwrapContract(t *testing.T) {
 	}
 }
 
-func TestReadFixedVeritySalt(t *testing.T) {
-	offset := uint64(4096)
-	header := fixedVerityHeader(offset)
-	want := append([]byte(nil), header[88:88+veritySaltSize]...)
-	path := filepath.Join(t.TempDir(), "mwp")
-	contents := append(make([]byte, offset), header...)
-	if err := os.WriteFile(path, contents, 0600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := readFixedVeritySalt(path, offset)
+func TestModelSalt(t *testing.T) {
+	salt, err := modelSalt(ModelSpec{Name: "m", Repo: "org/model@rev"})
 	if err != nil {
-		t.Fatalf("readFixedVeritySalt: %v", err)
+		t.Fatalf("modelSalt: %v", err)
 	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("salt = %x, want %x", got, want)
+	if !bytes.Equal(salt, modelwrap.VeritySalt("org/model@rev")) {
+		t.Fatal("salt does not match the modelwrap identity derivation")
 	}
-
-	contents[int(offset)+65] = 0
-	if err := os.WriteFile(path, contents, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readFixedVeritySalt(path, offset); err == nil {
-		t.Fatal("mismatched fixed header accepted")
+	if _, err := modelSalt(ModelSpec{Name: "m"}); err == nil {
+		t.Fatal("missing repo accepted")
 	}
 }
 
 func TestOpenAndMountVerityCleansUpMountFailure(t *testing.T) {
 	ops := &fakeModelVolumeOps{mountErr: errors.New("mount failed")}
-	err := openAndMountVerityWithOps(ops, "/dev/source", "mwp-test", strings.Repeat("a", 64), "4096", "/mnt/model")
+	err := openAndMountVerityWithOps(ops, "/dev/source", "mwp-test", strings.Repeat("a", 64), "4096", testSalt(), "/mnt/model")
 	if err == nil || !strings.Contains(err.Error(), "mount failed") {
 		t.Fatalf("error = %v, want mount failure", err)
 	}
@@ -125,6 +109,7 @@ func TestOpenEncryptedAndMountZeroesKeyAndCleansUp(t *testing.T) {
 		"mwp-test",
 		strings.Repeat("a", 64),
 		"4096",
+		testSalt(),
 		"/mnt/model",
 		key,
 	)
@@ -153,6 +138,7 @@ func TestOpenEncryptedAndMountCleansBothMappingsAfterMountFailure(t *testing.T) 
 		"mwp-test",
 		strings.Repeat("a", 64),
 		"4096",
+		testSalt(),
 		"/mnt/model",
 		key,
 	)
@@ -174,18 +160,8 @@ func TestOpenEncryptedAndMountCleansBothMappingsAfterMountFailure(t *testing.T) 
 	}
 }
 
-func fixedVerityHeader(hashOffset uint64) []byte {
-	header := make([]byte, veritySuperblockSize)
-	copy(header[0:8], "verity\x00\x00")
-	binary.LittleEndian.PutUint32(header[8:12], modelwrap.VerityFormat)
-	binary.LittleEndian.PutUint32(header[12:16], 1)
-	copy(header[32:64], modelwrap.VerityHashAlgorithm)
-	binary.LittleEndian.PutUint32(header[64:68], modelwrap.VerityDataBlockSize)
-	binary.LittleEndian.PutUint32(header[68:72], modelwrap.VerityHashBlockSize)
-	binary.LittleEndian.PutUint64(header[72:80], hashOffset/modelwrap.VerityDataBlockSize)
-	binary.LittleEndian.PutUint16(header[80:82], veritySaltSize)
-	copy(header[88:88+veritySaltSize], bytes.Repeat([]byte{0x5a}, veritySaltSize))
-	return header
+func testSalt() []byte {
+	return bytes.Repeat([]byte{0x5a}, veritySaltSize)
 }
 
 type fakeModelVolumeOps struct {
@@ -197,7 +173,7 @@ type fakeModelVolumeOps struct {
 	removeErr    error
 }
 
-func (ops *fakeModelVolumeOps) openVerity(_ string, name, _, _ string) (string, error) {
+func (ops *fakeModelVolumeOps) openVerity(_ string, name, _, _ string, _ []byte) (string, error) {
 	ops.calls = append(ops.calls, "verity:"+name)
 	if ops.verityErr != nil {
 		return "", ops.verityErr

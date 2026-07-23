@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"strconv"
@@ -21,9 +19,8 @@ import (
 )
 
 const (
-	veritySuperblockSize = 512
-	veritySaltSize       = 32
-	sectorSize           = 512
+	veritySaltSize = 32
+	sectorSize     = 512
 )
 
 // mountModels mounts all model packs from the config
@@ -47,11 +44,15 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 
 		switch kind {
 		case modelKindPlaintext:
+			salt, err := modelSalt(model)
+			if err != nil {
+				return err
+			}
 			sourceDevice, err := device.ModelDisk(index)
 			if err != nil {
 				return fmt.Errorf("finding model disk %d: %w", index, err)
 			}
-			if err := mountModelPack(ref, sourceDevice); err != nil {
+			if err := mountModelPack(ref, salt, sourceDevice); err != nil {
 				return fmt.Errorf("mounting model pack %s: %w", ref.raw, err)
 			}
 		case modelKindEncrypted:
@@ -68,8 +69,19 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 	return nil
 }
 
+// modelSalt re-derives the dm-verity salt from the attested model
+// identity (repo: name@revision). The salt is required so the artifact's
+// untrusted superblock never has to be read; a wrong repo fails closed
+// because nothing verifies against the attested root hash.
+func modelSalt(model ModelSpec) ([]byte, error) {
+	if model.Repo == "" {
+		return nil, fmt.Errorf("model %q must specify repo (name@revision) to derive the dm-verity salt", model.Name)
+	}
+	return modelwrap.VeritySalt(model.Repo), nil
+}
+
 // mountModelPack mounts a plaintext model wrap using dm-verity.
-func mountModelPack(spec *modelPackRef, sourceDevice string) error {
+func mountModelPack(spec *modelPackRef, salt []byte, sourceDevice string) error {
 	deviceName := spec.mapperName()
 	mountPoint := spec.mountPoint()
 
@@ -77,7 +89,7 @@ func mountModelPack(spec *modelPackRef, sourceDevice string) error {
 	if err := createLegacyModelPackAlias(spec); err != nil {
 		return err
 	}
-	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, mountPoint); err != nil {
+	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, salt, mountPoint); err != nil {
 		removeLegacyModelPackAlias(spec)
 		return err
 	}
@@ -99,6 +111,10 @@ func mountEncryptedModelPack(
 		return fmt.Errorf("invalid EMWP format: %s: %w", model.EMWP, err)
 	}
 
+	salt, err := modelSalt(model)
+	if err != nil {
+		return err
+	}
 	key, err := encryptedModelKey(model.KeySecret, spec, externalConfig)
 	if err != nil {
 		return err
@@ -120,6 +136,7 @@ func mountEncryptedModelPack(
 		verityName,
 		spec.RootHash,
 		spec.HashOffset,
+		salt,
 		mountPoint,
 		key,
 	); err != nil {
@@ -246,12 +263,12 @@ func encryptedModelKey(keySecret string, spec *modelPackRef, externalConfig *shi
 	return modelwrap.DeriveKey(key, spec.ArtifactRef)
 }
 
-func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset, mountPoint string) error {
-	return openAndMountVerityWithOps(directModelVolumeOps{}, sourceDevice, deviceName, rootHash, hashOffset, mountPoint)
+func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset string, salt []byte, mountPoint string) error {
+	return openAndMountVerityWithOps(directModelVolumeOps{}, sourceDevice, deviceName, rootHash, hashOffset, salt, mountPoint)
 }
 
 type modelVolumeOps interface {
-	openVerity(sourceDevice, name, rootHash, hashOffset string) (string, error)
+	openVerity(sourceDevice, name, rootHash, hashOffset string, salt []byte) (string, error)
 	openCrypt(sourceDevice, name string, key []byte) (string, error)
 	remove(name string) error
 	mount(sourceDevice, mountPoint string) error
@@ -259,17 +276,12 @@ type modelVolumeOps interface {
 
 type directModelVolumeOps struct{}
 
-func (directModelVolumeOps) openVerity(sourceDevice, name, rootHash, hashOffset string) (string, error) {
+func (directModelVolumeOps) openVerity(sourceDevice, name, rootHash, hashOffset string, salt []byte) (string, error) {
 	offset, err := strconv.ParseUint(hashOffset, 10, 64)
 	if err != nil {
 		return "", fmt.Errorf("invalid verity hash offset %q: %w", hashOffset, err)
 	}
-	salt, err := readFixedVeritySalt(sourceDevice, offset)
-	if err != nil {
-		return "", err
-	}
 	lengthSectors, params, err := fixedVerityTable(sourceDevice, rootHash, offset, salt)
-	zeroBytes(salt)
 	if err != nil {
 		return "", err
 	}
@@ -320,9 +332,11 @@ func (directModelVolumeOps) mount(sourceDevice, mountPoint string) error {
 
 func openAndMountVerityWithOps(
 	ops modelVolumeOps,
-	sourceDevice, deviceName, rootHash, hashOffset, mountPoint string,
+	sourceDevice, deviceName, rootHash, hashOffset string,
+	salt []byte,
+	mountPoint string,
 ) error {
-	mapperNode, err := ops.openVerity(sourceDevice, deviceName, rootHash, hashOffset)
+	mapperNode, err := ops.openVerity(sourceDevice, deviceName, rootHash, hashOffset, salt)
 	if err != nil {
 		return err
 	}
@@ -337,7 +351,9 @@ func openAndMountVerityWithOps(
 
 func openEncryptedAndMount(
 	ops modelVolumeOps,
-	sourceDevice, cryptName, verityName, rootHash, hashOffset, mountPoint string,
+	sourceDevice, cryptName, verityName, rootHash, hashOffset string,
+	salt []byte,
+	mountPoint string,
 	key []byte,
 ) error {
 	defer zeroBytes(key)
@@ -345,7 +361,7 @@ func openEncryptedAndMount(
 	if err != nil {
 		return err
 	}
-	if err := openAndMountVerityWithOps(ops, cryptDevice, verityName, rootHash, hashOffset, mountPoint); err != nil {
+	if err := openAndMountVerityWithOps(ops, cryptDevice, verityName, rootHash, hashOffset, salt, mountPoint); err != nil {
 		if removeErr := ops.remove(cryptName); removeErr != nil {
 			return errors.Join(err, fmt.Errorf("removing failed crypt mapping: %w", removeErr))
 		}
@@ -439,41 +455,6 @@ func verityTable(deviceNumber, rootHash string, hashOffset uint64, salt []byte) 
 		hex.EncodeToString(salt),
 	)
 	return lengthSectors, params, nil
-}
-
-func readFixedVeritySalt(sourceDevice string, hashOffset uint64) ([]byte, error) {
-	if err := validateVerityHashOffset(hashOffset); err != nil {
-		return nil, err
-	}
-	if hashOffset > uint64(1<<63-modelwrap.VerityHashBlockSize) {
-		return nil, fmt.Errorf("verity hash offset %d exceeds supported file offset", hashOffset)
-	}
-	file, err := os.Open(sourceDevice)
-	if err != nil {
-		return nil, fmt.Errorf("opening verity device %s: %w", sourceDevice, err)
-	}
-	defer file.Close()
-	superblock := make([]byte, veritySuperblockSize)
-	if _, err := file.ReadAt(superblock, int64(hashOffset)); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("reading fixed verity header: short read")
-		}
-		return nil, fmt.Errorf("reading fixed verity header: %w", err)
-	}
-	if string(superblock[0:8]) != "verity\x00\x00" ||
-		binary.LittleEndian.Uint32(superblock[8:12]) != modelwrap.VerityFormat ||
-		binary.LittleEndian.Uint32(superblock[12:16]) != 1 ||
-		strings.TrimRight(string(superblock[32:64]), "\x00") != modelwrap.VerityHashAlgorithm ||
-		binary.LittleEndian.Uint32(superblock[64:68]) != modelwrap.VerityDataBlockSize ||
-		binary.LittleEndian.Uint32(superblock[68:72]) != modelwrap.VerityHashBlockSize ||
-		binary.LittleEndian.Uint64(superblock[72:80]) != hashOffset/modelwrap.VerityDataBlockSize ||
-		binary.LittleEndian.Uint16(superblock[80:82]) != veritySaltSize {
-		zeroBytes(superblock)
-		return nil, fmt.Errorf("verity header does not match the fixed modelwrap contract")
-	}
-	salt := append([]byte(nil), superblock[88:88+veritySaltSize]...)
-	zeroBytes(superblock)
-	return salt, nil
 }
 
 func validateVerityHashOffset(hashOffset uint64) error {

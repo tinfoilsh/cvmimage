@@ -5,7 +5,6 @@ MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
 SHIPPING_INITRD = initrd.cpio.zst
-DEBUG_IMAGE = tinfoilcvm-debug
 
 NVATTEST_VERSION = 1.2.2.1780962352-1
 NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
@@ -51,7 +50,7 @@ test-roothash-artifacts:
 
 clean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf $(DEBUG_IMAGE) $(DEBUG_IMAGE).*
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd.cpio.zst
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/stage build/artifacts
@@ -85,7 +84,7 @@ bazel-debug-layer: builder-debug-init
 	mkdir -p build/stage
 	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
 
-test-debug-image-contract: bazel-rootfs bazel-debug-layer
+test-debug-image-contract:
 	./scripts/test-debug-image-contract.sh \
 		build/stage/bazel-rootfs.tar \
 		build/stage/bazel-debug-layer.tar
@@ -134,6 +133,7 @@ update-runtime-locks:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh
 
 shipping-image: bazel-rootfs additive-initrd
+	./scripts/test-debug-image-contract.sh build/stage/bazel-rootfs.tar
 	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 		tinfoilcvm.vmlinuz tinfoilcvm.initrd
 	$(MKOSI) --force
@@ -150,22 +150,25 @@ shipping-image: bazel-rootfs additive-initrd
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
 debug-image: bazel-rootfs bazel-debug-layer additive-initrd custom-kernel-artifacts
-	rm -f $(DEBUG_IMAGE) $(DEBUG_IMAGE).raw $(DEBUG_IMAGE).roothash \
-		$(DEBUG_IMAGE).hash $(DEBUG_IMAGE).vmlinuz $(DEBUG_IMAGE).initrd
-	$(MKOSI) --force --output=$(DEBUG_IMAGE) \
+	./scripts/test-debug-image-contract.sh \
+		build/stage/bazel-rootfs.tar \
+		build/stage/bazel-debug-layer.tar
+	rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
+		tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd
+	$(MKOSI) --force --output=tinfoilcvm-debug \
 		--base-tree="$(CURDIR)/build/stage/bazel-debug-layer.tar"
-	sudo env PATH="$(TRUSTED_PATH)" chmod 0644 $(DEBUG_IMAGE).raw $(DEBUG_IMAGE).roothash
+	sudo env PATH="$(TRUSTED_PATH)" chmod 0644 tinfoilcvm-debug.raw tinfoilcvm-debug.roothash
 	sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" \
-		$(DEBUG_IMAGE).raw $(DEBUG_IMAGE).roothash
-	install -m 0644 "$(SHIPPING_KERNEL)" $(DEBUG_IMAGE).vmlinuz
-	install -m 0644 "$(SHIPPING_INITRD)" $(DEBUG_IMAGE).initrd
-	cmp -s "$(SHIPPING_KERNEL)" $(DEBUG_IMAGE).vmlinuz
-	cmp -s "$(SHIPPING_INITRD)" $(DEBUG_IMAGE).initrd
-	test -s $(DEBUG_IMAGE).raw
-	test "$$(wc -c < $(DEBUG_IMAGE).roothash)" -eq 64
-	grep -Eq '^[a-f0-9]{64}$$' $(DEBUG_IMAGE).roothash
-	cp $(DEBUG_IMAGE).roothash $(DEBUG_IMAGE).hash
-	@echo "debug image hash: $$(cat $(DEBUG_IMAGE).hash)"
+		tinfoilcvm-debug.raw tinfoilcvm-debug.roothash
+	install -m 0644 "$(SHIPPING_KERNEL)" tinfoilcvm-debug.vmlinuz
+	install -m 0644 "$(SHIPPING_INITRD)" tinfoilcvm-debug.initrd
+	cmp -s "$(SHIPPING_KERNEL)" tinfoilcvm-debug.vmlinuz
+	cmp -s "$(SHIPPING_INITRD)" tinfoilcvm-debug.initrd
+	test -s tinfoilcvm-debug.raw
+	test "$$(wc -c < tinfoilcvm-debug.roothash)" -eq 64
+	grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm-debug.roothash
+	cp tinfoilcvm-debug.roothash tinfoilcvm-debug.hash
+	@echo "debug image hash: $$(cat tinfoilcvm-debug.hash)"
 
 rebuild: shipping-image
 

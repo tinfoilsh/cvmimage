@@ -40,6 +40,10 @@ func (c *Container) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func validateContainerInputPolicy(index int, container *Container) error {
+	return validateContainerInputPolicyForMode(index, container, false)
+}
+
+func validateContainerInputPolicyForMode(index int, container *Container, debug bool) error {
 	fields := container.inputFields
 	if fields.privileged {
 		return fmt.Errorf("containers[%d].privileged is unsupported", index)
@@ -60,9 +64,8 @@ func validateContainerInputPolicy(index int, container *Container) error {
 		return fmt.Errorf("containers[%d].ipc must be private or host", index)
 	}
 	for volumeIndex, volume := range container.Volumes {
-		source, _, found := strings.Cut(volume, ":")
-		if !found || !validNamedVolume(source) {
-			return fmt.Errorf("containers[%d].volumes[%d] must use a named volume source", index, volumeIndex)
+		if _, err := canonicalizeContainerVolume(volume, debug); err != nil {
+			return fmt.Errorf("containers[%d].volumes[%d] %w", index, volumeIndex, err)
 		}
 	}
 	for capabilityIndex, capability := range container.CapAdd {
@@ -71,6 +74,21 @@ func validateContainerInputPolicy(index int, container *Container) error {
 		}
 	}
 	return nil
+}
+
+func canonicalizeContainerVolume(volume string, debug bool) (string, error) {
+	if debug {
+		if canonical, ok := canonicalizeDebugDockerSocketBind(volume); ok {
+			return canonical, nil
+		}
+	}
+
+	source, _, found := strings.Cut(volume, ":")
+	if found && validNamedVolume(source) {
+		return volume, nil
+	}
+
+	return "", fmt.Errorf("must use a named volume source")
 }
 
 func allowedContainerCapability(capability string) bool {

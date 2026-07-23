@@ -49,7 +49,12 @@ func run(ctx context.Context) error {
 	// 1. Config
 	start := time.Now()
 	log.Println("Loading configuration")
-	config, err := loadAndVerifyConfig()
+	cmdline, err := readKernelCmdline()
+	if err != nil {
+		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("parsing kernel cmdline: %w", err)
+	}
+	config, err := loadAndVerifyConfig(cmdline)
 	if err != nil {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
 		return err
@@ -169,7 +174,7 @@ func run(ctx context.Context) error {
 
 	// 11. Containers + health checks
 	log.Println("Launching containers")
-	if err := launchContainersAndWaitHealthy(ctx, tracker, config, externalConfig); err != nil {
+	if err := launchContainersAndWaitHealthyWithMode(ctx, tracker, config, externalConfig, cmdline.Debug); err != nil {
 		return err
 	}
 

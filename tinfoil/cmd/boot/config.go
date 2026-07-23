@@ -206,7 +206,7 @@ func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 }
 
 // loadAndVerifyConfig reads the config from disk and verifies its hash
-func loadAndVerifyConfig() (*Config, error) {
+func loadAndVerifyConfig(cmdline kernelCmdline) (*Config, error) {
 	configDiskPath, err := device.ConfigDisk()
 	if err != nil {
 		return nil, fmt.Errorf("finding config disk: %w", err)
@@ -218,7 +218,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	}
 
 	// Verify hash against kernel cmdline
-	expectedHash, err := getCmdlineParam("tinfoil-config-hash")
+	expectedHash, err := cmdline.requiredConfigHash()
 	if err != nil {
 		return nil, fmt.Errorf("getting expected config hash: %w", err)
 	}
@@ -241,7 +241,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	if err := yaml.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-	if err := validateConfigShape(&config); err != nil {
+	if err := validateConfigShapeForMode(&config, cmdline.Debug); err != nil {
 		return nil, err
 	}
 

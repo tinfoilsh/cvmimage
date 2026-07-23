@@ -26,7 +26,7 @@ containers:
       - SYS_NICE
       - SYS_RESOURCE
 `)
-	if err := validateConfigShape(&config); err != nil {
+	if err := validateConfigShapeForMode(&config, false); err != nil {
 		t.Fatalf("validateConfigShape rejected known production inputs: %v", err)
 	}
 }
@@ -58,9 +58,42 @@ func TestContainerInputPolicyRejectsUnsupportedInputs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			config := decodePolicyConfig(t, "containers:\n  - name: workload\n    image: example.invalid/workload\n    "+test.body+"\n")
-			err := validateConfigShape(&config)
+			err := validateConfigShapeForMode(&config, false)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateConfigShape error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestContainerInputPolicyDebugSocketPolicy(t *testing.T) {
+	tests := []struct {
+		name  string
+		debug bool
+		body  string
+		want  string
+	}{
+		{name: "production rejects socket bind", body: "volumes: [/run/docker.sock:/var/run/docker.sock]", want: "named volume source"},
+		{name: "debug accepts exact socket bind", debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock]"},
+		{name: "debug rejects rw socket bind alias", debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock:rw]", want: "named volume source"},
+		{name: "debug rejects source alias", debug: true, body: "volumes: [/var/run/docker.sock:/var/run/docker.sock]", want: "named volume source"},
+		{name: "debug rejects target alias", debug: true, body: "volumes: [/run/docker.sock:/run/docker.sock]", want: "named volume source"},
+		{name: "debug rejects read-only socket bind", debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock:ro]", want: "named volume source"},
+		{name: "debug rejects extra options", debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock:rw,z]", want: "named volume source"},
+		{name: "debug rejects other host bind", debug: true, body: "volumes: [/tmp:/tmp]", want: "named volume source"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := decodePolicyConfig(t, "containers:\n  - name: workload\n    image: example.invalid/workload\n    "+test.body+"\n")
+			err := validateConfigShapeForMode(&config, test.debug)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validateConfigShapeForMode rejected %s: %v", test.name, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateConfigShapeForMode error = %v, want %q", err, test.want)
 			}
 		})
 	}
@@ -98,6 +131,20 @@ func TestValidNamedVolume(t *testing.T) {
 		if validNamedVolume(name) {
 			t.Errorf("validNamedVolume(%q) = true", name)
 		}
+	}
+}
+
+func TestContainerInputPolicyRejectsDuplicateReservedName(t *testing.T) {
+	config := decodePolicyConfig(t, `
+containers:
+  - name: tinfoil-ssh-installer
+    image: example.invalid/installer
+  - name: tinfoil-ssh-installer
+    image: example.invalid/installer
+`)
+	err := validateConfigShapeForMode(&config, true)
+	if err == nil || !strings.Contains(err.Error(), `duplicates`) {
+		t.Fatalf("validateConfigShapeForMode error = %v, want duplicate-name rejection", err)
 	}
 }
 

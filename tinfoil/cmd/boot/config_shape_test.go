@@ -41,6 +41,18 @@ func TestValidateConfigShapeEnforcesCollectionLimits(t *testing.T) {
 	}
 }
 
+func TestValidateConfigShapeRejectsDuplicateContainerNames(t *testing.T) {
+	config := Config{
+		Containers: []Container{
+			{Name: "workload", Image: "example.invalid/a"},
+			{Name: "workload", Image: "example.invalid/b"},
+		},
+	}
+	if err := validateConfigShapeForMode(&config, false); err == nil || !strings.Contains(err.Error(), "duplicates") {
+		t.Fatalf("validateConfigShapeForMode error = %v, want duplicate-name rejection", err)
+	}
+}
+
 func TestValidateConfigShapeRejectsNestedOrAmbiguousEnv(t *testing.T) {
 	for name, item := range map[string]interface{}{
 		"invalid name":  "BAD-NAME",

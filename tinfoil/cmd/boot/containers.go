@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
 
 	"tinfoil/internal/boot"
@@ -108,6 +109,10 @@ func networkCreateOptions(name string) dockernetwork.CreateOptions {
 
 // launchContainers starts all containers from the config
 func launchContainers(ctx context.Context, config *Config, extConfig *shimconfig.ExternalConfig) error {
+	return launchContainersWithMode(ctx, config, extConfig, false)
+}
+
+func launchContainersWithMode(ctx context.Context, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		return nil
@@ -132,7 +137,7 @@ func launchContainers(ctx context.Context, config *Config, extConfig *shimconfig
 			errors = append(errors, fmt.Sprintf("%s: pulling image: %v", c.Name, err))
 			continue
 		}
-		if err := createAndStartContainer(cli, c, config, extConfig); err != nil {
+		if err := createAndStartContainerWithMode(cli, c, config, extConfig, debug); err != nil {
 			log.Printf("Error starting container %s: %v", c.Name, err)
 			errors = append(errors, fmt.Sprintf("%s: %v", c.Name, err))
 		}
@@ -148,6 +153,10 @@ func launchContainers(ctx context.Context, config *Config, extConfig *shimconfig
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
 func launchContainersAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig) error {
+	return launchContainersAndWaitHealthyWithMode(ctx, tracker, config, extConfig, false)
+}
+
+func launchContainersAndWaitHealthyWithMode(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
@@ -195,7 +204,7 @@ func launchContainersAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, 
 		wg.Add(1)
 		go func(i int, c Container) {
 			defer wg.Done()
-			errs[i] = runContainer(cli, c, config, extConfig, &substages, &mu, flush)
+			errs[i] = runContainer(cli, c, config, extConfig, &substages, &mu, flush, debug)
 		}(i, c)
 	}
 	wg.Wait()
@@ -226,6 +235,7 @@ func runContainer(
 	substages *[]boot.Stage,
 	mu *sync.Mutex,
 	flush func(),
+	debug bool,
 ) error {
 	cStart := time.Now()
 
@@ -255,7 +265,7 @@ func runContainer(
 
 	// Create + start
 	startPhase := time.Now()
-	if err := createAndStartContainer(cli, c, cfg, extConfig); err != nil {
+	if err := createAndStartContainerWithMode(cli, c, cfg, extConfig, debug); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
 		record("start", boot.StatusFailed, time.Since(startPhase), detail)
 		finish(boot.StatusFailed, detail)
@@ -366,8 +376,53 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 
 // createAndStartContainer creates and starts a container (image must already be pulled).
 func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig) error {
+	return createAndStartContainerWithMode(cli, c, cfg, extConfig, false)
+}
+
+func createAndStartContainerWithMode(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
+	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, debug)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Creating container %s", c.Name)
+
+	resp, err := cli.ContainerCreate(context.Background(), containerConfig, hostConfig, networkingConfig, nil, c.Name)
+	if err != nil {
+		return fmt.Errorf("creating container: %w", err)
+	}
+
+	for _, n := range rest {
+		gwPriority := 0
+		if cfg.Networks[n] != nil && cfg.Networks[n].Egress != "closed" {
+			gwPriority = 100
+		}
+		ep := endpointSettings(n, gwPriority)
+		if err := cli.NetworkConnect(context.Background(), n, resp.ID, ep); err != nil {
+			return fmt.Errorf("connecting container %s to %s: %w", c.Name, n, err)
+		}
+	}
+
+	if err := cli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("starting container: %w", err)
+	}
+
+	log.Printf("Started container %s (%s)", c.Name, resp.ID[:12])
+	return nil
+}
+
+func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) (*container.Config, *container.HostConfig, *dockernetwork.NetworkingConfig, []string, error) {
 	if c.Image == "" {
-		return fmt.Errorf("no image specified for container %s", c.Name)
+		return nil, nil, nil, nil, fmt.Errorf("no image specified for container %s", c.Name)
+	}
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	if cfg.Networks == nil {
+		cfg.Networks = map[string]*NetworkSpec{}
+	}
+	if extConfig == nil {
+		extConfig = &shimconfig.ExternalConfig{}
 	}
 
 	// Build environment variables
@@ -455,15 +510,21 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 
 	// Volume mounts
 	for _, vol := range c.Volumes {
-		hostConfig.Binds = append(hostConfig.Binds, vol)
+		canonical, err := canonicalizeContainerVolume(vol, debug)
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("container %q volume %q %w", c.Name, vol, err)
+		}
+		hostConfig.Binds = append(hostConfig.Binds, canonical)
+	}
+
+	if debug && c.Name == reservedDebugContainerName {
+		applyReservedDebugRuntime(containerConfig, hostConfig)
 	}
 
 	// GPU configuration
 	if req := parseGPUs(c.GPUs); req != nil {
 		hostConfig.DeviceRequests = []container.DeviceRequest{*req}
 	}
-
-	log.Printf("Creating container %s", c.Name)
 
 	// Pin the egress-capable network's GwPriority so Docker installs the
 	// default route through it; equal priorities are non-deterministic.
@@ -483,24 +544,27 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		}
 	}
 
-	resp, err := cli.ContainerCreate(context.Background(), containerConfig, hostConfig, networkingConfig, nil, c.Name)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
-	}
+	return containerConfig, hostConfig, networkingConfig, rest, nil
+}
 
-	for _, n := range rest {
-		ep := endpointSettings(n, gwPriority(n))
-		if err := cli.NetworkConnect(context.Background(), n, resp.ID, ep); err != nil {
-			return fmt.Errorf("connecting container %s to %s: %w", c.Name, n, err)
-		}
+func applyReservedDebugRuntime(containerConfig *container.Config, hostConfig *container.HostConfig) {
+	hostConfig.NetworkMode = "bridge"
+	port := nat.Port(reservedDebugPort)
+	if containerConfig.ExposedPorts == nil {
+		containerConfig.ExposedPorts = nat.PortSet{}
 	}
-
-	if err := cli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
-		return fmt.Errorf("starting container: %w", err)
+	containerConfig.ExposedPorts[port] = struct{}{}
+	if hostConfig.PortBindings == nil {
+		hostConfig.PortBindings = nat.PortMap{}
 	}
-
-	log.Printf("Started container %s (%s)", c.Name, resp.ID[:12])
-	return nil
+	hostConfig.PortBindings[port] = []nat.PortBinding{{
+		HostPort: fmt.Sprintf("%d", reservedDebugHostPort),
+	}}
+	hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
+		PathOnHost:        reservedDebugSerialDevice,
+		PathInContainer:   reservedDebugSerialDevice,
+		CgroupPermissions: "rw",
+	})
 }
 
 func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettings {

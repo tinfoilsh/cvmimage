@@ -1,8 +1,12 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
 
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
@@ -163,5 +167,79 @@ func TestEndpointSettingsPinsShimUpstreamIP(t *testing.T) {
 	}
 	if regular.GwPriority != 100 {
 		t.Errorf("GwPriority: got %d, want 100", regular.GwPriority)
+	}
+}
+
+func TestBuildContainerCreateSpec_DebugInstallerGetsFixedRuntime(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{}}
+	c := Container{
+		Name:    reservedDebugContainerName,
+		Image:   "example.invalid/installer",
+		Volumes: []string{debugDockerSocketBind},
+	}
+
+	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, true)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	if networkingConfig != nil {
+		t.Fatalf("expected no networking config, got %+v", networkingConfig)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("expected no follow-on networks, got %v", rest)
+	}
+	if hostConfig.NetworkMode != container.NetworkMode("bridge") {
+		t.Fatalf("NetworkMode = %q, want bridge", hostConfig.NetworkMode)
+	}
+	if !hostConfig.ReadonlyRootfs {
+		t.Fatal("ReadonlyRootfs = false, want true default")
+	}
+	if len(hostConfig.CapDrop) != 1 || hostConfig.CapDrop[0] != "ALL" {
+		t.Fatalf("CapDrop = %v, want [ALL]", hostConfig.CapDrop)
+	}
+	if !slices.Contains(hostConfig.SecurityOpt, "no-new-privileges:true") {
+		t.Fatalf("SecurityOpt = %v, want no-new-privileges", hostConfig.SecurityOpt)
+	}
+	if !slices.Contains(hostConfig.Binds, debugDockerSocketBind) {
+		t.Fatalf("Binds = %v, want exact docker socket bind", hostConfig.Binds)
+	}
+
+	port := nat.Port(reservedDebugPort)
+	if _, ok := containerConfig.ExposedPorts[port]; !ok {
+		t.Fatalf("ExposedPorts = %v, want %s", containerConfig.ExposedPorts, port)
+	}
+	bindings := hostConfig.PortBindings[port]
+	if len(bindings) != 1 || bindings[0].HostPort != "2222" {
+		t.Fatalf("PortBindings[%s] = %v, want host port 2222", port, bindings)
+	}
+	if len(hostConfig.Devices) != 1 {
+		t.Fatalf("Devices = %v, want one synthesized serial mapping", hostConfig.Devices)
+	}
+	if got := hostConfig.Devices[0]; got.PathOnHost != reservedDebugSerialDevice || got.PathInContainer != reservedDebugSerialDevice || got.CgroupPermissions != "rw" {
+		t.Fatalf("Devices[0] = %+v, want exact /dev/hvc0 rw mapping", got)
+	}
+}
+
+func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{}}
+	c := Container{
+		Name:  reservedDebugContainerName,
+		Image: "example.invalid/installer",
+	}
+
+	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, false)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	if len(containerConfig.ExposedPorts) != 0 {
+		t.Fatalf("ExposedPorts = %v, want none in production", containerConfig.ExposedPorts)
+	}
+	if len(hostConfig.PortBindings) != 0 {
+		t.Fatalf("PortBindings = %v, want none in production", hostConfig.PortBindings)
+	}
+	for _, dev := range hostConfig.Devices {
+		if dev.PathOnHost == reservedDebugSerialDevice || dev.PathInContainer == reservedDebugSerialDevice {
+			t.Fatalf("Devices = %v, want no synthesized serial device in production", hostConfig.Devices)
+		}
 	}
 }

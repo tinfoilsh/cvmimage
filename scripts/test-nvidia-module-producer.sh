@@ -64,6 +64,7 @@ validate_nvidia_modules "$source_dir" "$module_dir" "$release"
 
 bazel_package="$scratch/bazel-package"
 mkdir -p "$bazel_package"
+printf 'incomplete\n' > "$bazel_package/BUILD.bazel"
 write_bazel_module_package "$bazel_package"
 cat > "$scratch/expected-BUILD.bazel" <<'EOF'
 package(default_visibility = ["//visibility:public"])
@@ -78,6 +79,7 @@ filegroup(
 )
 EOF
 cmp "$scratch/expected-BUILD.bazel" "$bazel_package/BUILD.bazel"
+test -z "$(find "$bazel_package" -maxdepth 1 -name '.BUILD.bazel.*' -print -quit)"
 
 for module in "${required_modules[@]}"; do
     mv "$module_dir/$module" "$module_dir/$module.missing"

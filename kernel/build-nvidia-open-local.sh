@@ -126,21 +126,31 @@ validate_nvidia_modules() {
 
 write_bazel_module_package() {
     local destination=$1
-    local module
+    local module temporary
 
-    {
+    for module in "${required_modules[@]}"; do
+        if [[ ! "$module" =~ ^[a-z0-9-]+\.ko$ ]]; then
+            echo "invalid NVIDIA module contract entry: $module" >&2
+            return 1
+        fi
+    done
+
+    temporary="$(mktemp "$destination/.BUILD.bazel.XXXXXXXX")"
+
+    if ! {
         printf '%s\n' 'package(default_visibility = ["//visibility:public"])' ''
         printf '%s\n' 'filegroup(' '    name = "modules",' '    srcs = ['
         for module in "${required_modules[@]}"; do
-            if [[ ! "$module" =~ ^[a-z0-9-]+\.ko$ ]]; then
-                echo "invalid NVIDIA module contract entry: $module" >&2
-                return 1
-            fi
             printf '        "%s",\n' "$module"
         done
         printf '%s\n' '    ],' ')'
-    } > "$destination/BUILD.bazel"
-    touch -d @0 "$destination/BUILD.bazel"
+    } > "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    chmod 0644 "$temporary"
+    touch -d @0 "$temporary"
+    mv -f -- "$temporary" "$destination/BUILD.bazel"
 }
 
 main() {

@@ -41,3 +41,7 @@ The rootfs target deliberately has no hostile-builder verifier, every-path
 manifest, forbidden-path policy, package filter or runtime-footprint denylist.
 The trusted release worker, independent reproduction, protected expected-
 measurement promotion and runtime attestation are the integrity boundary.
+
+`make shipping-image` passes this tar to mkosi as its only base tree. The
+shipping step does not install packages, run package scripts, copy a builder
+filesystem, or add a second rootfs overlay.

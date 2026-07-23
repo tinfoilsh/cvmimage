@@ -825,6 +825,38 @@
 			"arch": "amd64",
 			"dependencies": [
 				{
+					"key": "libc6_2.43-2ubuntu2_amd64",
+					"name": "libc6",
+					"version": "2.43-2ubuntu2"
+				},
+				{
+					"key": "libc-gconv-modules-extra_2.43-2ubuntu2_amd64",
+					"name": "libc-gconv-modules-extra",
+					"version": "2.43-2ubuntu2"
+				},
+				{
+					"key": "libgcc-s1_16-20260322-1ubuntu1_amd64",
+					"name": "libgcc-s1",
+					"version": "16-20260322-1ubuntu1"
+				},
+				{
+					"key": "gcc-16-base_16-20260322-1ubuntu1_amd64",
+					"name": "gcc-16-base",
+					"version": "16-20260322-1ubuntu1"
+				}
+			],
+			"key": "libc-bin_2.43-2ubuntu2_amd64",
+			"name": "libc-bin",
+			"sha256": "c34230e6892fa95e498e51640f7131946120b83eb672f586e341fa53bf504359",
+			"urls": [
+				"https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/g/glibc/libc-bin_2.43-2ubuntu2_amd64.deb"
+			],
+			"version": "2.43-2ubuntu2"
+		},
+		{
+			"arch": "amd64",
+			"dependencies": [
+				{
 					"key": "zlib1g_1-1.3.dfsg-p-really1.3.1-1ubuntu3_amd64",
 					"name": "zlib1g",
 					"version": "1:1.3.dfsg+really1.3.1-1ubuntu3"

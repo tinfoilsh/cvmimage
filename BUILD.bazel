@@ -2,4 +2,11 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "MODULE.bazel.lock",
+    "build/builder-work/output/artifacts/tinfoil-boot",
+    "build/builder-work/output/artifacts/tinfoil-container-status",
+    "build/builder-work/output/artifacts/tinfoil-egress",
+    "build/builder-work/output/artifacts/tinfoil-init",
+    "build/builder-work/output/artifacts/tinfoil-shim",
+    "build/rootfs-artifacts/nvattest/usr/bin/nvattest",
+    "build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2",
 ])

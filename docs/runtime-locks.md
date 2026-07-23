@@ -13,13 +13,13 @@ layer for later additive assembly.
 `image/runtime-sources.lock.json` contains ordinary URL and SHA-256 locks for
 Docker and NVIDIA archives that cannot be represented by the Ubuntu apt
 resolver. The module extension downloads each archive with Bazel's built-in
-digest verification and exposes only its fixed `archive` file. It does not
-parse Debian members, restate package contents, or select shipping paths.
+digest verification. It exposes the complete Docker payload and uses the
+existing `rules_distroless` complete-payload normalization for NVIDIA Debian
+packages. It does not filter package paths or execute maintainer scripts.
 
 The NVIDIA CUDA repository uses a flat apt layout that `rules_distroless`
-0.8.0 cannot resolve. A later rootfs assembly change may add one narrow
-raw-DEB-to-layer normalization rule. That rule must preserve the complete
-payload and must not grow into a package filter or path-policy mechanism.
+0.8.0 cannot resolve. Its package URLs and digests therefore remain in the
+ordinary source lock instead of a resolver-generated apt lock.
 
 `.bazelversion` pins Bazel 8.7.0 and `MODULE.bazel.lock` pins the Bzlmod graph.
 Run `make test-runtime-locks` for the package-lock comparison and locked module

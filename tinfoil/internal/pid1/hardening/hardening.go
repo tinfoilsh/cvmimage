@@ -29,33 +29,110 @@ const (
 type servicePolicy struct {
 	noNewPrivileges      bool
 	boundCapabilities    []int
+	restrictFilesystems  bool
+	deniedSyscalls       []uint32
+	restrictNamespaceOps bool
 	allowedSocketDomains []uint32
 }
 
-// A nil boundCapabilities list deliberately preserves the inherited bounding
-// set. Boot still performs model-pack mounts and device-mapper and nftables
-// operations, so the current image does not establish a narrower safe set for
-// it. A non-nil empty list means that no capabilities are permitted.
+// kernelManagementSyscalls are denied for every hardened service, including
+// the privileged one-shot boot helper. Most are a deliberate second layer over
+// controls enforced elsewhere (module loading via kernel.modules_disabled, bpf/
+// perf via sysctl, mount/kexec via dropped capabilities): denying them keeps
+// each service protected even if another mechanism regresses. Three are the
+// sole control at this layer and are load-bearing on their own: the keyring
+// syscalls (add_key/request_key/keyctl) and io_uring, which is denied because
+// its ring submits file and socket operations the kernel executes without a
+// syscall the rest of this filter could inspect.
+var kernelManagementSyscalls = []uint32{
+	unix.SYS_ACCT,
+	unix.SYS_ADD_KEY,
+	unix.SYS_BPF,
+	unix.SYS_DELETE_MODULE,
+	unix.SYS_FINIT_MODULE,
+	unix.SYS_INIT_MODULE,
+	unix.SYS_IO_URING_ENTER,
+	unix.SYS_IO_URING_REGISTER,
+	unix.SYS_IO_URING_SETUP,
+	unix.SYS_IOPERM,
+	unix.SYS_IOPL,
+	unix.SYS_KEXEC_FILE_LOAD,
+	unix.SYS_KEXEC_LOAD,
+	unix.SYS_KEYCTL,
+	unix.SYS_OPEN_BY_HANDLE_AT,
+	unix.SYS_PERF_EVENT_OPEN,
+	unix.SYS_PROCESS_VM_READV,
+	unix.SYS_PROCESS_VM_WRITEV,
+	unix.SYS_PTRACE,
+	unix.SYS_QUOTACTL,
+	unix.SYS_QUOTACTL_FD,
+	unix.SYS_REBOOT,
+	unix.SYS_REQUEST_KEY,
+	unix.SYS_SWAPOFF,
+	unix.SYS_SWAPON,
+	unix.SYS_USERFAULTFD,
+}
+
+var restrictedServiceSyscalls = append([]uint32{
+	unix.SYS_CHROOT,
+	unix.SYS_CLONE3,
+	unix.SYS_FANOTIFY_INIT,
+	unix.SYS_FSCONFIG,
+	unix.SYS_FSMOUNT,
+	unix.SYS_FSOPEN,
+	unix.SYS_FSPICK,
+	unix.SYS_MKNOD,
+	unix.SYS_MKNODAT,
+	unix.SYS_MOUNT,
+	unix.SYS_MOUNT_SETATTR,
+	unix.SYS_MOVE_MOUNT,
+	unix.SYS_NAME_TO_HANDLE_AT,
+	unix.SYS_OPEN_TREE,
+	unix.SYS_OPEN_TREE_ATTR,
+	unix.SYS_PIVOT_ROOT,
+	unix.SYS_SETDOMAINNAME,
+	unix.SYS_SETHOSTNAME,
+	unix.SYS_SETNS,
+	unix.SYS_UMOUNT2,
+	unix.SYS_UNSHARE,
+}, kernelManagementSyscalls...)
+
+// A non-nil empty boundCapabilities list means that no capabilities are
+// permitted. Boot is a one-shot privileged helper: its fixed set covers
+// device-mapper/mount operations, nftables, and mapper-node creation.
 func policyFor(service Service) (servicePolicy, bool) {
 	switch service {
 	case ServiceBoot:
-		return servicePolicy{noNewPrivileges: true}, true
+		return servicePolicy{
+			noNewPrivileges:   true,
+			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD},
+			deniedSyscalls:    kernelManagementSyscalls,
+		}, true
 	case ServiceContainerStatus:
 		return servicePolicy{
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{},
+			restrictFilesystems:  true,
+			deniedSyscalls:       restrictedServiceSyscalls,
+			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX},
 		}, true
 	case ServiceEgress:
 		return servicePolicy{
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
+			restrictFilesystems:  true,
+			deniedSyscalls:       restrictedServiceSyscalls,
+			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		}, true
 	case ServiceShim:
 		return servicePolicy{
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{unix.CAP_NET_BIND_SERVICE},
+			restrictFilesystems:  true,
+			deniedSyscalls:       restrictedServiceSyscalls,
+			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6},
 		}, true
 	default:
@@ -71,16 +148,23 @@ func ApplyService(service Service) error {
 }
 
 type serviceKernel interface {
+	restrictFilesystems() error
 	dropBoundingCapability(int) error
 	setCapabilities([2]unix.CapUserData) error
 	setNoNewPrivileges() error
-	restrictSocketDomains([]uint32) error
+	restrictSyscalls([]uint32, bool, []uint32) error
 }
 
 func applyService(kernel serviceKernel, service Service) error {
 	policy, ok := policyFor(service)
 	if !ok {
 		return fmt.Errorf("unknown service hardening policy %q", service)
+	}
+
+	if policy.restrictFilesystems {
+		if err := kernel.restrictFilesystems(); err != nil {
+			return fmt.Errorf("restrict filesystems for %s: %w", service, err)
+		}
 	}
 
 	if policy.boundCapabilities != nil {
@@ -112,9 +196,13 @@ func applyService(kernel serviceKernel, service Service) error {
 			return fmt.Errorf("set no_new_privileges for %s: %w", service, err)
 		}
 	}
-	if policy.allowedSocketDomains != nil {
-		if err := kernel.restrictSocketDomains(policy.allowedSocketDomains); err != nil {
-			return fmt.Errorf("restrict socket domains for %s: %w", service, err)
+	if policy.deniedSyscalls != nil || policy.restrictNamespaceOps || policy.allowedSocketDomains != nil {
+		if err := kernel.restrictSyscalls(
+			policy.deniedSyscalls,
+			policy.restrictNamespaceOps,
+			policy.allowedSocketDomains,
+		); err != nil {
+			return fmt.Errorf("restrict syscalls for %s: %w", service, err)
 		}
 	}
 	return nil

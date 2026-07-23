@@ -55,9 +55,15 @@ func serviceSeccompFilters(denied []uint32, restrictNamespaceOps bool, domains [
 		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(unix.ENOSYS)},
 	}
 	for _, number := range denied {
+		errno := uint32(unix.EPERM)
+		if number == unix.SYS_CLONE3 {
+			// glibc falls back to clone(2) only when clone3 is unavailable.
+			// The clone filter below still rejects every namespace flag.
+			errno = uint32(unix.ENOSYS)
+		}
 		filters = append(filters,
 			unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 1, K: number},
-			unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)},
+			unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | errno},
 		)
 	}
 	if restrictNamespaceOps {

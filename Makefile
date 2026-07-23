@@ -6,13 +6,10 @@ BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
 SHIPPING_INITRD = initrd.cpio.zst
 
-NVATTEST_VERSION = 1.2.2.1780962352-1
-NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
-                packages/libnvat_$(NVATTEST_VERSION)_amd64.deb
-NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
-                           build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
+NVATTEST_CACHE ?= $(if $(strip $(XDG_CACHE_HOME)),$(XDG_CACHE_HOME),$(HOME)/.cache)/cvmimage-hardening/nvattest
+NVATTEST_RUNTIME_OUTPUT = build/rootfs-artifacts/nvattest
 
-.PHONY: all build rebuild shipping-image clean deepclean hash nvattest \
+.PHONY: all build rebuild shipping-image clean deepclean hash nvattest regenerate-nvattest release-nvattest-cache \
 	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
@@ -181,24 +178,24 @@ rebuild: shipping-image
 
 build: shipping-image
 
-# The CUDA repo's nvattest links libxml2.so.2; resolute ships libxml2.so.16, so
-# we build from source against the system lib. See build-nvattest.sh.
-nvattest: $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS)
+# Normal image builds consume only the two fixed, content-addressed nvattest
+# runtime artifacts from a durable local cache. They never invoke the source
+# producer implicitly.
+nvattest:
+	./scripts/stage-nvattest-cache.sh \
+		"$(NVATTEST_CACHE)" \
+		"$(abspath $(NVATTEST_RUNTIME_OUTPUT))"
 
-# Grouped target (&:): a single build-nvattest.sh run produces both the nvattest
-# and libnvat debs, so make won't consider the build up-to-date when only one of
-# them is present.
-$(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS) &: \
-		build-nvattest.sh \
-		builder/Dockerfile \
-		builder/build-initrd.sh \
-		scripts/nvattest-artifacts.sh \
-		scripts/nvattest-regorus-Cargo.lock \
-		scripts/build-runtime-builder.sh \
-		scripts/run-runtime-builder.sh \
-		scripts/runtime-builder-base-image.txt \
-		scripts/runtime-builder-snapshot.txt | runtime-builder
-	./scripts/run-runtime-builder.sh nvattest
+# Source regeneration is deliberately explicit. It verifies the fixed producer
+# hashes before publishing artifacts into the local content-addressed cache.
+regenerate-nvattest: runtime-builder
+	./scripts/regenerate-nvattest-cache.sh "$(NVATTEST_CACHE)"
+
+# Release qualification rebuilds nvattest twice, verifies the reviewed hashes,
+# and publishes the verified result into the local cache for shipping-image.
+release-nvattest-cache:
+	./scripts/reproduce-nvattest.sh \
+		--publish-cache "$(NVATTEST_CACHE)"
 
 test-nvattest-artifacts:
 	./scripts/test-nvattest-artifacts.sh

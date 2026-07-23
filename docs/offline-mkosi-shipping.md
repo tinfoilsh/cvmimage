@@ -19,8 +19,12 @@ not change runtime policy or image contents. A real extracted-filesystem
 comparison leaves only ext4's formatter-owned `lost+found` directory outside
 the additive rootfs tar.
 
-`make shipping-image` builds the named producers, additive rootfs, and additive
-initrd before invoking mkosi. It then publishes these fixed local outputs:
+`make shipping-image` builds the required named producers, stages the verified
+content-addressed nvattest runtime artifacts, and builds the additive rootfs and
+initrd before invoking mkosi. It fails closed instead of rebuilding nvattest if
+that durable local cache is absent or mismatched. Fresh release runners first
+populate the cache with `make release-nvattest-cache`. It then publishes these
+fixed local outputs:
 
 - `tinfoilcvm.raw` from mkosi;
 - `tinfoilcvm.roothash` from mkosi;

@@ -70,8 +70,8 @@ func runPID1() {
 		initLogf("warning: running with pid %d, expected pid 1", os.Getpid())
 	}
 
-	// This is the lifetime context. The boot deadline is deliberately created
-	// inside run and can never end post-boot supervision.
+	// This signal-notified context owns both startup and supervision. Narrow
+	// readiness checks apply their own operation-specific timeouts.
 	parent, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	err := run(parent)

@@ -4,11 +4,14 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestPinnedVeritySaltMatchesRepartSeed(t *testing.T) {
@@ -98,6 +101,54 @@ func TestCmdlineValueFromRejectsAmbiguity(t *testing.T) {
 	}
 	if _, err := cmdlineValueFrom("console=hvc0", "roothash"); !os.IsNotExist(err) {
 		t.Fatalf("missing roothash error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestIsMountPointUsesKernelMountIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		targetID  uint64
+		parentID  uint64
+		mask      uint32
+		want      bool
+		wantError bool
+	}{
+		{name: "mounted", targetID: 8, parentID: 1, mask: unix.STATX_MNT_ID, want: true},
+		{name: "same mount", targetID: 1, parentID: 1, mask: unix.STATX_MNT_ID},
+		{name: "missing mount id", targetID: 8, parentID: 1, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statx := func(_ int, path string, _ int, _ int, stat *unix.Statx_t) error {
+				stat.Mask = test.mask
+				if path == "/run" {
+					stat.Mnt_id = test.targetID
+				} else if path == "/" {
+					stat.Mnt_id = test.parentID
+				} else {
+					t.Fatalf("unexpected statx path %q", path)
+				}
+				return nil
+			}
+
+			got, err := isMountPoint("/run", statx)
+			if (err != nil) != test.wantError {
+				t.Fatalf("isMountPoint error = %v, wantError %v", err, test.wantError)
+			}
+			if got != test.want {
+				t.Fatalf("isMountPoint = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestIsMountPointPropagatesStatxErrors(t *testing.T) {
+	want := errors.New("statx failed")
+	_, err := isMountPoint("/run", func(int, string, int, int, *unix.Statx_t) error {
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("isMountPoint error = %v, want %v", err, want)
 	}
 }
 

@@ -4,6 +4,8 @@
     "icc": false,
     "userland-proxy": false,
     "firewall-backend": "nftables",
+    "ipv6": false,
+    "ip6tables": false,
     "features": {
         "containerd-snapshotter": true
     },

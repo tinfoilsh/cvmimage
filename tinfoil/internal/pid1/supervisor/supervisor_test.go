@@ -567,6 +567,20 @@ func TestProcessCgroupReadsFixedPopulatedEvent(t *testing.T) {
 	}
 }
 
+func TestOSChildWithoutCgroupIsExplicitlyUnpopulated(t *testing.T) {
+	child := &osChild{}
+	populated, err := child.cgroupPopulated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if populated {
+		t.Fatal("child without cgroup reported populated")
+	}
+	if err := child.killCgroup(); err != nil {
+		t.Fatalf("killCgroup() = %v", err)
+	}
+}
+
 func TestDrainKillsOrphanedDescendant(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)

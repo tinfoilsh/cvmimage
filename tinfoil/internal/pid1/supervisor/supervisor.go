@@ -346,10 +346,23 @@ func (p *osChild) groupAlive() (bool, error) {
 	}
 	return err == nil, err
 }
-func (p *osChild) cgroupPopulated() (bool, error) { return p.cgroup.populated() }
-func (p *osChild) killCgroup() error              { return p.cgroup.kill() }
+func (p *osChild) cgroupPopulated() (bool, error) {
+	if p.cgroup == nil {
+		return false, nil
+	}
+	return p.cgroup.populated()
+}
+func (p *osChild) killCgroup() error {
+	if p.cgroup == nil {
+		return nil
+	}
+	return p.cgroup.kill()
+}
 func (p *osChild) release() error {
 	err := p.process.Release()
+	if p.cgroup == nil {
+		return err
+	}
 	populated, stateErr := p.cgroup.populated()
 	if stateErr != nil || populated {
 		return errors.Join(err, stateErr)

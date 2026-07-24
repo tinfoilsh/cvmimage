@@ -33,11 +33,23 @@ func TestValidateConfigShapeEnforcesCollectionLimits(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateConfigShape(&test.config)
+			err := validateConfigShape(&test.config, false)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateConfigShape error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestValidateConfigShapeRejectsDuplicateContainerNames(t *testing.T) {
+	config := Config{
+		Containers: []Container{
+			{Name: "workload", Image: "example.invalid/a"},
+			{Name: "workload", Image: "example.invalid/b"},
+		},
+	}
+	if err := validateConfigShape(&config, false); err == nil || !strings.Contains(err.Error(), "duplicates") {
+		t.Fatalf("validateConfigShape error = %v, want duplicate-name rejection", err)
 	}
 }
 
@@ -51,7 +63,7 @@ func TestValidateConfigShapeRejectsNestedOrAmbiguousEnv(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := Config{Containers: []Container{{Env: []interface{}{item}}}}
-			if err := validateConfigShape(&config); err == nil {
+			if err := validateConfigShape(&config, false); err == nil {
 				t.Fatalf("validateConfigShape accepted %s", name)
 			}
 		})

@@ -68,6 +68,12 @@ jobs:
       - name: Test locked runtime inputs
         run: make test-runtime-locks
 
+      - name: Test measured runtime libcap payload
+        run: make test-runtime-libcap-contract
+
+      - name: Test measured runtime debconf payload
+        run: make test-runtime-debconf-contract
+
       - name: Test nvattest artifact safety
         run: make test-nvattest-artifacts
 

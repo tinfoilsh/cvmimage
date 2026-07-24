@@ -7,8 +7,12 @@ contents, or claim to authenticate a builder.
 the dated `20260721T000000Z` snapshot and exact requested package versions.
 `rules_distroless` resolves the complete dependency closure into
 `image/runtime-packages.lock.json`, including each package URL and SHA-256.
-`@ubuntu_runtime//:packages` exposes every complete normalized package payload
-layer for later additive assembly.
+Each `@ubuntu_runtime//PACKAGE:data` target exposes one complete normalized
+package payload. `_RUNTIME_PACKAGE_LAYERS` in `image/BUILD.bazel` is the fixed
+measured-rootfs assembly selection; it uses those complete data layers without
+path filtering or archive repacking. `debconf` and `libcap2-bin` remain in the
+canonical lock as dependency provenance, but their administrative payloads are
+intentionally absent from `_RUNTIME_PACKAGE_LAYERS` and the measured rootfs.
 
 `image/runtime-sources.lock.json` contains ordinary URL and SHA-256 locks for
 Docker and NVIDIA archives that cannot be represented by the Ubuntu apt

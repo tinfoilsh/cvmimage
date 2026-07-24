@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
-	"github.com/mackerelio/go-osstat/cpu"
-	"github.com/mackerelio/go-osstat/memory"
 
 	"tinfoil/internal/auth"
 	"tinfoil/internal/config"
@@ -104,20 +102,18 @@ func collectMetrics(metadata *config.Metadata) (*Metrics, error) {
 		CPUType: cpuVendor(),
 	}
 
-	memory, err := memory.Get()
+	totalMemory, usedMemory, err := readMemoryUsage()
 	if err != nil {
 		return nil, err
 	}
-	metrics.CPUMemTotal = int(memory.Total / 1024 / 1024 / 1024) // to GB
-	metrics.CPUMemUtil = int(memory.Used / 1024 / 1024 / 1024)
+	metrics.CPUMemTotal = int(totalMemory / 1024 / 1024 / 1024) // to GB
+	metrics.CPUMemUtil = int(usedMemory / 1024 / 1024 / 1024)
 
-	cpuStats, err := cpu.Get()
+	cpuUtilization, err := readCPUUtilization()
 	if err != nil {
 		return nil, err
 	}
-	busy := cpuStats.User + cpuStats.System + cpuStats.Nice
-	total := busy + cpuStats.Idle
-	metrics.CPUUtil = int(float64(busy) / float64(total) * 100)
+	metrics.CPUUtil = cpuUtilization
 
 	// Set GPU metrics if available
 	gpuType, totalMem, usedMem, gpuUtil, err := gpuMetrics()

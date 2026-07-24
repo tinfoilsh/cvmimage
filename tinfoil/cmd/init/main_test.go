@@ -85,6 +85,7 @@ func newLifecycleHarness() *lifecycleHarness {
 	harness.deps = lifecycleDeps{
 		services:     harness.services,
 		oneShot:      func(context.Context, supervisor.Command) error { return nil },
+		loopback:     func(context.Context) error { return nil },
 		nvidia:       func(context.Context) error { return nil },
 		lockModules:  func() error { return nil },
 		debugFailure: func(context.Context, error) {},
@@ -413,6 +414,10 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 		record(command.Name)
 		return nil
 	}
+	harness.deps.loopback = func(context.Context) error {
+		record("loopback")
+		return nil
+	}
 	harness.deps.nvidia = func(context.Context) error {
 		record("nvidia-bootstrap")
 		return nil
@@ -441,6 +446,24 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	containerd := slices.Index(events, containerdName)
 	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables {
 		t.Fatalf("startup events = %v", events)
+	}
+}
+
+func TestLoopbackFailureStopsBootBeforeNVIDIA(t *testing.T) {
+	harness := newLifecycleHarness()
+	loopbackErr := errors.New("loopback failed")
+	nvidiaCalled := false
+	harness.deps.loopback = func(context.Context) error { return loopbackErr }
+	harness.deps.nvidia = func(context.Context) error {
+		nvidiaCalled = true
+		return nil
+	}
+	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
+	if !errors.Is(err, loopbackErr) {
+		t.Fatalf("runLifecycle error = %v, want loopback failure", err)
+	}
+	if nvidiaCalled || len(harness.services.started) != 0 {
+		t.Fatal("boot continued after loopback failure")
 	}
 }
 

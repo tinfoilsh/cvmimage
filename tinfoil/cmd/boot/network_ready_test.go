@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -72,28 +72,24 @@ func TestWaitForNetworkInterfacePollsUntilSysfsAppears(t *testing.T) {
 	}
 }
 
-func TestApplyStaticNetworkUsesFixedIPCommands(t *testing.T) {
-	var calls []string
-	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		calls = append(calls, name+" "+strings.Join(args, " "))
-		return nil, nil
+func TestApplyStaticNetworkUsesFixedIPv4Contract(t *testing.T) {
+	called := false
+	configure := func(_ context.Context, iface string, prefix netip.Prefix, gateway netip.Addr) error {
+		called = true
+		if iface != "ens2" || prefix.String() != "100.64.0.42/20" || gateway.String() != "100.64.0.1" {
+			t.Fatalf("configure(%q, %s, %s)", iface, prefix, gateway)
+		}
+		return nil
 	}
 	config := shimconfig.ExternalNetworkConfig{
 		Address: "100.64.0.42/20",
 		Gateway: "100.64.0.1",
 	}
-	if err := applyStaticNetwork(context.Background(), "ens2", &config, run); err != nil {
+	if err := applyStaticNetwork(context.Background(), "ens2", &config, configure); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"/usr/sbin/ip link set dev ens2 up",
-		"/usr/sbin/ip addr flush dev ens2",
-		"/usr/sbin/ip route flush dev ens2",
-		"/usr/sbin/ip addr replace 100.64.0.42/20 dev ens2",
-		"/usr/sbin/ip route replace default via 100.64.0.1 dev ens2",
-	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("calls = %v, want %v", calls, want)
+	if !called {
+		t.Fatal("network configurer was not called")
 	}
 }
 
@@ -178,16 +174,35 @@ func TestMeasuredResolverAssetMatchesFixedContract(t *testing.T) {
 	}
 }
 
-func TestApplyStaticNetworkPropagatesCommandFailure(t *testing.T) {
+func TestApplyStaticNetworkPropagatesNetlinkFailure(t *testing.T) {
 	config := &shimconfig.ExternalNetworkConfig{
 		Address: "100.64.0.42/20",
 		Gateway: "100.64.0.1",
 	}
-	run := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
-		return []byte("permission denied"), errors.New("exit status 2")
+	configure := func(context.Context, string, netip.Prefix, netip.Addr) error {
+		return errors.New("permission denied")
 	}
-	err := applyStaticNetwork(context.Background(), "ens2", config, run)
+	err := applyStaticNetwork(context.Background(), "ens2", config, configure)
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
-		t.Fatalf("command failure = %v", err)
+		t.Fatalf("netlink failure = %v", err)
+	}
+}
+
+func TestApplyStaticNetworkRejectsNonIPv4Configuration(t *testing.T) {
+	tests := []shimconfig.ExternalNetworkConfig{
+		{Address: "2001:db8::1/64", Gateway: "100.64.0.1"},
+		{Address: "100.64.0.42/20", Gateway: "2001:db8::1"},
+		{Address: "invalid", Gateway: "100.64.0.1"},
+	}
+	for _, config := range tests {
+		called := false
+		err := applyStaticNetwork(context.Background(), "ens2", &config,
+			func(context.Context, string, netip.Prefix, netip.Addr) error {
+				called = true
+				return nil
+			})
+		if err == nil || called {
+			t.Fatalf("applyStaticNetwork(%+v) = %v, called=%t", config, err, called)
+		}
 	}
 }

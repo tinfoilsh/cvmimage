@@ -6,22 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/rtnetlink"
 )
 
 const (
 	networkReadyTimeout = 90 * time.Second
 	networkPollInterval = 100 * time.Millisecond
-	ipBinary            = "/usr/sbin/ip"
 	resolverPath        = "/etc/resolv.conf"
 	primaryNameserver   = "1.1.1.1"
 	secondaryNameserver = "1.0.0.1"
@@ -31,11 +30,7 @@ const (
 var sysBusPCIDevices = "/sys/bus/pci/devices"
 var errNetworkInterfaceNotFound = errors.New("network interface not found")
 
-type commandRunner func(context.Context, string, ...string) ([]byte, error)
-
-func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
+type networkConfigurer func(context.Context, string, netip.Prefix, netip.Addr) error
 
 func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetworkConfig) (string, error) {
 	if err := verifyFixedResolver(resolverPath); err != nil {
@@ -53,7 +48,7 @@ func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetwo
 	if err != nil {
 		return "", err
 	}
-	if err := applyStaticNetwork(ctx, iface, config, runCommand); err != nil {
+	if err := applyStaticNetwork(ctx, iface, config, rtnetlink.ConfigureIPv4); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(
@@ -155,28 +150,15 @@ func applyStaticNetwork(
 	ctx context.Context,
 	iface string,
 	config *shimconfig.ExternalNetworkConfig,
-	run commandRunner,
+	configure networkConfigurer,
 ) error {
-	commands := []struct {
-		name string
-		args []string
-	}{
-		{ipBinary, []string{"link", "set", "dev", iface, "up"}},
-		{ipBinary, []string{"addr", "flush", "dev", iface}},
-		{ipBinary, []string{"route", "flush", "dev", iface}},
-		{ipBinary, []string{"addr", "replace", config.Address, "dev", iface}},
-		{ipBinary, []string{"route", "replace", "default", "via", config.Gateway, "dev", iface}},
+	prefix, err := netip.ParsePrefix(config.Address)
+	if err != nil || !prefix.Addr().Is4() {
+		return fmt.Errorf("parse configured IPv4 prefix %q: %w", config.Address, err)
 	}
-	for _, command := range commands {
-		output, err := run(ctx, command.name, command.args...)
-		if err == nil {
-			continue
-		}
-		detail := strings.TrimSpace(string(output))
-		if detail != "" {
-			return fmt.Errorf("%s %s: %w: %s", command.name, strings.Join(command.args, " "), err, detail)
-		}
-		return fmt.Errorf("%s %s: %w", command.name, strings.Join(command.args, " "), err)
+	gateway, err := netip.ParseAddr(config.Gateway)
+	if err != nil || !gateway.Is4() {
+		return fmt.Errorf("parse configured IPv4 gateway %q: %w", config.Gateway, err)
 	}
-	return nil
+	return configure(ctx, iface, prefix, gateway)
 }

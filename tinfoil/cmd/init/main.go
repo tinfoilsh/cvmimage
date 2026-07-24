@@ -21,6 +21,7 @@ import (
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
+	"tinfoil/internal/rtnetlink"
 )
 
 const (
@@ -96,6 +97,7 @@ type serviceControl interface {
 type lifecycleDeps struct {
 	services     serviceControl
 	oneShot      func(context.Context, supervisor.Command) error
+	loopback     func(context.Context) error
 	nvidia       func(context.Context) error
 	lockModules  func() error
 	debugFailure func(context.Context, error)
@@ -125,6 +127,7 @@ func run(parent context.Context) (result error) {
 		oneShot: func(ctx context.Context, command supervisor.Command) error {
 			return runOneShot(ctx, manager, command, oneShotStopGrace)
 		},
+		loopback: rtnetlink.SetLoopbackUp,
 		nvidia: func(ctx context.Context) error {
 			return runNVIDIABootstrap(
 				ctx,
@@ -183,8 +186,8 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.limits(); err != nil {
 		return fmt.Errorf("runtime limits: %w", err)
 	}
-	if err := deps.oneShot(bootCtx, command("loopback", "/usr/sbin/ip", "link", "set", "dev", "lo", "up")); err != nil {
-		return err
+	if err := deps.loopback(bootCtx); err != nil {
+		return fmt.Errorf("configure loopback: %w", err)
 	}
 	if err := deps.nvidia(bootCtx); err != nil {
 		return err

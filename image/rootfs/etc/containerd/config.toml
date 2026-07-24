@@ -7,6 +7,8 @@ disabled_plugins = [
     "io.containerd.grpc.v1.cri",
     "io.containerd.grpc.v1.sandbox-controllers",
     "io.containerd.grpc.v1.sandboxes",
+    "io.containerd.grpc.v1.transfer",
+    "io.containerd.image-verifier.v1.bindir",
     "io.containerd.internal.v1.opt",
     "io.containerd.internal.v1.tracing",
     "io.containerd.monitor.container.v1.restart",
@@ -20,6 +22,7 @@ disabled_plugins = [
     "io.containerd.snapshotter.v1.erofs",
     "io.containerd.snapshotter.v1.zfs",
     "io.containerd.tracing.processor.v1.otlp",
+    "io.containerd.transfer.v1.local",
 ]
 
 root = "/mnt/ramdisk/private/containerd/root"

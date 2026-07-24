@@ -11,6 +11,53 @@ load(
 )
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 
+# Only package data archives enter the measured rootfs; Debian maintainer
+# scripts and control archives are neither included nor executed. Debconf and
+# libcap2-bin stay pinned in the canonical lock as dependency provenance, but
+# their administrative payloads are not needed by the fixed runtime.
+_RUNTIME_PACKAGE_LAYERS = [
+    "@ubuntu_runtime//ca-certificates:data",
+    "@ubuntu_runtime//gcc-16-base:data",
+    "@ubuntu_runtime//iproute2:data",
+    "@ubuntu_runtime//libbpf1:data",
+    "@ubuntu_runtime//libbsd0:data",
+    "@ubuntu_runtime//libc-bin:data",
+    "@ubuntu_runtime//libc-gconv-modules-extra:data",
+    "@ubuntu_runtime//libc6:data",
+    "@ubuntu_runtime//libcap2:data",
+    "@ubuntu_runtime//libcom-err2:data",
+    "@ubuntu_runtime//libdb5.3t64:data",
+    "@ubuntu_runtime//libedit2:data",
+    "@ubuntu_runtime//libelf1t64:data",
+    "@ubuntu_runtime//libgcc-s1:data",
+    "@ubuntu_runtime//libgmp10:data",
+    "@ubuntu_runtime//libgssapi-krb5-2:data",
+    "@ubuntu_runtime//libjansson4:data",
+    "@ubuntu_runtime//libk5crypto3:data",
+    "@ubuntu_runtime//libkeyutils1:data",
+    "@ubuntu_runtime//libkrb5-3:data",
+    "@ubuntu_runtime//libkrb5support0:data",
+    "@ubuntu_runtime//libmd0:data",
+    "@ubuntu_runtime//libmnl0:data",
+    "@ubuntu_runtime//libnftables1:data",
+    "@ubuntu_runtime//libnftnl11:data",
+    "@ubuntu_runtime//libpcre2-8-0:data",
+    "@ubuntu_runtime//libseccomp2:data",
+    "@ubuntu_runtime//libselinux1:data",
+    "@ubuntu_runtime//libssl3t64:data",
+    "@ubuntu_runtime//libstdc++6:data",
+    "@ubuntu_runtime//libtinfo6:data",
+    "@ubuntu_runtime//libtirpc-common:data",
+    "@ubuntu_runtime//libtirpc3t64:data",
+    "@ubuntu_runtime//libxml2-16:data",
+    "@ubuntu_runtime//libxtables12:data",
+    "@ubuntu_runtime//libzstd1:data",
+    "@ubuntu_runtime//nftables:data",
+    "@ubuntu_runtime//openssl-provider-legacy:data",
+    "@ubuntu_runtime//openssl:data",
+    "@ubuntu_runtime//zlib1g:data",
+]
+
 cacerts(
     name = "ubuntu-runtime-cacerts",
     mode = "0644",
@@ -39,13 +86,47 @@ sh_test(
 sh_test(
     name = "container-runtime-rootfs-contract-test",
     srcs = ["//scripts:test-container-runtime-rootfs.sh"],
-    args = ["$(location :docker-static-rootfs-layer)"],
-    data = [":docker-static-rootfs-layer"],
+    args = [
+        "$(location :container-runtime-contract-rootfs-layer)",
+        "$(location rootfs/etc/containerd/config.toml)",
+    ],
+    data = [
+        ":container-runtime-contract-rootfs-layer",
+        "rootfs/etc/containerd/config.toml",
+    ],
+)
+
+sh_test(
+    name = "runtime-libcap-contract-test",
+    srcs = ["//scripts:test-runtime-libcap-contract.sh"],
+    args = ["$(location :runtime-packages.lock.json)"] + [
+        "$(location %s)" % layer
+        for layer in _RUNTIME_PACKAGE_LAYERS
+    ],
+    data = [
+        ":runtime-packages.lock.json",
+    ] + _RUNTIME_PACKAGE_LAYERS,
+)
+
+sh_test(
+    name = "runtime-debconf-contract-test",
+    srcs = ["//scripts:test-runtime-debconf-contract.sh"],
+    args = [
+        "$(location :runtime-packages.lock.json)",
+        "$(location @ubuntu_runtime//debconf:data)",
+    ] + [
+        "$(location %s)" % layer
+        for layer in _RUNTIME_PACKAGE_LAYERS
+    ],
+    data = [
+        ":runtime-packages.lock.json",
+        "@ubuntu_runtime//debconf:data",
+    ] + _RUNTIME_PACKAGE_LAYERS,
 )
 
 filegroup(
     name = "runtime-package-layers",
-    srcs = ["@ubuntu_runtime//:packages"],
+    srcs = _RUNTIME_PACKAGE_LAYERS,
 )
 
 filegroup(
@@ -126,6 +207,20 @@ pkg_tar(
     extension = "tar",
     mtime = 0,
     out = "docker-static-rootfs-layer.tar",
+    owner = "0.0",
+    portable_mtime = False,
+    stamp = 0,
+)
+
+pkg_tar(
+    name = "container-runtime-contract-rootfs-layer",
+    srcs = [
+        ":docker-static-payload",
+        ":repository-rootfs-0644",
+    ],
+    extension = "tar",
+    mtime = 0,
+    out = "container-runtime-contract-rootfs-layer.tar",
     owner = "0.0",
     portable_mtime = False,
     stamp = 0,

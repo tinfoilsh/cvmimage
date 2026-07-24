@@ -4,16 +4,16 @@ TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
-SHIPPING_INITRD = initrd.cpio.zst
+SHIPPING_INITRD = bazel-bin/image/initrd/initrd.cpio.zst
 
 override NVATTEST_RUNTIME_OUTPUT := build/rootfs-artifacts/nvattest
 NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
 NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
 .PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
-	runtime-builder builder-initrd bazel-initrd-command bazel-rootfs additive-initrd \
+	runtime-builder builder-initrd bazel-initrd bazel-rootfs \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
-	test-additive-initrd test-roothash-artifacts \
+	test-roothash-artifacts \
 	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
 	custom-kernel-artifacts \
@@ -49,8 +49,6 @@ test-roothash-artifacts:
 clean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd.cpio.zst
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/stage build/artifacts
 
 deepclean:
@@ -95,14 +93,8 @@ nvidia-module-artifacts: custom-kernel-artifacts
 test-nvidia-module-producer:
 	./scripts/test-nvidia-module-producer.sh
 
-bazel-initrd-command:
-	$(BAZEL) build -c opt --lockfile_mode=error //tinfoil/cmd/initrd:tinfoil-initrd
-
-additive-initrd: bazel-initrd-command
-	./scripts/build-additive-initrd.sh
-
-test-additive-initrd:
-	./scripts/test-additive-initrd.sh
+bazel-initrd:
+	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
 
 reproducible-nvidia-modules:
 	./scripts/reproduce-nvidia-modules.sh
@@ -123,7 +115,7 @@ verify-runtime-sources:
 update-runtime-locks:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh
 
-shipping-image: bazel-rootfs additive-initrd
+shipping-image: bazel-rootfs bazel-initrd
 	./scripts/test-debug-image-contract.sh build/stage/bazel-rootfs.tar
 	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 		tinfoilcvm.vmlinuz tinfoilcvm.initrd
@@ -140,7 +132,7 @@ shipping-image: bazel-rootfs additive-initrd
 	cp tinfoilcvm.roothash tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
-debug-image: bazel-rootfs bazel-debug-layer additive-initrd custom-kernel-artifacts
+debug-image: bazel-rootfs bazel-debug-layer bazel-initrd custom-kernel-artifacts
 	./scripts/test-debug-image-contract.sh \
 		build/stage/bazel-rootfs.tar \
 		build/stage/bazel-debug-layer.tar

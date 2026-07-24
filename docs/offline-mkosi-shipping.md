@@ -25,7 +25,7 @@ initrd before invoking mkosi. It then publishes these fixed local outputs:
 - `tinfoilcvm.raw` from mkosi;
 - `tinfoilcvm.roothash` from mkosi;
 - `tinfoilcvm.vmlinuz` from `kernel/out/tinfoil-custom.vmlinuz`;
-- `tinfoilcvm.initrd` from `initrd.cpio.zst`; and
+- `tinfoilcvm.initrd` from `bazel-bin/image/initrd/initrd.cpio.zst`; and
 - `tinfoilcvm.hash` as the compatibility copy of the roothash.
 
 The tag workflow performs one ordinary build and publishes those artifacts. It

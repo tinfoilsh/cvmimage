@@ -1,0 +1,27 @@
+load("@bazel_lib//lib:run_binary.bzl", "run_binary")
+load("@rules_go//go:def.bzl", "go_binary")
+
+go_binary(
+    name = "write-fixed-cpio",
+    srcs = ["writer.go"],
+    pure = "on",
+    visibility = [":__pkg__"],
+)
+
+run_binary(
+    name = "initrd",
+    srcs = [
+        "//tinfoil/cmd/initrd:tinfoil-initrd",
+        "@zstd_toolchains//:resolved_toolchain",
+    ],
+    outs = ["initrd.cpio.zst"],
+    args = [
+        "$(execpath //tinfoil/cmd/initrd:tinfoil-initrd)",
+        "$(execpath @zstd_toolchains//:resolved_toolchain)",
+        "$(execpath :initrd.cpio.zst)",
+    ],
+    mnemonic = "FixedInitrd",
+    progress_message = "Building fixed measured initrd",
+    tool = ":write-fixed-cpio",
+    visibility = ["//visibility:public"],
+)

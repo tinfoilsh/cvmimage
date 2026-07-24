@@ -153,12 +153,18 @@ func applyStaticNetwork(
 	configure networkConfigurer,
 ) error {
 	prefix, err := netip.ParsePrefix(config.Address)
-	if err != nil || !prefix.Addr().Is4() {
+	if err != nil {
 		return fmt.Errorf("parse configured IPv4 prefix %q: %w", config.Address, err)
 	}
+	if !prefix.Addr().Is4() {
+		return fmt.Errorf("configured prefix %q is not IPv4", config.Address)
+	}
 	gateway, err := netip.ParseAddr(config.Gateway)
-	if err != nil || !gateway.Is4() {
+	if err != nil {
 		return fmt.Errorf("parse configured IPv4 gateway %q: %w", config.Gateway, err)
+	}
+	if !gateway.Is4() {
+		return fmt.Errorf("configured gateway %q is not IPv4", config.Gateway)
 	}
 	return configure(ctx, iface, prefix, gateway)
 }

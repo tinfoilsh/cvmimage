@@ -10,7 +10,6 @@ archs:
   - amd64
 packages:
   - "ca-certificates (= 20260223)"
-  - "iproute2 (= 6.19.0-1ubuntu1)"
   - "nftables (= 1.1.6-1)"
   - "libc6 (= 2.43-2ubuntu2)"
   - "libc-bin (= 2.43-2ubuntu2)"

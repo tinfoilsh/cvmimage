@@ -189,20 +189,23 @@ func TestApplyStaticNetworkPropagatesNetlinkFailure(t *testing.T) {
 }
 
 func TestApplyStaticNetworkRejectsNonIPv4Configuration(t *testing.T) {
-	tests := []shimconfig.ExternalNetworkConfig{
-		{Address: "2001:db8::1/64", Gateway: "100.64.0.1"},
-		{Address: "100.64.0.42/20", Gateway: "2001:db8::1"},
-		{Address: "invalid", Gateway: "100.64.0.1"},
+	tests := []struct {
+		config shimconfig.ExternalNetworkConfig
+		want   string
+	}{
+		{config: shimconfig.ExternalNetworkConfig{Address: "2001:db8::1/64", Gateway: "100.64.0.1"}, want: `configured prefix "2001:db8::1/64" is not IPv4`},
+		{config: shimconfig.ExternalNetworkConfig{Address: "100.64.0.42/20", Gateway: "2001:db8::1"}, want: `configured gateway "2001:db8::1" is not IPv4`},
+		{config: shimconfig.ExternalNetworkConfig{Address: "invalid", Gateway: "100.64.0.1"}, want: `parse configured IPv4 prefix "invalid"`},
 	}
-	for _, config := range tests {
+	for _, test := range tests {
 		called := false
-		err := applyStaticNetwork(context.Background(), "ens2", &config,
+		err := applyStaticNetwork(context.Background(), "ens2", &test.config,
 			func(context.Context, string, netip.Prefix, netip.Addr) error {
 				called = true
 				return nil
 			})
-		if err == nil || called {
-			t.Fatalf("applyStaticNetwork(%+v) = %v, called=%t", config, err, called)
+		if err == nil || !strings.Contains(err.Error(), test.want) || strings.Contains(err.Error(), "<nil>") || called {
+			t.Fatalf("applyStaticNetwork(%+v) = %v, called=%t", test.config, err, called)
 		}
 	}
 }

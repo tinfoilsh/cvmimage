@@ -8,7 +8,6 @@
 set -Eeuo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source "${repo_dir}/scripts/nvattest-artifacts.sh"
 
 readonly UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
 readonly UPSTREAM_TAG=2026.06.09
@@ -126,9 +125,17 @@ DESTDIR="${INSTALL}" cmake --install "${BUILD}/nv-attestation-sdk-build"
     "${INSTALL}/usr/bin/nvattest" \
     "${INSTALL}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
 
-nvattest_install_runtime_artifacts \
-    "${INSTALL}" "${RUNTIME_OUT_DIR}" "${SO_VERSION}" \
-    "${HOST_UID}" "${HOST_GID}" "${SOURCE_DATE_EPOCH}"
+rm -rf -- "${RUNTIME_OUT_DIR}"
+install -d -m 0755 \
+    "${RUNTIME_OUT_DIR}/usr/bin" \
+    "${RUNTIME_OUT_DIR}/usr/lib/x86_64-linux-gnu"
+install -m 0755 "${INSTALL}/usr/bin/nvattest" \
+    "${RUNTIME_OUT_DIR}/usr/bin/nvattest"
+install -m 0644 "${INSTALL}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
+    "${RUNTIME_OUT_DIR}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
+touch -h -d "@${SOURCE_DATE_EPOCH}" \
+    "${RUNTIME_OUT_DIR}/usr/bin/nvattest" \
+    "${RUNTIME_OUT_DIR}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
 
 sha256sum \
     "${RUNTIME_OUT_DIR}/usr/bin/nvattest" \

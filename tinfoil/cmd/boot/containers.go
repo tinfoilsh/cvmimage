@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -397,11 +396,6 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		}
 	}
 
-	// Security defaults per container-security-defaults.md.
-	secOpts := c.SecurityOpt
-	if !slices.Contains(secOpts, "no-new-privileges:true") {
-		secOpts = append(append([]string(nil), c.SecurityOpt...), "no-new-privileges:true")
-	}
 	pidsLimit := c.PidsLimit
 	if pidsLimit == nil {
 		n := defaultPidsLimit
@@ -417,7 +411,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		PidMode:        container.PidMode(c.PidMode),
 		CapAdd:         c.CapAdd,
 		CapDrop:        []string{"ALL"},
-		SecurityOpt:    secOpts,
+		SecurityOpt:    []string{"no-new-privileges:true"},
 		ReadonlyRootfs: c.ReadOnly == nil || *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},

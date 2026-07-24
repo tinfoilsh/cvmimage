@@ -124,6 +124,8 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 			_, _, errno = unix.RawSyscall(unix.SYS_IO_URING_REGISTER, 0, 0, 0)
 		case "namespace-clone":
 			_, _, errno = unix.RawSyscall6(unix.SYS_CLONE, uintptr(unix.CLONE_NEWNS), 0, 0, 0, 0, 0)
+		case "clone3":
+			_, _, errno = unix.RawSyscall6(unix.SYS_CLONE3, 0, 0, 0, 0, 0, 0)
 		case "x32":
 			_, _, errno = unix.RawSyscall(uintptr(x32SyscallBit|unix.SYS_GETPID), 0, 0, 0)
 		default:
@@ -131,7 +133,7 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 		}
 
 		want := syscall.EPERM
-		if operation == "x32" {
+		if operation == "clone3" || operation == "x32" {
 			want = syscall.ENOSYS
 		}
 		if errno != want {
@@ -151,6 +153,7 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 		{name: "egress-cannot-io-uring-enter", service: ServiceEgress, operation: "io-uring-enter"},
 		{name: "status-cannot-io-uring-register", service: ServiceContainerStatus, operation: "io-uring-register"},
 		{name: "shim-cannot-mount", service: ServiceShim, operation: "mount"},
+		{name: "shim-forces-clone3-fallback", service: ServiceShim, operation: "clone3"},
 		{name: "egress-cannot-clone-namespace", service: ServiceEgress, operation: "namespace-clone"},
 		{name: "status-rejects-x32", service: ServiceContainerStatus, operation: "x32"},
 	}

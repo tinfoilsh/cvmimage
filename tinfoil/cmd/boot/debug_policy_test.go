@@ -1,17 +1,13 @@
 package main
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestParseKernelCmdline(t *testing.T) {
 	tests := []struct {
-		name       string
-		cmdline    string
-		wantHash   string
-		wantDebug  bool
-		wantErrSub string
+		name      string
+		cmdline   string
+		wantHash  string
+		wantDebug bool
 	}{
 		{
 			name:      "production by default",
@@ -26,39 +22,20 @@ func TestParseKernelCmdline(t *testing.T) {
 			wantDebug: true,
 		},
 		{
-			name:       "reject duplicate debug flag",
-			cmdline:    "tinfoil-debug=on tinfoil-debug=on",
-			wantErrSub: "duplicate kernel command-line parameter tinfoil-debug",
+			name:      "duplicate exact token remains debug",
+			cmdline:   "tinfoil-debug=on tinfoil-debug=on",
+			wantDebug: true,
 		},
 		{
-			name:       "reject bare debug flag",
-			cmdline:    "quiet tinfoil-debug root=/dev/vda",
-			wantErrSub: "malformed kernel command-line parameter tinfoil-debug",
-		},
-		{
-			name:       "reject other debug value",
-			cmdline:    "tinfoil-debug=off",
-			wantErrSub: `invalid kernel command-line parameter tinfoil-debug="off"`,
-		},
-		{
-			name:       "reject empty debug value",
-			cmdline:    "tinfoil-debug=",
-			wantErrSub: `invalid kernel command-line parameter tinfoil-debug=""`,
+			name:      "other forms remain production",
+			cmdline:   "tinfoil-debug tinfoil-debug=off tinfoil-debug=",
+			wantDebug: false,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := parseKernelCmdline(test.cmdline)
-			if test.wantErrSub != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantErrSub) {
-					t.Fatalf("parseKernelCmdline error = %v, want %q", err, test.wantErrSub)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseKernelCmdline: %v", err)
-			}
+			got := parseKernelCmdline(test.cmdline)
 			if got.ConfigHash != test.wantHash {
 				t.Fatalf("ConfigHash = %q, want %q", got.ConfigHash, test.wantHash)
 			}

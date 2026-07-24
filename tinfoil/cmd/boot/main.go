@@ -174,7 +174,7 @@ func run(ctx context.Context) error {
 
 	// 11. Containers + health checks
 	log.Println("Launching containers")
-	if err := launchContainersAndWaitHealthyWithMode(ctx, tracker, config, externalConfig, cmdline.Debug); err != nil {
+	if err := launchContainersAndWaitHealthy(ctx, tracker, config, externalConfig, cmdline.Debug); err != nil {
 		return err
 	}
 

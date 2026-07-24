@@ -108,56 +108,10 @@ func networkCreateOptions(name string) dockernetwork.CreateOptions {
 	return opts
 }
 
-// launchContainers starts all containers from the config
-func launchContainers(ctx context.Context, config *Config, extConfig *shimconfig.ExternalConfig) error {
-	return launchContainersWithMode(ctx, config, extConfig, false)
-}
-
-func launchContainersWithMode(ctx context.Context, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
-	if len(config.Containers) == 0 {
-		log.Println("No containers to launch")
-		return nil
-	}
-
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return fmt.Errorf("creating docker client: %w", err)
-	}
-	defer cli.Close()
-
-	if err := setupContainerNetwork(ctx, cli, config, debug); err != nil {
-		return fmt.Errorf("creating container network: %w", err)
-	}
-
-	log.Printf("Launching %d containers", len(config.Containers))
-	var errors []string
-	for _, c := range config.Containers {
-		log.Printf("Pulling image %s (%s)", c.Name, c.Image)
-		if err := pullImage(cli, c.Image); err != nil {
-			log.Printf("Error pulling image for %s: %v", c.Name, err)
-			errors = append(errors, fmt.Sprintf("%s: pulling image: %v", c.Name, err))
-			continue
-		}
-		if err := createAndStartContainerWithMode(cli, c, config, extConfig, debug); err != nil {
-			log.Printf("Error starting container %s: %v", c.Name, err)
-			errors = append(errors, fmt.Sprintf("%s: %v", c.Name, err))
-		}
-	}
-
-	if len(errors) > 0 {
-		return fmt.Errorf("failed to start %d container(s): %s", len(errors), strings.Join(errors, "; "))
-	}
-	return nil
-}
-
 // launchContainersAndWaitHealthy launches all containers in parallel with
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
-func launchContainersAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig) error {
-	return launchContainersAndWaitHealthyWithMode(ctx, tracker, config, extConfig, false)
-}
-
-func launchContainersAndWaitHealthyWithMode(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
+func launchContainersAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
@@ -266,7 +220,7 @@ func runContainer(
 
 	// Create + start
 	startPhase := time.Now()
-	if err := createAndStartContainerWithMode(cli, c, cfg, extConfig, debug); err != nil {
+	if err := createAndStartContainer(cli, c, cfg, extConfig, debug); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
 		record("start", boot.StatusFailed, time.Since(startPhase), detail)
 		finish(boot.StatusFailed, detail)
@@ -375,7 +329,7 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 	return first, rest
 }
 
-func createAndStartContainerWithMode(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
+func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
 	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, debug)
 	if err != nil {
 		return err
@@ -406,12 +360,6 @@ func createAndStartContainerWithMode(cli *client.Client, c Container, cfg *Confi
 func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) (*container.Config, *container.HostConfig, *dockernetwork.NetworkingConfig, []string, error) {
 	if c.Image == "" {
 		return nil, nil, nil, nil, fmt.Errorf("no image specified for container %s", c.Name)
-	}
-	if cfg == nil {
-		cfg = &Config{}
-	}
-	if extConfig == nil {
-		extConfig = &shimconfig.ExternalConfig{}
 	}
 
 	// Build environment variables
@@ -490,18 +438,10 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		hostConfig.Resources.NanoCPUs = int64(c.CPUs * 1e9)
 	}
 
-	if len(c.Devices) != 0 {
-		return nil, nil, nil, nil, fmt.Errorf("container %q devices are unsupported", c.Name)
-	}
-
 	// Volume mounts
 	reservedDebugRuntime := reservedDebugRuntimeEnabled(c.Name, debug)
 	for _, vol := range c.Volumes {
-		canonical, err := canonicalizeContainerVolume(vol, reservedDebugRuntime)
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("container %q volume %q %w", c.Name, vol, err)
-		}
-		hostConfig.Binds = append(hostConfig.Binds, canonical)
+		hostConfig.Binds = append(hostConfig.Binds, vol)
 	}
 
 	if reservedDebugRuntime {

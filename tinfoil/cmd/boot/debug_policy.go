@@ -29,15 +29,12 @@ func readKernelCmdline() (kernelCmdline, error) {
 	if err != nil {
 		return kernelCmdline{}, fmt.Errorf("reading %s: %w", kernelCmdlinePath, err)
 	}
-	return parseKernelCmdline(string(data))
+	return parseKernelCmdline(string(data)), nil
 }
 
-func parseKernelCmdline(cmdline string) (kernelCmdline, error) {
+func parseKernelCmdline(cmdline string) kernelCmdline {
 	var parsed kernelCmdline
-	debugSeen := false
-
 	configPrefix := tinfoilConfigHashParam + "="
-	debugPrefix := tinfoilDebugParam + "="
 
 	for _, field := range strings.Fields(cmdline) {
 		if value, found := strings.CutPrefix(field, configPrefix); found {
@@ -46,26 +43,12 @@ func parseKernelCmdline(cmdline string) (kernelCmdline, error) {
 			}
 			continue
 		}
-
-		if field == tinfoilDebugParam {
-			return kernelCmdline{}, fmt.Errorf("malformed kernel command-line parameter %s", tinfoilDebugParam)
+		if field == tinfoilDebugParam+"=on" {
+			parsed.Debug = true
 		}
-
-		value, found := strings.CutPrefix(field, debugPrefix)
-		if !found {
-			continue
-		}
-		if debugSeen {
-			return kernelCmdline{}, fmt.Errorf("duplicate kernel command-line parameter %s", tinfoilDebugParam)
-		}
-		debugSeen = true
-		if value != "on" {
-			return kernelCmdline{}, fmt.Errorf("invalid kernel command-line parameter %s=%q", tinfoilDebugParam, value)
-		}
-		parsed.Debug = true
 	}
 
-	return parsed, nil
+	return parsed
 }
 
 func (cmdline kernelCmdline) requiredConfigHash() (string, error) {
@@ -75,21 +58,11 @@ func (cmdline kernelCmdline) requiredConfigHash() (string, error) {
 	return cmdline.ConfigHash, nil
 }
 
-func canonicalizeDebugDockerSocketBind(volume string) (string, bool) {
-	if volume == debugDockerSocketBind {
-		return volume, true
-	}
-	return "", false
-}
-
 func reservedDebugRuntimeEnabled(containerName string, debug bool) bool {
 	return debug && containerName == reservedDebugContainerName
 }
 
 func hasReservedDebugContainer(config *Config) bool {
-	if config == nil {
-		return false
-	}
 	for _, container := range config.Containers {
 		if container.Name == reservedDebugContainerName {
 			return true

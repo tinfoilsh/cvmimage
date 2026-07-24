@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/netip"
 	"os"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -241,7 +240,7 @@ func loadAndVerifyConfig(cmdline kernelCmdline) (*Config, error) {
 	if err := yaml.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-	if err := validateConfigShapeForMode(&config, cmdline.Debug); err != nil {
+	if err := validateConfigShape(&config, cmdline.Debug); err != nil {
 		return nil, err
 	}
 
@@ -380,22 +379,4 @@ func readDiskPayload(path string, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("%s payload exceeds %d bytes", path, maxBytes)
 	}
 	return data, nil
-}
-
-// getCmdlineParam extracts a parameter value from /proc/cmdline
-func getCmdlineParam(param string) (string, error) {
-	data, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return "", fmt.Errorf("reading /proc/cmdline: %w", err)
-	}
-
-	prefix := param + "="
-
-	for part := range strings.FieldsSeq(string(data)) {
-		if value, found := strings.CutPrefix(part, prefix); found {
-			return value, nil
-		}
-	}
-
-	return "", fmt.Errorf("parameter %s not found in cmdline", param)
 }

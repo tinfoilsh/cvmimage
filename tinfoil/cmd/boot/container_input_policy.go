@@ -39,11 +39,7 @@ func (c *Container) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func validateContainerInputPolicy(index int, container *Container) error {
-	return validateContainerInputPolicyForMode(index, container, false)
-}
-
-func validateContainerInputPolicyForMode(index int, container *Container, debug bool) error {
+func validateContainerInputPolicy(index int, container *Container, debug bool) error {
 	fields := container.inputFields
 	if fields.privileged {
 		return fmt.Errorf("containers[%d].privileged is unsupported", index)
@@ -78,10 +74,8 @@ func validateContainerInputPolicyForMode(index int, container *Container, debug 
 }
 
 func canonicalizeContainerVolume(volume string, allowDebugDockerSocket bool) (string, error) {
-	if allowDebugDockerSocket {
-		if canonical, ok := canonicalizeDebugDockerSocketBind(volume); ok {
-			return canonical, nil
-		}
+	if allowDebugDockerSocket && volume == debugDockerSocketBind {
+		return volume, nil
 	}
 
 	source, _, found := strings.Cut(volume, ":")

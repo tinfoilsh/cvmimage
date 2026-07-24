@@ -27,7 +27,7 @@ containers:
       - SYS_NICE
       - SYS_RESOURCE
 `)
-	if err := validateConfigShapeForMode(&config, false); err != nil {
+	if err := validateConfigShape(&config, false); err != nil {
 		t.Fatalf("validateConfigShape rejected known production inputs: %v", err)
 	}
 }
@@ -59,7 +59,7 @@ func TestContainerInputPolicyRejectsUnsupportedInputs(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			config := decodePolicyConfig(t, "containers:\n  - name: workload\n    image: example.invalid/workload\n    "+test.body+"\n")
-			err := validateConfigShapeForMode(&config, false)
+			err := validateConfigShape(&config, false)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateConfigShape error = %v, want %q", err, test.want)
 			}
@@ -93,15 +93,15 @@ func TestContainerInputPolicyDebugSocketPolicy(t *testing.T) {
 				containerName = "workload"
 			}
 			config := decodePolicyConfig(t, "containers:\n  - name: "+containerName+"\n    image: example.invalid/workload\n    "+test.body+"\n")
-			err := validateConfigShapeForMode(&config, test.debug)
+			err := validateConfigShape(&config, test.debug)
 			if test.want == "" {
 				if err != nil {
-					t.Fatalf("validateConfigShapeForMode rejected %s: %v", test.name, err)
+					t.Fatalf("validateConfigShape rejected %s: %v", test.name, err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateConfigShapeForMode error = %v, want %q", err, test.want)
+				t.Fatalf("validateConfigShape error = %v, want %q", err, test.want)
 			}
 		})
 	}
@@ -114,9 +114,9 @@ func TestContainerInputPolicyRejectsUserSuppliedSerialDevices(t *testing.T) {
 				name := fmt.Sprintf("debug=%t/container=%s/device=%s", debug, containerName, device)
 				t.Run(name, func(t *testing.T) {
 					config := decodePolicyConfig(t, "containers:\n  - name: "+containerName+"\n    image: example.invalid/workload\n    devices: ["+device+"]\n")
-					err := validateConfigShapeForMode(&config, debug)
+					err := validateConfigShape(&config, debug)
 					if err == nil || !strings.Contains(err.Error(), ".devices is unsupported") {
-						t.Fatalf("validateConfigShapeForMode error = %v, want device rejection", err)
+						t.Fatalf("validateConfigShape error = %v, want device rejection", err)
 					}
 				})
 			}
@@ -167,9 +167,9 @@ containers:
   - name: tinfoil-ssh-installer
     image: example.invalid/installer
 `)
-	err := validateConfigShapeForMode(&config, true)
+	err := validateConfigShape(&config, true)
 	if err == nil || !strings.Contains(err.Error(), `duplicates`) {
-		t.Fatalf("validateConfigShapeForMode error = %v, want duplicate-name rejection", err)
+		t.Fatalf("validateConfigShape error = %v, want duplicate-name rejection", err)
 	}
 }
 

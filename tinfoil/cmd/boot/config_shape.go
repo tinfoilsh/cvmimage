@@ -14,11 +14,7 @@ const (
 	maxEnvironmentNameBytes   = 256
 )
 
-func validateConfigShape(config *Config) error {
-	return validateConfigShapeForMode(config, false)
-}
-
-func validateConfigShapeForMode(config *Config, debug bool) error {
+func validateConfigShape(config *Config, debug bool) error {
 	if len(config.Containers) > maxConfigContainers {
 		return fmt.Errorf("containers exceeds limit %d", maxConfigContainers)
 	}
@@ -42,18 +38,14 @@ func validateConfigShapeForMode(config *Config, debug bool) error {
 			return fmt.Errorf("containers[%d].name %q duplicates containers[%d].name", index, config.Containers[index].Name, prior)
 		}
 		seenContainerNames[config.Containers[index].Name] = index
-		if err := validateContainerShapeForMode(index, &config.Containers[index], debug); err != nil {
+		if err := validateContainerShape(index, &config.Containers[index], debug); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateContainerShape(index int, container *Container) error {
-	return validateContainerShapeForMode(index, container, false)
-}
-
-func validateContainerShapeForMode(index int, container *Container, debug bool) error {
+func validateContainerShape(index int, container *Container, debug bool) error {
 	lists := []struct {
 		name  string
 		count int
@@ -78,7 +70,7 @@ func validateContainerShapeForMode(index int, container *Container, debug bool) 
 	if container.Healthcheck != nil && len(container.Healthcheck.Test) > maxHealthcheckTestEntries {
 		return fmt.Errorf("containers[%d].healthcheck.test exceeds limit %d", index, maxHealthcheckTestEntries)
 	}
-	if err := validateContainerInputPolicyForMode(index, container, debug); err != nil {
+	if err := validateContainerInputPolicy(index, container, debug); err != nil {
 		return err
 	}
 	for envIndex, item := range container.Env {

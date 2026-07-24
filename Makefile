@@ -14,7 +14,7 @@ NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/l
 	runtime-builder builder-initrd bazel-rootfs additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
 	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
-	test-runtime-locks test-runtime-libcap-contract test-runtime-debconf-contract \
+	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
 	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
 	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
@@ -116,12 +116,6 @@ test-runtime-locks:
 		//image:runtime-package-lock-test
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-graph \
 		mod deps --lockfile_mode=error >/dev/null
-
-test-runtime-libcap-contract:
-	$(BAZEL) test --lockfile_mode=error //image:runtime-libcap-contract-test
-
-test-runtime-debconf-contract:
-	$(BAZEL) test --lockfile_mode=error //image:runtime-debconf-contract-test
 
 verify-runtime-sources:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check

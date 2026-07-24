@@ -181,11 +181,22 @@
         "bzlTransitiveDigest": "mF2eV4slSMEbCIO+MjMBgMciOSkZb9UUI2fFj3BPwNA=",
         "usagesDigest": "ZhxnUxFkNDXMRlHkZ0sEOIsJVy8V8BOOqt1yt9cZEgI=",
         "recordedFileInputs": {
-          "@@//image/runtime-sources.lock.json": "b577d13cc0b5e0b433b758ae761594039cf0ffa20724a1c1387d8503ab3e3c36"
+          "@@//image/runtime-sources.lock.json": "376855455155da04e35a4b01e607ae2726044bdda6e29e3592c155cd0ae89789"
         },
         "recordedDirentsInputs": {},
         "envVariables": {},
         "generatedRepoSpecs": {
+          "runtime_source_debug_busybox": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file_content": "load(\"@rules_distroless//apt/private:deb_postfix.bzl\", \"deb_postfix\")\n\ndeb_postfix(\n    name = \"payload\",\n    srcs = glob([\"data.tar*\"]),\n    outs = [\"layer.tar.gz\"],\n    mergedusr = False,\n    visibility = [\"//visibility:public\"],\n)\n",
+              "sha256": "fd605342f62268753076aa7d9321ff098b36ba53e47434145a9aedc28fd141a4",
+              "type": ".deb",
+              "urls": [
+                "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/b/busybox/busybox-static_1.37.0-7ubuntu1_amd64.deb"
+              ]
+            }
+          },
           "runtime_source_docker_static": {
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {

@@ -83,15 +83,16 @@ func newLifecycleHarness() *lifecycleHarness {
 	harness.services.observe = harness.readiness.Update
 	noSetup := func(pidruntime.LogFunc) error { return nil }
 	harness.deps = lifecycleDeps{
-		services:    harness.services,
-		oneShot:     func(context.Context, supervisor.Command) error { return nil },
-		nvidia:      func(context.Context) error { return nil },
-		lockModules: func() error { return nil },
-		setupFS:     noSetup,
-		sysctls:     noSetup,
-		ramdisk:     noSetup,
-		limits:      func() error { return nil },
-		syslog:      func(context.Context) {},
+		services:     harness.services,
+		oneShot:      func(context.Context, supervisor.Command) error { return nil },
+		nvidia:       func(context.Context) error { return nil },
+		lockModules:  func() error { return nil },
+		debugFailure: func(context.Context, error) {},
+		setupFS:      noSetup,
+		sysctls:      noSetup,
+		ramdisk:      noSetup,
+		limits:       func() error { return nil },
+		syslog:       func(context.Context) {},
 		exists: func(path string) (bool, error) {
 			return harness.existing[path], nil
 		},
@@ -467,6 +468,38 @@ func TestModuleLockFailureStopsBootBeforeServices(t *testing.T) {
 	}
 	if len(harness.services.started) != 0 {
 		t.Fatalf("services started despite module lock failure: %v", harness.services.started)
+	}
+}
+
+func TestLifecycleFailureParksBeforeServiceDrain(t *testing.T) {
+	harness := newLifecycleHarness()
+	setupErr := errors.New("filesystem setup failed")
+	harness.deps.setupFS = func(pidruntime.LogFunc) error { return setupErr }
+	parked := make(chan error, 1)
+	release := make(chan struct{})
+	harness.deps.debugFailure = func(_ context.Context, err error) {
+		parked <- err
+		<-release
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- runLifecycle(context.Background(), harness.deps, harness.readiness)
+	}()
+
+	if err := receiveTest(t, parked); !errors.Is(err, setupErr) {
+		t.Fatalf("parked error = %v, want %v", err, setupErr)
+	}
+	select {
+	case groups := <-harness.services.drained:
+		t.Fatalf("services drained before debug failure release: %v", groups)
+	default:
+	}
+	close(release)
+	if groups := receiveTest(t, harness.services.drained); fmt.Sprint(groups) != fmt.Sprint(shutdownGroups()) {
+		t.Fatalf("drain groups = %v, want %v", groups, shutdownGroups())
+	}
+	if err := receiveTest(t, result); !errors.Is(err, setupErr) {
+		t.Fatalf("runLifecycle error = %v, want %v", err, setupErr)
 	}
 }
 

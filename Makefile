@@ -14,6 +14,7 @@ NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
 
 .PHONY: all build rebuild shipping-image clean deepclean hash nvattest \
 	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
+	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
@@ -49,6 +50,7 @@ test-roothash-artifacts:
 
 clean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf initrd.cpio.zst
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/stage build/artifacts
@@ -63,6 +65,9 @@ runtime-builder:
 builder-initrd: runtime-builder
 	./scripts/run-runtime-builder.sh initrd
 
+builder-debug-init: runtime-builder
+	./scripts/run-runtime-builder.sh debug-init
+
 test-go-producer:
 	./scripts/test-go-producer.sh
 
@@ -73,6 +78,21 @@ bazel-rootfs: builder-initrd nvattest nvidia-module-artifacts
 	$(BAZEL) build --lockfile_mode=error //image:rootfs
 	mkdir -p build/stage
 	install -m 0644 bazel-bin/image/bazel-rootfs.tar build/stage/bazel-rootfs.tar
+
+bazel-debug-layer: builder-debug-init
+	$(BAZEL) build --lockfile_mode=error //image:debug-layer
+	mkdir -p build/stage
+	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
+
+
+test-debug-image-contract:
+	@test -s build/stage/bazel-rootfs.tar -a -s build/stage/bazel-debug-layer.tar || { \
+		echo 'missing staged rootfs layers; run make bazel-rootfs bazel-debug-layer explicitly' >&2; \
+		exit 1; \
+	}
+	./scripts/test-debug-image-contract.sh \
+		build/stage/bazel-rootfs.tar \
+		build/stage/bazel-debug-layer.tar
 
 custom-kernel-artifacts: runtime-builder
 	./scripts/run-runtime-builder.sh kernel
@@ -118,6 +138,7 @@ update-runtime-locks:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh
 
 shipping-image: bazel-rootfs additive-initrd
+	./scripts/test-debug-image-contract.sh build/stage/bazel-rootfs.tar
 	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 		tinfoilcvm.vmlinuz tinfoilcvm.initrd
 	$(MKOSI) --force
@@ -132,6 +153,29 @@ shipping-image: bazel-rootfs additive-initrd
 	grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.roothash
 	cp tinfoilcvm.roothash tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
+
+debug-image: bazel-rootfs bazel-debug-layer additive-initrd custom-kernel-artifacts
+	./scripts/test-debug-image-contract.sh \
+		build/stage/bazel-rootfs.tar \
+		build/stage/bazel-debug-layer.tar
+	rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
+		tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd
+	$(MKOSI) --force --output=tinfoilcvm-debug \
+		--base-tree="$(CURDIR)/build/stage/bazel-debug-layer.tar"
+	sudo env PATH="$(TRUSTED_PATH)" chmod 0644 tinfoilcvm-debug.raw tinfoilcvm-debug.roothash
+	sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" \
+		tinfoilcvm-debug.raw tinfoilcvm-debug.roothash
+	install -m 0644 "$(SHIPPING_KERNEL)" tinfoilcvm-debug.vmlinuz
+	install -m 0644 "$(SHIPPING_INITRD)" tinfoilcvm-debug.initrd
+	cmp -s "$(SHIPPING_KERNEL)" tinfoilcvm-debug.vmlinuz
+	cmp -s "$(SHIPPING_INITRD)" tinfoilcvm-debug.initrd
+	test -s tinfoilcvm-debug.raw
+	test -s tinfoilcvm-debug.vmlinuz
+	test -s tinfoilcvm-debug.initrd
+	test "$$(wc -c < tinfoilcvm-debug.roothash)" -eq 64
+	grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm-debug.roothash
+	cp tinfoilcvm-debug.roothash tinfoilcvm-debug.hash
+	@echo "debug image hash: $$(cat tinfoilcvm-debug.hash)"
 
 rebuild: shipping-image
 

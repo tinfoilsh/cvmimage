@@ -69,6 +69,7 @@ exports_files([
     "runtime-packages.yaml",
     "runtime-source-deb.BUILD.bazel",
     "runtime-source-docker.BUILD.bazel",
+    "runtime-sources.MODULE.bazel",
 ])
 
 filegroup(

@@ -61,15 +61,23 @@ func main() {
 		}
 		panic("syscall.Exec returned without an error")
 	}
+	if err := requirePID1(os.Getpid()); err != nil {
+		fmt.Fprintf(os.Stderr, "tinfoil-init: %v\n", err)
+		os.Exit(1)
+	}
 	runPID1()
+}
+
+func requirePID1(pid int) error {
+	if pid != 1 {
+		return fmt.Errorf("must run as pid 1, got pid %d", pid)
+	}
+	return nil
 }
 
 func runPID1() {
 	_ = os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
 	_ = os.Setenv(pid1Env, pid1EnvValue)
-	if os.Getpid() != 1 {
-		initLogf("warning: running with pid %d, expected pid 1", os.Getpid())
-	}
 
 	// This signal-notified context owns both startup and supervision. Narrow
 	// readiness checks apply their own operation-specific timeouts.

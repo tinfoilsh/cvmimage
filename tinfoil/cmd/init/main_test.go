@@ -100,6 +100,22 @@ func newLifecycleHarness() *lifecycleHarness {
 	return harness
 }
 
+func TestRequirePID1AcceptsPID1(t *testing.T) {
+	if err := requirePID1(1); err != nil {
+		t.Fatalf("requirePID1(1) = %v", err)
+	}
+}
+
+func TestRequirePID1RejectsNonPID1(t *testing.T) {
+	err := requirePID1(42)
+	if err == nil {
+		t.Fatal("requirePID1(42) succeeded")
+	}
+	if got, want := err.Error(), "must run as pid 1, got pid 42"; got != want {
+		t.Fatalf("requirePID1(42) = %q, want %q", got, want)
+	}
+}
+
 type fakeNVIDIA struct {
 	mu         sync.Mutex
 	calls      []string

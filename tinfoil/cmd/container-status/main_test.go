@@ -9,30 +9,27 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
 )
 
 type fakeContainerClient struct {
-	inspect map[string]container.InspectResponse
+	inspect map[string]containerInspect
 	errs    map[string]error
 }
 
-func lifecycleStatus(inspect container.InspectResponse, prior containerStatus, found, persistedValid bool) containerStatus {
+func lifecycleStatus(inspect containerInspect, prior containerStatus, found, persistedValid bool) containerStatus {
 	status := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, inspect)
 	applyLifecycle(&status, inspect, prior, found, persistedValid)
 	return status
 }
 
-func (f fakeContainerClient) ContainerInspect(_ context.Context, name string) (container.InspectResponse, error) {
+func (f fakeContainerClient) ContainerInspect(_ context.Context, name string) (containerInspect, error) {
 	if err := f.errs[name]; err != nil {
-		return container.InspectResponse{}, err
+		return containerInspect{}, err
 	}
 	if inspect, ok := f.inspect[name]; ok {
 		return inspect, nil
 	}
-	return container.InspectResponse{}, errdefs.ErrNotFound
+	return containerInspect{}, errContainerNotFound
 }
 
 func TestInspectDeclaredContainers_MissingContainer(t *testing.T) {
@@ -60,18 +57,17 @@ func TestInspectDeclaredContainers_MissingContainer(t *testing.T) {
 }
 
 func TestContainerStatusFromInspect_RunningContainer(t *testing.T) {
-	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "declared:latest", Restart: "unless-stopped"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "declared:latest", Restart: "unless-stopped"}, containerInspect{
+		Base: &containerInspectBase{
 			Name:         "/model",
 			RestartCount: 2,
-			State: &container.State{
+			State: &containerState{
 				Status:    "running",
-				Running:   true,
 				StartedAt: "2026-01-02T03:04:05Z",
 			},
-			HostConfig: &container.HostConfig{RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}},
+			HostConfig: &containerHostConfig{RestartPolicy: containerRestartPolicy{Name: "unless-stopped"}},
 		},
-		Config: &container.Config{Image: "actual:latest"},
+		Config: &containerConfig{Image: "actual:latest"},
 	})
 
 	if got.Name != "model" || got.Image != "actual:latest" {
@@ -89,17 +85,16 @@ func TestContainerStatusFromInspect_RunningContainer(t *testing.T) {
 }
 
 func TestContainerStatusFromInspect_RestartingContainer(t *testing.T) {
-	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, containerInspect{
+		Base: &containerInspectBase{
 			Name:         "/model",
 			RestartCount: 4,
-			State: &container.State{
-				Status:     "restarting",
-				Restarting: true,
-				ExitCode:   1,
-				Error:      "restart loop",
+			State: &containerState{
+				Status:   "restarting",
+				ExitCode: 1,
+				Error:    "restart loop",
 			},
-			HostConfig: &container.HostConfig{RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyOnFailure, MaximumRetryCount: 10}},
+			HostConfig: &containerHostConfig{RestartPolicy: containerRestartPolicy{Name: "on-failure", MaximumRetryCount: 10}},
 		},
 	})
 
@@ -115,9 +110,9 @@ func TestContainerStatusFromInspect_RestartingContainer(t *testing.T) {
 }
 
 func TestContainerStatusFromInspect_OOMKilledExitedContainer(t *testing.T) {
-	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
-			State: &container.State{
+	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, containerInspect{
+		Base: &containerInspectBase{
+			State: &containerState{
 				Status:     "exited",
 				OOMKilled:  true,
 				ExitCode:   137,
@@ -137,16 +132,16 @@ func TestContainerStatusFromInspect_OOMKilledExitedContainer(t *testing.T) {
 func TestContainerStatusFromInspect_UnhealthyHealthcheck(t *testing.T) {
 	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	end := start.Add(time.Second)
-	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
-			State: &container.State{
+	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, containerInspect{
+		Base: &containerInspectBase{
+			State: &containerState{
 				Status: "running",
-				Health: &container.Health{
-					Status:        container.Unhealthy,
+				Health: &containerHealthState{
+					Status:        "unhealthy",
 					FailingStreak: 3,
-					Log: []*container.HealthcheckResult{
-						{Start: start.Add(-time.Minute), End: end.Add(-time.Minute), ExitCode: 0, Output: "old"},
-						{Start: start, End: end, ExitCode: 1, Output: "model still loading"},
+					Log: []*containerHealthResult{
+						{Start: start.Add(-time.Minute), End: end.Add(-time.Minute), ExitCode: 0},
+						{Start: start, End: end, ExitCode: 1},
 					},
 				},
 			},
@@ -156,7 +151,7 @@ func TestContainerStatusFromInspect_UnhealthyHealthcheck(t *testing.T) {
 	if got.Health == nil {
 		t.Fatal("expected health state")
 	}
-	if got.Health.Status != container.Unhealthy || got.Health.FailingStreak != 3 {
+	if got.Health.Status != "unhealthy" || got.Health.FailingStreak != 3 {
 		t.Fatalf("health status/streak = %q/%d", got.Health.Status, got.Health.FailingStreak)
 	}
 	if got.Health.LastCheckExitCode == nil || *got.Health.LastCheckExitCode != 1 {
@@ -171,16 +166,15 @@ func TestLifecycleManualRestartBetweenInspectsFailsClosed(t *testing.T) {
 		ContainerID:       strings.Repeat("a", 64),
 		Process:           processOriginal,
 		LifecycleComplete: true,
-		Status:            string(container.StateRunning),
+		Status:            "running",
 		StartedAt:         "2026-07-24T01:00:00Z",
 	}
-	got := lifecycleStatus(container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
 			ID:           prior.ContainerID,
 			RestartCount: 1,
-			State: &container.State{
-				Status:    container.StateRunning,
-				Running:   true,
+			State: &containerState{
+				Status:    "running",
 				StartedAt: "2026-07-24T01:01:00Z",
 			},
 		},
@@ -201,15 +195,14 @@ func TestLifecycleMissedSameCountTransitionFailsClosed(t *testing.T) {
 		ContainerID:       strings.Repeat("b", 64),
 		Process:           processOriginal,
 		LifecycleComplete: true,
-		Status:            string(container.StateRunning),
+		Status:            "running",
 		StartedAt:         "2026-07-24T02:00:00Z",
 	}
-	got := lifecycleStatus(container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
 			ID: prior.ContainerID,
-			State: &container.State{
-				Status:    container.StateRunning,
-				Running:   true,
+			State: &containerState{
+				Status:    "running",
 				StartedAt: "2026-07-24T02:01:00Z",
 			},
 		},
@@ -228,14 +221,14 @@ func TestLifecycleObservedCleanStopThenStartRemainsComplete(t *testing.T) {
 		ContainerID:       containerID,
 		Process:           processOriginal,
 		LifecycleComplete: true,
-		Status:            string(container.StateRunning),
+		Status:            "running",
 		StartedAt:         "2026-07-24T03:00:00Z",
 	}
-	stopped := lifecycleStatus(container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	stopped := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
 			ID: containerID,
-			State: &container.State{
-				Status:     container.StateExited,
+			State: &containerState{
+				Status:     "exited",
 				ExitCode:   0,
 				StartedAt:  running.StartedAt,
 				FinishedAt: "2026-07-24T03:01:00Z",
@@ -246,12 +239,11 @@ func TestLifecycleObservedCleanStopThenStartRemainsComplete(t *testing.T) {
 		t.Fatalf("observed clean stop = %#v", stopped)
 	}
 
-	restarted := lifecycleStatus(container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	restarted := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
 			ID: containerID,
-			State: &container.State{
-				Status:    container.StateRunning,
-				Running:   true,
+			State: &containerState{
+				Status:    "running",
 				StartedAt: "2026-07-24T03:02:00Z",
 			},
 		},
@@ -271,16 +263,15 @@ func TestLifecycleRestartingInspectCapturesLatestOutcome(t *testing.T) {
 		ContainerID:       strings.Repeat("d", 64),
 		Process:           processOriginal,
 		LifecycleComplete: true,
-		Status:            string(container.StateRunning),
+		Status:            "running",
 		StartedAt:         "2026-07-24T04:00:00Z",
 	}
-	got := lifecycleStatus(container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
 			ID:           prior.ContainerID,
 			RestartCount: 1,
-			State: &container.State{
-				Status:     container.StateRestarting,
-				Restarting: true,
+			State: &containerState{
+				Status:     "restarting",
 				ExitCode:   9,
 				StartedAt:  prior.StartedAt,
 				FinishedAt: "2026-07-24T04:01:00Z",
@@ -303,21 +294,21 @@ func TestLifecycleMissedCrashLoopFailsClosed(t *testing.T) {
 		ContainerID:       strings.Repeat("7", 64),
 		Process:           processReplacement,
 		LifecycleComplete: true,
-		Status:            string(container.StateRestarting),
+		Status:            "restarting",
 		RestartCount:      1,
 		StartedAt:         "2026-07-24T04:30:00Z",
 		LatestOutcome: &processOutcome{
 			Process:    processOriginal,
-			Status:     string(container.StateRestarting),
+			Status:     "restarting",
 			ExitCode:   1,
 			FinishedAt: "2026-07-24T04:31:00Z",
 		},
 	}
-	got := lifecycleStatus(container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
 			ID:           prior.ContainerID,
 			RestartCount: 2,
-			State:        &container.State{Status: container.StateRunning, Running: true, StartedAt: "2026-07-24T04:32:00Z"},
+			State:        &containerState{Status: "running", StartedAt: "2026-07-24T04:32:00Z"},
 		},
 	}, prior, true, true)
 
@@ -333,14 +324,14 @@ func TestLifecycleIdentityChangeAndTruncationFailClosed(t *testing.T) {
 		ContainerID:       strings.Repeat("e", 64),
 		Process:           processOriginal,
 		LifecycleComplete: true,
-		Status:            string(container.StateRunning),
+		Status:            "running",
 		StartedAt:         "2026-07-24T05:00:00Z",
 	}
-	got := lifecycleStatus(container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
 			ID:           strings.Repeat("f", 64),
 			RestartCount: maxReportedRestartCount + 1,
-			State:        &container.State{Status: container.StateRunning, Running: true, StartedAt: "2026-07-24T05:01:00Z"},
+			State:        &containerState{Status: "running", StartedAt: "2026-07-24T05:01:00Z"},
 		},
 	}, prior, true, true)
 
@@ -394,14 +385,13 @@ func TestPublishContainerStatusWritesJSON(t *testing.T) {
 	}
 
 	err := publishContainerStatus(context.Background(), fakeContainerClient{
-		inspect: map[string]container.InspectResponse{
+		inspect: map[string]containerInspect{
 			"model": {
-				ContainerJSONBase: &container.ContainerJSONBase{
+				Base: &containerInspectBase{
 					ID:   strings.Repeat("9", 64),
 					Name: "/model",
-					State: &container.State{
-						Status:    container.StateRunning,
-						Running:   true,
+					State: &containerState{
+						Status:    "running",
 						StartedAt: "2026-07-24T07:00:00Z",
 					},
 				},

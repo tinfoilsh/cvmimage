@@ -14,9 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
@@ -40,7 +37,7 @@ type declaredConfig struct {
 }
 
 type containerStatusClient interface {
-	ContainerInspect(context.Context, string) (container.InspectResponse, error)
+	ContainerInspect(context.Context, string) (containerInspect, error)
 }
 
 type containersResponse struct {
@@ -91,11 +88,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		log.Fatalf("creating docker client: %v", err)
-	}
-	defer cli.Close()
+	cli := newDockerInspectClient(dockerSocketPath)
+	defer cli.CloseIdleConnections()
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -172,7 +166,7 @@ func inspectDeclaredContainersWithPrevious(ctx context.Context, cli containerSta
 		}
 		inspect, err := cli.ContainerInspect(ctx, c.Name)
 		if err != nil {
-			if errdefs.IsNotFound(err) {
+			if errors.Is(err, errContainerNotFound) {
 				states = append(states, containerStatus{
 					Name:          c.Name,
 					Image:         c.Image,
@@ -193,7 +187,7 @@ func inspectDeclaredContainersWithPrevious(ctx context.Context, cli containerSta
 	return states, nil
 }
 
-func containerStatusFromInspect(declared declaredContainer, inspect container.InspectResponse) containerStatus {
+func containerStatusFromInspect(declared declaredContainer, inspect containerInspect) containerStatus {
 	status := containerStatus{
 		Name:          declared.Name,
 		Image:         declared.Image,
@@ -205,42 +199,46 @@ func containerStatusFromInspect(declared declaredContainer, inspect container.In
 	if inspect.Config != nil && inspect.Config.Image != "" {
 		status.Image = inspect.Config.Image
 	}
-	if inspect.ContainerJSONBase == nil {
+	if inspect.Base == nil {
 		return status
 	}
-	status.ContainerID = inspect.ID
+	status.ContainerID = inspect.Base.ID
 
-	if inspect.Name != "" {
-		status.Name = strings.TrimPrefix(inspect.Name, "/")
+	if inspect.Base.Name != "" {
+		status.Name = strings.TrimPrefix(inspect.Base.Name, "/")
 	}
-	if inspect.HostConfig != nil && inspect.HostConfig.RestartPolicy.Name != "" {
-		status.RestartPolicy = string(inspect.HostConfig.RestartPolicy.Name)
-		if inspect.HostConfig.RestartPolicy.MaximumRetryCount > 0 {
-			status.RestartPolicy = fmt.Sprintf("%s:%d", status.RestartPolicy, inspect.HostConfig.RestartPolicy.MaximumRetryCount)
+	if inspect.Base.HostConfig != nil && inspect.Base.HostConfig.RestartPolicy.Name != "" {
+		status.RestartPolicy = inspect.Base.HostConfig.RestartPolicy.Name
+		if inspect.Base.HostConfig.RestartPolicy.MaximumRetryCount > 0 {
+			status.RestartPolicy = fmt.Sprintf("%s:%d", status.RestartPolicy, inspect.Base.HostConfig.RestartPolicy.MaximumRetryCount)
 		}
 	}
-	status.RestartCount, status.RestartCountTruncated, _ = boundedRestartCount(inspect.RestartCount)
-	if inspect.State == nil {
+	status.RestartCount, status.RestartCountTruncated, _ = boundedRestartCount(inspect.Base.RestartCount)
+	if inspect.Base.State == nil {
 		return status
 	}
 
-	status.Status = string(inspect.State.Status)
-	status.OOMKilled = inspect.State.OOMKilled
-	status.ExitCode = inspect.State.ExitCode
-	status.Error = inspect.State.Error
-	status.StartedAt = inspect.State.StartedAt
-	status.FinishedAt = inspect.State.FinishedAt
-	status.Health = containerHealthFromDocker(inspect.State.Health)
+	status.Status = inspect.Base.State.Status
+	status.OOMKilled = inspect.Base.State.OOMKilled
+	status.ExitCode = inspect.Base.State.ExitCode
+	status.Error = inspect.Base.State.Error
+	status.StartedAt = inspect.Base.State.StartedAt
+	status.FinishedAt = inspect.Base.State.FinishedAt
+	status.Health = containerHealthFromDocker(inspect.Base.State.Health)
 
 	return status
 }
 
-func applyLifecycle(status *containerStatus, inspect container.InspectResponse, prior containerStatus, found, persistedValid bool) {
-	restartCount, truncated, countValid := boundedRestartCount(inspect.RestartCount)
+func applyLifecycle(status *containerStatus, inspect containerInspect, prior containerStatus, found, persistedValid bool) {
+	if inspect.Base == nil {
+		status.LifecycleComplete = false
+		return
+	}
+	restartCount, truncated, countValid := boundedRestartCount(inspect.Base.RestartCount)
 	status.RestartCount = restartCount
 	status.RestartCountTruncated = truncated
 	status.Process = processForRestartCount(restartCount)
-	status.LifecycleComplete = persistedValid && countValid && !truncated && inspect.RestartCount == 0 && validContainerID(status.ContainerID)
+	status.LifecycleComplete = persistedValid && countValid && !truncated && inspect.Base.RestartCount == 0 && validContainerID(status.ContainerID)
 
 	if found && prior.Created && (!validPriorStatus(prior) || prior.ContainerID != status.ContainerID) {
 		status.LifecycleComplete = false
@@ -252,7 +250,7 @@ func applyLifecycle(status *containerStatus, inspect container.InspectResponse, 
 		if prior.StartedAt != "" && status.StartedAt != "" && !sameStart {
 			status.Process = processReplacement
 		}
-		initialStart := prior.StartedAt == "" && status.StartedAt != "" && prior.Status == string(container.StateCreated)
+		initialStart := prior.StartedAt == "" && status.StartedAt != "" && prior.Status == containerStateCreated
 		priorTerminal := terminalStatus(prior.Status) && prior.LatestOutcome != nil
 		transitionProven := false
 		switch {
@@ -277,10 +275,10 @@ func applyLifecycle(status *containerStatus, inspect container.InspectResponse, 
 
 	outcomeProcess := status.Process
 	priorReplacement := found && prior.Created && validPriorStatus(prior) && prior.ContainerID == status.ContainerID && prior.Process == processReplacement
-	if inspect.State != nil && inspect.State.Status == container.StateRestarting && inspect.RestartCount == 1 && !priorReplacement {
+	if inspect.Base.State != nil && inspect.Base.State.Status == containerStateRestarting && inspect.Base.RestartCount == 1 && !priorReplacement {
 		outcomeProcess = processOriginal
 	}
-	if outcome := outcomeFromInspect(inspect.State, outcomeProcess); outcome != nil {
+	if outcome := outcomeFromInspect(inspect.Base.State, outcomeProcess); outcome != nil {
 		status.LatestOutcome = outcome
 	}
 }
@@ -347,13 +345,13 @@ func validContainerID(containerID string) bool {
 	return err == nil
 }
 
-func outcomeFromInspect(state *container.State, process string) *processOutcome {
-	if state == nil || !terminalStatus(string(state.Status)) || state.ExitCode < 0 || state.ExitCode > 255 {
+func outcomeFromInspect(state *containerState, process string) *processOutcome {
+	if state == nil || !terminalStatus(state.Status) || state.ExitCode < 0 || state.ExitCode > 255 {
 		return nil
 	}
 	return &processOutcome{
 		Process:    process,
-		Status:     string(state.Status),
+		Status:     state.Status,
 		ExitCode:   state.ExitCode,
 		OOMKilled:  state.OOMKilled,
 		FinishedAt: state.FinishedAt,
@@ -361,7 +359,7 @@ func outcomeFromInspect(state *container.State, process string) *processOutcome 
 }
 
 func terminalStatus(status string) bool {
-	return status == string(container.StateExited) || status == string(container.StateDead) || status == string(container.StateRestarting)
+	return status == containerStateExited || status == containerStateDead || status == containerStateRestarting
 }
 
 func processForRestartCount(restartCount int) string {
@@ -389,12 +387,12 @@ func cloneOutcome(outcome *processOutcome) *processOutcome {
 	return &copy
 }
 
-func containerHealthFromDocker(health *container.Health) *containerHealth {
+func containerHealthFromDocker(health *containerHealthState) *containerHealth {
 	if health == nil {
 		return nil
 	}
 	out := &containerHealth{
-		Status:        string(health.Status),
+		Status:        health.Status,
 		FailingStreak: health.FailingStreak,
 	}
 	if len(health.Log) == 0 {

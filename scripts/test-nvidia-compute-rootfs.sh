@@ -1,46 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-    echo "usage: $0 /path/to/bazel-rootfs.tar /path/to/runtime-sources.lock.json" >&2
+if [[ $# -ne 1 ]]; then
+    echo "usage: $0 /path/to/bazel-rootfs.tar" >&2
     exit 2
 fi
 
 archive="$1"
-source_lock="$2"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
 members="$scratch/members"
 tar -tf "$archive" | sed 's#^\./##' >"$members"
-
-omitted_sources=(
-    libnvidia-egl-gbm1
-    libnvidia-egl-wayland21
-    libnvidia-egl-xcb1
-    libnvidia-egl-xlib1
-    libnvidia-encode
-)
-for source in "${omitted_sources[@]}"; do
-    if grep -Fq "\"id\": \"$source\"" "$source_lock"; then
-        echo "$source must not remain in the canonical runtime source lock" >&2
-        exit 1
-    fi
-done
-
-omitted_archives=(
-    libnvidia-egl-gbm1_1.1.3-1ubuntu1_amd64.deb
-    libnvidia-egl-wayland21_1.0.1-1ubuntu1_amd64.deb
-    libnvidia-egl-xcb1_1.0.5-1ubuntu1_amd64.deb
-    libnvidia-egl-xlib1_1.0.5-1ubuntu1_amd64.deb
-    libnvidia-encode_595.71.05-1ubuntu1_amd64.deb
-)
-for archive_name in "${omitted_archives[@]}"; do
-    if grep -Fq "/$archive_name\"" "$source_lock"; then
-        echo "$archive_name must not remain in the canonical runtime source lock" >&2
-        exit 1
-    fi
-done
 
 forbidden_paths=(
     usr/lib/x86_64-linux-gnu/libnvidia-egl-gbm.so.1

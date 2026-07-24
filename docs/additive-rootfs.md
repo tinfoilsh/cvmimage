@@ -2,7 +2,7 @@
 
 The measured root filesystem starts empty and is assembled by
 `//image:rootfs` into `bazel-bin/image/bazel-rootfs.tar`.
-`make bazel-rootfs` runs the fixed named producers and installs that archive at
+`make rootfs` runs the fixed named producers and installs that archive at
 `build/stage/bazel-rootfs.tar` for the offline mkosi shipping step.
 
 The target combines, in fixed order:

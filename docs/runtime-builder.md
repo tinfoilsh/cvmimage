@@ -24,13 +24,10 @@ fixed worktree-local runtime outputs and fail with an instruction to run `make
 regenerate-nvattest` when either is absent. The trusted builder publishes those
 files directly; there is no second output-authentication or cache-lock layer.
 
-The standard producer interface is:
+The standard rootfs interface is:
 
 ```sh
-make runtime-builder
-./builder/run.sh runtime-go
-./builder/run.sh kernel
-./builder/run.sh nvidia
+make rootfs
 ```
 
 Regenerate nvattest explicitly when changing its source or build inputs:
@@ -39,9 +36,8 @@ Regenerate nvattest explicitly when changing its source or build inputs:
 make regenerate-nvattest
 ```
 
-The release workflow calls `make release-image`, which first regenerates
-nvattest from pinned inputs on the fresh release worker and then builds the
-shipping image.
+Release workers regenerate nvattest explicitly before building the shipping
+image.
 
 The runtime Go, nvattest, and kernel producers use ordinary unprivileged
 containers. NVIDIA alone receives `CAP_SYS_ADMIN` with confined host-device

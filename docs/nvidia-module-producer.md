@@ -35,8 +35,7 @@ builder filesystem contents are discarded and are not eligible rootfs inputs.
 The normal producer command is:
 
 ```sh
-make runtime-builder
-./builder/run.sh nvidia
+make rootfs
 ```
 
 The pinned kernel source package is verified and stored inside the disposable

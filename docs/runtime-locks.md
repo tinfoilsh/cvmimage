@@ -27,8 +27,7 @@ module declarations instead of a resolver-generated apt lock.
 
 `.bazelversion` pins Bazel 8.7.0 and `MODULE.bazel.lock` pins the Bzlmod graph.
 Normal builds use the checked-in locks with `--lockfile_mode=error`. Run
-`make update-runtime-locks` only when intentionally rotating the Ubuntu package
-manifest; it invokes the upstream `rules_distroless` lock target directly.
-Review the resulting lockfile diff before committing it. Regenerate
+`bazel run @ubuntu_runtime//:lock` only when intentionally rotating the Ubuntu
+package manifest. Review the resulting lockfile diff before committing it. Regenerate
 `MODULE.bazel.lock` from the real workspace with
 `bazel mod deps --lockfile_mode=update` when module dependencies change.

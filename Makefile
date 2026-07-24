@@ -1,89 +1,35 @@
-all: build
-
 TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 BAZEL ?= bazel
-SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
-SHIPPING_INITRD = bazel-bin/image/initrd/initrd.cpio.zst
+BUILDER_IMAGE := cvmimage-runtime-builder
+SHIPPING_KERNEL := kernel/out/tinfoil-custom.vmlinuz
+SHIPPING_INITRD := bazel-bin/image/initrd/initrd.cpio.zst
+NVATTEST_OUTPUT := build/rootfs-artifacts/nvattest
+NVATTEST_BINARY := $(NVATTEST_OUTPUT)/usr/bin/nvattest
+NVATTEST_LIBRARY := $(NVATTEST_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
-override NVATTEST_RUNTIME_OUTPUT := build/rootfs-artifacts/nvattest
-NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
-NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
+.PHONY: rootfs shipping-image debug-image test regenerate-nvattest clean
 
-.PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
-	runtime-builder builder-runtime-go bazel-initrd bazel-rootfs \
-	builder-debug-init bazel-debug-layer debug-image \
-	test-bazel-initrd update-runtime-locks \
-	custom-kernel-artifacts \
-	nvidia-module-artifacts
-
-# tinfoilcvm.hash is the compatibility copy written by `shipping-image`; mkosi's
-# direct roothash split artifact is the source contract.
-hash:
-	@if [ ! -f tinfoilcvm.roothash ]; then \
-	    echo "missing authoritative tinfoilcvm.roothash" >&2; \
-	    exit 1; \
-	fi; \
-	if [ "$$(wc -c < tinfoilcvm.roothash)" -ne 64 ] || ! grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.roothash; then \
-	    echo "invalid roothash artifact tinfoilcvm.roothash" >&2; \
-	    exit 1; \
-	fi; \
-	if [ -f tinfoilcvm.hash ]; then \
-	    if [ "$$(wc -c < tinfoilcvm.hash)" -ne 64 ] || ! grep -Eq '^[a-f0-9]{64}$$' tinfoilcvm.hash; then \
-	        echo "invalid compatibility artifact tinfoilcvm.hash" >&2; \
-	        exit 1; \
-	    fi; \
-	    if ! cmp -s tinfoilcvm.roothash tinfoilcvm.hash; then \
-	        echo "tinfoilcvm.hash differs from authoritative tinfoilcvm.roothash" >&2; \
-	        exit 1; \
-	    fi; \
-	fi; \
-	cat tinfoilcvm.roothash
-
-clean:
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/stage build/artifacts
-
-deepclean:
-	$(MKOSI) clean
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
-
-runtime-builder:
-	docker build --pull --file builder/Dockerfile --tag cvmimage-runtime-builder builder
-
-builder-runtime-go: runtime-builder
+rootfs:
+	docker build --pull --file builder/Dockerfile --tag $(BUILDER_IMAGE) builder
 	./builder/run.sh runtime-go
-
-builder-debug-init: runtime-builder
-	./builder/run.sh debug-init
-
-bazel-rootfs: builder-runtime-go nvattest nvidia-module-artifacts
+	@test -x "$(NVATTEST_BINARY)" || { \
+		echo "missing nvattest runtime binary; run 'make regenerate-nvattest'" >&2; \
+		exit 1; \
+	}
+	@test -f "$(NVATTEST_LIBRARY)" || { \
+		echo "missing libnvat runtime library; run 'make regenerate-nvattest'" >&2; \
+		exit 1; \
+	}
+	./builder/run.sh kernel
+	./builder/run.sh nvidia
 	$(BAZEL) build --lockfile_mode=error //image:rootfs
 	mkdir -p build/stage
 	install -m 0644 bazel-bin/image/bazel-rootfs.tar build/stage/bazel-rootfs.tar
 
-bazel-debug-layer: builder-debug-init
-	$(BAZEL) build --lockfile_mode=error //image:debug-layer
-	mkdir -p build/stage
-	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
-
-custom-kernel-artifacts: runtime-builder
-	./builder/run.sh kernel
-
-nvidia-module-artifacts: custom-kernel-artifacts
-	./builder/run.sh nvidia
-
-bazel-initrd:
+shipping-image:
+	$(MAKE) rootfs
 	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
-
-test-bazel-initrd: bazel-initrd
-	$(BAZEL) test -c opt --lockfile_mode=error //image/initrd:writer_test
-
-update-runtime-locks:
-	$(BAZEL) run @ubuntu_runtime//:lock
-
-shipping-image: bazel-rootfs bazel-initrd
 	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 		tinfoilcvm.vmlinuz tinfoilcvm.initrd
 	$(MKOSI) --force
@@ -99,7 +45,13 @@ shipping-image: bazel-rootfs bazel-initrd
 	cp tinfoilcvm.roothash tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
-debug-image: bazel-rootfs bazel-debug-layer bazel-initrd custom-kernel-artifacts
+debug-image:
+	$(MAKE) rootfs
+	./builder/run.sh debug-init
+	$(BAZEL) build --lockfile_mode=error //image:debug-layer
+	mkdir -p build/stage
+	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
+	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
 	rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
 		tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd
 	$(MKOSI) --force --output=tinfoilcvm-debug \
@@ -109,8 +61,6 @@ debug-image: bazel-rootfs bazel-debug-layer bazel-initrd custom-kernel-artifacts
 		tinfoilcvm-debug.raw tinfoilcvm-debug.roothash
 	install -m 0644 "$(SHIPPING_KERNEL)" tinfoilcvm-debug.vmlinuz
 	install -m 0644 "$(SHIPPING_INITRD)" tinfoilcvm-debug.initrd
-	cmp -s "$(SHIPPING_KERNEL)" tinfoilcvm-debug.vmlinuz
-	cmp -s "$(SHIPPING_INITRD)" tinfoilcvm-debug.initrd
 	test -s tinfoilcvm-debug.raw
 	test -s tinfoilcvm-debug.vmlinuz
 	test -s tinfoilcvm-debug.initrd
@@ -119,29 +69,22 @@ debug-image: bazel-rootfs bazel-debug-layer bazel-initrd custom-kernel-artifacts
 	cp tinfoilcvm-debug.roothash tinfoilcvm-debug.hash
 	@echo "debug image hash: $$(cat tinfoilcvm-debug.hash)"
 
-release-image:
-	$(MAKE) regenerate-nvattest
-	$(MAKE) shipping-image
-
-rebuild: shipping-image
-
-build: shipping-image
-
-# Normal image builds consume only the two fixed producer outputs. Building
-# nvattest is an explicit operation because it is expensive and release-only.
-nvattest:
-	@test -x "$(NVATTEST_RUNTIME_BINARY)" || { \
-		echo "missing nvattest runtime binary; run 'make regenerate-nvattest'" >&2; \
-		exit 1; \
-	}
-	@test -f "$(NVATTEST_RUNTIME_LIBRARY)" || { \
-		echo "missing libnvat runtime library; run 'make regenerate-nvattest'" >&2; \
-		exit 1; \
-	}
+test:
+	cd tinfoil && go test ./...
+	cd tinfoil && go test -race ./cmd/init ./internal/boot/...
+	cd tinfoil && go test -tags=tinfoil_debug_image ./cmd/init
+	cd tinfoil && go vet ./...
+	$(BAZEL) test -c opt --lockfile_mode=error //tinfoil/... //image/initrd:writer_test
+	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
 
 regenerate-nvattest:
-	rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
-	$(MAKE) runtime-builder
+	docker build --pull --file builder/Dockerfile --tag $(BUILDER_IMAGE) builder
+	rm -rf "$(NVATTEST_OUTPUT)"
 	./builder/run.sh nvattest
-	test -x "$(NVATTEST_RUNTIME_BINARY)"
-	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
+	test -x "$(NVATTEST_BINARY)"
+	test -f "$(NVATTEST_LIBRARY)"
+
+clean:
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/stage build/artifacts

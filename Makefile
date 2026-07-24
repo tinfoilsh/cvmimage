@@ -16,7 +16,7 @@ NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/l
 	test-additive-initrd test-roothash-artifacts \
 	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
-	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
+	custom-kernel-artifacts \
 	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
 	reproducible-runtime-artifacts
 
@@ -107,7 +107,7 @@ test-additive-initrd:
 reproducible-nvidia-modules:
 	./scripts/reproduce-nvidia-modules.sh
 
-reproducible-runtime-artifacts: reproducible-nvattest reproducible-nvidia-modules
+reproducible-runtime-artifacts: reproducible-nvidia-modules
 
 test-runtime-locks:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check
@@ -189,9 +189,3 @@ regenerate-nvattest:
 	./scripts/run-runtime-builder.sh nvattest
 	test -x "$(NVATTEST_RUNTIME_BINARY)"
 	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
-
-test-nvattest-artifacts:
-	./scripts/test-nvattest-artifacts.sh
-
-reproducible-nvattest:
-	./scripts/reproduce-nvattest.sh

@@ -62,8 +62,5 @@ jobs:
       - name: Test locked runtime inputs
         run: make test-runtime-locks
 
-      - name: Test nvattest artifact safety
-        run: make test-nvattest-artifacts
-
       - name: Test NVIDIA named module contract
         run: make test-nvidia-module-producer

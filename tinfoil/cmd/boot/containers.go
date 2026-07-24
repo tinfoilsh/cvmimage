@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	dockerconfig "github.com/docker/cli/cli/config"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	dockernetwork "github.com/docker/docker/api/types/network"
@@ -506,21 +504,19 @@ func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettin
 
 // pullImage pulls an image using the Docker SDK with auth from Docker config
 func pullImage(cli *client.Client, imageName string) error {
+	return pullImageWithAuthPath(cli, imageName, boot.DockerConfigPath)
+}
+
+func pullImageWithAuthPath(cli *client.Client, imageName, authPath string) error {
 	ctx := context.Background()
 
 	opts := image.PullOptions{}
 
-	// Extract registry host and get auth
-	host := "docker.io"
-	if parts := strings.Split(imageName, "/"); len(parts) > 1 && strings.Contains(parts[0], ".") {
-		host = parts[0]
+	registryAuth, err := registryAuthForImage(authPath, imageName)
+	if err != nil {
+		return err
 	}
-	if cfg, err := dockerconfig.Load(dockerconfig.Dir()); err == nil {
-		if auth, err := cfg.GetAuthConfig(host); err == nil && auth.Username != "" {
-			encoded, _ := json.Marshal(auth)
-			opts.RegistryAuth = base64.URLEncoding.EncodeToString(encoded)
-		}
-	}
+	opts.RegistryAuth = registryAuth
 
 	reader, err := cli.ImagePull(ctx, imageName, opts)
 	if err != nil {

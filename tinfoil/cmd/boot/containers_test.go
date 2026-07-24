@@ -1,11 +1,14 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
 	shimconfig "tinfoil/internal/config"
@@ -241,5 +244,39 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 		if dev.PathOnHost == reservedDebugSerialDevice || dev.PathInContainer == reservedDebugSerialDevice {
 			t.Fatalf("Devices = %v, want no synthesized serial device in production", hostConfig.Devices)
 		}
+	}
+}
+
+func TestPullImagePassesExactRegistryAuth(t *testing.T) {
+	const expectedAuth = "eyJ1c2VybmFtZSI6ImFsaWNlIiwicGFzc3dvcmQiOiJzZWNyZXQiLCJzZXJ2ZXJhZGRyZXNzIjoicHJpdmF0ZS5leGFtcGxlLmNvbSJ9"
+	requestSeen := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("X-Registry-Auth"); got != expectedAuth {
+			t.Errorf("X-Registry-Auth = %q, want %q", got, expectedAuth)
+		}
+		requestSeen <- struct{}{}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte("{}\n"))
+	}))
+	defer server.Close()
+
+	dockerClient, err := client.NewClientWithOpts(
+		client.WithHost(server.URL),
+		client.WithHTTPClient(server.Client()),
+		client.WithVersion("1.44"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dockerClient.Close()
+
+	authPath := writeDockerConfig(t, dockerConfigJSON("private.example.com", "alice", "secret"))
+	if err := pullImageWithAuthPath(dockerClient, "private.example.com/team/image:latest", authPath); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-requestSeen:
+	default:
+		t.Fatal("Docker engine did not receive an image pull request")
 	}
 }

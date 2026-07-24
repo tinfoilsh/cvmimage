@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/netip"
 	"os"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -206,7 +205,7 @@ func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 }
 
 // loadAndVerifyConfig reads the config from disk and verifies its hash
-func loadAndVerifyConfig() (*Config, error) {
+func loadAndVerifyConfig(cmdline kernelCmdline) (*Config, error) {
 	configDiskPath, err := device.ConfigDisk()
 	if err != nil {
 		return nil, fmt.Errorf("finding config disk: %w", err)
@@ -218,7 +217,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	}
 
 	// Verify hash against kernel cmdline
-	expectedHash, err := getCmdlineParam("tinfoil-config-hash")
+	expectedHash, err := cmdline.requiredConfigHash()
 	if err != nil {
 		return nil, fmt.Errorf("getting expected config hash: %w", err)
 	}
@@ -241,7 +240,7 @@ func loadAndVerifyConfig() (*Config, error) {
 	if err := yaml.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-	if err := validateConfigShape(&config); err != nil {
+	if err := validateConfigShape(&config, cmdline.Debug); err != nil {
 		return nil, err
 	}
 
@@ -380,22 +379,4 @@ func readDiskPayload(path string, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("%s payload exceeds %d bytes", path, maxBytes)
 	}
 	return data, nil
-}
-
-// getCmdlineParam extracts a parameter value from /proc/cmdline
-func getCmdlineParam(param string) (string, error) {
-	data, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return "", fmt.Errorf("reading /proc/cmdline: %w", err)
-	}
-
-	prefix := param + "="
-
-	for part := range strings.FieldsSeq(string(data)) {
-		if value, found := strings.CutPrefix(part, prefix); found {
-			return value, nil
-		}
-	}
-
-	return "", fmt.Errorf("parameter %s not found in cmdline", param)
 }

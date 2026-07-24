@@ -39,7 +39,7 @@ func (c *Container) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func validateContainerInputPolicy(index int, container *Container) error {
+func validateContainerInputPolicy(index int, container *Container, debug bool) error {
 	fields := container.inputFields
 	if fields.privileged {
 		return fmt.Errorf("containers[%d].privileged is unsupported", index)
@@ -59,10 +59,10 @@ func validateContainerInputPolicy(index int, container *Container) error {
 	if container.IPC != "" && container.IPC != "private" && container.IPC != "host" {
 		return fmt.Errorf("containers[%d].ipc must be private or host", index)
 	}
+	allowDebugDockerSocket := reservedDebugRuntimeEnabled(container.Name, debug)
 	for volumeIndex, volume := range container.Volumes {
-		source, _, found := strings.Cut(volume, ":")
-		if !found || !validNamedVolume(source) {
-			return fmt.Errorf("containers[%d].volumes[%d] must use a named volume source", index, volumeIndex)
+		if _, err := canonicalizeContainerVolume(volume, allowDebugDockerSocket); err != nil {
+			return fmt.Errorf("containers[%d].volumes[%d] %w", index, volumeIndex, err)
 		}
 	}
 	for capabilityIndex, capability := range container.CapAdd {
@@ -71,6 +71,19 @@ func validateContainerInputPolicy(index int, container *Container) error {
 		}
 	}
 	return nil
+}
+
+func canonicalizeContainerVolume(volume string, allowDebugDockerSocket bool) (string, error) {
+	if allowDebugDockerSocket && volume == debugDockerSocketBind {
+		return volume, nil
+	}
+
+	source, _, found := strings.Cut(volume, ":")
+	if found && validNamedVolume(source) {
+		return volume, nil
+	}
+
+	return "", fmt.Errorf("must use a named volume source")
 }
 
 func allowedContainerCapability(capability string) bool {

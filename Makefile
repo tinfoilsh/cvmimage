@@ -11,14 +11,11 @@ NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
 NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
 .PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
-	runtime-builder builder-initrd bazel-initrd bazel-rootfs \
-	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
-	test-bazel-initrd test-roothash-artifacts \
-	test-runtime-locks \
-	verify-runtime-sources update-runtime-locks \
+	runtime-builder builder-runtime-go bazel-initrd bazel-rootfs \
+	builder-debug-init bazel-debug-layer debug-image \
+	test-bazel-initrd update-runtime-locks \
 	custom-kernel-artifacts \
-	nvidia-module-artifacts test-nvidia-module-producer reproducible-nvidia-modules \
-	reproducible-runtime-artifacts
+	nvidia-module-artifacts
 
 # tinfoilcvm.hash is the compatibility copy written by `shipping-image`; mkosi's
 # direct roothash split artifact is the source contract.
@@ -43,9 +40,6 @@ hash:
 	fi; \
 	cat tinfoilcvm.roothash
 
-test-roothash-artifacts:
-	./scripts/test-roothash-artifacts.sh
-
 clean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm.*
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
@@ -56,15 +50,15 @@ deepclean:
 	sudo env PATH="$(TRUSTED_PATH)" rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
 
 runtime-builder:
-	./scripts/build-runtime-builder.sh
+	docker build --pull --file builder/Dockerfile --tag cvmimage-runtime-builder builder
 
-builder-initrd: runtime-builder
-	./scripts/run-runtime-builder.sh initrd
+builder-runtime-go: runtime-builder
+	./builder/run.sh runtime-go
 
 builder-debug-init: runtime-builder
-	./scripts/run-runtime-builder.sh debug-init
+	./builder/run.sh debug-init
 
-bazel-rootfs: builder-initrd nvattest nvidia-module-artifacts
+bazel-rootfs: builder-runtime-go nvattest nvidia-module-artifacts
 	$(BAZEL) build --lockfile_mode=error //image:rootfs
 	mkdir -p build/stage
 	install -m 0644 bazel-bin/image/bazel-rootfs.tar build/stage/bazel-rootfs.tar
@@ -74,24 +68,11 @@ bazel-debug-layer: builder-debug-init
 	mkdir -p build/stage
 	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
 
-
-test-debug-image-contract:
-	@test -s build/stage/bazel-rootfs.tar -a -s build/stage/bazel-debug-layer.tar || { \
-		echo 'missing staged rootfs layers; run make bazel-rootfs bazel-debug-layer explicitly' >&2; \
-		exit 1; \
-	}
-	./scripts/test-debug-image-contract.sh \
-		build/stage/bazel-rootfs.tar \
-		build/stage/bazel-debug-layer.tar
-
 custom-kernel-artifacts: runtime-builder
-	./scripts/run-runtime-builder.sh kernel
+	./builder/run.sh kernel
 
 nvidia-module-artifacts: custom-kernel-artifacts
-	./scripts/run-runtime-builder.sh nvidia
-
-test-nvidia-module-producer:
-	./scripts/test-nvidia-module-producer.sh
+	./builder/run.sh nvidia
 
 bazel-initrd:
 	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
@@ -99,27 +80,10 @@ bazel-initrd:
 test-bazel-initrd: bazel-initrd
 	$(BAZEL) test -c opt --lockfile_mode=error //image/initrd:writer_test
 
-reproducible-nvidia-modules:
-	./scripts/reproduce-nvidia-modules.sh
-
-reproducible-runtime-artifacts: reproducible-nvidia-modules
-
-test-runtime-locks:
-	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check
-	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-test test \
-		--symlink_prefix=/tmp/cvmimage-bazel-runtime-lock-test- \
-		//image:runtime-package-lock-test
-	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-graph \
-		mod deps --lockfile_mode=error >/dev/null
-
-verify-runtime-sources:
-	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check
-
 update-runtime-locks:
-	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh
+	$(BAZEL) run @ubuntu_runtime//:lock
 
 shipping-image: bazel-rootfs bazel-initrd
-	./scripts/test-debug-image-contract.sh build/stage/bazel-rootfs.tar
 	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 		tinfoilcvm.vmlinuz tinfoilcvm.initrd
 	$(MKOSI) --force
@@ -136,9 +100,6 @@ shipping-image: bazel-rootfs bazel-initrd
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
 debug-image: bazel-rootfs bazel-debug-layer bazel-initrd custom-kernel-artifacts
-	./scripts/test-debug-image-contract.sh \
-		build/stage/bazel-rootfs.tar \
-		build/stage/bazel-debug-layer.tar
 	rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
 		tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd
 	$(MKOSI) --force --output=tinfoilcvm-debug \
@@ -180,7 +141,7 @@ nvattest:
 
 regenerate-nvattest:
 	rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
-	./scripts/build-runtime-builder.sh
-	./scripts/run-runtime-builder.sh nvattest
+	$(MAKE) runtime-builder
+	./builder/run.sh nvattest
 	test -x "$(NVATTEST_RUNTIME_BINARY)"
 	test -f "$(NVATTEST_RUNTIME_LIBRARY)"

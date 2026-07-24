@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "runtime",
+    srcs = ["setup.go"],
+    importpath = "tinfoil/internal/pid1/runtime",
+    visibility = ["//tinfoil:__subpackages__"],
+    deps = [
+        "//tinfoil/internal/boot",
+        "@org_golang_x_sys//unix",
+    ],
+)

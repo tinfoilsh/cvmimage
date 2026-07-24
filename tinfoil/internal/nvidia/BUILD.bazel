@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "nvidia",
+    srcs = [
+        "bootstrap_status.go",
+        "devices.go",
+        "modules.go",
+        "services.go",
+    ],
+    importpath = "tinfoil/internal/nvidia",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_nvidia_go_nvml//pkg/nvml",
+        "@org_golang_x_sys//unix",
+    ],
+)

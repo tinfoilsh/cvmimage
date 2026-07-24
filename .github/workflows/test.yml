@@ -44,6 +44,9 @@ jobs:
       - name: Build
         run: cd tinfoil && go build ./...
 
+      - name: Build Bazel Go commands
+        run: bazel build //tinfoil/cmd/init:tinfoil-init //tinfoil/cmd/initrd:tinfoil-initrd
+
       - name: Test
         run: cd tinfoil && go test ./...
 

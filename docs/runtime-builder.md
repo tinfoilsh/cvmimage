@@ -20,6 +20,14 @@ trees, caches, logs, and installed tools are discarded. Rootfs construction
 may consume only the named producer outputs mounted from explicit output
 directories.
 
+Bazel builds the shipping PID1 target with upstream `rules_go` CGO support.
+The Bazel invocation runs inside this same pinned builder and explicitly selects
+`/usr/bin/gcc`; Bazel's native C toolchain discovery therefore sees the fixed
+GCC 15.2, binutils 2.46, and glibc 2.43 development environment rather than the
+developer host. No project-defined C rule or third-party C toolchain framework
+is involved. The production artifact cutover remains a separate
+measurement-changing change.
+
 Normal rootfs and image builds never compile nvattest. They require the two
 fixed worktree-local runtime outputs and fail with an instruction to run `make
 regenerate-nvattest` when either is absent. The trusted builder publishes those
@@ -29,6 +37,7 @@ The standard producer interface is:
 
 ```sh
 ./scripts/build-runtime-builder.sh
+./scripts/run-runtime-builder.sh bazel-pid1
 ./scripts/run-runtime-builder.sh initrd
 ./scripts/run-runtime-builder.sh kernel
 ./scripts/run-runtime-builder.sh nvidia

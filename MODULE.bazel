@@ -15,11 +15,20 @@ go_sdk.download(version = "1.25.7")
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.module(
+    path = "github.com/NVIDIA/go-nvml",
+    sum = "h1:OLX8Jq3dONuPOQPC7rndB6+iDmDakw0XTYgzMxObkEw=",
+    version = "v0.13.0-1",
+)
+go_deps.module(
     path = "golang.org/x/sys",
     sum = "h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=",
     version = "v0.45.0",
 )
-use_repo(go_deps, "org_golang_x_sys")
+use_repo(
+    go_deps,
+    "com_github_nvidia_go_nvml",
+    "org_golang_x_sys",
+)
 
 bazel_lib_toolchains = use_extension("@bazel_lib//lib:extensions.bzl", "toolchains")
 use_repo(bazel_lib_toolchains, "zstd_toolchains")

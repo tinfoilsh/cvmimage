@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 if [ "$#" -ne 1 ]; then
-    echo "usage: $0 {debug-init|initrd|nvattest|kernel|nvidia}" >&2
+    echo "usage: $0 {bazel-pid1|debug-init|initrd|nvattest|kernel|nvidia}" >&2
     exit 2
 fi
 
@@ -43,6 +43,21 @@ mkdir -p "$cache_root"
 repo_mount="type=bind,src=$repo_dir,dst=/workspace,readonly"
 
 case "$producer" in
+    bazel-pid1)
+        mkdir -p "$cache_root/bazel"
+        docker run --rm \
+            --user "$host_uid:$host_gid" \
+            --mount "$repo_mount" \
+            --mount "type=bind,src=$cache_root/bazel,dst=/cache/bazel" \
+            "$builder_image" \
+            bazel \
+                --output_user_root=/cache/bazel \
+                build \
+                --lockfile_mode=error \
+                --repo_env=CC=/usr/bin/gcc \
+                --symlink_prefix=/tmp/cvmimage-bazel- \
+                //tinfoil/cmd/init:tinfoil-init
+        ;;
     debug-init)
         output="${TINFOIL_DEBUG_BUILDER_OUTPUT:-$repo_dir/build/debug-work/output}"
         mkdir -p "$output" "$cache_root/go-build" "$cache_root/go-mod"

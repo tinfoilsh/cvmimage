@@ -76,6 +76,21 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
+RUN set -eux; \
+    test "$(dpkg-query -W -f='${Version}' gcc)" = 4:15.2.0-5ubuntu1; \
+    test "$(dpkg-query -W -f='${Version}' gcc-15)" = 15.2.0-16ubuntu1; \
+    test "$(dpkg-query -W -f='${Version}' binutils)" = 2.46-3ubuntu2; \
+    test "$(dpkg-query -W -f='${Version}' libc6-dev)" = 2.43-2ubuntu2; \
+    curl -fsSL --retry 3 \
+        https://github.com/bazelbuild/bazel/releases/download/8.7.0/bazel-8.7.0-linux-x86_64 \
+        -o /tmp/bazel; \
+    printf '%s  %s\n' \
+        d7606e679b78067c811096fb3d6cf135225b528835ca396e3a4dddf957859544 \
+        /tmp/bazel | sha256sum -c --strict -; \
+    install -m 0755 /tmp/bazel /usr/local/bin/bazel; \
+    rm -f /tmp/bazel; \
+    test "$(bazel --version)" = 'bazel 8.7.0'
+
 COPY build-initrd.sh /usr/local/bin/build-initrd
 
 WORKDIR /workspace

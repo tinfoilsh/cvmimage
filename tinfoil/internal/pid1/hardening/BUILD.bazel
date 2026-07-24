@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "hardening",
+    srcs = [
+        "filesystems_linux.go",
+        "hardening.go",
+        "module_lock.go",
+        "seccomp_linux_amd64.go",
+    ],
+    importpath = "tinfoil/internal/pid1/hardening",
+    visibility = ["//tinfoil:__subpackages__"],
+    deps = ["@org_golang_x_sys//unix"],
+)

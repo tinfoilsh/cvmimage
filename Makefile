@@ -11,7 +11,7 @@ NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
 NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
 .PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
-	runtime-builder builder-initrd bazel-rootfs additive-initrd \
+	runtime-builder builder-bazel-pid1 builder-initrd bazel-rootfs additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
 	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-runtime-locks \
@@ -59,6 +59,9 @@ deepclean:
 
 runtime-builder:
 	./scripts/build-runtime-builder.sh
+
+builder-bazel-pid1: runtime-builder
+	./scripts/run-runtime-builder.sh bazel-pid1
 
 builder-initrd: runtime-builder
 	./scripts/run-runtime-builder.sh initrd

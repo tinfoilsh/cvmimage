@@ -23,6 +23,7 @@ runtime_sources = use_extension("//image:runtime_sources.bzl", "runtime_sources"
 runtime_sources.from_lock(lock = "//image:runtime-sources.lock.json")
 use_repo(
     runtime_sources,
+    "runtime_source_debug_busybox",
     "runtime_source_docker_static",
     "runtime_source_libnvidia_cfg1",
     "runtime_source_libnvidia_compute",

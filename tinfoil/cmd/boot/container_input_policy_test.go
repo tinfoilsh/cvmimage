@@ -23,7 +23,6 @@ containers:
       - NET_BIND_SERVICE
       - SETGID
       - SETUID
-      - SYS_ADMIN
       - SYS_NICE
       - SYS_RESOURCE
 `)
@@ -52,6 +51,7 @@ func TestContainerInputPolicyRejectsUnsupportedInputs(t *testing.T) {
 		{name: "slash bind", body: "volumes: [data/cache:/cache]", want: "named volume source"},
 		{name: "docker socket", body: "volumes: [/var/run/docker.sock:/var/run/docker.sock]", want: "named volume source"},
 		{name: "anonymous volume", body: "volumes: [/data]", want: "named volume source"},
+		{name: "sys admin", body: "cap_add: [SYS_ADMIN]", want: `capability "SYS_ADMIN" is unsupported`},
 		{name: "sys module", body: "cap_add: [SYS_MODULE]", want: `capability "SYS_MODULE" is unsupported`},
 		{name: "cap prefix alias", body: "cap_add: [CAP_CHOWN]", want: `capability "CAP_CHOWN" is unsupported`},
 	}

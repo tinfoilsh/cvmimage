@@ -77,10 +77,6 @@ func allowedContainerCapability(capability string) bool {
 	switch capability {
 	case "CHOWN", "DAC_OVERRIDE", "IPC_LOCK", "KILL", "NET_BIND_SERVICE", "SETGID", "SETUID", "SYS_NICE", "SYS_RESOURCE":
 		return true
-	// SYS_ADMIN remains a temporary exception for the production document
-	// conversion workload and should be removed after workload qualification.
-	case "SYS_ADMIN":
-		return true
 	default:
 		return false
 	}

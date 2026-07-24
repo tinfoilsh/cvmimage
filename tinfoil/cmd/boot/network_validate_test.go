@@ -9,15 +9,33 @@ import (
 	shimconfig "tinfoil/internal/config"
 )
 
+const (
+	testMaxBridgeNameLength = 15
+	testMaxHostnameLabel    = 63
+	testMaxHostnameLength   = 253
+)
+
+func TestFixedNetworkInputLimits(t *testing.T) {
+	if maxBridgeNameLen != testMaxBridgeNameLength {
+		t.Fatalf("maxBridgeNameLen = %d, want fixed contract %d", maxBridgeNameLen, testMaxBridgeNameLength)
+	}
+	if maxHostnameLabel != testMaxHostnameLabel {
+		t.Fatalf("maxHostnameLabel = %d, want fixed contract %d", maxHostnameLabel, testMaxHostnameLabel)
+	}
+	if maxHostnameLength != testMaxHostnameLength {
+		t.Fatalf("maxHostnameLength = %d, want fixed contract %d", maxHostnameLength, testMaxHostnameLength)
+	}
+}
+
 func TestIsNetworkName(t *testing.T) {
 	t.Parallel()
 
-	for _, value := range []string{"a", "0", "a0", "a-b", strings.Repeat("a", maxBridgeNameLen)} {
+	for _, value := range []string{"a", "0", "a0", "a-b", strings.Repeat("a", testMaxBridgeNameLength)} {
 		if !isNetworkName(value) {
 			t.Errorf("isNetworkName(%q) = false", value)
 		}
 	}
-	for _, value := range []string{"", "A", "-a", "a-", "a.b", "a_b", "é", strings.Repeat("a", maxBridgeNameLen+1)} {
+	for _, value := range []string{"", "A", "-a", "a-", "a.b", "a_b", "é", strings.Repeat("a", testMaxBridgeNameLength+1)} {
 		if isNetworkName(value) {
 			t.Errorf("isNetworkName(%q) = true", value)
 		}
@@ -44,15 +62,15 @@ func TestIsNetworkName(t *testing.T) {
 func TestIsRFC1123Hostname(t *testing.T) {
 	t.Parallel()
 
-	maxLengthHostname := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
-	if len(maxLengthHostname) != maxHostnameLength {
-		t.Fatalf("maximum hostname fixture is %d bytes, want %d", len(maxLengthHostname), maxHostnameLength)
+	maxLengthHostname := strings.Repeat("a", testMaxHostnameLabel) + "." + strings.Repeat("b", testMaxHostnameLabel) + "." + strings.Repeat("c", testMaxHostnameLabel) + "." + strings.Repeat("d", 61)
+	if len(maxLengthHostname) != testMaxHostnameLength {
+		t.Fatalf("maximum hostname fixture is %d bytes, want %d", len(maxLengthHostname), testMaxHostnameLength)
 	}
 	for _, value := range []string{
 		"a",
 		"API.TINFOIL.SH",
 		"a-b.example",
-		strings.Repeat("a", maxHostnameLabel),
+		strings.Repeat("a", testMaxHostnameLabel),
 		maxLengthHostname,
 	} {
 		if !isRFC1123Hostname(value) {
@@ -71,7 +89,7 @@ func TestIsRFC1123Hostname(t *testing.T) {
 		"ſ",
 		"a.K.example",
 		"a.ſ.example",
-		strings.Repeat("a", maxHostnameLabel+1),
+		strings.Repeat("a", testMaxHostnameLabel+1),
 		maxLengthHostname + "a",
 	} {
 		if isRFC1123Hostname(value) {

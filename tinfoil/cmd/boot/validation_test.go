@@ -31,57 +31,6 @@ func TestIsHexHash(t *testing.T) {
 	}
 }
 
-func TestIsUUID(t *testing.T) {
-	t.Parallel()
-
-	const valid = "01234567-89ab-cdef-0123-456789abcdef"
-	if !isUUID(valid) {
-		t.Fatalf("isUUID(%q) = false", valid)
-	}
-	for _, value := range []string{"", valid[:35], valid + "0", "01234567_89ab-cdef-0123-456789abcdef", "01234567-89AB-cdef-0123-456789abcdef"} {
-		if isUUID(value) {
-			t.Errorf("isUUID(%q) = true", value)
-		}
-	}
-
-	candidate := []byte(valid)
-	for index := range candidate {
-		original := candidate[index]
-		for character := 0; character <= 255; character++ {
-			candidate[index] = byte(character)
-			want := testLowerHex(byte(character))
-			if index == 8 || index == 13 || index == 18 || index == 23 {
-				want = character == '-'
-			}
-			if got := isUUID(string(candidate)); got != want {
-				t.Fatalf("isUUID with byte %#x at %d = %t, want %t", character, index, got, want)
-			}
-		}
-		candidate[index] = original
-	}
-}
-
-func TestIsOffset(t *testing.T) {
-	t.Parallel()
-
-	for _, value := range []string{"0", "00", "18446744073709551615", strings.Repeat("9", 4096)} {
-		if !isOffset(value) {
-			t.Errorf("isOffset(%q) = false", value)
-		}
-	}
-	for _, value := range []string{"", "+1", "-1", " 1", "1 ", "1\n", "1.0", "１２"} {
-		if isOffset(value) {
-			t.Errorf("isOffset(%q) = true", value)
-		}
-	}
-	for character := 0; character <= 255; character++ {
-		value := string([]byte{'1', byte(character), '2'})
-		if got, want := isOffset(value), testDigit(byte(character)); got != want {
-			t.Fatalf("isOffset with byte %#x = %t, want %t", character, got, want)
-		}
-	}
-}
-
 func TestIsRegistry(t *testing.T) {
 	t.Parallel()
 

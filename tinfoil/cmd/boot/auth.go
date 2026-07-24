@@ -23,6 +23,7 @@ import (
 const (
 	secretGCloudKey      = "GCLOUD_KEY"
 	secretGCloudRegistry = "GCLOUD_REGISTRY"
+	dockerHubRegistry    = "docker.io"
 
 	maxDockerConfigBytes      = 1 << 20
 	maxDockerRegistries       = 1024
@@ -288,11 +289,14 @@ func registryAuthForImage(path, imageName string) (string, error) {
 }
 
 func imageRegistryHost(imageName string) string {
-	host := "docker.io"
-	if parts := strings.Split(imageName, "/"); len(parts) > 1 && strings.Contains(parts[0], ".") {
-		host = parts[0]
+	first, _, found := strings.Cut(imageName, "/")
+	if !found {
+		return dockerHubRegistry
 	}
-	return host
+	if first == "localhost" || strings.ContainsAny(first, ".:") {
+		return canonicalRegistryHost(first)
+	}
+	return dockerHubRegistry
 }
 
 func dockerAuthForHost(auths map[string]DockerAuth, host string) (DockerAuth, string, bool) {
@@ -312,13 +316,23 @@ func normalizeRegistryHost(registryKey string) string {
 		parsed, err := url.Parse(registryKey)
 		if err == nil && parsed.Hostname() != "" {
 			if parsed.Port() == "" {
-				return parsed.Hostname()
+				return canonicalRegistryHost(parsed.Hostname())
 			}
-			return net.JoinHostPort(parsed.Hostname(), parsed.Port())
+			return canonicalRegistryHost(net.JoinHostPort(parsed.Hostname(), parsed.Port()))
 		}
 	}
 	host, _, _ := strings.Cut(registryKey, "/")
-	return host
+	return canonicalRegistryHost(host)
+}
+
+func canonicalRegistryHost(host string) string {
+	host = strings.ToLower(host)
+	switch host {
+	case "index.docker.io", "registry-1.docker.io":
+		return dockerHubRegistry
+	default:
+		return host
+	}
 }
 
 func setDockerAuth(config *DockerConfig, registryKey, encoded string) error {

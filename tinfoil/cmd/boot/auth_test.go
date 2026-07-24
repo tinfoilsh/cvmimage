@@ -162,6 +162,24 @@ func TestRegistryAuthForImagePreservesDockerHubAndGCP(t *testing.T) {
 			username:    "docker-user",
 			password:    "docker-token",
 		},
+		"docker hub CLI alias": {
+			registryKey: "https://index.docker.io/v1/",
+			image:       "ubuntu:latest",
+			username:    "docker-user",
+			password:    "docker-token",
+		},
+		"docker hub engine alias": {
+			registryKey: "registry-1.docker.io",
+			image:       "library/ubuntu:latest",
+			username:    "docker-user",
+			password:    "docker-token",
+		},
+		"localhost port": {
+			registryKey: "localhost:5000",
+			image:       "localhost:5000/team/image:latest",
+			username:    "local-user",
+			password:    "local-token",
+		},
 		"gcp": {
 			registryKey: "us-docker.pkg.dev",
 			image:       "us-docker.pkg.dev/project/repository/image:latest",
@@ -183,6 +201,22 @@ func TestRegistryAuthForImagePreservesDockerHubAndGCP(t *testing.T) {
 				t.Fatalf("decoded RegistryAuth = %+v", decoded)
 			}
 		})
+	}
+}
+
+func TestImageRegistryHost(t *testing.T) {
+	for image, want := range map[string]string{
+		"ubuntu:latest":                              dockerHubRegistry,
+		"library/ubuntu:latest":                      dockerHubRegistry,
+		"localhost/team/image:latest":                "localhost",
+		"localhost:5000/team/image:latest":           "localhost:5000",
+		"registry.example.com/team/image:latest":     "registry.example.com",
+		"REGISTRY.EXAMPLE.COM:5000/image:latest":     "registry.example.com:5000",
+		"registry-1.docker.io/library/ubuntu:latest": dockerHubRegistry,
+	} {
+		if got := imageRegistryHost(image); got != want {
+			t.Errorf("imageRegistryHost(%q) = %q, want %q", image, got, want)
+		}
 	}
 }
 

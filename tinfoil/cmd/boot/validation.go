@@ -17,37 +17,6 @@ func isHexHash(value string) bool {
 	return true
 }
 
-func isUUID(value string) bool {
-	if len(value) != 36 {
-		return false
-	}
-	for index := 0; index < len(value); index++ {
-		switch index {
-		case 8, 13, 18, 23:
-			if value[index] != '-' {
-				return false
-			}
-		default:
-			if !isLowerHex(value[index]) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func isOffset(value string) bool {
-	if value == "" {
-		return false
-	}
-	for index := 0; index < len(value); index++ {
-		if !isDigit(value[index]) {
-			return false
-		}
-	}
-	return true
-}
-
 func isRegistry(value string) bool {
 	if value == "" || !isLowerAlphanumeric(value[0]) {
 		return false

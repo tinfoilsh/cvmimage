@@ -98,8 +98,8 @@ done
 
 printf '%s  %s\n' \
     "${REGORUS_LOCK_SHA256}" \
-    "${repo_dir}/scripts/nvattest-regorus-Cargo.lock" | sha256sum --check --strict -
-install -m 0444 "${repo_dir}/scripts/nvattest-regorus-Cargo.lock" \
+    "${repo_dir}/builder/nvattest/regorus.Cargo.lock" | sha256sum --check --strict -
+install -m 0444 "${repo_dir}/builder/nvattest/regorus.Cargo.lock" \
     "${WORK}/prefetch/regorus/bindings/ffi/Cargo.lock"
 cargo fetch --locked \
     --manifest-path "${WORK}/prefetch/regorus/bindings/ffi/Cargo.toml"

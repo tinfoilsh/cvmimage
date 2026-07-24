@@ -27,10 +27,10 @@ files directly; there is no second output-authentication or cache-lock layer.
 The standard producer interface is:
 
 ```sh
-./scripts/build-runtime-builder.sh
-./scripts/run-runtime-builder.sh initrd
-./scripts/run-runtime-builder.sh kernel
-./scripts/run-runtime-builder.sh nvidia
+make runtime-builder
+./builder/run.sh runtime-go
+./builder/run.sh kernel
+./builder/run.sh nvidia
 ```
 
 Regenerate nvattest explicitly when changing its source or build inputs:
@@ -41,16 +41,13 @@ make regenerate-nvattest
 
 The release workflow calls `make release-image`, which first regenerates
 nvattest from pinned inputs on the fresh release worker and then builds the
-shipping image. Repeated full-build comparison is deferred rather than
-embedded in routine PR CI.
+shipping image.
 
-Initrd, nvattest, and kernel producers use ordinary unprivileged containers.
-NVIDIA alone receives `CAP_SYS_ADMIN` with confined host-device access for its
-fixed mount-namespace build. Output paths are explicit; arbitrary host
-environment state is not forwarded.
+The runtime Go, nvattest, and kernel producers use ordinary unprivileged
+containers. NVIDIA alone receives `CAP_SYS_ADMIN` with confined host-device
+access for its fixed mount-namespace build. Output paths are explicit;
+arbitrary host environment state is not forwarded.
 
 The build pipeline does not claim to defend against a malicious builder.
 Build-time disruption and denial of service are accepted because they cannot
-make an unapproved image pass runtime attestation. Release qualification, run
-outside routine PR CI, performs clean repeated builds and compares the fixed
-named outputs before promoting the resulting image measurement.
+make an unapproved image pass runtime attestation.

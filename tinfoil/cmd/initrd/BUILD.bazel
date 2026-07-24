@@ -31,9 +31,4 @@ go_test(
         "//:mkosi.repart/11-root-verity.conf",
     ],
     embed = [":initrd_lib"],
-    deps = [
-        "//tinfoil/internal/boot",
-        "//tinfoil/internal/devicemapper",
-        "@org_golang_x_sys//unix",
-    ],
 )

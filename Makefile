@@ -55,7 +55,7 @@ clean:
 
 deepclean:
 	$(MKOSI) clean
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/rootfs-artifacts/nvattest
 
 runtime-builder:
 	./scripts/build-runtime-builder.sh

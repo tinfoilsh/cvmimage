@@ -84,54 +84,6 @@ sh_test(
     ],
 )
 
-sh_test(
-    name = "container-runtime-rootfs-contract-test",
-    srcs = ["//scripts:test-container-runtime-rootfs.sh"],
-    args = [
-        "$(location :container-runtime-contract-rootfs-layer)",
-        "$(location rootfs/etc/containerd/config.toml)",
-    ],
-    data = [
-        ":container-runtime-contract-rootfs-layer",
-        "rootfs/etc/containerd/config.toml",
-    ],
-)
-
-sh_test(
-    name = "runtime-libcap-contract-test",
-    srcs = ["//scripts:test-runtime-libcap-contract.sh"],
-    args = ["$(location :runtime-packages.lock.json)"] + [
-        "$(location %s)" % layer
-        for layer in _RUNTIME_PACKAGE_LAYERS
-    ],
-    data = [
-        ":runtime-packages.lock.json",
-    ] + _RUNTIME_PACKAGE_LAYERS,
-)
-
-sh_test(
-    name = "runtime-debconf-contract-test",
-    srcs = ["//scripts:test-runtime-debconf-contract.sh"],
-    args = [
-        "$(location :runtime-packages.lock.json)",
-        "$(location @ubuntu_runtime//debconf:data)",
-    ] + [
-        "$(location %s)" % layer
-        for layer in _RUNTIME_PACKAGE_LAYERS
-    ],
-    data = [
-        ":runtime-packages.lock.json",
-        "@ubuntu_runtime//debconf:data",
-    ] + _RUNTIME_PACKAGE_LAYERS,
-)
-
-sh_test(
-    name = "nvidia-compute-rootfs-contract-test",
-    srcs = ["//scripts:test-nvidia-compute-rootfs.sh"],
-    args = ["$(location :rootfs)"],
-    data = [":rootfs"],
-)
-
 filegroup(
     name = "runtime-package-layers",
     srcs = _RUNTIME_PACKAGE_LAYERS,

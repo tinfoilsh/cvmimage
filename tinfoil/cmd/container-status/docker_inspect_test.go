@@ -107,7 +107,7 @@ func TestDockerInspectClientEscapesContainerName(t *testing.T) {
 			t.Errorf("request URI = %q", r.RequestURI)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{}`)
+		fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running","ExitCode":0}}`, strings.Repeat("b", 64))
 	}))
 	client := newDockerInspectClient(socketPath)
 	t.Cleanup(client.CloseIdleConnections)
@@ -136,7 +136,6 @@ func TestDockerInspectClientRejectsUnexpectedResponses(t *testing.T) {
 	}{
 		{name: "error status", status: http.StatusInternalServerError, contentType: "application/json", body: `{"message":"sensitive"}`, want: "HTTP status 500"},
 		{name: "redirect", status: http.StatusTemporaryRedirect, contentType: "application/json", body: `{}`, want: "HTTP status 307"},
-		{name: "missing content type", status: http.StatusOK, body: `{}`, want: "non-JSON content type"},
 		{name: "text content type", status: http.StatusOK, contentType: "text/plain", body: `{}`, want: "non-JSON content type"},
 		{name: "malformed JSON", status: http.StatusOK, contentType: "application/json", body: `{`, want: "decoding inspect response"},
 		{name: "trailing JSON", status: http.StatusOK, contentType: "application/json", body: `{} {}`, want: "decoding inspect response"},
@@ -161,6 +160,38 @@ func TestDockerInspectClientRejectsUnexpectedResponses(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "sensitive") {
 				t.Fatalf("error exposed daemon response body: %v", err)
+			}
+		})
+	}
+}
+
+func TestDockerInspectClientRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "missing container ID", body: `{"State":{"Status":"running","ExitCode":0}}`, want: "invalid container ID"},
+		{name: "short container ID", body: `{"Id":"abc","State":{"Status":"running","ExitCode":0}}`, want: "invalid container ID"},
+		{name: "negative restart count", body: fmt.Sprintf(`{"Id":%q,"RestartCount":-1,"State":{"Status":"running","ExitCode":0}}`, strings.Repeat("a", 64)), want: "negative restart count"},
+		{name: "missing state", body: fmt.Sprintf(`{"Id":%q}`, strings.Repeat("a", 64)), want: "missing state"},
+		{name: "missing state status", body: fmt.Sprintf(`{"Id":%q,"State":{"ExitCode":0}}`, strings.Repeat("a", 64)), want: "invalid state status"},
+		{name: "unknown state status", body: fmt.Sprintf(`{"Id":%q,"State":{"Status":"unknown","ExitCode":0}}`, strings.Repeat("a", 64)), want: "invalid state status"},
+		{name: "invalid exit code", body: fmt.Sprintf(`{"Id":%q,"State":{"Status":"exited","ExitCode":256}}`, strings.Repeat("a", 64)), want: "invalid exit code"},
+		{name: "invalid started time", body: fmt.Sprintf(`{"Id":%q,"State":{"Status":"running","ExitCode":0,"StartedAt":"invalid"}}`, strings.Repeat("a", 64)), want: "invalid started_at"},
+		{name: "invalid finished time", body: fmt.Sprintf(`{"Id":%q,"State":{"Status":"exited","ExitCode":0,"FinishedAt":"invalid"}}`, strings.Repeat("a", 64)), want: "invalid finished_at"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			socketPath := serveDockerSocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, test.body)
+			}))
+			client := newDockerInspectClient(socketPath)
+			t.Cleanup(client.CloseIdleConnections)
+			_, err := client.ContainerInspect(context.Background(), "model")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
 		})
 	}

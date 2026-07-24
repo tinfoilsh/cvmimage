@@ -230,7 +230,7 @@ func containerStatusFromInspect(declared declaredContainer, inspect containerIns
 }
 
 func applyLifecycle(status *containerStatus, inspect containerInspect, prior containerStatus, found, persistedValid bool) {
-	if inspect.Base == nil {
+	if inspect.Base == nil || inspect.Base.State == nil {
 		status.LifecycleComplete = false
 		return
 	}
@@ -240,7 +240,7 @@ func applyLifecycle(status *containerStatus, inspect containerInspect, prior con
 	status.Process = processForRestartCount(restartCount)
 	status.LifecycleComplete = persistedValid && countValid && !truncated && inspect.Base.RestartCount == 0 && validContainerID(status.ContainerID)
 
-	if found && prior.Created && (!validPriorStatus(prior) || prior.ContainerID != status.ContainerID) {
+	if found && (!prior.Created || !validPriorStatus(prior) || prior.ContainerID != status.ContainerID) {
 		status.LifecycleComplete = false
 	} else if found && prior.Created {
 		if prior.Process == processReplacement {
@@ -261,9 +261,6 @@ func applyLifecycle(status *containerStatus, inspect containerInspect, prior con
 			status.Process = processReplacement
 			transitionProven = true
 		case restartCount == prior.RestartCount+1 && terminalStatus(status.Status):
-			status.Process = processReplacement
-			transitionProven = true
-		case restartCount < prior.RestartCount && priorTerminal && !sameStart:
 			status.Process = processReplacement
 			transitionProven = true
 		}
@@ -292,7 +289,7 @@ func loadPreviousStatuses(path string) (map[string]containerStatus, bool) {
 		return nil, false
 	}
 	var response containersResponse
-	if json.Unmarshal(data, &response) != nil || response.ObservedAt.IsZero() {
+	if json.Unmarshal(data, &response) != nil || response.ObservedAt.IsZero() || response.Unavailable != "" {
 		return nil, false
 	}
 	previous := make(map[string]containerStatus, len(response.Containers))
@@ -316,6 +313,9 @@ func loadPreviousStatuses(path string) (map[string]containerStatus, bool) {
 
 func validPriorStatus(status containerStatus) bool {
 	if !validContainerID(status.ContainerID) || status.RestartCount < 0 || status.RestartCount > maxReportedRestartCount {
+		return false
+	}
+	if !validDockerStateStatus(status.Status) {
 		return false
 	}
 	if status.Process != processOriginal && status.Process != processReplacement {

@@ -24,7 +24,10 @@ const (
 	containerStateCreated     = "created"
 	containerStateDead        = "dead"
 	containerStateExited      = "exited"
+	containerStatePaused      = "paused"
+	containerStateRemoving    = "removing"
 	containerStateRestarting  = "restarting"
+	containerStateRunning     = "running"
 )
 
 var errContainerNotFound = errors.New("container not found")
@@ -162,6 +165,9 @@ func (c *dockerInspectClient) ContainerInspect(ctx context.Context, name string)
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return containerInspect{}, fmt.Errorf("decoding inspect response: %w", err)
 	}
+	if err := validateDockerInspectResponse(wire); err != nil {
+		return containerInspect{}, err
+	}
 	return containerInspect{
 		Base: &containerInspectBase{
 			ID:           wire.ID,
@@ -172,4 +178,42 @@ func (c *dockerInspectClient) ContainerInspect(ctx context.Context, name string)
 		},
 		Config: wire.Config,
 	}, nil
+}
+
+func validateDockerInspectResponse(wire dockerInspectResponse) error {
+	if !validContainerID(wire.ID) {
+		return fmt.Errorf("inspect response has invalid container ID")
+	}
+	if wire.RestartCount < 0 {
+		return fmt.Errorf("inspect response has negative restart count")
+	}
+	if wire.State == nil {
+		return fmt.Errorf("inspect response is missing state")
+	}
+	if !validDockerStateStatus(wire.State.Status) {
+		return fmt.Errorf("inspect response has invalid state status %q", wire.State.Status)
+	}
+	if wire.State.ExitCode < 0 || wire.State.ExitCode > 255 {
+		return fmt.Errorf("inspect response has invalid exit code %d", wire.State.ExitCode)
+	}
+	if wire.State.StartedAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, wire.State.StartedAt); err != nil {
+			return fmt.Errorf("inspect response has invalid started_at")
+		}
+	}
+	if wire.State.FinishedAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, wire.State.FinishedAt); err != nil {
+			return fmt.Errorf("inspect response has invalid finished_at")
+		}
+	}
+	return nil
+}
+
+func validDockerStateStatus(status string) bool {
+	switch status {
+	case containerStateCreated, containerStateRunning, containerStatePaused, containerStateRestarting, containerStateRemoving, containerStateExited, containerStateDead:
+		return true
+	default:
+		return false
+	}
 }

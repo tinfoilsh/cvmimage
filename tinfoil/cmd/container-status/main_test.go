@@ -159,6 +159,57 @@ func TestContainerStatusFromInspect_UnhealthyHealthcheck(t *testing.T) {
 	}
 }
 
+func TestLifecycleFreshBaselineAndInvalidPersistence(t *testing.T) {
+	inspect := containerInspect{
+		Base: &containerInspectBase{
+			ID: strings.Repeat("0", 64),
+			State: &containerState{
+				Status:    containerStateRunning,
+				StartedAt: "2026-07-24T00:30:00Z",
+			},
+		},
+	}
+
+	fresh := lifecycleStatus(inspect, containerStatus{}, false, true)
+	if !fresh.LifecycleComplete || fresh.Process != processOriginal {
+		t.Fatalf("fresh lifecycle baseline = %#v", fresh)
+	}
+
+	invalid := lifecycleStatus(inspect, containerStatus{}, false, false)
+	if invalid.LifecycleComplete {
+		t.Fatalf("invalid persisted lifecycle = %#v", invalid)
+	}
+}
+
+func TestLifecycleMissingStateFailsClosed(t *testing.T) {
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{ID: strings.Repeat("1", 64)},
+	}, containerStatus{}, false, true)
+
+	if got.LifecycleComplete || got.Process != "" {
+		t.Fatalf("missing state lifecycle = %#v", got)
+	}
+}
+
+func TestLifecycleDisappearanceCannotResetContinuity(t *testing.T) {
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
+			ID: strings.Repeat("2", 64),
+			State: &containerState{
+				Status:    containerStateRunning,
+				StartedAt: "2026-07-24T00:45:00Z",
+			},
+		},
+	}, containerStatus{
+		Name:    "model",
+		Created: false,
+	}, true, true)
+
+	if got.LifecycleComplete {
+		t.Fatalf("recreated lifecycle = %#v", got)
+	}
+}
+
 func TestLifecycleManualRestartBetweenInspectsFailsClosed(t *testing.T) {
 	prior := containerStatus{
 		Name:              "model",
@@ -317,7 +368,40 @@ func TestLifecycleMissedCrashLoopFailsClosed(t *testing.T) {
 	}
 }
 
-func TestLifecycleIdentityChangeAndTruncationFailClosed(t *testing.T) {
+func TestLifecycleRestartCountDecreaseFailsClosed(t *testing.T) {
+	prior := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       strings.Repeat("8", 64),
+		Process:           processReplacement,
+		LifecycleComplete: true,
+		Status:            containerStateExited,
+		RestartCount:      2,
+		StartedAt:         "2026-07-24T04:40:00Z",
+		LatestOutcome: &processOutcome{
+			Process:    processReplacement,
+			Status:     containerStateExited,
+			ExitCode:   1,
+			FinishedAt: "2026-07-24T04:41:00Z",
+		},
+	}
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
+			ID:           prior.ContainerID,
+			RestartCount: 1,
+			State: &containerState{
+				Status:    containerStateRunning,
+				StartedAt: "2026-07-24T04:42:00Z",
+			},
+		},
+	}, prior, true, true)
+
+	if got.LifecycleComplete || got.RestartCount != 1 {
+		t.Fatalf("decreased restart count lifecycle = %#v", got)
+	}
+}
+
+func TestLifecycleIdentityChangeFailsClosed(t *testing.T) {
 	prior := containerStatus{
 		Name:              "model",
 		Created:           true,
@@ -329,14 +413,38 @@ func TestLifecycleIdentityChangeAndTruncationFailClosed(t *testing.T) {
 	}
 	got := lifecycleStatus(containerInspect{
 		Base: &containerInspectBase{
-			ID:           strings.Repeat("f", 64),
+			ID:    strings.Repeat("f", 64),
+			State: &containerState{Status: containerStateRunning, StartedAt: "2026-07-24T05:01:00Z"},
+		},
+	}, prior, true, true)
+
+	if got.LifecycleComplete || got.RestartCountTruncated || got.RestartCount != 0 {
+		t.Fatalf("identity change lifecycle = %#v", got)
+	}
+}
+
+func TestLifecycleRestartCountTruncationFailsClosed(t *testing.T) {
+	containerID := strings.Repeat("6", 64)
+	prior := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       containerID,
+		Process:           processReplacement,
+		LifecycleComplete: true,
+		Status:            containerStateRunning,
+		RestartCount:      maxReportedRestartCount,
+		StartedAt:         "2026-07-24T05:10:00Z",
+	}
+	got := lifecycleStatus(containerInspect{
+		Base: &containerInspectBase{
+			ID:           containerID,
 			RestartCount: maxReportedRestartCount + 1,
-			State:        &containerState{Status: "running", StartedAt: "2026-07-24T05:01:00Z"},
+			State:        &containerState{Status: containerStateRunning, StartedAt: prior.StartedAt},
 		},
 	}, prior, true, true)
 
 	if got.LifecycleComplete || !got.RestartCountTruncated || got.RestartCount != maxReportedRestartCount {
-		t.Fatalf("identity/truncation lifecycle = %#v", got)
+		t.Fatalf("restart count truncation lifecycle = %#v", got)
 	}
 }
 
@@ -356,6 +464,40 @@ func TestLoadPreviousStatusesRejectsMalformedIdentity(t *testing.T) {
 	}
 	if previous, valid := loadPreviousStatuses(path); valid || previous != nil {
 		t.Fatalf("malformed previous status accepted: valid=%v previous=%#v", valid, previous)
+	}
+}
+
+func TestLoadPreviousStatusesRejectsInvalidState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "container-status.json")
+	if err := os.WriteFile(path, []byte(`{
+  "observed_at": "2026-07-24T06:02:00Z",
+  "containers": [{
+    "name": "model",
+    "created": true,
+    "container_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "process": "original",
+    "status": "unknown",
+    "restart_count": 0
+  }]
+}`), 0o644); err != nil {
+		t.Fatalf("writing previous status: %v", err)
+	}
+	if previous, valid := loadPreviousStatuses(path); valid || previous != nil {
+		t.Fatalf("invalid state accepted: valid=%v previous=%#v", valid, previous)
+	}
+}
+
+func TestLoadPreviousStatusesRejectsUnavailableObservation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "container-status.json")
+	if err := os.WriteFile(path, []byte(`{
+  "observed_at": "2026-07-24T06:05:00Z",
+  "containers": [],
+  "unavailable": "inspecting model: temporary failure"
+}`), 0o644); err != nil {
+		t.Fatalf("writing previous status: %v", err)
+	}
+	if previous, valid := loadPreviousStatuses(path); valid || previous != nil {
+		t.Fatalf("unavailable previous status accepted: valid=%v previous=%#v", valid, previous)
 	}
 }
 

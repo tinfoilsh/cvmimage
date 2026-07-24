@@ -59,7 +59,7 @@ case "$producer" in
             --env "HOST_UID=$host_uid" \
             --env "HOST_GID=$host_gid" \
             "$builder_image" \
-            /workspace/build-nvattest.sh --runtime-output /output/runtime
+            /workspace/builder/nvattest/build.sh --runtime-output /output/runtime
         ;;
     kernel)
         build_root="$repo_dir/kernel/build"

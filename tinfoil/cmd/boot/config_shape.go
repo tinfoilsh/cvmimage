@@ -52,7 +52,6 @@ func validateContainerShape(index int, container *Container) error {
 		{name: "volumes", count: len(container.Volumes)},
 		{name: "devices", count: len(container.Devices)},
 		{name: "cap_add", count: len(container.CapAdd)},
-		{name: "security_opt", count: len(container.SecurityOpt)},
 		{name: "networks", count: len(container.Networks)},
 	}
 	for _, list := range lists {
@@ -65,6 +64,9 @@ func validateContainerShape(index int, container *Container) error {
 	}
 	if container.Healthcheck != nil && len(container.Healthcheck.Test) > maxHealthcheckTestEntries {
 		return fmt.Errorf("containers[%d].healthcheck.test exceeds limit %d", index, maxHealthcheckTestEntries)
+	}
+	if err := validateContainerInputPolicy(index, container); err != nil {
+		return err
 	}
 	for envIndex, item := range container.Env {
 		switch value := item.(type) {

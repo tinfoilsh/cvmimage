@@ -364,8 +364,11 @@ func (p *osChild) release() error {
 		return err
 	}
 	populated, stateErr := p.cgroup.populated()
-	if stateErr != nil || populated {
+	if stateErr != nil {
 		return errors.Join(err, stateErr)
+	}
+	if populated {
+		return errors.Join(err, fmt.Errorf("cgroup %s remained populated during release", p.cgroup.path))
 	}
 	return errors.Join(err, p.cgroup.remove())
 }
@@ -376,9 +379,6 @@ type processCgroup struct {
 
 func (c *processCgroup) populated() (bool, error) {
 	data, err := os.ReadFile(filepath.Join(c.path, "cgroup.events"))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
 	if err != nil {
 		return false, err
 	}
@@ -402,11 +402,7 @@ func (c *processCgroup) populated() (bool, error) {
 }
 
 func (c *processCgroup) kill() error {
-	err := os.WriteFile(filepath.Join(c.path, "cgroup.kill"), []byte("1"), 0)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+	return os.WriteFile(filepath.Join(c.path, "cgroup.kill"), []byte("1"), 0)
 }
 
 func (c *processCgroup) remove() error {
@@ -555,14 +551,31 @@ func (s *Supervisor) startLocked(record *serviceRecord) (*Process, error) {
 }
 
 func (s *Supervisor) stopInitial(record *serviceRecord, process *Process) error {
-	var errs []error
-	errs = append(errs, s.killCgroups([]*Process{process}, initialCleanupGrace))
-	if _, err := process.Wait(context.Background()); err != nil {
-		errs = append(errs, err)
-	}
+	cleanupErr := s.stopFailedProcess(process)
 	s.mu.Lock()
 	s.retireLocked(record)
 	s.mu.Unlock()
+	return cleanupErr
+}
+
+func (s *Supervisor) stopFailedProcess(process *Process) error {
+	var errs []error
+	errs = append(errs, s.killCgroups([]*Process{process}, initialCleanupGrace))
+	select {
+	case <-process.Done():
+	default:
+		if err := process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			errs = append(errs, fmt.Errorf("kill pid %d process group: %w", process.PID(), err))
+		}
+	}
+	select {
+	case <-process.Done():
+		if _, err := process.Wait(context.Background()); err != nil {
+			errs = append(errs, err)
+		}
+	case <-s.clock.After(initialCleanupGrace):
+		errs = append(errs, fmt.Errorf("pid %d did not exit after readiness cleanup", process.PID()))
+	}
 	return errors.Join(errs...)
 }
 
@@ -638,8 +651,7 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 			}
 			if readyErr := s.ready(s.context, record, next); readyErr != nil {
 				s.emit(State{Name: record.spec.Name, Required: record.spec.Required, Err: readyErr})
-				cleanupErr := s.killCgroups([]*Process{next}, initialCleanupGrace)
-				_, _ = next.Wait(context.Background())
+				cleanupErr := s.stopFailedProcess(next)
 				s.mu.Lock()
 				if record.process == next {
 					record.process = nil
@@ -780,6 +792,7 @@ func (s *Supervisor) killCgroups(processes []*Process, grace time.Duration) erro
 		}
 		if err := process.killCgroup(); err != nil {
 			errs = append(errs, fmt.Errorf("kill pid %d cgroup: %w", process.PID(), err))
+			continue
 		}
 		pending[process] = true
 	}

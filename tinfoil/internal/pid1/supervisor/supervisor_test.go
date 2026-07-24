@@ -31,6 +31,7 @@ type fakeBackend struct {
 	exitOnTERM     map[string]bool
 	groupSurvives  map[string]bool
 	cgroupSurvives map[string]bool
+	killCgroupErr  map[string]error
 	removeErr      map[string]error
 	externalCgroup bool
 }
@@ -51,6 +52,7 @@ func newFakeBackend(sigchld chan os.Signal) *fakeBackend {
 		started: make(chan int, 32), signaled: make(chan string, 32),
 		exitOnTERM: map[string]bool{}, groupSurvives: map[string]bool{},
 		cgroupSurvives: map[string]bool{},
+		killCgroupErr:  map[string]error{},
 		removeErr:      map[string]error{},
 	}
 }
@@ -164,6 +166,10 @@ func (p *fakeProcess) cgroupPopulated() (bool, error) {
 func (p *fakeProcess) killCgroup() error {
 	p.backend.signaled <- fmt.Sprintf("%s:cgroup.kill", p.name)
 	p.backend.mu.Lock()
+	if err := p.backend.killCgroupErr[p.name]; err != nil {
+		p.backend.mu.Unlock()
+		return err
+	}
 	exited := p.exited
 	p.groupRunning = false
 	p.cgroupRunning = false
@@ -318,6 +324,29 @@ func TestInitialReadinessFailureKillsCgroupWaitsAndPermitsRetry(t *testing.T) {
 		t.Fatalf("retry start: %v", err)
 	}
 	_ = receive(t, backend.started)
+}
+
+func TestInitialReadinessFailureFallsBackWhenCgroupKillFails(t *testing.T) {
+	sigchld := make(chan os.Signal, 8)
+	backend := newFakeBackend(sigchld)
+	backend.killCgroupErr["service"] = errors.New("cgroup kill denied")
+	manager := newManager(backend, sigchld, nil)
+	supervisor := New(context.Background(), manager, Config{})
+	service := Service{
+		Name: "service", Command: Command{Name: "service", Path: "/service"},
+		Ready: func(context.Context) error { return errors.New("not ready") },
+	}
+
+	err := supervisor.Start(context.Background(), service)
+	if err == nil || !strings.Contains(err.Error(), "cgroup kill denied") {
+		t.Fatalf("Start() = %v, want cgroup cleanup error", err)
+	}
+	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
+		t.Fatalf("cleanup signal = %q, want service:cgroup.kill", got)
+	}
+	if got := receive(t, backend.signaled); got != "service:killed" {
+		t.Fatalf("fallback signal = %q, want service:killed", got)
+	}
 }
 
 func TestRestartMaximumIsNeverBelowBase(t *testing.T) {
@@ -564,6 +593,31 @@ func TestProcessCgroupReadsFixedPopulatedEvent(t *testing.T) {
 	}
 	if _, err := cgroup.populated(); err == nil {
 		t.Fatal("invalid populated value succeeded")
+	}
+}
+
+func TestProcessCgroupMissingControlsFailClosed(t *testing.T) {
+	cgroup := &processCgroup{path: filepath.Join(t.TempDir(), "missing")}
+	if _, err := cgroup.populated(); err == nil {
+		t.Fatal("missing cgroup.events succeeded")
+	}
+	if err := cgroup.kill(); err == nil {
+		t.Fatal("missing cgroup.kill succeeded")
+	}
+}
+
+func TestOSChildReleaseRejectsPopulatedCgroup(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "cgroup.events"), []byte("populated 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := &osChild{process: process, processID: os.Getpid(), cgroup: &processCgroup{path: directory}}
+	if err := child.release(); err == nil {
+		t.Fatal("populated cgroup release succeeded")
 	}
 }
 

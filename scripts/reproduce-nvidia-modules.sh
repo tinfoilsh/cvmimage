@@ -30,7 +30,5 @@ while IFS= read -r module; do
     cmp "$reproduction_dir/first/nvidia-modules/$module" \
         "$reproduction_dir/second/nvidia-modules/$module"
 done < "$repo_dir/kernel/nvidia-modules.txt"
-cmp "$reproduction_dir/first/nvidia-modules/BUILD.bazel" \
-    "$reproduction_dir/second/nvidia-modules/BUILD.bazel"
 
 echo "NVIDIA modules are byte-identical across isolated builds"

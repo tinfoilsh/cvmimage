@@ -53,8 +53,8 @@ jobs:
       - name: Test direct roothash contract
         run: ./scripts/test-roothash-artifacts.sh
 
-      - name: Build fixed measured initrd
-        run: make bazel-initrd
+      - name: Test fixed measured initrd
+        run: make test-bazel-initrd
 
       - name: Test Fabric Manager config contract
         run: ./scripts/test-fabric-manager-config.sh

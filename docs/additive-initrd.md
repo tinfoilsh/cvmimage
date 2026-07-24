@@ -26,10 +26,11 @@ Build-time denial of service is accepted under this threat model. A failed,
 slow, or disrupted builder cannot cause a different image to pass runtime
 attestation; it can only prevent production of a releasable artifact.
 
-The focused command is:
+The focused commands are:
 
 ```sh
 make bazel-initrd
+make test-bazel-initrd
 ```
 
 Repeated full-build comparison is deferred. Release qualification boots,

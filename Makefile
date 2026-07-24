@@ -13,7 +13,7 @@ NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/l
 .PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
 	runtime-builder builder-initrd bazel-initrd bazel-rootfs \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
-	test-roothash-artifacts \
+	test-bazel-initrd test-roothash-artifacts \
 	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
 	custom-kernel-artifacts \
@@ -95,6 +95,9 @@ test-nvidia-module-producer:
 
 bazel-initrd:
 	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
+
+test-bazel-initrd: bazel-initrd
+	$(BAZEL) test -c opt --lockfile_mode=error //image/initrd:writer_test
 
 reproducible-nvidia-modules:
 	./scripts/reproduce-nvidia-modules.sh

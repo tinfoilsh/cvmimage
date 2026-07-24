@@ -26,11 +26,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-resolve_once() {
-    local name=$1
-    local workspace="$scratch/$name/workspace"
-    local output_base="$scratch/$name/output-base"
-    local generated="$scratch/$name/generated"
+resolve_runtime_lock() {
+    local workspace="$scratch/workspace"
+    local output_base="$scratch/output-base"
+    local generated="$scratch/generated"
 
     mkdir -p "$workspace/image" "$generated"
     cp "$repo_dir/image/runtime-packages.yaml" "$workspace/image/"
@@ -70,18 +69,15 @@ EOF
     )
 }
 
-resolve_once first
-resolve_once second
-cmp "$scratch/first/generated/runtime-packages.lock.json" \
-    "$scratch/second/generated/runtime-packages.lock.json"
+resolve_runtime_lock
 (cd "$repo_dir" && "$bazel_bin" mod deps --lockfile_mode=error >/dev/null)
 
 if [ "$check_only" -eq 1 ]; then
-    cmp "$scratch/first/generated/runtime-packages.lock.json" \
+    cmp "$scratch/generated/runtime-packages.lock.json" \
         "$repo_dir/image/runtime-packages.lock.json"
 else
     replacement="$(mktemp "$repo_dir/image/.runtime-packages.lock.json.XXXXXXXX")"
-    install -m 0644 "$scratch/first/generated/runtime-packages.lock.json" "$replacement"
+    install -m 0644 "$scratch/generated/runtime-packages.lock.json" "$replacement"
     mv -f -- "$replacement" "$repo_dir/image/runtime-packages.lock.json"
     replacement=
 fi

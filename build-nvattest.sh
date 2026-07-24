@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Builds nvattest + libnvat debs for mkosi and exports the two named runtime
-# artifacts needed by the additive rootfs. Always runs inside the shared pinned
-# runtime builder selected by the Makefile.
+# Builds the two named nvattest runtime artifacts used by the additive rootfs.
+# Always runs inside the shared pinned runtime builder selected by the Makefile.
 # The cuda-ubuntu2604 repo now ships nvattest, but its libnvat links
 # libxml2.so.2 while Ubuntu resolute ships only libxml2.so.16 (libxml2 2.14
 # bumped the SONAME). So we keep building from source against system libxml2-16.
@@ -40,25 +39,18 @@ readonly JSON_URL=https://github.com/nlohmann/json/releases/download/v3.12.0/jso
 readonly JSON_SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
 readonly REGORUS_LOCK_SHA256=847ed5732480d7b4bdb65ed932c0413f6966c5bdc5a62e272be9a48bf103cd3b
 
-readonly PKG_VERSION=1.2.2.1780962352-1
 readonly SO_VERSION=1.2.2
-readonly ARCH=amd64
 
-DEB_OUT_DIR="${repo_dir}/packages"
 RUNTIME_OUT_DIR="${repo_dir}/build/rootfs-artifacts/nvattest"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --deb-output)
-            DEB_OUT_DIR=${2:?missing value for --deb-output}
-            shift 2
-            ;;
         --runtime-output)
             RUNTIME_OUT_DIR=${2:?missing value for --runtime-output}
             shift 2
             ;;
         *)
-            echo "usage: $0 [--deb-output DIR] [--runtime-output DIR]" >&2
+            echo "usage: $0 [--runtime-output DIR]" >&2
             exit 2
             ;;
     esac
@@ -75,7 +67,6 @@ trap cleanup EXIT
 
 rm -rf -- "${WORK}"
 mkdir -p "${WORK}"
-mkdir -p "${DEB_OUT_DIR}"
 
 export SOURCE_DATE_EPOCH=0
 export TZ=UTC
@@ -139,51 +130,6 @@ nvattest_install_runtime_artifacts \
     "${INSTALL}" "${RUNTIME_OUT_DIR}" "${SO_VERSION}" \
     "${HOST_UID}" "${HOST_GID}" "${SOURCE_DATE_EPOCH}"
 
-make_deb() {
-    local stage=$1 pkg=$2 section=$3 deps=$4 desc=$5
-    local size; size=$(du -sk "${stage}/usr" | awk '{print $1}')
-    cat > "${stage}/DEBIAN/control" <<EOF
-Package: ${pkg}
-Source: libnvat
-Version: ${PKG_VERSION}
-Architecture: ${ARCH}
-Maintainer: tinfoil <noreply@tinfoil.sh>
-Installed-Size: ${size}
-Depends: ${deps}
-Section: ${section}
-Priority: optional
-Description: ${desc}
- Built from ${UPSTREAM_URL}@${UPSTREAM_TAG}.
-EOF
-    dpkg-deb --root-owner-group --build "${stage}" \
-        "${DEB_OUT_DIR}/${pkg}_${PKG_VERSION}_${ARCH}.deb"
-}
-
-libnvat="${WORK}/deb-libnvat"
-mkdir -p "${libnvat}/DEBIAN" "${libnvat}/usr/lib/x86_64-linux-gnu"
-cp -a "${INSTALL}"/usr/lib/x86_64-linux-gnu/libnvat.so{,.1,.${SO_VERSION}} \
-    "${libnvat}/usr/lib/x86_64-linux-gnu/"
-make_deb "${libnvat}" libnvat libs \
-    "libc6 (>= 2.34), libgcc-s1 (>= 3.0), libstdc++6 (>= 13), libxml2-16 (>= 2.14)" \
-    "Runtime libraries for NVIDIA attestation SDK (built from source)"
-
-nvattest="${WORK}/deb-nvattest"
-mkdir -p "${nvattest}/DEBIAN" "${nvattest}/usr/bin"
-cp -a "${INSTALL}/usr/bin/nvattest" "${nvattest}/usr/bin/"
-make_deb "${nvattest}" nvattest devel \
-    "libnvat (= ${PKG_VERSION}), libc6 (>= 2.34), libgcc-s1 (>= 3.0), libstdc++6 (>= 13)" \
-    "NVIDIA Attestation SDK CLI (built from source)"
-
-for package in \
-    "${DEB_OUT_DIR}/libnvat_${PKG_VERSION}_${ARCH}.deb" \
-    "${DEB_OUT_DIR}/nvattest_${PKG_VERSION}_${ARCH}.deb"; do
-    if [ "$(id -u)" -eq 0 ]; then
-        chown "${HOST_UID}:${HOST_GID}" "${package}"
-    fi
-    touch -d "@${SOURCE_DATE_EPOCH}" "${package}"
-done
-
 sha256sum \
     "${RUNTIME_OUT_DIR}/usr/bin/nvattest" \
     "${RUNTIME_OUT_DIR}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
-ls -la "${DEB_OUT_DIR}"/{libnvat,nvattest}_*.deb

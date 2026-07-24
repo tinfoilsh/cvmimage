@@ -75,7 +75,9 @@ jobs:
           test "$(bazel --version)" = "bazel 8.7.0"
 
       - name: Build image
-        run: make release-image
+        run: |
+          make regenerate-nvattest
+          make shipping-image
 
       - name: Check release artifacts
         run: |

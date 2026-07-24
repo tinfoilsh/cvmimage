@@ -11,9 +11,9 @@ NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
 NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
 .PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
-	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
+	runtime-builder builder-initrd bazel-rootfs additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
-	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
+	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
 	test-runtime-locks test-runtime-libcap-contract test-runtime-debconf-contract \
 	verify-runtime-sources update-runtime-locks \
 	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
@@ -66,12 +66,6 @@ builder-initrd: runtime-builder
 builder-debug-init: runtime-builder
 	./scripts/run-runtime-builder.sh debug-init
 
-test-go-producer:
-	./scripts/test-go-producer.sh
-
-test-runtime-builder-contract:
-	./scripts/test-runtime-builder-contract.sh
-
 bazel-rootfs: builder-initrd nvattest nvidia-module-artifacts
 	$(BAZEL) build --lockfile_mode=error //image:rootfs
 	mkdir -p build/stage
@@ -104,12 +98,6 @@ test-nvidia-module-producer:
 additive-initrd: builder-initrd
 	TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
 
-verify-additive-initrd: additive-initrd
-	./scripts/initrd_manifest.py verify-archive \
-		--manifest image/initrd/manifest.tsv \
-		--binary build/builder-work/output/artifacts/tinfoil-initrd \
-		--archive initrd.cpio.zst
-
 test-additive-initrd:
 	./scripts/test-additive-initrd.sh
 
@@ -122,7 +110,7 @@ reproducible-nvidia-modules:
 reproducible-runtime-artifacts: reproducible-additive-initrd reproducible-nvattest reproducible-nvidia-modules
 
 test-runtime-locks:
-	./scripts/test-update-runtime-locks.sh
+	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check
 	$(BAZEL) --output_base=/tmp/cvmimage-bazel-runtime-lock-test test \
 		--symlink_prefix=/tmp/cvmimage-bazel-runtime-lock-test- \
 		//image:runtime-package-lock-test

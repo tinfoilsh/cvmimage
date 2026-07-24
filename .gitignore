@@ -16,4 +16,7 @@ tinfoil-boot/tinfoil-boot
 tinfoil/boot
 tinfoil/shim
 /build/
+/kernel/build/
+/kernel/out/
+/bazel-*
 /evidence/

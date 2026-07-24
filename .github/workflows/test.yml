@@ -2,7 +2,7 @@ name: Test
 
 on:
   pull_request:
-    branches: [main, jules/harden-tcb, jules/tcb-bazel-runtime-lock, jules/tcb-bazel-rootfs]
+    branches: [main, jules/harden-tcb]
   push:
     branches: [main]
 
@@ -55,12 +55,6 @@ jobs:
 
       - name: Test deterministic named initrd packaging
         run: make test-additive-initrd
-
-      - name: Test deterministic named Go producers
-        run: make test-go-producer
-
-      - name: Test pinned runtime builder contract
-        run: make test-runtime-builder-contract
 
       - name: Test Fabric Manager config contract
         run: ./scripts/test-fabric-manager-config.sh

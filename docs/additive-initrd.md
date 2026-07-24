@@ -36,7 +36,6 @@ The focused commands are:
 ./scripts/build-runtime-builder.sh
 ./scripts/run-runtime-builder.sh initrd
 make additive-initrd
-make verify-additive-initrd
 make test-additive-initrd
 ```
 

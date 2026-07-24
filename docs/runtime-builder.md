@@ -20,16 +20,9 @@ trees, caches, logs, and installed tools are discarded. Rootfs construction
 may consume only the named producer outputs mounted from explicit output
 directories.
 
-Normal rootfs and image builds do not rebuild nvattest. They consume the two
-fixed runtime artifacts from the durable local cache at
-`${XDG_CACHE_HOME:-$HOME/.cache}/cvmimage-hardening/nvattest` by default,
-overrideable with `NVATTEST_CACHE=/path`. The cache is shared across worktrees,
-survives repository `clean` and `deepclean`, and is addressed by the reviewed
-SHA-256 digests of the two runtime files. Consumers verify both digests and the
-fixed ELF/runtime contract and fail closed when either artifact is absent or
-mismatched. The epoch-zero staged copies are not Make targets, so their
-reproducible timestamps cannot make the source producer appear perpetually
-stale.
+Normal rootfs and image builds reuse the two worktree-local nvattest runtime
+outputs when both already exist. Their reproducible epoch-zero timestamps are
+not Make targets and therefore do not trigger unnecessary source rebuilds.
 
 The standard producer interface is:
 
@@ -41,33 +34,20 @@ The standard producer interface is:
 make test-go-producer
 ```
 
-Regenerate and publish the fixed nvattest cache only when intentionally updating
-or restoring it:
+Regenerate nvattest explicitly when changing its source or build inputs:
 
 ```sh
 make regenerate-nvattest
 ```
 
-The regeneration target builds from source in the pinned builder and refuses to
-publish outputs unless they match the reviewed producer hashes. Changing those
-hashes is a source update requiring review. `make reproducible-nvattest` performs
-two isolated source builds and byte comparisons only during release
-qualification; it is not a dependency of normal images or routine PR CI.
-
-Fresh release runners prime the durable cache explicitly with:
-
-```sh
-make release-nvattest-cache
-```
-
-That release-only target performs the required two isolated source builds,
-compares them byte-for-byte, verifies the reviewed hashes, and publishes the
-verified result into the local cache that `make shipping-image` then consumes.
+The release workflow calls `make release-image`, which first regenerates
+nvattest on the fresh release worker and then builds the shipping image.
+`make reproducible-nvattest` remains available for independent qualification.
 
 Initrd, nvattest, and kernel producers use ordinary unprivileged containers.
 NVIDIA alone receives `CAP_SYS_ADMIN` with confined host-device access for its
-fixed mount-namespace build. Output and cache paths are explicit; arbitrary
-host environment state is not forwarded.
+fixed mount-namespace build. Output paths are explicit; arbitrary host
+environment state is not forwarded.
 
 The build pipeline does not claim to defend against a malicious builder.
 Build-time disruption and denial of service are accepted because they cannot

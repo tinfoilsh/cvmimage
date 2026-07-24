@@ -6,10 +6,11 @@ BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
 SHIPPING_INITRD = initrd.cpio.zst
 
-NVATTEST_CACHE ?= $(if $(strip $(XDG_CACHE_HOME)),$(XDG_CACHE_HOME),$(HOME)/.cache)/cvmimage-hardening/nvattest
 NVATTEST_RUNTIME_OUTPUT = build/rootfs-artifacts/nvattest
+NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
+NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
-.PHONY: all build rebuild shipping-image clean deepclean hash nvattest regenerate-nvattest release-nvattest-cache \
+.PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
 	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
@@ -174,28 +175,32 @@ debug-image: bazel-rootfs bazel-debug-layer additive-initrd custom-kernel-artifa
 	cp tinfoilcvm-debug.roothash tinfoilcvm-debug.hash
 	@echo "debug image hash: $$(cat tinfoilcvm-debug.hash)"
 
+release-image:
+	$(MAKE) regenerate-nvattest
+	$(MAKE) shipping-image
+
 rebuild: shipping-image
 
 build: shipping-image
 
-# Normal image builds consume only the two fixed, content-addressed nvattest
-# runtime artifacts from a durable local cache. They never invoke the source
-# producer implicitly.
+# Reuse an existing worktree-local nvattest build. Rebuild only when either
+# runtime output is absent or regeneration is requested explicitly.
 nvattest:
-	./scripts/stage-nvattest-cache.sh \
-		"$(NVATTEST_CACHE)" \
-		"$(abspath $(NVATTEST_RUNTIME_OUTPUT))"
+	@if [ ! -x "$(NVATTEST_RUNTIME_BINARY)" ] || [ ! -f "$(NVATTEST_RUNTIME_LIBRARY)" ]; then \
+	    ./scripts/build-runtime-builder.sh; \
+	    ./scripts/run-runtime-builder.sh nvattest; \
+	else \
+	    echo "Reusing existing nvattest runtime artifacts"; \
+	fi
+	test -x "$(NVATTEST_RUNTIME_BINARY)"
+	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
 
-# Source regeneration is deliberately explicit. It verifies the fixed producer
-# hashes before publishing artifacts into the local content-addressed cache.
-regenerate-nvattest: runtime-builder
-	./scripts/regenerate-nvattest-cache.sh "$(NVATTEST_CACHE)"
-
-# Release qualification rebuilds nvattest twice, verifies the reviewed hashes,
-# and publishes the verified result into the local cache for shipping-image.
-release-nvattest-cache:
-	./scripts/reproduce-nvattest.sh \
-		--publish-cache "$(NVATTEST_CACHE)"
+regenerate-nvattest:
+	rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
+	./scripts/build-runtime-builder.sh
+	./scripts/run-runtime-builder.sh nvattest
+	test -x "$(NVATTEST_RUNTIME_BINARY)"
+	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
 
 test-nvattest-artifacts:
 	./scripts/test-nvattest-artifacts.sh

@@ -2,9 +2,8 @@
 
 The measured root filesystem starts empty and is assembled by
 `//image:rootfs` into `bazel-bin/image/bazel-rootfs.tar`.
-`make bazel-rootfs` runs the required fixed named producers, verifies and stages
-the fixed content-addressed nvattest cache artifacts, and installs that archive
-at `build/stage/bazel-rootfs.tar` for the offline mkosi shipping step.
+`make bazel-rootfs` runs the fixed named producers and installs that archive at
+`build/stage/bazel-rootfs.tar` for the offline mkosi shipping step.
 
 The target combines, in fixed order:
 
@@ -13,8 +12,7 @@ The target combines, in fixed order:
 2. the complete locked Docker static archive payload;
 3. repository-owned files under `image/rootfs` with explicit mode, UID and
    GID;
-4. the fixed Go and NVIDIA kernel-module producer outputs plus the reviewed,
-   SHA-256-verified nvattest cache artifacts; and
+4. the fixed Go, nvattest and NVIDIA kernel-module producer outputs; and
 5. only the mountpoints and symlinks required by the measured boot contract.
 
 Package payloads are inert. No package maintainer scripts run while assembling

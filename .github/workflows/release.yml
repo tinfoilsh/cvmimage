@@ -74,11 +74,8 @@ jobs:
           sudo install -m 0755 "$archive" /usr/local/bin/bazel
           test "$(bazel --version)" = "bazel 8.7.0"
 
-      - name: Prime nvattest cache
-        run: make release-nvattest-cache
-
       - name: Build image
-        run: make shipping-image
+        run: make release-image
 
       - name: Check release artifacts
         run: |

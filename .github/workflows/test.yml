@@ -41,14 +41,5 @@ jobs:
           sudo install -m 0755 "$archive" /usr/local/bin/bazel
           test "$(bazel --version)" = "bazel 8.7.0"
 
-      - name: Build
-        run: cd tinfoil && go build ./...
-
       - name: Test
-        run: cd tinfoil && go test ./...
-
-      - name: Test debug-tagged PID1
-        run: cd tinfoil && go test -tags=tinfoil_debug_image ./cmd/init
-
-      - name: Test fixed measured initrd
-        run: make test-bazel-initrd
+        run: make test

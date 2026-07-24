@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
-	"os/exec"
 	"sort"
-	"strings"
 	"time"
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/netfilter"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,15 +26,11 @@ type network struct {
 	Allow []string `yaml:"allow"`
 }
 
-type nftClient struct {
-	apply func(string) ([]byte, error)
-}
-
-// Engine maintains the nft allow sets described by the boot-generated config.
+// Engine maintains the fixed kernel allow sets described by the boot-generated config.
 type Engine struct {
 	config   *config
 	resolve  func(context.Context, []string) ([]string, error)
-	nft      nftClient
+	apply    func(context.Context, map[string][]netip.Addr) error
 	interval time.Duration
 }
 
@@ -45,11 +41,9 @@ func Load() (*Engine, error) {
 		return nil, err
 	}
 	return &Engine{
-		config:  cfg,
-		resolve: resolve,
-		nft: nftClient{
-			apply: applyDelta,
-		},
+		config:   cfg,
+		resolve:  resolve,
+		apply:    netfilter.ReplaceAllowSets,
 		interval: refreshInterval,
 	}, nil
 }
@@ -64,11 +58,11 @@ func (e *Engine) Populate(ctx context.Context) error {
 	return e.Refresh(ctx)
 }
 
-// Refresh resolves every allowlist, then replaces all fixed sets in one nft
+// Refresh resolves every allowlist, then replaces all fixed sets in one netlink
 // transaction. No runtime state file or parser is needed.
 func (e *Engine) Refresh(ctx context.Context) error {
 	names := make([]string, 0, len(e.config.Networks))
-	resolved := make(map[string][]string, len(e.config.Networks))
+	resolved := make(map[string][]netip.Addr, len(e.config.Networks))
 	for name := range e.config.Networks {
 		names = append(names, name)
 	}
@@ -78,22 +72,22 @@ func (e *Engine) Refresh(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("network %q: %w", name, err)
 		}
-		resolved[name] = current
+		addresses := make([]netip.Addr, len(current))
+		for index, value := range current {
+			address, err := netip.ParseAddr(value)
+			if err != nil || !address.Is4() {
+				return fmt.Errorf("network %q: resolver returned invalid IPv4 address %q", name, value)
+			}
+			addresses[index] = address
+		}
+		sort.Slice(addresses, func(i, j int) bool { return addresses[i].Compare(addresses[j]) < 0 })
+		resolved[containernet.AllowSetPrefix+name] = addresses
 	}
 	if len(names) == 0 {
 		return nil
 	}
-	var script strings.Builder
-	for _, name := range names {
-		setName := containernet.AllowSetPrefix + name
-		fmt.Fprintf(&script, "flush set inet tinfoil %s\n", setName)
-		if len(resolved[name]) > 0 {
-			fmt.Fprintf(&script, "add element inet tinfoil %s { %s }\n",
-				setName, strings.Join(resolved[name], ", "))
-		}
-	}
-	if out, err := e.nft.apply(script.String()); err != nil {
-		return fmt.Errorf("replacing egress allow sets: %w (%s)", err, out)
+	if err := e.apply(ctx, resolved); err != nil {
+		return fmt.Errorf("replacing egress allow sets: %w", err)
 	}
 	return nil
 }
@@ -148,10 +142,4 @@ func resolve(ctx context.Context, domains []string) ([]string, error) {
 		return nil, fmt.Errorf("no IPv4 addresses resolved for %v", domains)
 	}
 	return ips, nil
-}
-
-func applyDelta(script string) ([]byte, error) {
-	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(script)
-	return cmd.CombinedOutput()
 }

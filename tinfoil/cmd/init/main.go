@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/netfilter"
 	"tinfoil/internal/nvidia"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
@@ -100,6 +101,7 @@ type lifecycleDeps struct {
 	loopback     func(context.Context) error
 	nvidia       func(context.Context) error
 	lockModules  func() error
+	firewall     func(context.Context) error
 	debugFailure func(context.Context, error)
 	setupFS      func(pidruntime.LogFunc) error
 	sysctls      func(pidruntime.LogFunc) error
@@ -142,6 +144,7 @@ func run(parent context.Context) (result error) {
 		},
 		debugFailure: parkDebugFailure,
 		lockModules:  hardening.LockKernelModules,
+		firewall:     netfilter.Initialize,
 		setupFS:      pidruntime.SetupFilesystems,
 		sysctls:      pidruntime.ApplySysctls,
 		ramdisk:      pidruntime.SetupRamdisk,
@@ -195,8 +198,8 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.lockModules(); err != nil {
 		return fmt.Errorf("lock kernel modules: %w", err)
 	}
-	if err := deps.oneShot(bootCtx, command("nftables", "/usr/sbin/nft", "-f", "/etc/nftables.conf")); err != nil {
-		return err
+	if err := deps.firewall(bootCtx); err != nil {
+		return fmt.Errorf("initialize firewall: %w", err)
 	}
 	deps.syslog(runtimeCtx)
 

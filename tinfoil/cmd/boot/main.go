@@ -157,7 +157,7 @@ func run(ctx context.Context) error {
 	// 9. Firewall
 	start = time.Now()
 	log.Println("Configuring firewall")
-	if err := setupFirewall(config); err != nil {
+	if err := setupFirewall(ctx, config); err != nil {
 		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("firewall setup failed: %w", err)
 	}

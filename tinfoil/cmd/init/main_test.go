@@ -88,6 +88,7 @@ func newLifecycleHarness() *lifecycleHarness {
 		loopback:     func(context.Context) error { return nil },
 		nvidia:       func(context.Context) error { return nil },
 		lockModules:  func() error { return nil },
+		firewall:     func(context.Context) error { return nil },
 		debugFailure: func(context.Context, error) {},
 		setupFS:      noSetup,
 		sysctls:      noSetup,
@@ -426,6 +427,10 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 		record("module-lock")
 		return nil
 	}
+	harness.deps.firewall = func(context.Context) error {
+		record("firewall")
+		return nil
+	}
 	harness.services.onStart = record
 	parent, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -442,9 +447,9 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	loopback := slices.Index(events, "loopback")
 	bootstrap := slices.Index(events, "nvidia-bootstrap")
 	lock := slices.Index(events, "module-lock")
-	nftables := slices.Index(events, "nftables")
+	firewall := slices.Index(events, "firewall")
 	containerd := slices.Index(events, containerdName)
-	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables {
+	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || firewall != lock+1 || containerd <= firewall {
 		t.Fatalf("startup events = %v", events)
 	}
 }
@@ -479,14 +484,20 @@ func TestModuleLockFailureStopsBootBeforeServices(t *testing.T) {
 		return nil
 	}
 	harness.deps.lockModules = func() error { return lockErr }
+	harness.deps.firewall = func(context.Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, "firewall")
+		return nil
+	}
 	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
 	if !errors.Is(err, lockErr) {
 		t.Fatalf("runLifecycle error = %v, want module lock failure", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if slices.Contains(events, "nftables") {
-		t.Fatalf("nftables ran despite module lock failure: %v", events)
+	if slices.Contains(events, "firewall") {
+		t.Fatalf("firewall ran despite module lock failure: %v", events)
 	}
 	if len(harness.services.started) != 0 {
 		t.Fatalf("services started despite module lock failure: %v", harness.services.started)

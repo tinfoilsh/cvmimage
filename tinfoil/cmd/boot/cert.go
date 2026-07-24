@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,6 +19,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/dcode"
+	"tinfoil/internal/netfilter"
 	tlsutil "tinfoil/internal/tls"
 )
 
@@ -182,15 +184,15 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 }
 
 func withHTTP01Firewall(requestCertificate func() (*tls.Certificate, error)) (*tls.Certificate, error) {
-	return withHTTP01FirewallWith(runNft, requestCertificate)
+	return withHTTP01FirewallWith(netfilter.OpenHTTP01, netfilter.CloseHTTP01, requestCertificate)
 }
 
-func withHTTP01FirewallWith(run func(string) error, requestCertificate func() (*tls.Certificate, error)) (cert *tls.Certificate, retErr error) {
-	if err := run("add rule inet tinfoil http01 tcp dport 80 accept\n"); err != nil {
+func withHTTP01FirewallWith(open, close func(context.Context) error, requestCertificate func() (*tls.Certificate, error)) (cert *tls.Certificate, retErr error) {
+	if err := open(context.Background()); err != nil {
 		return nil, fmt.Errorf("opening HTTP-01 firewall: %w", err)
 	}
 	defer func() {
-		if err := run("flush chain inet tinfoil http01\n"); err != nil {
+		if err := close(context.Background()); err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("closing HTTP-01 firewall: %w", err))
 		}
 	}()

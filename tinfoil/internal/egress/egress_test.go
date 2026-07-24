@@ -3,6 +3,8 @@ package egress
 import (
 	"context"
 	"errors"
+	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +19,10 @@ func TestRefreshFailsClosedBeforeNftOnResolutionError(t *testing.T) {
 		resolve: func(context.Context, []string) ([]string, error) {
 			return nil, errors.New("DNS unavailable")
 		},
-		nft: nftClient{apply: func(string) ([]byte, error) {
+		apply: func(context.Context, map[string][]netip.Addr) error {
 			applied = true
-			return nil, nil
-		}},
+			return nil
+		},
 		interval: time.Minute,
 	}
 
@@ -29,7 +31,7 @@ func TestRefreshFailsClosedBeforeNftOnResolutionError(t *testing.T) {
 		t.Fatalf("Refresh() error = %v", err)
 	}
 	if applied {
-		t.Fatal("resolution failure changed nft state")
+		t.Fatal("resolution failure changed netfilter state")
 	}
 }
 
@@ -45,15 +47,16 @@ func TestRefreshReplacesAllSetsInOneDeterministicTransaction(t *testing.T) {
 			}
 			return []string{"192.0.2.2", "192.0.2.1"}, nil
 		},
-		nft: nftClient{apply: func(script string) ([]byte, error) {
-			want := "flush set inet tinfoil allow-alpha\n" +
-				"add element inet tinfoil allow-alpha { 192.0.2.2, 192.0.2.1 }\n" +
-				"flush set inet tinfoil allow-zeta\n"
-			if script != want {
-				t.Fatalf("nft script = %q, want %q", script, want)
+		apply: func(_ context.Context, sets map[string][]netip.Addr) error {
+			want := map[string][]netip.Addr{
+				"allow-alpha": {netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2")},
+				"allow-zeta":  {},
 			}
-			return nil, nil
-		}},
+			if !reflect.DeepEqual(sets, want) {
+				t.Fatalf("sets = %#v, want %#v", sets, want)
+			}
+			return nil
+		},
 		interval: time.Minute,
 	}
 
@@ -67,10 +70,8 @@ func TestRefreshPropagatesNftFailure(t *testing.T) {
 		config: &config{Networks: map[string]network{
 			"control": {Allow: nil},
 		}},
-		resolve: func(context.Context, []string) ([]string, error) { return nil, nil },
-		nft: nftClient{apply: func(string) ([]byte, error) {
-			return []byte("permission denied"), errors.New("exit status 1")
-		}},
+		resolve:  func(context.Context, []string) ([]string, error) { return nil, nil },
+		apply:    func(context.Context, map[string][]netip.Addr) error { return errors.New("permission denied") },
 		interval: time.Minute,
 	}
 
@@ -90,7 +91,7 @@ func TestRefreshThreadsCancellationIntoResolution(t *testing.T) {
 		resolve: func(ctx context.Context, _ []string) ([]string, error) {
 			return nil, ctx.Err()
 		},
-		nft:      nftClient{apply: func(string) ([]byte, error) { return nil, nil }},
+		apply:    func(context.Context, map[string][]netip.Addr) error { return nil },
 		interval: time.Minute,
 	}
 

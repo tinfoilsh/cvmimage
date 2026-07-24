@@ -18,9 +18,10 @@ The measured daemon policy includes these mode `0644` files:
   userland proxy, uses Docker's nftables backend, enables no-new-privileges and
   the containerd snapshotter, and registers only the pinned NVIDIA runtime by
   absolute path.
-- `/etc/nftables.conf` installs the fail-closed input and forward baseline that
-  `tinfoil-boot` augments after creating the fixed container bridge. The fixed
-  external address and gateway contract has no DHCP allowance.
+- PID1 installs the fixed fail-closed input and forward baseline directly with
+  the bounded `NETLINK_NETFILTER` client. `tinfoil-boot` augments only its
+  measured chains after creating fixed container bridges; no nft language
+  parser or policy file is present in the runtime image.
 - `/etc/nvidia-container-runtime/config.toml` prevents runtime module loading,
   exposes only compute and utility capabilities, invokes only the pinned
   `runc` path, consumes only `/var/run/cdi` specifications, and rejects

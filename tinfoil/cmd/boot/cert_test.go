@@ -1,10 +1,9 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,8 +13,11 @@ func TestWithHTTP01FirewallUsesFixedMeasuredChain(t *testing.T) {
 	var events []string
 	wantCert := &tls.Certificate{}
 
-	cert, err := withHTTP01FirewallWith(func(script string) error {
-		events = append(events, script)
+	cert, err := withHTTP01FirewallWith(func(context.Context) error {
+		events = append(events, "open")
+		return nil
+	}, func(context.Context) error {
+		events = append(events, "close")
 		return nil
 	}, func() (*tls.Certificate, error) {
 		events = append(events, "request certificate")
@@ -29,9 +31,9 @@ func TestWithHTTP01FirewallUsesFixedMeasuredChain(t *testing.T) {
 	}
 
 	wantEvents := []string{
-		"add rule inet tinfoil http01 tcp dport 80 accept\n",
+		"open",
 		"request certificate",
-		"flush chain inet tinfoil http01\n",
+		"close",
 	}
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("events = %#v, want %#v", events, wantEvents)
@@ -42,11 +44,11 @@ func TestWithHTTP01FirewallDoesNotRequestCertificateWhenOpeningFails(t *testing.
 	openErr := errors.New("open failed")
 	requested := false
 
-	_, err := withHTTP01FirewallWith(func(script string) error {
-		if script != "add rule inet tinfoil http01 tcp dport 80 accept\n" {
-			t.Fatalf("script = %q", script)
-		}
+	_, err := withHTTP01FirewallWith(func(context.Context) error {
 		return openErr
+	}, func(context.Context) error {
+		t.Fatal("close called after open failure")
+		return nil
 	}, func() (*tls.Certificate, error) {
 		requested = true
 		return nil, nil
@@ -63,12 +65,12 @@ func TestWithHTTP01FirewallFailsClosedWhenCleanupFails(t *testing.T) {
 	cleanupErr := errors.New("flush failed")
 	call := 0
 
-	cert, err := withHTTP01FirewallWith(func(string) error {
+	cert, err := withHTTP01FirewallWith(func(context.Context) error {
 		call++
-		if call == 2 {
-			return cleanupErr
-		}
 		return nil
+	}, func(context.Context) error {
+		call++
+		return cleanupErr
 	}, func() (*tls.Certificate, error) {
 		return &tls.Certificate{}, nil
 	})
@@ -88,12 +90,12 @@ func TestWithHTTP01FirewallPreservesRequestAndCleanupFailures(t *testing.T) {
 	cleanupErr := errors.New("flush failed")
 	call := 0
 
-	_, err := withHTTP01FirewallWith(func(string) error {
+	_, err := withHTTP01FirewallWith(func(context.Context) error {
 		call++
-		if call == 2 {
-			return cleanupErr
-		}
 		return nil
+	}, func(context.Context) error {
+		call++
+		return cleanupErr
 	}, func() (*tls.Certificate, error) {
 		return nil, requestErr
 	})
@@ -102,33 +104,5 @@ func TestWithHTTP01FirewallPreservesRequestAndCleanupFailures(t *testing.T) {
 	}
 	if !errors.Is(err, cleanupErr) {
 		t.Fatalf("error = %v, want wrapped %v", err, cleanupErr)
-	}
-}
-
-func TestMeasuredFirewallDefinesHTTP01Chain(t *testing.T) {
-	policyPath := filepath.Join("..", "..", "..", "image", "rootfs", "etc", "nftables.conf")
-	policy, err := os.ReadFile(policyPath)
-	if err != nil {
-		t.Fatalf("reading %s: %v", policyPath, err)
-	}
-
-	text := string(policy)
-	for _, contract := range []string{
-		"chain http01 {\n    }",
-		"jump http01",
-		"ip protocol 1 accept",
-		"meta l4proto 58 accept",
-	} {
-		if !strings.Contains(text, contract) {
-			t.Fatalf("measured firewall policy does not contain %q", contract)
-		}
-	}
-	if strings.Contains(text, "tcp dport 80 accept") {
-		t.Fatal("measured firewall policy opens HTTP-01 before certificate issuance")
-	}
-	for _, protocolName := range []string{"ip protocol icmp", "l4proto ipv6-icmp"} {
-		if strings.Contains(text, protocolName) {
-			t.Fatalf("measured firewall policy depends on protocol-name parsing: %q", protocolName)
-		}
 	}
 }

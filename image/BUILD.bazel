@@ -50,6 +50,13 @@ sh_test(
     data = [":rootfs"],
 )
 
+sh_test(
+    name = "rootfs-no-nftables-test",
+    srcs = ["//scripts:test-rootfs-no-nftables.sh"],
+    args = ["$(location :rootfs)"],
+    data = [":rootfs"],
+)
+
 filegroup(
     name = "runtime-package-layers",
     srcs = ["@ubuntu_runtime//:packages"],
@@ -88,7 +95,6 @@ pkg_files(
         "rootfs/etc/group",
         "rootfs/etc/hostname",
         "rootfs/etc/hosts",
-        "rootfs/etc/nftables.conf",
         "rootfs/etc/nsswitch.conf",
         "rootfs/etc/nvidia-container-runtime/config.toml",
         "rootfs/etc/passwd",

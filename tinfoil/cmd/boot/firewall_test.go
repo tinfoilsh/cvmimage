@@ -9,62 +9,71 @@ import (
 	"time"
 
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/netfilter"
 )
 
 type fakeEgressPopulator struct {
 	populate func(context.Context) error
 }
 
-func (f fakeEgressPopulator) Populate(ctx context.Context) error {
-	return f.populate(ctx)
-}
+func (f fakeEgressPopulator) Populate(ctx context.Context) error { return f.populate(ctx) }
 
-func TestFirewall_AllowlistPopulationFollowsNftOnce(t *testing.T) {
+func TestFirewallInstallsFixedNetworksBeforePopulation(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{
+		"web":     {Egress: "open"},
 		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
-		"metrics": {Egress: "allowlist", Allow: []string{"metrics.tinfoil.sh"}},
 	}}
 	var events []string
-	err := setupContainerNetworkFirewallWith(
-		context.Background(),
-		cfg,
-		false,
-		func(string) error {
-			events = append(events, "nft")
+	var got []netfilter.Network
+	err := setupContainerNetworkFirewallWith(context.Background(), cfg, false, func(_ context.Context, networks []netfilter.Network, debug bool) error {
+		events = append(events, "install")
+		got = append([]netfilter.Network(nil), networks...)
+		return nil
+	}, func() (egressPopulator, error) {
+		events = append(events, "load")
+		return fakeEgressPopulator{populate: func(context.Context) error {
+			events = append(events, "populate")
 			return nil
-		},
-		func() (egressPopulator, error) {
-			events = append(events, "load")
-			return fakeEgressPopulator{populate: func(context.Context) error {
-				events = append(events, "populate")
-				return nil
-			}}, nil
-		},
-	)
+		}}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"nft", "load", "populate"}; !reflect.DeepEqual(events, want) {
+	wantNetworks := []netfilter.Network{{Name: "control", Egress: netfilter.EgressAllowlist}, {Name: "web", Egress: netfilter.EgressOpen}}
+	if !reflect.DeepEqual(got, wantNetworks) {
+		t.Fatalf("networks = %#v, want %#v", got, wantNetworks)
+	}
+	if want := []string{"install", "load", "populate"}; !reflect.DeepEqual(events, want) {
 		t.Fatalf("effects = %v, want %v", events, want)
 	}
 }
 
-func TestFirewall_NoAllowlistSkipsPopulation(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"ipc": {Egress: "closed"},
-		"web": {Egress: "open"},
-	}}
+func TestFirewallAddsClosedShimNetwork(t *testing.T) {
+	cfg := &Config{
+		ShimCfg:  &shimconfig.Config{UpstreamContainer: "api"},
+		Networks: map[string]*NetworkSpec{"web": {Egress: "open"}},
+	}
+	var got []netfilter.Network
+	err := setupContainerNetworkFirewallWith(context.Background(), cfg, false, func(_ context.Context, networks []netfilter.Network, debug bool) error {
+		got = append([]netfilter.Network(nil), networks...)
+		return nil
+	}, func() (egressPopulator, error) { t.Fatal("unexpected egress load"); return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []netfilter.Network{{Name: "web", Egress: netfilter.EgressOpen}, {Name: "shim-net", Egress: netfilter.EgressClosed}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("networks = %#v, want %#v", got, want)
+	}
+}
+
+func TestFirewallNoAllowlistSkipsPopulation(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{"ipc": {Egress: "closed"}, "web": {Egress: "open"}}}
 	loaded := false
-	err := setupContainerNetworkFirewallWith(
-		context.Background(),
-		cfg,
-		false,
-		func(string) error { return nil },
-		func() (egressPopulator, error) {
-			loaded = true
-			return nil, nil
-		},
-	)
+	err := setupContainerNetworkFirewallWith(context.Background(), cfg, false, func(context.Context, []netfilter.Network, bool) error { return nil }, func() (egressPopulator, error) {
+		loaded = true
+		return nil, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,266 +82,65 @@ func TestFirewall_NoAllowlistSkipsPopulation(t *testing.T) {
 	}
 }
 
-func TestFirewall_PopulationFailureAbortsSetup(t *testing.T) {
-	wantErr := errors.New("resolution failed")
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
-	}}
-	populateCalls := 0
-	err := setupContainerNetworkFirewallWith(
-		context.Background(),
-		cfg,
-		false,
-		func(string) error { return nil },
-		func() (egressPopulator, error) {
-			return fakeEgressPopulator{populate: func(context.Context) error {
-				populateCalls++
-				return wantErr
-			}}, nil
-		},
-	)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("setup error = %v, want %v", err, wantErr)
+func TestFirewallRejectsModeOutsideFixedContract(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{"web": {Egress: "future-mode"}}}
+	called := false
+	err := setupContainerNetworkFirewallWith(context.Background(), cfg, false, func(context.Context, []netfilter.Network, bool) error {
+		called = true
+		return nil
+	}, func() (egressPopulator, error) { return nil, nil })
+	if err == nil || !strings.Contains(err.Error(), "invalid egress mode") {
+		t.Fatalf("error = %v", err)
 	}
-	if populateCalls != 1 {
-		t.Fatalf("Populate calls = %d, want 1", populateCalls)
+	if called {
+		t.Fatal("invalid mode reached the kernel")
 	}
 }
 
-func TestFirewall_PopulationHasFixedBootDeadline(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
-	}}
-	err := setupContainerNetworkFirewallWith(
-		context.Background(),
-		cfg,
-		false,
-		func(string) error { return nil },
-		func() (egressPopulator, error) {
-			return fakeEgressPopulator{populate: func(ctx context.Context) error {
-				deadline, ok := ctx.Deadline()
-				if !ok {
-					t.Fatal("population context has no deadline")
-				}
-				remaining := time.Until(deadline)
-				if remaining > egressInitialPopulationTimeout || remaining < egressInitialPopulationTimeout-time.Second {
-					t.Fatalf("population deadline = %s, want %s", remaining, egressInitialPopulationTimeout)
-				}
-				return nil
-			}}, nil
-		},
-	)
+func TestFirewallPopulationFailureAbortsSetup(t *testing.T) {
+	wantErr := errors.New("resolution failed")
+	cfg := &Config{Networks: map[string]*NetworkSpec{"control": {Egress: "allowlist"}}}
+	err := setupContainerNetworkFirewallWith(context.Background(), cfg, false, func(context.Context, []netfilter.Network, bool) error { return nil }, func() (egressPopulator, error) {
+		return fakeEgressPopulator{populate: func(context.Context) error { return wantErr }}, nil
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("setup error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestFirewallPopulationHasFixedBootDeadline(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{"control": {Egress: "allowlist"}}}
+	err := setupContainerNetworkFirewallWith(context.Background(), cfg, false, func(context.Context, []netfilter.Network, bool) error { return nil }, func() (egressPopulator, error) {
+		return fakeEgressPopulator{populate: func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("population context has no deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining > egressInitialPopulationTimeout || remaining < egressInitialPopulationTimeout-time.Second {
+				t.Fatalf("population deadline = %s, want %s", remaining, egressInitialPopulationTimeout)
+			}
+			return nil
+		}}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestFirewall_PopulationInheritsBootCancellation(t *testing.T) {
+func TestFirewallPopulationInheritsBootCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
-	}}
-	err := setupContainerNetworkFirewallWith(
-		ctx,
-		cfg,
-		false,
-		func(string) error { return nil },
-		func() (egressPopulator, error) {
-			return fakeEgressPopulator{populate: func(ctx context.Context) error {
-				<-ctx.Done()
-				return ctx.Err()
-			}}, nil
-		},
-	)
+	cfg := &Config{Networks: map[string]*NetworkSpec{"control": {Egress: "allowlist"}}}
+	err := setupContainerNetworkFirewallWith(ctx, cfg, false, func(context.Context, []netfilter.Network, bool) error { return nil }, func() (egressPopulator, error) {
+		return fakeEgressPopulator{populate: func(ctx context.Context) error { return ctx.Err() }}, nil
+	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("setup error = %v, want boot cancellation", err)
 	}
 }
 
-func TestFirewall_PopulationHonorsEarlierBootDeadline(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
-	}}
-	err := setupContainerNetworkFirewallWith(
-		ctx,
-		cfg,
-		false,
-		func(string) error { return nil },
-		func() (egressPopulator, error) {
-			return fakeEgressPopulator{populate: func(ctx context.Context) error {
-				<-ctx.Done()
-				return ctx.Err()
-			}}, nil
-		},
-	)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("setup error = %v, want boot deadline", err)
-	}
-}
-
-// renderFirewallScript returns the nft script setupContainerNetworkFirewall
-// would commit, minus the runNft call.
-func renderFirewallScript(cfg *Config, debug bool) string {
-	var s strings.Builder
-	for name, spec := range cfg.Networks {
-		writeBridgeRules(&s, name, spec)
-	}
-	if shimUpstreamSet(cfg) {
-		writeBridgeRules(&s, "shim-net", &NetworkSpec{Egress: "closed"})
-	}
-	if debug && hasReservedDebugContainer(cfg) {
-		writeReservedDebugForwardRules(&s)
-	}
-	return s.String()
-}
-
-func TestFirewall_ClosedBridgeHasNoEgressRule(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"ipc-exec": {Egress: "closed"},
-	}}
-	script := renderFirewallScript(cfg, false)
-	if !strings.Contains(script, `iif "ipc-exec" oif "ipc-exec" accept`) {
-		t.Error("closed bridge should still allow intra-bridge traffic")
-	}
-	if !strings.Contains(script, `oif "ipc-exec" ct state established`) {
-		t.Error("closed bridge should still allow return traffic")
-	}
-	if !strings.Contains(script, `input iif "ipc-exec" ct state new drop`) {
-		t.Error("closed bridge should block container→host")
-	}
-	if strings.Contains(script, "ip daddr") {
-		t.Errorf("closed bridge must not emit egress rules; got:\n%s", script)
-	}
-}
-
-func TestFirewall_OpenBridgeEmitsPublicAccept(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"web": {Egress: "open"},
-	}}
-	script := renderFirewallScript(cfg, false)
-	if !strings.Contains(script, `iif "web" ip daddr != {`) {
-		t.Errorf("open bridge should accept public v4; got:\n%s", script)
-	}
-	if !strings.Contains(script, `iif "web" ip6 daddr != {`) {
-		t.Error("open bridge should accept public v6")
-	}
-}
-
-func TestFirewall_OpenBridgeBlocksNonPublicIPv4Ranges(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"web": {Egress: "open"},
-	}}
-	script := renderFirewallScript(cfg, false)
-	for _, cidr := range []string{
-		"100.64.0.0/10",   // RFC 6598 shared address space.
-		"198.18.0.0/15",   // RFC 6890 benchmarking.
-		"198.51.100.0/24", // RFC 5737 documentation.
-		"224.0.0.0/4",     // RFC 6890 multicast.
-		"240.0.0.0/4",     // RFC 6890 reserved.
-		"255.255.255.255/32",
-	} {
-		if !strings.Contains(script, cidr) {
-			t.Errorf("open bridge should exclude %s from public egress; got:\n%s", cidr, script)
-		}
-	}
-}
-
-func TestFirewall_AllowlistEmitsSetAndAcceptRule(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
-	}}
-	script := renderFirewallScript(cfg, false)
-	if !strings.Contains(script, `add set inet tinfoil allow-control`) {
-		t.Errorf("allowlist must declare its set; got:\n%s", script)
-	}
-	if !strings.Contains(script, `iif "control" ip daddr @allow-control accept`) {
-		t.Errorf("allowlist must reference its set; got:\n%s", script)
-	}
-	if !strings.Contains(script, `iif "control" ip daddr {`) {
-		t.Error("allowlist must drop private destinations")
-	}
-}
-
-func TestFirewall_AllowlistDropsNonPublicBeforeAllowSet(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{
-		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
-	}}
-	script := renderFirewallScript(cfg, false)
-	dropRule := `iif "control" ip daddr {`
-	dropIdx := strings.Index(script, dropRule)
-	allowIdx := strings.Index(script, `iif "control" ip daddr @allow-control accept`)
-	if dropIdx == -1 || allowIdx == -1 {
-		t.Fatalf("expected non-public drop before allow set; got:\n%s", script)
-	}
-	if dropIdx > allowIdx {
-		t.Fatalf("non-public drop must precede allow set; got:\n%s", script)
-	}
-	for _, cidr := range []string{"100.64.0.0/10", "198.18.0.0/15"} {
-		if !strings.Contains(script, cidr) {
-			t.Errorf("allowlist bridge should drop %s before allow set; got:\n%s", cidr, script)
-		}
-	}
-}
-
-func TestFirewall_ShimNetAlwaysClosed(t *testing.T) {
-	cfg := &Config{
-		ShimCfg: &shimconfig.Config{UpstreamContainer: "x"},
-		Networks: map[string]*NetworkSpec{
-			"web": {Egress: "open"},
-		},
-	}
-	script := renderFirewallScript(cfg, false)
-	if !strings.Contains(script, `iif "shim-net" oif "shim-net" accept`) {
-		t.Errorf("shim-net should emit intra-bridge accept; got:\n%s", script)
-	}
-	if strings.Contains(script, `iif "shim-net" ip daddr !`) {
-		t.Error("shim-net must not get an egress-open rule")
-	}
-}
-
-func TestFirewall_DebugInstallerAllowsOnlyPublishedSSHForward(t *testing.T) {
-	cfg := &Config{
-		Networks: map[string]*NetworkSpec{},
-		Containers: []Container{{
-			Name: reservedDebugContainerName,
-		}},
-	}
-	script := renderFirewallScript(cfg, true)
-	for _, rule := range []string{
-		`oifname "docker0" ct status dnat tcp dport 2222 accept`,
-		`iifname "docker0" ct state established,related accept`,
-	} {
-		if !strings.Contains(script, rule) {
-			t.Errorf("debug installer rule %q missing from:\n%s", rule, script)
-		}
-	}
-}
-
-func TestFirewall_ProductionAndGenericContainersKeepDockerBridgeClosed(t *testing.T) {
-	reserved := &Config{
-		Networks:   map[string]*NetworkSpec{},
-		Containers: []Container{{Name: reservedDebugContainerName}},
-	}
-	generic := &Config{
-		Networks:   map[string]*NetworkSpec{},
-		Containers: []Container{{Name: "workload"}},
-	}
-	for name, script := range map[string]string{
-		"production": renderFirewallScript(reserved, false),
-		"generic":    renderFirewallScript(generic, true),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if strings.Contains(script, `docker0`) {
-				t.Fatalf("unexpected docker0 forwarding rule:\n%s", script)
-			}
-		})
-	}
-}
-
-func TestAttachOrder_EgressFirstThenClosedThenShim(t *testing.T) {
+func TestAttachOrderEgressFirstThenClosedThenShim(t *testing.T) {
 	cfg := &Config{
 		ShimCfg: &shimconfig.Config{UpstreamContainer: "api"},
 		Networks: map[string]*NetworkSpec{
@@ -341,37 +149,57 @@ func TestAttachOrder_EgressFirstThenClosedThenShim(t *testing.T) {
 			"ipc-a":    {Egress: "closed"},
 		},
 	}
-	c := Container{Name: "api", Networks: []string{"ipc-exec", "control", "ipc-a"}}
-	first, rest := attachOrder(c, cfg)
+	first, rest := attachOrder(Container{Name: "api", Networks: []string{"ipc-exec", "control", "ipc-a"}}, cfg)
 	if first != "control" {
 		t.Errorf("egress network should be first, got %q", first)
 	}
-	// shim-net must come last
 	if len(rest) == 0 || rest[len(rest)-1] != "shim-net" {
 		t.Errorf("shim-net should be last, got rest=%v", rest)
 	}
 }
 
-func TestAttachOrder_NoNetworksNonShim(t *testing.T) {
-	cfg := &Config{Networks: map[string]*NetworkSpec{}}
-	c := Container{Name: "lonely"}
-	first, rest := attachOrder(c, cfg)
+func TestAttachOrderNoNetworksNonShim(t *testing.T) {
+	first, rest := attachOrder(Container{Name: "lonely"}, &Config{Networks: map[string]*NetworkSpec{}})
 	if first != "" || len(rest) != 0 {
 		t.Errorf("unattached non-shim container should get nothing, got %q %v", first, rest)
 	}
 }
 
-func TestAttachOrder_NoNetworksShimUpstreamGetsShimNet(t *testing.T) {
-	cfg := &Config{
-		ShimCfg:  &shimconfig.Config{UpstreamContainer: "upstream"},
-		Networks: map[string]*NetworkSpec{},
+func TestAttachOrderNoNetworksShimUpstreamGetsShimNet(t *testing.T) {
+	cfg := &Config{ShimCfg: &shimconfig.Config{UpstreamContainer: "upstream"}, Networks: map[string]*NetworkSpec{}}
+	first, rest := attachOrder(Container{Name: "upstream"}, cfg)
+	if first != "shim-net" || len(rest) != 0 {
+		t.Errorf("unexpected attachment: first=%q rest=%v", first, rest)
 	}
-	c := Container{Name: "upstream"}
-	first, rest := attachOrder(c, cfg)
-	if first != "shim-net" {
-		t.Errorf("upstream-with-no-networks should attach to shim-net, got %q", first)
+}
+
+func TestFixedFirewallDebugForwardContract(t *testing.T) {
+	tests := []struct {
+		name       string
+		debug      bool
+		containers []Container
+		want       bool
+	}{
+		{name: "reserved debug", debug: true, containers: []Container{{Name: reservedDebugContainerName}}, want: true},
+		{name: "production", containers: []Container{{Name: reservedDebugContainerName}}},
+		{name: "generic", debug: true, containers: []Container{{Name: "workload"}}},
 	}
-	if len(rest) != 0 {
-		t.Errorf("expected no additional networks, got %v", rest)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			err := setupContainerNetworkFirewallWith(context.Background(), &Config{
+				Networks:   map[string]*NetworkSpec{},
+				Containers: test.containers,
+			}, test.debug, func(_ context.Context, _ []netfilter.Network, debugForward bool) error {
+				called = true
+				if debugForward != test.want {
+					t.Fatalf("debugForward = %t, want %t", debugForward, test.want)
+				}
+				return nil
+			}, func() (egressPopulator, error) { return nil, nil })
+			if err != nil || !called {
+				t.Fatalf("setup error = %v, called=%t", err, called)
+			}
+		})
 	}
 }

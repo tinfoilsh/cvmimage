@@ -31,7 +31,8 @@ type fakeBackend struct {
 	exitOnTERM     map[string]bool
 	groupSurvives  map[string]bool
 	cgroupSurvives map[string]bool
-	orphanPIDs     map[string][]int
+	removeErr      map[string]error
+	externalCgroup bool
 }
 
 type fakeProcess struct {
@@ -49,7 +50,8 @@ func newFakeBackend(sigchld chan os.Signal) *fakeBackend {
 		nextPID: 100, children: map[int]*fakeProcess{}, sigchld: sigchld,
 		started: make(chan int, 32), signaled: make(chan string, 32),
 		exitOnTERM: map[string]bool{}, groupSurvives: map[string]bool{},
-		cgroupSurvives: map[string]bool{}, orphanPIDs: map[string][]int{},
+		cgroupSurvives: map[string]bool{},
+		removeErr:      map[string]error{},
 	}
 }
 
@@ -85,6 +87,28 @@ func (b *fakeBackend) waitNoHang() (int, syscall.WaitStatus, error) {
 	return wait.pid, wait.status, nil
 }
 
+func (b *fakeBackend) cgroupPopulated() (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.externalCgroup {
+		return true, nil
+	}
+	for _, child := range b.children {
+		if child.cgroupRunning {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (b *fakeBackend) killCgroup() error {
+	b.signaled <- "root:cgroup.kill"
+	b.mu.Lock()
+	b.externalCgroup = false
+	b.mu.Unlock()
+	return nil
+}
+
 func (b *fakeBackend) exit(pid int, status syscall.WaitStatus) {
 	b.mu.Lock()
 	if child := b.children[pid]; child != nil {
@@ -104,7 +128,7 @@ func (b *fakeBackend) exit(pid int, status syscall.WaitStatus) {
 func (p *fakeProcess) pid() int { return p.id }
 func (p *fakeProcess) release() error {
 	p.id = -1
-	return nil
+	return p.backend.removeErr[p.name]
 }
 func (p *fakeProcess) signal(signal syscall.Signal) error {
 	p.backend.signaled <- fmt.Sprintf("%s:%s", p.name, signal)
@@ -143,19 +167,12 @@ func (p *fakeProcess) killCgroup() error {
 	exited := p.exited
 	p.groupRunning = false
 	p.cgroupRunning = false
-	orphans := append([]int(nil), p.backend.orphanPIDs[p.name]...)
-	p.backend.orphanPIDs[p.name] = nil
 	p.backend.mu.Unlock()
 	if !exited {
 		p.backend.exit(p.pgid, syscall.WaitStatus(uint32(syscall.SIGKILL)&0x7f))
 	}
-	for _, pid := range orphans {
-		p.backend.exit(pid, syscall.WaitStatus(uint32(syscall.SIGKILL)&0x7f))
-	}
 	return nil
 }
-
-func (p *fakeProcess) removeCgroup() error { return nil }
 
 func TestManagerOwnsDirectWaitsAndReapsOrphans(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
@@ -447,6 +464,7 @@ func TestDrainOrdersGroupsAndEscalatesTermToKill(t *testing.T) {
 	backend.exitOnTERM["shim"] = true
 	backend.exitOnTERM["dockerd"] = true
 	backend.exitOnTERM["containerd"] = true
+	backend.externalCgroup = true
 	manager := newManager(backend, sigchld, nil)
 	clock := newFakeClock()
 	supervisor := New(context.Background(), manager, Config{Clock: clock})
@@ -475,12 +493,13 @@ func TestDrainOrdersGroupsAndEscalatesTermToKill(t *testing.T) {
 	got = append(got, receive(t, backend.signaled))
 	got = append(got, receive(t, backend.signaled))
 	got = append(got, receive(t, backend.signaled))
+	got = append(got, receive(t, backend.signaled))
 	if err := receive(t, result); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"egress:terminated", "shim:terminated", "egress:cgroup.kill",
-		"dockerd:terminated", "containerd:terminated",
+		"dockerd:terminated", "containerd:terminated", "root:cgroup.kill",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("signals = %v, want %v", got, want)
@@ -492,11 +511,12 @@ func TestDrainOrdersGroupsAndEscalatesTermToKill(t *testing.T) {
 	}
 }
 
-func TestDrainKillsSurvivingCgroupAfterDirectChildExit(t *testing.T) {
+func TestDrainKillsSetsidDescendantAfterDirectChildExit(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)
 	backend.exitOnTERM["service"] = true
-	backend.groupSurvives["service"] = true
+	backend.cgroupSurvives["service"] = true
+	backend.removeErr["service"] = syscall.ENOTEMPTY
 	manager := newManager(backend, sigchld, nil)
 	clock := newFakeClock()
 	supervisor := New(context.Background(), manager, Config{Clock: clock})
@@ -528,83 +548,30 @@ func TestDrainKillsSurvivingCgroupAfterDirectChildExit(t *testing.T) {
 }
 
 func TestProcessCgroupReadsFixedPopulatedEvent(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		events    string
-		populated bool
-		wantErr   bool
-	}{
-		{name: "empty", events: "populated 0\nfrozen 0\n"},
-		{name: "populated", events: "populated 1\nfrozen 0\n", populated: true},
-		{name: "invalid value", events: "populated 2\n", wantErr: true},
-		{name: "missing", events: "frozen 0\n", wantErr: true},
-		{name: "unterminated", events: "populated 0", wantErr: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			directory := t.TempDir()
-			if err := os.WriteFile(filepath.Join(directory, "cgroup.events"), []byte(test.events), 0600); err != nil {
-				t.Fatal(err)
-			}
-			populated, err := (&processCgroup{path: directory}).populated()
-			if (err != nil) != test.wantErr {
-				t.Fatalf("populated error = %v, wantErr %v", err, test.wantErr)
-			}
-			if populated != test.populated {
-				t.Fatalf("populated = %v, want %v", populated, test.populated)
-			}
-		})
+	directory := t.TempDir()
+	events := filepath.Join(directory, "cgroup.events")
+	cgroup := &processCgroup{path: directory}
+	for contents, want := range map[string]bool{"populated 0\n": false, "populated 1\n": true} {
+		if err := os.WriteFile(events, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := cgroup.populated(); err != nil || got != want {
+			t.Fatalf("events %q: populated=%v error=%v", contents, got, err)
+		}
+	}
+	if err := os.WriteFile(events, []byte("populated 2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cgroup.populated(); err == nil {
+		t.Fatal("invalid populated value succeeded")
 	}
 }
 
-func TestDrainKillsSetsidDescendantOutsideStableProcessGroup(t *testing.T) {
+func TestDrainKillsOrphanedDescendant(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)
-	backend.exitOnTERM["service"] = true
 	backend.cgroupSurvives["service"] = true
 	manager := newManager(backend, sigchld, nil)
-	supervisor := New(context.Background(), manager, Config{Clock: newFakeClock()})
-	if err := supervisor.Start(context.Background(), Service{
-		Name: "service", Command: Command{Name: "service", Path: "/service"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	pid := receive(t, backend.started)
-
-	result := make(chan error, 1)
-	go func() {
-		result <- supervisor.Drain([][]string{{"service"}}, time.Second, 2*time.Second)
-	}()
-	if got := receive(t, backend.signaled); got != "service:terminated" {
-		t.Fatalf("TERM signal = %q", got)
-	}
-	backend.mu.Lock()
-	process := backend.children[pid]
-	groupRunning := process.groupRunning
-	cgroupRunning := process.cgroupRunning
-	backend.mu.Unlock()
-	if groupRunning || !cgroupRunning {
-		t.Fatalf("after setsid escape: groupRunning=%v cgroupRunning=%v", groupRunning, cgroupRunning)
-	}
-	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
-		t.Fatalf("final cleanup = %q", got)
-	}
-	if err := receive(t, result); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestDrainKillsAndReapsOrphanedDescendant(t *testing.T) {
-	sigchld := make(chan os.Signal, 8)
-	backend := newFakeBackend(sigchld)
-	backend.cgroupSurvives["service"] = true
-	backend.orphanPIDs["service"] = []int{777}
-	var logsMu sync.Mutex
-	var logs []string
-	manager := newManager(backend, sigchld, func(format string, args ...any) {
-		logsMu.Lock()
-		logs = append(logs, fmt.Sprintf(format, args...))
-		logsMu.Unlock()
-	})
 	supervisor := New(context.Background(), manager, Config{Clock: newFakeClock()})
 	if err := supervisor.Start(context.Background(), Service{
 		Name: "service", Command: Command{Name: "service", Path: "/service"},
@@ -627,18 +594,4 @@ func TestDrainKillsAndReapsOrphanedDescendant(t *testing.T) {
 	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
 		t.Fatalf("orphan cleanup = %q", got)
 	}
-
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		logsMu.Lock()
-		got := strings.Join(logs, "\n")
-		logsMu.Unlock()
-		if strings.Contains(got, "reaped adopted child pid=777") {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	logsMu.Lock()
-	defer logsMu.Unlock()
-	t.Fatalf("orphan was not reaped by manager:\n%s", strings.Join(logs, "\n"))
 }

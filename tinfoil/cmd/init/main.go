@@ -41,6 +41,7 @@ const (
 	egressName       = "tinfoil-egress"
 	containerdSocket = "/run/containerd/containerd.sock"
 	dockerSocket     = "/run/docker.sock"
+	dockerCgroupRoot = "/tinfoil-init/docker"
 	readyPath        = "/run/tinfoil-init.ready"
 	selfExecPath     = "/proc/self/exe"
 	pid1Env          = "TINFOIL_PID1"
@@ -204,12 +205,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: dockerName, Required: true, Restart: true,
-		Command: command(dockerName, "/usr/bin/dockerd",
-			"-H", "unix://"+dockerSocket, "--containerd="+containerdSocket),
-		Ready: endpointReady("unix", dockerSocket, dockerReadyLimit),
-	}); err != nil {
+	if err := deps.services.Start(bootCtx, dockerService()); err != nil {
 		return err
 	}
 	if err := deps.oneShot(bootCtx, hardenedCommand(
@@ -253,6 +249,18 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	<-parent.Done()
 	initLogf("shutdown requested")
 	return nil
+}
+
+func dockerService() supervisor.Service {
+	return supervisor.Service{
+		Name: dockerName, Required: true, Restart: true,
+		Command: command(dockerName, "/usr/bin/dockerd",
+			"-H", "unix://"+dockerSocket,
+			"--containerd="+containerdSocket,
+			"--exec-opt=native.cgroupdriver=cgroupfs",
+			"--cgroup-parent="+dockerCgroupRoot),
+		Ready: endpointReady("unix", dockerSocket, dockerReadyLimit),
+	}
 }
 
 type nvidiaBootstrapControl interface {

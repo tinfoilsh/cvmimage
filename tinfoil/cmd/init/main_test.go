@@ -444,6 +444,14 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	}
 }
 
+func TestDockerUsesPID1OwnedCgroupParent(t *testing.T) {
+	dockerArgs := dockerService().Command.Args
+	if !slices.Contains(dockerArgs, "--exec-opt=native.cgroupdriver=cgroupfs") ||
+		!slices.Contains(dockerArgs, "--cgroup-parent="+dockerCgroupRoot) {
+		t.Fatalf("dockerd cgroup args = %v", dockerArgs)
+	}
+}
+
 func TestModuleLockFailureStopsBootBeforeServices(t *testing.T) {
 	harness := newLifecycleHarness()
 	lockErr := errors.New("module lock failed")

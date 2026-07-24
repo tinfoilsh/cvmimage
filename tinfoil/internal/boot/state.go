@@ -142,13 +142,6 @@ func (t *Tracker) RecordSubstages(name string, substages []Stage) {
 	}
 }
 
-// Flush writes the current boot state to disk without setting CompletedAt.
-func (t *Tracker) Flush() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.flushLocked()
-}
-
 func (t *Tracker) flushLocked() error {
 	data, err := json.MarshalIndent(t.state, "", "  ")
 	if err != nil {

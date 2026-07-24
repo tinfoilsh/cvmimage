@@ -99,12 +99,6 @@ type charDevice struct {
 	mode  os.FileMode
 }
 
-// HasPCIDevice reports whether sysfs contains a supported NVIDIA GPU or
-// NVSwitch PCI function.
-func HasPCIDevice() (bool, error) {
-	return hasPCIDevice(systemDevicePaths)
-}
-
 // HasNVSwitch reports whether sysfs contains an NVIDIA NVSwitch function.
 func HasNVSwitch() (bool, error) {
 	return hasNVSwitch(systemDevicePaths)

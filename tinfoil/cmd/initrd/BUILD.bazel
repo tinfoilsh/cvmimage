@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "initrd_lib",
+    srcs = ["main.go"],
+    importpath = "tinfoil/cmd/initrd",
+    visibility = [":__pkg__"],
+    deps = [
+        "//tinfoil/internal/boot",
+        "//tinfoil/internal/devicemapper",
+        "@org_golang_x_sys//unix",
+    ],
+)
+
+go_binary(
+    name = "tinfoil-initrd",
+    embed = [":initrd_lib"],
+    gc_linkopts = [
+        "-s",
+        "-w",
+    ],
+    pure = "on",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "initrd_test",
+    srcs = ["main_test.go"],
+    data = [
+        "//:mkosi.conf",
+        "//:mkosi.repart/11-root-verity.conf",
+    ],
+    embed = [":initrd_lib"],
+    deps = [
+        "//tinfoil/internal/boot",
+        "//tinfoil/internal/devicemapper",
+        "@org_golang_x_sys//unix",
+    ],
+)

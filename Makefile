@@ -6,7 +6,7 @@ BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
 SHIPPING_INITRD = initrd.cpio.zst
 
-NVATTEST_RUNTIME_OUTPUT = build/rootfs-artifacts/nvattest
+override NVATTEST_RUNTIME_OUTPUT := build/rootfs-artifacts/nvattest
 NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
 NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
@@ -55,7 +55,7 @@ clean:
 
 deepclean:
 	$(MKOSI) clean
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/rootfs-artifacts/nvattest
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
 
 runtime-builder:
 	./scripts/build-runtime-builder.sh

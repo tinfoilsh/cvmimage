@@ -14,16 +14,16 @@ path filtering or archive repacking. `debconf` and `libcap2-bin` remain in the
 canonical lock as dependency provenance, but their administrative payloads are
 intentionally absent from `_RUNTIME_PACKAGE_LAYERS` and the measured rootfs.
 
-`image/runtime-sources.lock.json` contains ordinary URL and SHA-256 locks for
-Docker and NVIDIA archives that cannot be represented by the Ubuntu apt
-resolver. The module extension downloads each archive with Bazel's built-in
-digest verification. It exposes the complete Docker payload and uses the
-existing `rules_distroless` complete-payload normalization for NVIDIA Debian
-packages. It does not filter package paths or execute maintainer scripts.
+`MODULE.bazel` directly declares ordinary `http_archive` URL and SHA-256 locks
+for Docker and NVIDIA archives that cannot be represented by the Ubuntu apt
+resolver. Bazel verifies each digest. The fixed BUILD templates expose the four
+used Docker binaries and use the existing `rules_distroless` complete-payload
+normalization for NVIDIA Debian packages. They do not filter package paths or
+execute maintainer scripts.
 
 The NVIDIA CUDA repository uses a flat apt layout that `rules_distroless`
 0.8.0 cannot resolve. Its package URLs and digests therefore remain in the
-ordinary source lock instead of a resolver-generated apt lock.
+module declarations instead of a resolver-generated apt lock.
 
 `.bazelversion` pins Bazel 8.7.0 and `MODULE.bazel.lock` pins the Bzlmod graph.
 Run `make test-runtime-locks` for the package-lock comparison and locked module

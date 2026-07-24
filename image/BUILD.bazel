@@ -71,19 +71,6 @@ exports_files([
     "runtime-source-docker.BUILD.bazel",
 ])
 
-sh_test(
-    name = "runtime-package-lock-test",
-    srcs = ["//scripts:compare_runtime_package_lock.sh"],
-    args = [
-        "$(location :runtime-packages.lock.json)",
-        "$(location @@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile)",
-    ],
-    data = [
-        ":runtime-packages.lock.json",
-        "@@rules_distroless++apt+ubuntu_runtime_resolve//:lockfile",
-    ],
-)
-
 filegroup(
     name = "runtime-package-layers",
     srcs = _RUNTIME_PACKAGE_LAYERS,

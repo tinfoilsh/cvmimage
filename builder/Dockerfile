@@ -1,7 +1,4 @@
-ARG RUNTIME_BUILDER_BASE_IMAGE
-FROM ${RUNTIME_BUILDER_BASE_IMAGE}
-
-ARG APT_SNAPSHOT_DATE
+FROM ubuntu@sha256:5e275723f82c67e387ba9e3c24baa0abdcb268917f276a0561c97bef9450d0b4
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 \
@@ -13,7 +10,7 @@ RUN set -eux; \
     rm -f /etc/apt/sources.list.d/*; \
     printf '%s\n' \
         'Types: deb' \
-        "URIs: https://snapshot.ubuntu.com/ubuntu/${APT_SNAPSHOT_DATE}" \
+        'URIs: https://snapshot.ubuntu.com/ubuntu/20260721T000000Z' \
         'Suites: resolute resolute-updates resolute-security' \
         'Components: main universe restricted multiverse' \
         'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
@@ -76,12 +73,6 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
-COPY build-initrd.sh /usr/local/bin/build-initrd
+COPY build-runtime-go.sh /usr/local/bin/build-runtime-go
 
 WORKDIR /workspace
-
-ARG RUNTIME_BUILDER_BASE_IMAGE
-ARG RUNTIME_BUILDER_RECIPE_SHA256
-LABEL org.tinfoil.runtime-builder.base=${RUNTIME_BUILDER_BASE_IMAGE} \
-      org.tinfoil.runtime-builder.snapshot=${APT_SNAPSHOT_DATE} \
-      org.tinfoil.runtime-builder.recipe=${RUNTIME_BUILDER_RECIPE_SHA256}

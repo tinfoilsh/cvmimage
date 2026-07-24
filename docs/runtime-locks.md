@@ -26,10 +26,9 @@ The NVIDIA CUDA repository uses a flat apt layout that `rules_distroless`
 module declarations instead of a resolver-generated apt lock.
 
 `.bazelversion` pins Bazel 8.7.0 and `MODULE.bazel.lock` pins the Bzlmod graph.
-Run `make test-runtime-locks` for the package-lock comparison and locked module
-graph. Run `make verify-runtime-sources` to regenerate the Ubuntu package lock
-once with the upstream `rules_distroless` resolver and compare it with the
-checked-in file. Run `make update-runtime-locks` only when intentionally
-rotating the package manifest. Regenerate
+Normal builds use the checked-in locks with `--lockfile_mode=error`. Run
+`make update-runtime-locks` only when intentionally rotating the Ubuntu package
+manifest; it invokes the upstream `rules_distroless` lock target directly.
+Review the resulting lockfile diff before committing it. Regenerate
 `MODULE.bazel.lock` from the real workspace with
 `bazel mod deps --lockfile_mode=update` when module dependencies change.

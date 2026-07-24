@@ -1,7 +1,7 @@
 --- a/drivers/acpi/acpica/exregion.c
 +++ b/drivers/acpi/acpica/exregion.c
 @@ -16,0 +17,42 @@
-+#ifdef CONFIG_ARCH_HAS_CC_PLATFORM
++#if defined(CONFIG_ARCH_HAS_CC_PLATFORM) && defined(CONFIG_X86)
 +#include <asm/coco.h>
 +#include <asm/pgtable.h>
 +#include <linux/cc_platform.h>
@@ -44,7 +44,7 @@
 +#endif
 +
 @@ -177,0 +220,4 @@
-+#ifdef CONFIG_ARCH_HAS_CC_PLATFORM
++#if defined(CONFIG_ARCH_HAS_CC_PLATFORM) && defined(CONFIG_X86)
 +	if (!acpi_ex_system_memory_access_allowed(logical_addr_ptr, length))
 +		return_ACPI_STATUS(AE_AML_ILLEGAL_ADDRESS);
 +#endif

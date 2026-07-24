@@ -34,6 +34,24 @@ type sysctlSetting struct {
 	optional bool
 }
 
+type runtimeMount struct {
+	source string
+	target string
+	fstype string
+	flags  uintptr
+	data   string
+	fatal  bool
+}
+
+var runtimeMounts = []runtimeMount{
+	{"tmpfs", "/dev/shm", "tmpfs", syscall.MS_NOSUID | syscall.MS_NODEV, "mode=1777,size=512M", true},
+	{"devpts", "/dev/pts", "devpts", syscall.MS_NOSUID | syscall.MS_NOEXEC, "mode=0620,ptmxmode=0666,newinstance", true},
+	{"mqueue", "/dev/mqueue", "mqueue", syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC, "", false},
+	{"hugetlbfs", "/dev/hugepages", "hugetlbfs", syscall.MS_NOSUID | syscall.MS_NODEV, "mode=1770,gid=0", false},
+	{"configfs", "/sys/kernel/config", "configfs", syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC, "", true},
+	{"cgroup2", "/sys/fs/cgroup", "cgroup2", syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC, "", true},
+}
+
 // sysctlPolicy is compiled into the measured PID 1 binary. Keeping the exact
 // procfs paths here avoids shipping a configuration-language parser.
 var sysctlPolicy = []sysctlSetting{
@@ -66,27 +84,8 @@ func SetupFilesystems(log LogFunc) error {
 	if err := os.WriteFile("/proc/sys/kernel/hostname", []byte("tinfoil\n"), 0644); err != nil {
 		logf(log, "warning: setting hostname: %v", err)
 	}
-	mounts := []struct {
-		source string
-		target string
-		fstype string
-		flags  uintptr
-		data   string
-		fatal  bool
-	}{
-		{"tmpfs", "/dev/shm", "tmpfs", syscall.MS_NOSUID | syscall.MS_NODEV, "mode=1777,size=512M", true},
-		{"devpts", "/dev/pts", "devpts", syscall.MS_NOSUID | syscall.MS_NOEXEC, "mode=0620,ptmxmode=0666,newinstance", true},
-		{"mqueue", "/dev/mqueue", "mqueue", syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC, "", false},
-		{"hugetlbfs", "/dev/hugepages", "hugetlbfs", syscall.MS_NOSUID | syscall.MS_NODEV, "mode=1770,gid=0", false},
-		{"cgroup2", "/sys/fs/cgroup", "cgroup2", syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC, "", true},
-	}
-	for _, mount := range mounts {
-		if err := mountIfNeeded(mount.source, mount.target, mount.fstype, mount.flags, mount.data, log); err != nil {
-			if mount.fatal {
-				return err
-			}
-			logf(log, "optional mount skipped: %v", err)
-		}
+	if err := mountRuntimeFilesystems(runtimeMounts, mountIfNeeded, log); err != nil {
+		return err
 	}
 	if err := ensureSymlink("/dev/shm", "/run/shm"); err != nil {
 		logf(log, "warning: creating /run/shm compatibility symlink: %v", err)
@@ -100,6 +99,22 @@ func SetupFilesystems(log LogFunc) error {
 	} {
 		if err := ensureDir(dir.path, dir.mode); err != nil {
 			logf(log, "warning: creating runtime dir %s: %v", dir.path, err)
+		}
+	}
+	return nil
+}
+
+func mountRuntimeFilesystems(
+	mounts []runtimeMount,
+	mount func(string, string, string, uintptr, string, LogFunc) error,
+	log LogFunc,
+) error {
+	for _, entry := range mounts {
+		if err := mount(entry.source, entry.target, entry.fstype, entry.flags, entry.data, log); err != nil {
+			if entry.fatal {
+				return err
+			}
+			logf(log, "optional mount skipped: %v", err)
 		}
 	}
 	return nil

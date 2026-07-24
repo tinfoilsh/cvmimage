@@ -20,21 +20,34 @@ trees, caches, logs, and installed tools are discarded. Rootfs construction
 may consume only the named producer outputs mounted from explicit output
 directories.
 
-The standard interface is:
+Normal rootfs and image builds reuse the two worktree-local nvattest runtime
+outputs when both already exist. Their reproducible epoch-zero timestamps are
+not Make targets and therefore do not trigger unnecessary source rebuilds.
+
+The standard producer interface is:
 
 ```sh
 ./scripts/build-runtime-builder.sh
 ./scripts/run-runtime-builder.sh initrd
-./scripts/run-runtime-builder.sh nvattest
 ./scripts/run-runtime-builder.sh kernel
 ./scripts/run-runtime-builder.sh nvidia
 make test-go-producer
 ```
 
+Regenerate nvattest explicitly when changing its source or build inputs:
+
+```sh
+make regenerate-nvattest
+```
+
+The release workflow calls `make release-image`, which first regenerates
+nvattest on the fresh release worker and then builds the shipping image.
+`make reproducible-nvattest` remains available for independent qualification.
+
 Initrd, nvattest, and kernel producers use ordinary unprivileged containers.
 NVIDIA alone receives `CAP_SYS_ADMIN` with confined host-device access for its
-fixed mount-namespace build. Output and cache paths are explicit; arbitrary
-host environment state is not forwarded.
+fixed mount-namespace build. Output paths are explicit; arbitrary host
+environment state is not forwarded.
 
 The build pipeline does not claim to defend against a malicious builder.
 Build-time disruption and denial of service are accepted because they cannot

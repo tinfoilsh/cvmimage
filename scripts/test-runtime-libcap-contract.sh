@@ -12,8 +12,22 @@ shift
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-grep -Fq '"key": "libcap2-bin_1-2.75-10ubuntu2_amd64"' "$lock"
-grep -Fq '"sha256": "d92a8f9affbd2277d191e65978ba2a194d00d00a04f52ee9d1bca2a2ba26697d"' "$lock"
+python3 - "$lock" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as lock_file:
+    packages = json.load(lock_file)["packages"]
+
+matches = [
+    package
+    for package in packages
+    if package.get("key") == "libcap2-bin_1-2.75-10ubuntu2_amd64"
+    and package.get("sha256") == "d92a8f9affbd2277d191e65978ba2a194d00d00a04f52ee9d1bca2a2ba26697d"
+]
+if len(matches) != 1:
+    raise SystemExit("locked libcap2-bin key and SHA-256 must identify exactly one package record")
+PY
 
 members="$scratch/members"
 : >"$members"

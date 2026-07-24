@@ -13,8 +13,22 @@ shift 2
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-grep -Fq '"key": "debconf_1.5.92_amd64"' "$lock"
-grep -Fq '"sha256": "025984be5dc70b32e02c8a668fdcceba674173bbda4a3e7ff93fac800dcdd122"' "$lock"
+python3 - "$lock" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as lock_file:
+    packages = json.load(lock_file)["packages"]
+
+matches = [
+    package
+    for package in packages
+    if package.get("key") == "debconf_1.5.92_amd64"
+    and package.get("sha256") == "025984be5dc70b32e02c8a668fdcceba674173bbda4a3e7ff93fac800dcdd122"
+]
+if len(matches) != 1:
+    raise SystemExit("locked debconf key and SHA-256 must identify exactly one package record")
+PY
 
 debconf_members="$scratch/debconf-members"
 tar -tzf "$debconf_archive" | sed 's#^\./##' >"$debconf_members"
@@ -56,12 +70,17 @@ for archive in "$@"; do
     tar -tzf "$archive" | sed 's#^\./##' >>"$runtime_members"
 done
 
-for path in "${debconf_paths[@]}"; do
-    if grep -Fqx "$path" "$runtime_members"; then
-        echo "$path must not be present in the measured runtime package layers" >&2
-        exit 1
-    fi
-done
+debconf_payload_members="$scratch/debconf-payload-members"
+runtime_payload_members="$scratch/runtime-payload-members"
+find "$scratch/debconf" \( -type f -o -type l \) -printf '%P\n' | LC_ALL=C sort -u >"$debconf_payload_members"
+LC_ALL=C sort -u "$runtime_members" >"$runtime_payload_members"
+overlap="$scratch/debconf-runtime-overlap"
+comm -12 "$debconf_payload_members" "$runtime_payload_members" >"$overlap"
+if [[ -s "$overlap" ]]; then
+    echo "locked debconf payload members must not enter the measured runtime package layers:" >&2
+    cat "$overlap" >&2
+    exit 1
+fi
 
 required=(
     usr/bin/ip

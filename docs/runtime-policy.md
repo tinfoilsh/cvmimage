@@ -1,13 +1,13 @@
-# Fixed measured rootfs policy
+# Measured runtime policy
 
-`image/rootfs` contains only fixed files that the final additive rootfs copies
-byte-for-byte as root-owned declarations. It does not define package
-extraction, runtime directories, sysctls, systemd policy, or NVIDIA
-compatibility behavior.
+`image/rootfs` contains fixed files that the additive rootfs copies byte-for-byte
+as root-owned declarations. It does not define package extraction, runtime
+directories, sysctls, systemd policy, or NVIDIA compatibility behavior.
 
 The only non-root account is `nvidia-persistenced` with the measured identity
-`143:143`. Both accounts are locked and non-login. Resolver bytes must remain
-identical to the fixed resolver contract used by `tinfoil-boot`.
+`143:143`. The root and `nvidia-persistenced` accounts are locked and
+non-login. Resolver bytes must remain identical to the fixed resolver contract
+used by `tinfoil-boot`.
 
 The measured daemon policy includes these mode `0644` files:
 
@@ -28,16 +28,11 @@ The measured daemon policy includes these mode `0644` files:
   container-selected `ldconfig` execution. Its `@/sbin/ldconfig` value is
   host-relative under the pinned toolkit contract and resolves to the
   `ldconfig` executable provided by Ubuntu's required `libc-bin` package.
-
-The NVIDIA bootstrap publishes `/var/run/cdi/nvidia.yaml` atomically for the
-runtime's fixed `nvidia.com/gpu` CDI kind. Legacy, CSV, hook compatibility, and
-alternate OCI runtimes are not configured.
-
 - `/usr/share/nvidia/nvswitch/fabricmanager.cfg` preserves the pinned package
   configuration and sets the fixed command socket to
   `/run/nvidia-fabricmanager/socket`. PID 1 invokes Fabric Manager directly and
   requires both its live PID file and this Unix socket before continuing.
 
-The additive rootfs declaration in `image/BUILD.bazel` is the metadata owner.
-It installs these source-controlled bytes as UID/GID `0:0` with explicit modes;
-there is no second validator that restates their complete path or hash set.
+The NVIDIA bootstrap publishes `/var/run/cdi/nvidia.yaml` atomically for the
+runtime's fixed `nvidia.com/gpu` CDI kind. Legacy, CSV, hook compatibility, and
+alternate OCI runtimes are not configured.

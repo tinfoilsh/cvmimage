@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds the two named nvattest runtime artifacts used by the additive rootfs.
-# Always runs inside the shared pinned runtime builder selected by the Makefile.
+# Always runs inside the shared pinned runtime builder.
 # The cuda-ubuntu2604 repo now ships nvattest, but its libnvat links
 # libxml2.so.2 while Ubuntu resolute ships only libxml2.so.16 (libxml2 2.14
 # bumped the SONAME). So we keep building from source against system libxml2-16.
 
 set -Eeuo pipefail
 
-repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 readonly UPSTREAM_URL=https://github.com/NVIDIA/attestation-sdk.git
 readonly UPSTREAM_TAG=2026.06.09

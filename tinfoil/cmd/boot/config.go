@@ -221,7 +221,7 @@ func loadAndVerifyConfig(cmdline kernelCmdline) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting expected config hash: %w", err)
 	}
-	if !hexHashPattern.MatchString(expectedHash) {
+	if !isHexHash(expectedHash) {
 		return nil, fmt.Errorf("invalid config hash format in cmdline: %s", expectedHash)
 	}
 

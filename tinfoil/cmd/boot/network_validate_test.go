@@ -9,6 +9,95 @@ import (
 	shimconfig "tinfoil/internal/config"
 )
 
+func TestIsNetworkName(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"a", "0", "a0", "a-b", strings.Repeat("a", maxBridgeNameLen)} {
+		if !isNetworkName(value) {
+			t.Errorf("isNetworkName(%q) = false", value)
+		}
+	}
+	for _, value := range []string{"", "A", "-a", "a-", "a.b", "a_b", "é", strings.Repeat("a", maxBridgeNameLen+1)} {
+		if isNetworkName(value) {
+			t.Errorf("isNetworkName(%q) = true", value)
+		}
+	}
+
+	for character := 0; character <= 255; character++ {
+		byteValue := byte(character)
+		if got, want := isNetworkName(string([]byte{byteValue})), testLowerAlphanumeric(byteValue); got != want {
+			t.Fatalf("isNetworkName single byte %#x = %t, want %t", character, got, want)
+		}
+		if got, want := isNetworkName(string([]byte{byteValue, 'b'})), testLowerAlphanumeric(byteValue); got != want {
+			t.Fatalf("isNetworkName first byte %#x = %t, want %t", character, got, want)
+		}
+		wantInterior := testLowerAlphanumeric(byteValue) || byteValue == '-'
+		if got := isNetworkName(string([]byte{'a', byteValue, 'b'})); got != wantInterior {
+			t.Fatalf("isNetworkName interior byte %#x = %t, want %t", character, got, wantInterior)
+		}
+		if got, want := isNetworkName(string([]byte{'a', byteValue})), testLowerAlphanumeric(byteValue); got != want {
+			t.Fatalf("isNetworkName final byte %#x = %t, want %t", character, got, want)
+		}
+	}
+}
+
+func TestIsRFC1123Hostname(t *testing.T) {
+	t.Parallel()
+
+	maxLengthHostname := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+	if len(maxLengthHostname) != maxHostnameLength {
+		t.Fatalf("maximum hostname fixture is %d bytes, want %d", len(maxLengthHostname), maxHostnameLength)
+	}
+	for _, value := range []string{
+		"a",
+		"API.TINFOIL.SH",
+		"a-b.example",
+		strings.Repeat("a", maxHostnameLabel),
+		maxLengthHostname,
+	} {
+		if !isRFC1123Hostname(value) {
+			t.Errorf("isRFC1123Hostname(%q) = false", value)
+		}
+	}
+	for _, value := range []string{
+		"",
+		".a",
+		"a.",
+		"a..b",
+		"-a",
+		"a-",
+		"é",
+		"K",
+		"ſ",
+		"a.K.example",
+		"a.ſ.example",
+		strings.Repeat("a", maxHostnameLabel+1),
+		maxLengthHostname + "a",
+	} {
+		if isRFC1123Hostname(value) {
+			t.Errorf("isRFC1123Hostname(%q) = true", value)
+		}
+	}
+
+	for character := 0; character <= 255; character++ {
+		byteValue := byte(character)
+		wantAlphanumeric := testASCIIAlpha(byteValue) || testDigit(byteValue)
+		if got := isRFC1123Hostname(string([]byte{byteValue})); got != wantAlphanumeric {
+			t.Fatalf("isRFC1123Hostname single byte %#x = %t, want %t", character, got, wantAlphanumeric)
+		}
+		wantInterior := wantAlphanumeric || byteValue == '-' || byteValue == '.'
+		if got := isRFC1123Hostname(string([]byte{'a', byteValue, 'b'})); got != wantInterior {
+			t.Fatalf("isRFC1123Hostname interior byte %#x = %t, want %t", character, got, wantInterior)
+		}
+		if got := isRFC1123Hostname(string([]byte{'a', '.', byteValue})); got != wantAlphanumeric {
+			t.Fatalf("isRFC1123Hostname label-first byte %#x = %t, want %t", character, got, wantAlphanumeric)
+		}
+		if got := isRFC1123Hostname(string([]byte{'a', byteValue})); got != wantAlphanumeric {
+			t.Fatalf("isRFC1123Hostname final byte %#x = %t, want %t", character, got, wantAlphanumeric)
+		}
+	}
+}
+
 // parseTestConfig mirrors loadAndVerifyConfig: unmarshal, decode shim,
 // run validateNetwork. Uses raw YAML so tests exercise NetworkSpec's
 // UnmarshalYAML default-egress behavior.

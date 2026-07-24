@@ -362,7 +362,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		// Extract host: REGISTRY_GHCR_IO_TOKEN -> GHCR_IO -> ghcr.io
 		hostPart := strings.TrimSuffix(strings.TrimPrefix(key, "REGISTRY_"), "_TOKEN")
 		host := strings.ToLower(strings.ReplaceAll(hostPart, "_", "."))
-		if host == "" || token == "" || !registryPattern.MatchString(host) {
+		if host == "" || token == "" || !isRegistry(host) {
 			continue
 		}
 		user := ext.Secrets["REGISTRY_"+hostPart+"_USER"]
@@ -394,7 +394,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		registries := strings.Split(gcloudRegistry, ",")
 		for _, reg := range registries {
 			reg = strings.TrimSpace(reg)
-			if reg != "" && registryPattern.MatchString(reg) {
+			if reg != "" && isRegistry(reg) {
 				encoded := base64.StdEncoding.EncodeToString([]byte("_json_key_base64:" + base64.StdEncoding.EncodeToString([]byte(gcloudKey))))
 				if err := setDockerAuth(&cfg, reg, encoded); err != nil {
 					return err

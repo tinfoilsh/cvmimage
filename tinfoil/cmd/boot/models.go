@@ -245,7 +245,7 @@ func parseModelPackRef(ref string) (*modelPackRef, error) {
 }
 
 func encryptedModelKey(keySecret string, spec *modelPackRef, externalConfig *shimconfig.ExternalConfig) ([]byte, error) {
-	if !secretNamePattern.MatchString(keySecret) {
+	if !isSecretName(keySecret) {
 		return nil, fmt.Errorf("invalid key secret name: %s", keySecret)
 	}
 	if externalConfig == nil {

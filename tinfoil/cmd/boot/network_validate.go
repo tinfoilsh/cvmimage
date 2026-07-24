@@ -3,25 +3,73 @@ package main
 import (
 	"fmt"
 	"net"
-	"regexp"
 	"slices"
 	"strings"
 
 	"tinfoil/internal/containernet"
 )
 
-var rfc1123HostnamePattern = regexp.MustCompile(
-	`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`,
-)
-
 const (
 	maxHostnameLength = 253
-	maxBridgeNameLen = 15
+	maxHostnameLabel  = 63
+	maxBridgeNameLen  = 15
 )
 
 var validEgressModes = []string{"closed", "allowlist", "open"}
 
-var networkNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+func isNetworkName(value string) bool {
+	if value == "" || len(value) > maxBridgeNameLen || !isLowerAlphanumeric(value[0]) {
+		return false
+	}
+	if len(value) == 1 {
+		return true
+	}
+	if !isLowerAlphanumeric(value[len(value)-1]) {
+		return false
+	}
+	for index := 1; index < len(value)-1; index++ {
+		if !isLowerAlphanumeric(value[index]) && value[index] != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isRFC1123Hostname(value string) bool {
+	if value == "" || len(value) > maxHostnameLength {
+		return false
+	}
+
+	labelLength := 0
+	lastAlphanumeric := false
+	for index := 0; index < len(value); {
+		if value[index] == '.' {
+			if labelLength == 0 || !lastAlphanumeric {
+				return false
+			}
+			labelLength = 0
+			lastAlphanumeric = false
+			index++
+			continue
+		}
+
+		character := value[index]
+		alphanumeric := isASCIIAlpha(character) || isDigit(character)
+		if !alphanumeric {
+			if character != '-' || labelLength == 0 {
+				return false
+			}
+		}
+		labelLength++
+		if labelLength > maxHostnameLabel {
+			return false
+		}
+		lastAlphanumeric = alphanumeric
+		index++
+	}
+
+	return labelLength > 0 && lastAlphanumeric
+}
 
 func validateNetwork(cfg *Config) error {
 	for _, port := range cfg.CVMNetwork.InboundPorts {
@@ -92,7 +140,7 @@ func validateNetworkEntry(name string, spec *NetworkSpec) error {
 	if len(name) > maxBridgeNameLen {
 		return fmt.Errorf("name exceeds %d-char interface-name limit", maxBridgeNameLen)
 	}
-	if !networkNamePattern.MatchString(name) {
+	if !isNetworkName(name) {
 		return fmt.Errorf("name must be lowercase alphanumeric + hyphens (got %q)", name)
 	}
 	if !slices.Contains(validEgressModes, spec.Egress) {
@@ -122,7 +170,7 @@ func validateAllowEntry(host string) error {
 	if len(host) > maxHostnameLength {
 		return fmt.Errorf("hostname exceeds %d-byte DNS limit", maxHostnameLength)
 	}
-	if !rfc1123HostnamePattern.MatchString(host) {
+	if !isRFC1123Hostname(host) {
 		return fmt.Errorf("not a valid DNS hostname")
 	}
 	return nil

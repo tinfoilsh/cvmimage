@@ -48,13 +48,18 @@ func (m *Manager) StartConsole(command Command, console *os.File) (*Process, err
 			reply <- startResponse{err: fmt.Errorf("start %s: %w", command.Name, err)}
 			return
 		}
-		child := osChild{process: process}
-		managed := &Process{child: child, done: make(chan struct{})}
-		children[process.Pid] = managed
+		managed := newConsoleProcess(process, command.Name)
+		children[managed.PID()] = managed
 		reply <- startResponse{process: managed}
 	}
 	response := <-reply
 	return response.process, response.err
+}
+
+func newConsoleProcess(process *os.Process, name string) *Process {
+	pid := process.Pid
+	child := osChild{process: process, processID: pid}
+	return &Process{pid: pid, name: name, child: child, done: make(chan struct{})}
 }
 
 // StopConsole terminates the complete console process group with bounded

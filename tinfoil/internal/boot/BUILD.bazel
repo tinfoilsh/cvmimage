@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "boot",
+    srcs = [
+        "paths.go",
+        "state.go",
+    ],
+    importpath = "tinfoil/internal/boot",
+    visibility = ["//tinfoil:__subpackages__"],
+)
+
+go_test(
+    name = "boot_test",
+    srcs = ["state_test.go"],
+    embed = [":boot"],
+)

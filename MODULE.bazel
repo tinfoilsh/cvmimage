@@ -4,9 +4,22 @@ module(
 )
 
 bazel_dep(name = "bazel_lib", version = "3.0.0-rc.0")
+bazel_dep(name = "gazelle", version = "0.52.2")
 bazel_dep(name = "rules_distroless", version = "0.8.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "rules_python", version = "2.2.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.25.7")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.module(
+    path = "golang.org/x/sys",
+    sum = "h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=",
+    version = "v0.45.0",
+)
+use_repo(go_deps, "org_golang_x_sys")
 
 bazel_lib_toolchains = use_extension("@bazel_lib//lib:extensions.bzl", "toolchains")
 use_repo(bazel_lib_toolchains, "zstd_toolchains")

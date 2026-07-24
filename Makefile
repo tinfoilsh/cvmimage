@@ -6,13 +6,11 @@ BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
 SHIPPING_INITRD = initrd.cpio.zst
 
-NVATTEST_VERSION = 1.2.2.1780962352-1
-NVATTEST_DEBS = packages/nvattest_$(NVATTEST_VERSION)_amd64.deb \
-                packages/libnvat_$(NVATTEST_VERSION)_amd64.deb
-NVATTEST_RUNTIME_OUTPUTS = build/rootfs-artifacts/nvattest/usr/bin/nvattest \
-                           build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
+NVATTEST_RUNTIME_OUTPUT = build/rootfs-artifacts/nvattest
+NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
+NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
-.PHONY: all build rebuild shipping-image clean deepclean hash nvattest \
+.PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
 	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
 	test-go-producer test-runtime-builder-contract test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
@@ -177,28 +175,32 @@ debug-image: bazel-rootfs bazel-debug-layer additive-initrd custom-kernel-artifa
 	cp tinfoilcvm-debug.roothash tinfoilcvm-debug.hash
 	@echo "debug image hash: $$(cat tinfoilcvm-debug.hash)"
 
+release-image:
+	$(MAKE) regenerate-nvattest
+	$(MAKE) shipping-image
+
 rebuild: shipping-image
 
 build: shipping-image
 
-# The CUDA repo's nvattest links libxml2.so.2; resolute ships libxml2.so.16, so
-# we build from source against the system lib. See build-nvattest.sh.
-nvattest: $(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS)
+# Reuse an existing worktree-local nvattest build. Rebuild only when either
+# runtime output is absent or regeneration is requested explicitly.
+nvattest:
+	@if [ ! -x "$(NVATTEST_RUNTIME_BINARY)" ] || [ ! -f "$(NVATTEST_RUNTIME_LIBRARY)" ]; then \
+	    ./scripts/build-runtime-builder.sh; \
+	    ./scripts/run-runtime-builder.sh nvattest; \
+	else \
+	    echo "Reusing existing nvattest runtime artifacts"; \
+	fi
+	test -x "$(NVATTEST_RUNTIME_BINARY)"
+	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
 
-# Grouped target (&:): a single build-nvattest.sh run produces both the nvattest
-# and libnvat debs, so make won't consider the build up-to-date when only one of
-# them is present.
-$(NVATTEST_DEBS) $(NVATTEST_RUNTIME_OUTPUTS) &: \
-		build-nvattest.sh \
-		builder/Dockerfile \
-		builder/build-initrd.sh \
-		scripts/nvattest-artifacts.sh \
-		scripts/nvattest-regorus-Cargo.lock \
-		scripts/build-runtime-builder.sh \
-		scripts/run-runtime-builder.sh \
-		scripts/runtime-builder-base-image.txt \
-		scripts/runtime-builder-snapshot.txt | runtime-builder
+regenerate-nvattest:
+	rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
+	./scripts/build-runtime-builder.sh
 	./scripts/run-runtime-builder.sh nvattest
+	test -x "$(NVATTEST_RUNTIME_BINARY)"
+	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
 
 test-nvattest-artifacts:
 	./scripts/test-nvattest-artifacts.sh

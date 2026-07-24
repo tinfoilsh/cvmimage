@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,10 @@ import (
 )
 
 const (
-	pollInterval = 5 * time.Second
+	pollInterval            = 5 * time.Second
+	maxReportedRestartCount = 255
+	processOriginal         = "original"
+	processReplacement      = "replacement"
 )
 
 type declaredContainer struct {
@@ -46,19 +50,32 @@ type containersResponse struct {
 }
 
 type containerStatus struct {
-	Name          string           `json:"name"`
-	Image         string           `json:"image"`
-	Declared      bool             `json:"declared"`
-	Created       bool             `json:"created"`
-	Status        string           `json:"status,omitempty"`
-	RestartCount  int              `json:"restart_count"`
-	RestartPolicy string           `json:"restart_policy,omitempty"`
-	OOMKilled     bool             `json:"oom_killed"`
-	ExitCode      int              `json:"exit_code"`
-	Error         string           `json:"error,omitempty"`
-	StartedAt     string           `json:"started_at,omitempty"`
-	FinishedAt    string           `json:"finished_at,omitempty"`
-	Health        *containerHealth `json:"health,omitempty"`
+	Name                  string           `json:"name"`
+	Image                 string           `json:"image"`
+	Declared              bool             `json:"declared"`
+	Created               bool             `json:"created"`
+	ContainerID           string           `json:"container_id,omitempty"`
+	Process               string           `json:"process,omitempty"`
+	LifecycleComplete     bool             `json:"lifecycle_complete"`
+	Status                string           `json:"status,omitempty"`
+	RestartCount          int              `json:"restart_count"`
+	RestartCountTruncated bool             `json:"restart_count_truncated"`
+	RestartPolicy         string           `json:"restart_policy,omitempty"`
+	LatestOutcome         *processOutcome  `json:"latest_outcome,omitempty"`
+	OOMKilled             bool             `json:"oom_killed"`
+	ExitCode              int              `json:"exit_code"`
+	Error                 string           `json:"error,omitempty"`
+	StartedAt             string           `json:"started_at,omitempty"`
+	FinishedAt            string           `json:"finished_at,omitempty"`
+	Health                *containerHealth `json:"health,omitempty"`
+}
+
+type processOutcome struct {
+	Process    string `json:"process"`
+	Status     string `json:"status"`
+	ExitCode   int    `json:"exit_code"`
+	OOMKilled  bool   `json:"oom_killed"`
+	FinishedAt string `json:"finished_at,omitempty"`
 }
 
 type containerHealth struct {
@@ -102,6 +119,7 @@ func publishAndLog(ctx context.Context, cli containerStatusClient) {
 }
 
 func publishContainerStatus(ctx context.Context, cli containerStatusClient, configPath, outputPath string) error {
+	previous, persistedValid := loadPreviousStatuses(outputPath)
 	declared, err := loadDeclaredContainers(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -110,7 +128,7 @@ func publishContainerStatus(ctx context.Context, cli containerStatusClient, conf
 		return fmt.Errorf("loading declared containers: %w", err)
 	}
 
-	states, inspectErr := inspectDeclaredContainers(ctx, cli, declared)
+	states, inspectErr := inspectDeclaredContainersWithPrevious(ctx, cli, declared, previous, persistedValid)
 	resp := containersResponse{
 		ObservedAt: time.Now().UTC(),
 		Containers: states,
@@ -143,6 +161,10 @@ func loadDeclaredContainers(path string) ([]declaredContainer, error) {
 }
 
 func inspectDeclaredContainers(ctx context.Context, cli containerStatusClient, declared []declaredContainer) ([]containerStatus, error) {
+	return inspectDeclaredContainersWithPrevious(ctx, cli, declared, nil, true)
+}
+
+func inspectDeclaredContainersWithPrevious(ctx context.Context, cli containerStatusClient, declared []declaredContainer, previous map[string]containerStatus, persistedValid bool) ([]containerStatus, error) {
 	states := make([]containerStatus, 0, len(declared))
 	for _, c := range declared {
 		if c.Name == "" {
@@ -163,7 +185,10 @@ func inspectDeclaredContainers(ctx context.Context, cli containerStatusClient, d
 			}
 			return states, fmt.Errorf("inspecting %s: %w", c.Name, err)
 		}
-		states = append(states, containerStatusFromInspect(c, inspect))
+		status := containerStatusFromInspect(c, inspect)
+		prior, found := previous[c.Name]
+		applyLifecycle(&status, inspect, prior, found, persistedValid)
+		states = append(states, status)
 	}
 	return states, nil
 }
@@ -183,6 +208,7 @@ func containerStatusFromInspect(declared declaredContainer, inspect container.In
 	if inspect.ContainerJSONBase == nil {
 		return status
 	}
+	status.ContainerID = inspect.ID
 
 	if inspect.Name != "" {
 		status.Name = strings.TrimPrefix(inspect.Name, "/")
@@ -193,7 +219,7 @@ func containerStatusFromInspect(declared declaredContainer, inspect container.In
 			status.RestartPolicy = fmt.Sprintf("%s:%d", status.RestartPolicy, inspect.HostConfig.RestartPolicy.MaximumRetryCount)
 		}
 	}
-	status.RestartCount = inspect.RestartCount
+	status.RestartCount, status.RestartCountTruncated, _ = boundedRestartCount(inspect.RestartCount)
 	if inspect.State == nil {
 		return status
 	}
@@ -207,6 +233,160 @@ func containerStatusFromInspect(declared declaredContainer, inspect container.In
 	status.Health = containerHealthFromDocker(inspect.State.Health)
 
 	return status
+}
+
+func applyLifecycle(status *containerStatus, inspect container.InspectResponse, prior containerStatus, found, persistedValid bool) {
+	restartCount, truncated, countValid := boundedRestartCount(inspect.RestartCount)
+	status.RestartCount = restartCount
+	status.RestartCountTruncated = truncated
+	status.Process = processForRestartCount(restartCount)
+	status.LifecycleComplete = persistedValid && countValid && !truncated && inspect.RestartCount == 0 && validContainerID(status.ContainerID)
+
+	if found && prior.Created && (!validPriorStatus(prior) || prior.ContainerID != status.ContainerID) {
+		status.LifecycleComplete = false
+	} else if found && prior.Created {
+		if prior.Process == processReplacement {
+			status.Process = processReplacement
+		}
+		sameStart := prior.StartedAt == status.StartedAt
+		if prior.StartedAt != "" && status.StartedAt != "" && !sameStart {
+			status.Process = processReplacement
+		}
+		initialStart := prior.StartedAt == "" && status.StartedAt != "" && prior.Status == string(container.StateCreated)
+		priorTerminal := terminalStatus(prior.Status) && prior.LatestOutcome != nil
+		transitionProven := false
+		switch {
+		case truncated || prior.RestartCountTruncated:
+		case restartCount == prior.RestartCount && (sameStart || initialStart):
+			transitionProven = true
+		case restartCount == prior.RestartCount && priorTerminal:
+			status.Process = processReplacement
+			transitionProven = true
+		case restartCount == prior.RestartCount+1 && terminalStatus(status.Status):
+			status.Process = processReplacement
+			transitionProven = true
+		case restartCount < prior.RestartCount && priorTerminal && !sameStart:
+			status.Process = processReplacement
+			transitionProven = true
+		}
+		status.LifecycleComplete = persistedValid && countValid && prior.LifecycleComplete && transitionProven
+		if transitionProven {
+			status.LatestOutcome = cloneOutcome(prior.LatestOutcome)
+		}
+	}
+
+	outcomeProcess := status.Process
+	priorReplacement := found && prior.Created && validPriorStatus(prior) && prior.ContainerID == status.ContainerID && prior.Process == processReplacement
+	if inspect.State != nil && inspect.State.Status == container.StateRestarting && inspect.RestartCount == 1 && !priorReplacement {
+		outcomeProcess = processOriginal
+	}
+	if outcome := outcomeFromInspect(inspect.State, outcomeProcess); outcome != nil {
+		status.LatestOutcome = outcome
+	}
+}
+
+func loadPreviousStatuses(path string) (map[string]containerStatus, bool) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, true
+	}
+	if err != nil {
+		return nil, false
+	}
+	var response containersResponse
+	if json.Unmarshal(data, &response) != nil || response.ObservedAt.IsZero() {
+		return nil, false
+	}
+	previous := make(map[string]containerStatus, len(response.Containers))
+	for _, status := range response.Containers {
+		if status.Name == "" {
+			return nil, false
+		}
+		if !status.Created && (status.ContainerID != "" || status.Process != "" || status.LifecycleComplete || status.LatestOutcome != nil) {
+			return nil, false
+		}
+		if status.Created && !validPriorStatus(status) {
+			return nil, false
+		}
+		if _, exists := previous[status.Name]; exists {
+			return nil, false
+		}
+		previous[status.Name] = status
+	}
+	return previous, true
+}
+
+func validPriorStatus(status containerStatus) bool {
+	if !validContainerID(status.ContainerID) || status.RestartCount < 0 || status.RestartCount > maxReportedRestartCount {
+		return false
+	}
+	if status.Process != processOriginal && status.Process != processReplacement {
+		return false
+	}
+	if status.RestartCount > 0 && status.Process != processReplacement {
+		return false
+	}
+	if status.StartedAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, status.StartedAt); err != nil {
+			return false
+		}
+	}
+	if status.LatestOutcome == nil {
+		return true
+	}
+	outcome := status.LatestOutcome
+	return terminalStatus(outcome.Status) && outcome.ExitCode >= 0 && outcome.ExitCode <= 255 &&
+		(outcome.Process == processOriginal || outcome.Process == processReplacement)
+}
+
+func validContainerID(containerID string) bool {
+	if len(containerID) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(containerID)
+	return err == nil
+}
+
+func outcomeFromInspect(state *container.State, process string) *processOutcome {
+	if state == nil || !terminalStatus(string(state.Status)) || state.ExitCode < 0 || state.ExitCode > 255 {
+		return nil
+	}
+	return &processOutcome{
+		Process:    process,
+		Status:     string(state.Status),
+		ExitCode:   state.ExitCode,
+		OOMKilled:  state.OOMKilled,
+		FinishedAt: state.FinishedAt,
+	}
+}
+
+func terminalStatus(status string) bool {
+	return status == string(container.StateExited) || status == string(container.StateDead) || status == string(container.StateRestarting)
+}
+
+func processForRestartCount(restartCount int) string {
+	if restartCount == 0 {
+		return processOriginal
+	}
+	return processReplacement
+}
+
+func boundedRestartCount(restartCount int) (int, bool, bool) {
+	if restartCount < 0 {
+		return 0, false, false
+	}
+	if restartCount > maxReportedRestartCount {
+		return maxReportedRestartCount, true, true
+	}
+	return restartCount, false, true
+}
+
+func cloneOutcome(outcome *processOutcome) *processOutcome {
+	if outcome == nil {
+		return nil
+	}
+	copy := *outcome
+	return &copy
 }
 
 func containerHealthFromDocker(health *container.Health) *containerHealth {

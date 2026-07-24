@@ -19,6 +19,12 @@ type fakeContainerClient struct {
 	errs    map[string]error
 }
 
+func lifecycleStatus(inspect container.InspectResponse, prior containerStatus, found, persistedValid bool) containerStatus {
+	status := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, inspect)
+	applyLifecycle(&status, inspect, prior, found, persistedValid)
+	return status
+}
+
 func (f fakeContainerClient) ContainerInspect(_ context.Context, name string) (container.InspectResponse, error) {
 	if err := f.errs[name]; err != nil {
 		return container.InspectResponse{}, err
@@ -158,6 +164,210 @@ func TestContainerStatusFromInspect_UnhealthyHealthcheck(t *testing.T) {
 	}
 }
 
+func TestLifecycleManualRestartBetweenInspectsFailsClosed(t *testing.T) {
+	prior := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       strings.Repeat("a", 64),
+		Process:           processOriginal,
+		LifecycleComplete: true,
+		Status:            string(container.StateRunning),
+		StartedAt:         "2026-07-24T01:00:00Z",
+	}
+	got := lifecycleStatus(container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID:           prior.ContainerID,
+			RestartCount: 1,
+			State: &container.State{
+				Status:    container.StateRunning,
+				Running:   true,
+				StartedAt: "2026-07-24T01:01:00Z",
+			},
+		},
+	}, prior, true, true)
+
+	if got.Process != processReplacement || got.RestartCount != 1 || got.LifecycleComplete {
+		t.Fatalf("manual restart lifecycle = %#v", got)
+	}
+	if got.LatestOutcome != nil {
+		t.Fatalf("missed manual restart reported outcome %#v", got.LatestOutcome)
+	}
+}
+
+func TestLifecycleMissedSameCountTransitionFailsClosed(t *testing.T) {
+	prior := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       strings.Repeat("b", 64),
+		Process:           processOriginal,
+		LifecycleComplete: true,
+		Status:            string(container.StateRunning),
+		StartedAt:         "2026-07-24T02:00:00Z",
+	}
+	got := lifecycleStatus(container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID: prior.ContainerID,
+			State: &container.State{
+				Status:    container.StateRunning,
+				Running:   true,
+				StartedAt: "2026-07-24T02:01:00Z",
+			},
+		},
+	}, prior, true, true)
+
+	if got.Process != processReplacement || got.RestartCount != 0 || got.LifecycleComplete {
+		t.Fatalf("missed same-count transition = %#v", got)
+	}
+}
+
+func TestLifecycleObservedCleanStopThenStartRemainsComplete(t *testing.T) {
+	containerID := strings.Repeat("c", 64)
+	running := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       containerID,
+		Process:           processOriginal,
+		LifecycleComplete: true,
+		Status:            string(container.StateRunning),
+		StartedAt:         "2026-07-24T03:00:00Z",
+	}
+	stopped := lifecycleStatus(container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID: containerID,
+			State: &container.State{
+				Status:     container.StateExited,
+				ExitCode:   0,
+				StartedAt:  running.StartedAt,
+				FinishedAt: "2026-07-24T03:01:00Z",
+			},
+		},
+	}, running, true, true)
+	if !stopped.LifecycleComplete || stopped.LatestOutcome == nil || stopped.LatestOutcome.Process != processOriginal {
+		t.Fatalf("observed clean stop = %#v", stopped)
+	}
+
+	restarted := lifecycleStatus(container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID: containerID,
+			State: &container.State{
+				Status:    container.StateRunning,
+				Running:   true,
+				StartedAt: "2026-07-24T03:02:00Z",
+			},
+		},
+	}, stopped, true, true)
+	if restarted.Process != processReplacement || restarted.RestartCount != 0 || !restarted.LifecycleComplete {
+		t.Fatalf("observed clean start = %#v", restarted)
+	}
+	if restarted.LatestOutcome == nil || restarted.LatestOutcome.ExitCode != 0 {
+		t.Fatalf("clean start lost latest outcome: %#v", restarted.LatestOutcome)
+	}
+}
+
+func TestLifecycleRestartingInspectCapturesLatestOutcome(t *testing.T) {
+	prior := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       strings.Repeat("d", 64),
+		Process:           processOriginal,
+		LifecycleComplete: true,
+		Status:            string(container.StateRunning),
+		StartedAt:         "2026-07-24T04:00:00Z",
+	}
+	got := lifecycleStatus(container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID:           prior.ContainerID,
+			RestartCount: 1,
+			State: &container.State{
+				Status:     container.StateRestarting,
+				Restarting: true,
+				ExitCode:   9,
+				StartedAt:  prior.StartedAt,
+				FinishedAt: "2026-07-24T04:01:00Z",
+			},
+		},
+	}, prior, true, true)
+
+	if got.Process != processReplacement || !got.LifecycleComplete || got.LatestOutcome == nil {
+		t.Fatalf("restarting lifecycle = %#v", got)
+	}
+	if got.LatestOutcome.Process != processOriginal || got.LatestOutcome.ExitCode != 9 {
+		t.Fatalf("restarting outcome = %#v", got.LatestOutcome)
+	}
+}
+
+func TestLifecycleMissedCrashLoopFailsClosed(t *testing.T) {
+	prior := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       strings.Repeat("7", 64),
+		Process:           processReplacement,
+		LifecycleComplete: true,
+		Status:            string(container.StateRestarting),
+		RestartCount:      1,
+		StartedAt:         "2026-07-24T04:30:00Z",
+		LatestOutcome: &processOutcome{
+			Process:    processOriginal,
+			Status:     string(container.StateRestarting),
+			ExitCode:   1,
+			FinishedAt: "2026-07-24T04:31:00Z",
+		},
+	}
+	got := lifecycleStatus(container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID:           prior.ContainerID,
+			RestartCount: 2,
+			State:        &container.State{Status: container.StateRunning, Running: true, StartedAt: "2026-07-24T04:32:00Z"},
+		},
+	}, prior, true, true)
+
+	if got.LifecycleComplete || got.LatestOutcome != nil || got.RestartCount != 2 {
+		t.Fatalf("missed crash loop = %#v", got)
+	}
+}
+
+func TestLifecycleIdentityChangeAndTruncationFailClosed(t *testing.T) {
+	prior := containerStatus{
+		Name:              "model",
+		Created:           true,
+		ContainerID:       strings.Repeat("e", 64),
+		Process:           processOriginal,
+		LifecycleComplete: true,
+		Status:            string(container.StateRunning),
+		StartedAt:         "2026-07-24T05:00:00Z",
+	}
+	got := lifecycleStatus(container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID:           strings.Repeat("f", 64),
+			RestartCount: maxReportedRestartCount + 1,
+			State:        &container.State{Status: container.StateRunning, Running: true, StartedAt: "2026-07-24T05:01:00Z"},
+		},
+	}, prior, true, true)
+
+	if got.LifecycleComplete || !got.RestartCountTruncated || got.RestartCount != maxReportedRestartCount {
+		t.Fatalf("identity/truncation lifecycle = %#v", got)
+	}
+}
+
+func TestLoadPreviousStatusesRejectsMalformedIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "container-status.json")
+	if err := os.WriteFile(path, []byte(`{
+  "observed_at": "2026-07-24T06:00:00Z",
+  "containers": [{
+    "name": "model",
+    "created": true,
+    "container_id": "invalid",
+    "process": "original",
+    "restart_count": 0
+  }]
+}`), 0o644); err != nil {
+		t.Fatalf("writing previous status: %v", err)
+	}
+	if previous, valid := loadPreviousStatuses(path); valid || previous != nil {
+		t.Fatalf("malformed previous status accepted: valid=%v previous=%#v", valid, previous)
+	}
+}
+
 func TestInspectDeclaredContainers_UnexpectedError(t *testing.T) {
 	boom := errors.New("docker unavailable")
 	states, err := inspectDeclaredContainers(context.Background(), fakeContainerClient{
@@ -187,8 +397,13 @@ func TestPublishContainerStatusWritesJSON(t *testing.T) {
 		inspect: map[string]container.InspectResponse{
 			"model": {
 				ContainerJSONBase: &container.ContainerJSONBase{
-					Name:  "/model",
-					State: &container.State{Status: "running", Running: true},
+					ID:   strings.Repeat("9", 64),
+					Name: "/model",
+					State: &container.State{
+						Status:    container.StateRunning,
+						Running:   true,
+						StartedAt: "2026-07-24T07:00:00Z",
+					},
 				},
 			},
 		},
@@ -207,6 +422,9 @@ func TestPublishContainerStatusWritesJSON(t *testing.T) {
 	}
 	if len(got.Containers) != 1 || got.Containers[0].Name != "model" || got.Containers[0].Status != "running" {
 		t.Fatalf("unexpected output: %#v", got)
+	}
+	if got.Containers[0].Process != processOriginal || !got.Containers[0].LifecycleComplete {
+		t.Fatalf("unexpected lifecycle output: %#v", got.Containers[0])
 	}
 	if got.ObservedAt.IsZero() {
 		t.Fatal("expected observed_at to be set")

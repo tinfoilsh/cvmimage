@@ -4,15 +4,12 @@ The initrd is constructed from two fixed inputs:
 
 - `image/initrd/manifest.tsv`, which declares the complete archive layout and
   deterministic metadata;
-- `build/builder-work/output/artifacts/tinfoil-initrd`, the initrd-specific
-  member of the shared pinned runtime builder's six fixed named Go outputs.
+- `bazel-bin/tinfoil/cmd/initrd/tinfoil-initrd_/tinfoil-initrd`, built from its
+  fixed pure-Go dependency closure with upstream `rules_go`.
 
-The Go compiler and its packages are installed in the disposable builder
-image. Package installation and maintainer scripts are allowed there because
-the builder filesystem is never copied into the initrd or measured rootfs. The
-additive-initrd producer accepts only the fixed `artifacts/tinfoil-initrd`
-file; the builder's other five named Go outputs are consumed by their own
-measured runtime destinations.
+The additive-initrd producer accepts only that fixed Bazel output. The five
+CGO-enabled measured runtime commands remain outputs of the pinned disposable
+builder and are consumed by their own measured runtime destinations.
 
 `scripts/build-additive-initrd.sh` writes a canonical `newc` archive directly
 from those inputs, compresses it with Zstandard 1.5.7 using one thread and level
@@ -33,14 +30,9 @@ attestation; it can only prevent production of a releasable artifact.
 The focused commands are:
 
 ```sh
-./scripts/build-runtime-builder.sh
-./scripts/run-runtime-builder.sh initrd
 make additive-initrd
 make test-additive-initrd
 ```
 
-Full reproduction is release qualification, not routine pull-request CI. The
-release process performs clean repeated builds with separate caches and outputs
-and requires the named builder binaries and compressed initrds to be
-byte-identical. This is output comparison, not an independent-rebuilder or
-provenance proof.
+Repeated full-build comparison is deferred. Release qualification boots,
+tests, attests, and promotes the exact candidate image.

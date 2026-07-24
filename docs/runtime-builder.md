@@ -1,16 +1,15 @@
 # Shared runtime builder
 
-The six measured Go commands, nvattest, custom kernel, and NVIDIA modules use
+The five CGO-enabled measured Go commands, nvattest, custom kernel, and NVIDIA modules use
 one disposable builder image. Its Ubuntu base digest, dated package snapshot,
 and tool versions are pinned. Each producer has a fixed entrypoint and
 publishes only explicitly named output files.
 
 The Go producer emits exactly these files under `artifacts/`, with no command
 discovery: `tinfoil-boot`, `tinfoil-container-status`, `tinfoil-egress`,
-`tinfoil-init`, `tinfoil-initrd`, and `tinfoil-shim`. It uses the fixed Go
+`tinfoil-init`, and `tinfoil-shim`. It uses the fixed Go
 1.25.7 toolchain with `GOTOOLCHAIN=local`, read-only modules, trimmed paths,
-omitted VCS metadata, and empty Go build IDs. `tinfoil-initrd` disables CGO and
-is statically linked. The five measured runtime commands enable CGO and use
+omitted VCS metadata, and empty Go build IDs. These commands enable CGO and use
 the pinned GCC/binutils toolchain in external-link mode with the ELF build ID
 disabled.
 

@@ -61,23 +61,8 @@ build_runtime_command() {
     finish_command "$name"
 }
 
-build_initrd_command() {
-    local binary="$artifact_dir/tinfoil-initrd"
-
-    CGO_ENABLED=0 "$go_bin" build \
-        -trimpath \
-        -buildvcs=false \
-        -mod=readonly \
-        -ldflags='-s -w -buildid=' \
-        -o "$binary" \
-        ./cmd/initrd
-
-    finish_command tinfoil-initrd
-}
-
 build_runtime_command tinfoil-boot ./cmd/boot
 build_runtime_command tinfoil-container-status ./cmd/container-status
 build_runtime_command tinfoil-egress ./cmd/egress
 build_runtime_command tinfoil-init ./cmd/init
-build_initrd_command
 build_runtime_command tinfoil-shim ./cmd/shim

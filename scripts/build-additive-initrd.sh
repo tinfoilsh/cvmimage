@@ -2,8 +2,7 @@
 set -Eeuo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-artifact_dir="${TINFOIL_BUILDER_OUTPUT:-$repo_dir/build/builder-work/output}"
-binary="$artifact_dir/artifacts/tinfoil-initrd"
+binary="${TINFOIL_INITRD_BINARY:-$repo_dir/bazel-bin/tinfoil/cmd/initrd/tinfoil-initrd_/tinfoil-initrd}"
 raw_archive="${TINFOIL_INITRD_RAW:-$repo_dir/build/artifacts/initrd.cpio}"
 output="${TINFOIL_INITRD_OUTPUT:-$repo_dir/initrd.cpio.zst}"
 manifest="$repo_dir/image/initrd/manifest.tsv"

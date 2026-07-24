@@ -124,6 +124,19 @@ sh_test(
     ] + _RUNTIME_PACKAGE_LAYERS,
 )
 
+sh_test(
+    name = "nvidia-compute-rootfs-contract-test",
+    srcs = ["//scripts:test-nvidia-compute-rootfs.sh"],
+    args = [
+        "$(location :rootfs)",
+        "$(location :runtime-sources.lock.json)",
+    ],
+    data = [
+        ":rootfs",
+        ":runtime-sources.lock.json",
+    ],
+)
+
 filegroup(
     name = "runtime-package-layers",
     srcs = _RUNTIME_PACKAGE_LAYERS,
@@ -137,11 +150,6 @@ filegroup(
         "@runtime_source_libnvidia_container_tools//:payload",
         "@runtime_source_libnvidia_container1//:payload",
         "@runtime_source_libnvidia_decode//:payload",
-        "@runtime_source_libnvidia_egl_gbm1//:payload",
-        "@runtime_source_libnvidia_egl_wayland21//:payload",
-        "@runtime_source_libnvidia_egl_xcb1//:payload",
-        "@runtime_source_libnvidia_egl_xlib1//:payload",
-        "@runtime_source_libnvidia_encode//:payload",
         "@runtime_source_libnvidia_gl//:payload",
         "@runtime_source_libnvidia_gpucomp//:payload",
         "@runtime_source_libnvidia_nscq//:payload",

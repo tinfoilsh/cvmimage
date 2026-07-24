@@ -1,0 +1,11 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "payload",
+    srcs = [
+        "containerd",
+        "containerd-shim-runc-v2",
+        "dockerd",
+        "runc",
+    ],
+)

@@ -560,10 +560,13 @@ func runOneShot(ctx context.Context, manager *supervisor.Manager, cmd supervisor
 	select {
 	case <-process.Done():
 	case <-timer.C:
-		_ = process.Signal(syscall.SIGKILL)
-		_, _ = process.Wait(context.Background())
 	}
-	return fmt.Errorf("%s interrupted: %w", cmd.Name, waitErr)
+	cleanupErr := process.KillCgroup()
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), grace)
+	cleanupErr = errors.Join(cleanupErr, process.WaitCgroupEmpty(cleanupCtx))
+	_, directWaitErr := process.Wait(cleanupCtx)
+	cancelCleanup()
+	return fmt.Errorf("%s interrupted: %w", cmd.Name, errors.Join(waitErr, cleanupErr, directWaitErr))
 }
 
 func annotateOneShotFailure(

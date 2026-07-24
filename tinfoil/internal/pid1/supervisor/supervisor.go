@@ -3,6 +3,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
+)
+
+const (
+	childCgroupRoot     = "/sys/fs/cgroup/tinfoil-init"
+	cgroupEventsLimit   = 4096
+	cgroupPollInterval  = 10 * time.Millisecond
+	initialCleanupGrace = 5 * time.Second
 )
 
 // Command describes a direct child of PID 1.
@@ -52,6 +60,9 @@ type backendProcess interface {
 	pid() int
 	signal(syscall.Signal) error
 	groupAlive() (bool, error)
+	cgroupPopulated() (bool, error)
+	killCgroup() error
+	removeCgroup() error
 	release() error
 }
 
@@ -91,7 +102,38 @@ func (p *Process) Signal(sig syscall.Signal) error {
 	return p.child.signal(sig)
 }
 
+// KillCgroup recursively kills every process in this child instance's cgroup.
+func (p *Process) KillCgroup() error { return p.child.killCgroup() }
+
+// WaitCgroupEmpty waits for cgroup.events to report populated 0, then removes
+// the per-child cgroup directory.
+func (p *Process) WaitCgroupEmpty(ctx context.Context) error {
+	for {
+		populated, err := p.cgroupPopulated()
+		if err != nil {
+			return err
+		}
+		if !populated {
+			return p.removeCgroup()
+		}
+		timer := time.NewTimer(cgroupPollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (p *Process) groupAlive() (bool, error) { return p.child.groupAlive() }
+func (p *Process) cgroupPopulated() (bool, error) {
+	return p.child.cgroupPopulated()
+}
+func (p *Process) killCgroup() error   { return p.child.killCgroup() }
+func (p *Process) removeCgroup() error { return p.child.removeCgroup() }
 
 type startResponse struct {
 	process *Process
@@ -113,7 +155,7 @@ type Manager struct {
 func NewManager(log func(string, ...any)) *Manager {
 	sigchld := make(chan os.Signal, 1)
 	signal.Notify(sigchld, syscall.SIGCHLD)
-	manager := newManager(osBackend{}, sigchld, log)
+	manager := newManager(&osBackend{cgroupRoot: childCgroupRoot}, sigchld, log)
 	return manager
 }
 
@@ -189,6 +231,14 @@ func (m *Manager) reapChildren(children map[int]*Process) {
 		if err := process.child.release(); err != nil {
 			m.logf("releasing child pid=%d: %v", pid, err)
 		}
+		populated, err := process.cgroupPopulated()
+		if err != nil {
+			m.logf("reading child cgroup pid=%d: %v", pid, err)
+		} else if !populated {
+			if err := process.removeCgroup(); err != nil {
+				m.logf("removing child cgroup pid=%d: %v", pid, err)
+			}
+		}
 	}
 }
 
@@ -198,26 +248,74 @@ func (m *Manager) logf(format string, args ...any) {
 	}
 }
 
-type osBackend struct{}
+type osBackend struct {
+	cgroupRoot string
+	nextCgroup uint64
+}
 
-func (osBackend) start(command Command) (backendProcess, error) {
+func (b *osBackend) start(command Command) (backendProcess, error) {
 	env := command.Env
 	if env == nil {
 		env = os.Environ()
 	}
+	cgroup, cgroupFD, err := b.createCgroup()
+	if err != nil {
+		return nil, fmt.Errorf("prepare cgroup for %s: %w", command.Name, err)
+	}
+	defer cgroupFD.Close()
 	process, err := os.StartProcess(command.Path, append([]string{command.Path}, command.Args...), &os.ProcAttr{
 		Dir:   command.Dir,
 		Env:   env,
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-		Sys:   &syscall.SysProcAttr{Setpgid: true},
+		Sys: &syscall.SysProcAttr{
+			Setpgid:     true,
+			UseCgroupFD: true,
+			CgroupFD:    int(cgroupFD.Fd()),
+		},
 	})
 	if err != nil {
+		_ = os.Remove(cgroup.path)
 		return nil, fmt.Errorf("start %s: %w", command.Name, err)
 	}
-	return osChild{process: process, processID: process.Pid}, nil
+	return &osChild{process: process, processID: process.Pid, cgroup: cgroup}, nil
 }
 
-func (osBackend) waitNoHang() (int, syscall.WaitStatus, error) {
+func (b *osBackend) createCgroup() (*processCgroup, *os.File, error) {
+	if err := os.Mkdir(b.cgroupRoot, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, nil, err
+	}
+	for {
+		b.nextCgroup++
+		path := filepath.Join(b.cgroupRoot, fmt.Sprintf("child-%016x", b.nextCgroup))
+		if err := os.Mkdir(path, 0700); errors.Is(err, os.ErrExist) {
+			continue
+		} else if err != nil {
+			return nil, nil, err
+		}
+		cgroup := &processCgroup{path: path}
+		if _, err := cgroup.populated(); err != nil {
+			_ = os.Remove(path)
+			return nil, nil, err
+		}
+		killFile, err := os.OpenFile(filepath.Join(path, "cgroup.kill"), os.O_WRONLY, 0)
+		if err != nil {
+			_ = os.Remove(path)
+			return nil, nil, err
+		}
+		if err := killFile.Close(); err != nil {
+			_ = os.Remove(path)
+			return nil, nil, err
+		}
+		fd, err := os.Open(path)
+		if err != nil {
+			_ = os.Remove(path)
+			return nil, nil, err
+		}
+		return cgroup, fd, nil
+	}
+}
+
+func (*osBackend) waitNoHang() (int, syscall.WaitStatus, error) {
 	var status syscall.WaitStatus
 	pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
 	return pid, status, err
@@ -226,17 +324,18 @@ func (osBackend) waitNoHang() (int, syscall.WaitStatus, error) {
 type osChild struct {
 	process   *os.Process
 	processID int
+	cgroup    *processCgroup
 }
 
-func (p osChild) pid() int { return p.processID }
-func (p osChild) signal(sig syscall.Signal) error {
+func (p *osChild) pid() int { return p.processID }
+func (p *osChild) signal(sig syscall.Signal) error {
 	err := syscall.Kill(-p.processID, sig)
 	if errors.Is(err, syscall.ESRCH) {
 		return os.ErrProcessDone
 	}
 	return err
 }
-func (p osChild) groupAlive() (bool, error) {
+func (p *osChild) groupAlive() (bool, error) {
 	err := syscall.Kill(-p.processID, 0)
 	if errors.Is(err, syscall.ESRCH) {
 		return false, nil
@@ -246,7 +345,64 @@ func (p osChild) groupAlive() (bool, error) {
 	}
 	return err == nil, err
 }
-func (p osChild) release() error { return p.process.Release() }
+func (p *osChild) cgroupPopulated() (bool, error) { return p.cgroup.populated() }
+func (p *osChild) killCgroup() error              { return p.cgroup.kill() }
+func (p *osChild) removeCgroup() error            { return p.cgroup.remove() }
+func (p *osChild) release() error                 { return p.process.Release() }
+
+type processCgroup struct {
+	path string
+}
+
+func (c *processCgroup) populated() (bool, error) {
+	data, err := os.ReadFile(filepath.Join(c.path, "cgroup.events"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if len(data) > cgroupEventsLimit {
+		return false, fmt.Errorf("cgroup.events exceeds %d bytes", cgroupEventsLimit)
+	}
+	for len(data) > 0 {
+		end := bytes.IndexByte(data, '\n')
+		if end < 0 {
+			return false, errors.New("cgroup.events has unterminated line")
+		}
+		line := data[:end]
+		data = data[end+1:]
+		switch {
+		case bytes.Equal(line, []byte("populated 0")):
+			return false, nil
+		case bytes.Equal(line, []byte("populated 1")):
+			return true, nil
+		case bytes.HasPrefix(line, []byte("populated ")):
+			return false, fmt.Errorf("invalid cgroup.events populated line %q", line)
+		}
+	}
+	return false, errors.New("cgroup.events lacks populated state")
+}
+
+func (c *processCgroup) kill() error {
+	file, err := os.OpenFile(filepath.Join(c.path, "cgroup.kill"), os.O_WRONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.WriteString("1")
+	return errors.Join(writeErr, file.Close())
+}
+
+func (c *processCgroup) remove() error {
+	err := os.Remove(c.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
 
 // State reports whether a managed service is ready. A required service is
 // marked unready before restart delay begins, allowing callers to fail closed.
@@ -388,9 +544,7 @@ func (s *Supervisor) startLocked(record *serviceRecord) (*Process, error) {
 
 func (s *Supervisor) stopInitial(record *serviceRecord, process *Process) error {
 	var errs []error
-	if err := process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		errs = append(errs, err)
-	}
+	errs = append(errs, s.killCgroups([]*Process{process}, initialCleanupGrace))
 	if _, err := process.Wait(context.Background()); err != nil {
 		errs = append(errs, err)
 	}
@@ -432,8 +586,8 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 		if record.process == process {
 			record.process = nil
 		}
-		alive, aliveErr := process.groupAlive()
-		if aliveErr == nil && !alive {
+		populated, populatedErr := process.cgroupPopulated()
+		if populatedErr == nil && !populated && process.removeCgroup() == nil {
 			delete(record.groups, process)
 		}
 		draining := s.draining
@@ -472,19 +626,22 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 			}
 			if readyErr := s.ready(s.context, record, next); readyErr != nil {
 				s.emit(State{Name: record.spec.Name, Required: record.spec.Required, Err: readyErr})
-				_ = next.Signal(syscall.SIGKILL)
+				cleanupErr := s.killCgroups([]*Process{next}, initialCleanupGrace)
 				_, _ = next.Wait(context.Background())
 				s.mu.Lock()
 				if record.process == next {
 					record.process = nil
 				}
-				if alive, err := next.groupAlive(); err == nil && !alive {
+				if populated, err := next.cgroupPopulated(); err == nil && !populated && next.removeCgroup() == nil {
 					delete(record.groups, next)
 				}
 				if s.clock.Now().Sub(record.started) >= s.stable {
 					record.delay = s.base
 				}
 				s.mu.Unlock()
+				if cleanupErr != nil {
+					s.emit(State{Name: record.spec.Name, Required: record.spec.Required, Err: cleanupErr})
+				}
 				continue
 			}
 			s.emit(State{Name: record.spec.Name, Required: record.spec.Required, Ready: true})
@@ -508,7 +665,7 @@ func (s *Supervisor) emit(state State) {
 }
 
 // Drain prevents new starts, then stops each dependency group with TERM and a
-// bounded wait before escalating remaining members to KILL.
+// bounded wait before recursively killing each remaining child cgroup.
 func (s *Supervisor) Drain(groups [][]string, termGrace, killGrace time.Duration) error {
 	s.mu.Lock()
 	s.draining = true
@@ -565,21 +722,64 @@ func (s *Supervisor) drainGroup(names []string, termGrace, killGrace time.Durati
 		}
 		alive = append(alive, process)
 	}
-	alive, waitErrs := waitProcessGroups(alive, s.clock.After(termGrace))
+	_, waitErrs := waitProcessGroups(alive, s.clock.After(termGrace))
 	errs = append(errs, waitErrs...)
-	killed := alive[:0]
-	for _, process := range alive {
-		if err := process.Signal(syscall.SIGKILL); errors.Is(err, os.ErrProcessDone) {
+	errs = append(errs, s.killCgroups(processes, killGrace))
+	return errors.Join(errs...)
+}
+
+func (s *Supervisor) killCgroups(processes []*Process, grace time.Duration) error {
+	pending := make(map[*Process]bool, len(processes))
+	var errs []error
+	for _, process := range processes {
+		populated, err := process.cgroupPopulated()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("pid %d cgroup state: %w", process.PID(), err))
 			continue
-		} else if err != nil {
-			errs = append(errs, err)
 		}
-		killed = append(killed, process)
+		if !populated {
+			if err := process.removeCgroup(); err != nil {
+				errs = append(errs, fmt.Errorf("remove pid %d cgroup: %w", process.PID(), err))
+			}
+			continue
+		}
+		if err := process.killCgroup(); err != nil {
+			errs = append(errs, fmt.Errorf("kill pid %d cgroup: %w", process.PID(), err))
+		}
+		pending[process] = true
 	}
-	alive, waitErrs = waitProcessGroups(killed, s.clock.After(killGrace))
-	errs = append(errs, waitErrs...)
-	for _, process := range alive {
-		errs = append(errs, fmt.Errorf("pid %d did not exit after SIGKILL", process.PID()))
+	if len(pending) == 0 {
+		return errors.Join(errs...)
+	}
+
+	timeout := s.clock.After(grace)
+	for len(pending) > 0 {
+		for process := range pending {
+			populated, err := process.cgroupPopulated()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("pid %d cgroup state after kill: %w", process.PID(), err))
+				delete(pending, process)
+				continue
+			}
+			if populated {
+				continue
+			}
+			if err := process.removeCgroup(); err != nil {
+				errs = append(errs, fmt.Errorf("remove pid %d cgroup: %w", process.PID(), err))
+			}
+			delete(pending, process)
+		}
+		if len(pending) == 0 {
+			break
+		}
+		select {
+		case <-timeout:
+			for process := range pending {
+				errs = append(errs, fmt.Errorf("pid %d cgroup remained populated after cgroup.kill", process.PID()))
+			}
+			return errors.Join(errs...)
+		case <-s.clock.After(cgroupPollInterval):
+		}
 	}
 	return errors.Join(errs...)
 }

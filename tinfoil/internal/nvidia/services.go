@@ -210,7 +210,7 @@ func (s *Services) CreateCDITemporary() (string, error) {
 	if err := ensureDirectory(directory); err != nil {
 		return "", fmt.Errorf("prepare NVIDIA CDI directory: %w", err)
 	}
-	file, err := os.CreateTemp(directory, ".nvidia.yaml.*")
+	file, err := os.CreateTemp(directory, ".nvidia.*.yaml")
 	if err != nil {
 		return "", fmt.Errorf("create NVIDIA CDI temporary file: %w", err)
 	}

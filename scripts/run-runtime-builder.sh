@@ -72,14 +72,12 @@ case "$producer" in
             /usr/local/bin/build-initrd /workspace /output
         ;;
     nvattest)
-        deb_output="${TINFOIL_NVATTEST_DEB_OUTPUT:-$repo_dir/packages}"
         runtime_output="${TINFOIL_NVATTEST_RUNTIME_OUTPUT:-$repo_dir/build/rootfs-artifacts/nvattest}"
         nvattest_home="$cache_root/nvattest-home"
-        mkdir -p "$deb_output" "$runtime_output" "$nvattest_home"
+        mkdir -p "$runtime_output" "$nvattest_home"
         docker run --rm \
             --user "$host_uid:$host_gid" \
             --mount "$repo_mount" \
-            --mount "type=bind,src=$deb_output,dst=/output/debs" \
             --mount "type=bind,src=$runtime_output,dst=/output/runtime" \
             --mount "type=bind,src=$nvattest_home,dst=/builder-home" \
             --env HOME=/builder-home \
@@ -88,7 +86,6 @@ case "$producer" in
             --env "HOST_GID=$host_gid" \
             "$builder_image" \
             /workspace/build-nvattest.sh \
-                --deb-output /output/debs \
                 --runtime-output /output/runtime
         ;;
     kernel)

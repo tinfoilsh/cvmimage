@@ -31,7 +31,6 @@ The standard producer interface is:
 ./scripts/run-runtime-builder.sh initrd
 ./scripts/run-runtime-builder.sh kernel
 ./scripts/run-runtime-builder.sh nvidia
-make test-go-producer
 ```
 
 Regenerate nvattest explicitly when changing its source or build inputs:

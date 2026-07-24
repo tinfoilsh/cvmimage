@@ -181,7 +181,7 @@
         "bzlTransitiveDigest": "mF2eV4slSMEbCIO+MjMBgMciOSkZb9UUI2fFj3BPwNA=",
         "usagesDigest": "ZhxnUxFkNDXMRlHkZ0sEOIsJVy8V8BOOqt1yt9cZEgI=",
         "recordedFileInputs": {
-          "@@//image/runtime-sources.lock.json": "376855455155da04e35a4b01e607ae2726044bdda6e29e3592c155cd0ae89789"
+          "@@//image/runtime-sources.lock.json": "2ad50af96e9c4019930845ed3413a7817b9479669978738f1b6299ea0d8b4a65"
         },
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -260,61 +260,6 @@
               "type": ".deb",
               "urls": [
                 "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-decode_595.71.05-1ubuntu1_amd64.deb"
-              ]
-            }
-          },
-          "runtime_source_libnvidia_egl_gbm1": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "build_file_content": "load(\"@rules_distroless//apt/private:deb_postfix.bzl\", \"deb_postfix\")\n\ndeb_postfix(\n    name = \"payload\",\n    srcs = glob([\"data.tar*\"]),\n    outs = [\"layer.tar.gz\"],\n    mergedusr = False,\n    visibility = [\"//visibility:public\"],\n)\n",
-              "sha256": "33e4c0e79059de1649443556b36295e6ce24c5070858de7018095c57d1c208b3",
-              "type": ".deb",
-              "urls": [
-                "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-egl-gbm1_1.1.3-1ubuntu1_amd64.deb"
-              ]
-            }
-          },
-          "runtime_source_libnvidia_egl_wayland21": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "build_file_content": "load(\"@rules_distroless//apt/private:deb_postfix.bzl\", \"deb_postfix\")\n\ndeb_postfix(\n    name = \"payload\",\n    srcs = glob([\"data.tar*\"]),\n    outs = [\"layer.tar.gz\"],\n    mergedusr = False,\n    visibility = [\"//visibility:public\"],\n)\n",
-              "sha256": "a60e911470d168a9c6cb760b0d5a848ccf957d4ee3f999e57a2601b3ea1c8cf1",
-              "type": ".deb",
-              "urls": [
-                "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-egl-wayland21_1.0.1-1ubuntu1_amd64.deb"
-              ]
-            }
-          },
-          "runtime_source_libnvidia_egl_xcb1": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "build_file_content": "load(\"@rules_distroless//apt/private:deb_postfix.bzl\", \"deb_postfix\")\n\ndeb_postfix(\n    name = \"payload\",\n    srcs = glob([\"data.tar*\"]),\n    outs = [\"layer.tar.gz\"],\n    mergedusr = False,\n    visibility = [\"//visibility:public\"],\n)\n",
-              "sha256": "d1956fcdba00e670ddce263afe93e4632fe9ba736b3ecb1981c409e525b55619",
-              "type": ".deb",
-              "urls": [
-                "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-egl-xcb1_1.0.5-1ubuntu1_amd64.deb"
-              ]
-            }
-          },
-          "runtime_source_libnvidia_egl_xlib1": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "build_file_content": "load(\"@rules_distroless//apt/private:deb_postfix.bzl\", \"deb_postfix\")\n\ndeb_postfix(\n    name = \"payload\",\n    srcs = glob([\"data.tar*\"]),\n    outs = [\"layer.tar.gz\"],\n    mergedusr = False,\n    visibility = [\"//visibility:public\"],\n)\n",
-              "sha256": "235e1269c4bdad7f8321fa34b08f3f538432bbecda38f765de193490db66c4d2",
-              "type": ".deb",
-              "urls": [
-                "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-egl-xlib1_1.0.5-1ubuntu1_amd64.deb"
-              ]
-            }
-          },
-          "runtime_source_libnvidia_encode": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
-            "attributes": {
-              "build_file_content": "load(\"@rules_distroless//apt/private:deb_postfix.bzl\", \"deb_postfix\")\n\ndeb_postfix(\n    name = \"payload\",\n    srcs = glob([\"data.tar*\"]),\n    outs = [\"layer.tar.gz\"],\n    mergedusr = False,\n    visibility = [\"//visibility:public\"],\n)\n",
-              "sha256": "7dbec1cd338076849a0c4ba0d0fac6389b657f5e06ed8f392e7d3a4b8a31518a",
-              "type": ".deb",
-              "urls": [
-                "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-encode_595.71.05-1ubuntu1_amd64.deb"
               ]
             }
           },

@@ -45,7 +45,7 @@ if [[ "$actual_version" != "$expected_version" ]]; then
     exit 1
 fi
 
-expected_config_digest="d6ca942be2c014cd726da80c336d4b5cd49728f0ec98043821d09156ef4e831f"
+expected_config_digest="b2f8b797ab9c0f0b520c8a1e7ac022fe0b607e08562c70fa49ff5888d6c5485d"
 actual_config_sha256="$(sha256sum "$config" | cut -d' ' -f1)"
 if [[ "$actual_config_sha256" != "$expected_config_digest" ]]; then
     echo "containerd config digest mismatch" >&2
@@ -125,6 +125,8 @@ io.containerd.differ.v1.erofs
 io.containerd.grpc.v1.cri
 io.containerd.grpc.v1.sandbox-controllers
 io.containerd.grpc.v1.sandboxes
+io.containerd.grpc.v1.transfer
+io.containerd.image-verifier.v1.bindir
 io.containerd.internal.v1.opt
 io.containerd.internal.v1.tracing
 io.containerd.monitor.container.v1.restart
@@ -138,6 +140,7 @@ io.containerd.snapshotter.v1.devmapper
 io.containerd.snapshotter.v1.erofs
 io.containerd.snapshotter.v1.zfs
 io.containerd.tracing.processor.v1.otlp
+io.containerd.transfer.v1.local
 EOF
 comm -23 "$scratch/expected-full" "$scratch/expected-disabled" >"$scratch/expected-policy"
 

@@ -39,8 +39,14 @@ sh_test(
 sh_test(
     name = "container-runtime-rootfs-contract-test",
     srcs = ["//scripts:test-container-runtime-rootfs.sh"],
-    args = ["$(location :docker-static-rootfs-layer)"],
-    data = [":docker-static-rootfs-layer"],
+    args = [
+        "$(location :container-runtime-contract-rootfs-layer)",
+        "$(location rootfs/etc/containerd/config.toml)",
+    ],
+    data = [
+        ":container-runtime-contract-rootfs-layer",
+        "rootfs/etc/containerd/config.toml",
+    ],
 )
 
 filegroup(
@@ -126,6 +132,20 @@ pkg_tar(
     extension = "tar",
     mtime = 0,
     out = "docker-static-rootfs-layer.tar",
+    owner = "0.0",
+    portable_mtime = False,
+    stamp = 0,
+)
+
+pkg_tar(
+    name = "container-runtime-contract-rootfs-layer",
+    srcs = [
+        ":docker-static-payload",
+        ":repository-rootfs-0644",
+    ],
+    extension = "tar",
+    mtime = 0,
+    out = "container-runtime-contract-rootfs-layer.tar",
     owner = "0.0",
     portable_mtime = False,
     stamp = 0,

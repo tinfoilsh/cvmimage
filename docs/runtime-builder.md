@@ -20,9 +20,11 @@ trees, caches, logs, and installed tools are discarded. Rootfs construction
 may consume only the named producer outputs mounted from explicit output
 directories.
 
-Normal rootfs and image builds reuse the two worktree-local nvattest runtime
-outputs when both already exist. Their reproducible epoch-zero timestamps are
-not Make targets and therefore do not trigger unnecessary source rebuilds.
+Normal rootfs and image builds never compile nvattest. They read a two-entry
+SHA-256 lock, require both content-addressed files under
+`build/artifact-cache/sha256`, verify them, and stage only those exact bytes for
+Bazel rootfs packaging. A missing, replaced, or malformed cache object fails
+the build closed.
 
 The standard producer interface is:
 
@@ -34,15 +36,17 @@ The standard producer interface is:
 make test-go-producer
 ```
 
-Regenerate nvattest explicitly when changing its source or build inputs:
+Populate the cache explicitly when changing its source or build inputs:
 
 ```sh
 make regenerate-nvattest
 ```
 
-The release workflow calls `make release-image`, which first regenerates
-nvattest on the fresh release worker and then builds the shipping image.
-`make reproducible-nvattest` remains available for independent qualification.
+The generated files must match `image/nvattest-runtime.sha256`; changing them
+requires a reviewed lock update. The release workflow calls `make
+release-image`, which explicitly populates this cache on the fresh release
+worker before building the shipping image. `make reproducible-nvattest` remains
+a release-qualification tool and is not part of routine PR CI.
 
 Initrd, nvattest, and kernel producers use ordinary unprivileged containers.
 NVIDIA alone receives `CAP_SYS_ADMIN` with confined host-device access for its

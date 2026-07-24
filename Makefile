@@ -6,10 +6,6 @@ BAZEL ?= bazel
 SHIPPING_KERNEL = kernel/out/tinfoil-custom.vmlinuz
 SHIPPING_INITRD = initrd.cpio.zst
 
-NVATTEST_RUNTIME_OUTPUT = build/rootfs-artifacts/nvattest
-NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
-NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
-
 .PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
 	runtime-builder builder-initrd bazel-rootfs additive-initrd verify-additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
@@ -55,7 +51,7 @@ clean:
 
 deepclean:
 	$(MKOSI) clean
-	sudo env PATH="$(TRUSTED_PATH)" rm -f packages/nvattest_*.deb packages/libnvat_*.deb
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf build/artifact-cache/sha256
 
 runtime-builder:
 	./scripts/build-runtime-builder.sh
@@ -189,24 +185,16 @@ rebuild: shipping-image
 
 build: shipping-image
 
-# Reuse an existing worktree-local nvattest build. Rebuild only when either
-# runtime output is absent or regeneration is requested explicitly.
 nvattest:
-	@if [ ! -x "$(NVATTEST_RUNTIME_BINARY)" ] || [ ! -f "$(NVATTEST_RUNTIME_LIBRARY)" ]; then \
-	    ./scripts/build-runtime-builder.sh; \
-	    ./scripts/run-runtime-builder.sh nvattest; \
-	else \
-	    echo "Reusing existing nvattest runtime artifacts"; \
-	fi
-	test -x "$(NVATTEST_RUNTIME_BINARY)"
-	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
+	./scripts/nvattest-runtime.sh stage
 
 regenerate-nvattest:
-	rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
 	./scripts/build-runtime-builder.sh
-	./scripts/run-runtime-builder.sh nvattest
-	test -x "$(NVATTEST_RUNTIME_BINARY)"
-	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
+	@temporary="$$(mktemp -d)"; \
+	trap 'rm -rf -- "$$temporary"' EXIT; \
+	TINFOIL_NVATTEST_RUNTIME_OUTPUT="$$temporary/runtime" \
+		./scripts/run-runtime-builder.sh nvattest; \
+	./scripts/nvattest-runtime.sh publish "$$temporary/runtime"
 
 test-nvattest-artifacts:
 	./scripts/test-nvattest-artifacts.sh

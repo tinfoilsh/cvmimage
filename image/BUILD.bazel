@@ -12,10 +12,11 @@ load(
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 
 # Only package data archives enter the measured rootfs; Debian maintainer
-# scripts and control archives are neither included nor executed.
+# scripts and control archives are neither included nor executed. Debconf and
+# libcap2-bin stay pinned in the canonical lock as dependency provenance, but
+# their administrative payloads are not needed by the fixed runtime.
 _RUNTIME_PACKAGE_LAYERS = [
     "@ubuntu_runtime//ca-certificates:data",
-    "@ubuntu_runtime//debconf:data",
     "@ubuntu_runtime//gcc-16-base:data",
     "@ubuntu_runtime//iproute2:data",
     "@ubuntu_runtime//libbpf1:data",
@@ -104,6 +105,22 @@ sh_test(
     ],
     data = [
         ":runtime-packages.lock.json",
+    ] + _RUNTIME_PACKAGE_LAYERS,
+)
+
+sh_test(
+    name = "runtime-debconf-contract-test",
+    srcs = ["//scripts:test-runtime-debconf-contract.sh"],
+    args = [
+        "$(location :runtime-packages.lock.json)",
+        "$(location @ubuntu_runtime//debconf:data)",
+    ] + [
+        "$(location %s)" % layer
+        for layer in _RUNTIME_PACKAGE_LAYERS
+    ],
+    data = [
+        ":runtime-packages.lock.json",
+        "@ubuntu_runtime//debconf:data",
     ] + _RUNTIME_PACKAGE_LAYERS,
 )
 

@@ -1,4 +1,4 @@
-# Deterministic NVIDIA module producer
+# NVIDIA module producer
 
 `kernel/build-nvidia-open-local.sh` builds the three external modules required
 by the measured guest:

@@ -190,7 +190,8 @@ nvattest:
 
 regenerate-nvattest:
 	./scripts/build-runtime-builder.sh
-	@temporary="$$(mktemp -d)"; \
+	@set -eu; \
+	temporary="$$(mktemp -d)"; \
 	trap 'rm -rf -- "$$temporary"' EXIT; \
 	TINFOIL_NVATTEST_RUNTIME_OUTPUT="$$temporary/runtime" \
 		./scripts/run-runtime-builder.sh nvattest; \

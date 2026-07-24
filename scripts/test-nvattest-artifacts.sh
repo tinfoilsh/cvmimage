@@ -8,8 +8,10 @@ readonly SO_VERSION=1.2.2
 nvattest_require_tool cc
 
 temporary="$(mktemp -d)"
+relative_stage=".nvattest-relative-stage-test.$$"
 cleanup() {
     rm -rf -- "${temporary}"
+    rm -rf -- "${repo_root}/${relative_stage}"
 }
 trap cleanup EXIT
 
@@ -77,6 +79,12 @@ test "$(stat -c %a "${stage}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}")
 test "$(stat -c %Y "${stage}/usr/bin/nvattest")" = 0
 test "$(stat -c %Y "${stage}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}")" = 0
 
+TINFOIL_NVATTEST_CACHE="${cache}" \
+    TINFOIL_NVATTEST_LOCK="${lock}" \
+    TINFOIL_NVATTEST_STAGE="${relative_stage}" \
+    "${repo_root}/scripts/nvattest-runtime.sh" stage
+cmp "${fixture}/usr/bin/nvattest" "${repo_root}/${relative_stage}/usr/bin/nvattest"
+
 chmod u+w "${cache}/${binary_digest}"
 printf 'tampered\n' >>"${cache}/${binary_digest}"
 if run_contract stage 2>/dev/null; then
@@ -102,12 +110,12 @@ rm "${cache}/${library_digest}"
 install -m 0444 "${fixture}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}" \
     "${cache}/${library_digest}"
 
-printf 'unexpected third entry\n' >>"${lock}"
+printf '\nunexpected fourth entry\n' >>"${lock}"
 if run_contract stage 2>/dev/null; then
-    echo "staging accepted a malformed nvattest lock" >&2
+    echo "staging accepted trailing data after a blank lock line" >&2
     exit 1
 fi
-sed -i '$d' "${lock}"
+sed -i '3,$d' "${lock}"
 run_contract stage
 
 output="${temporary}/output"

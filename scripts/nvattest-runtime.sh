@@ -14,20 +14,18 @@ readonly nvattest_so_version=1.2.2
 source "${repo_root}/scripts/nvattest-artifacts.sh"
 
 read_lock() {
-    local first_digest first_name second_digest second_name extra
+    local first_digest first_name second_digest second_name
+    local -a lines
 
-    {
-        read -r first_digest first_name
-        read -r second_digest second_name
-        read -r extra || true
-    } <"${lock_file}"
+    mapfile -t lines <"${lock_file}"
+    [ "${#lines[@]}" -eq 2 ] || return 1
+    read -r first_digest first_name <<<"${lines[0]}"
+    read -r second_digest second_name <<<"${lines[1]}"
 
     [[ "${first_digest}" =~ ^[0-9a-f]{64}$ ]] || return 1
     [[ "${second_digest}" =~ ^[0-9a-f]{64}$ ]] || return 1
     [ "${first_name}" = nvattest ] || return 1
     [ "${second_name}" = "libnvat.so.${nvattest_so_version}" ] || return 1
-    [ -z "${extra:-}" ] || return 1
-
     NVATTEST_DIGEST=${first_digest}
     LIBNVAT_DIGEST=${second_digest}
 }
@@ -44,12 +42,13 @@ verify_cache_file() {
 }
 
 stage_cache() (
-    local temporary
+    local stage_parent temporary
 
     verify_cache_file "${NVATTEST_DIGEST}"
     verify_cache_file "${LIBNVAT_DIGEST}"
-    mkdir -p "${stage_root%/*}"
-    temporary="$(mktemp -d "${stage_root%/*}/.nvattest.XXXXXXXX")"
+    stage_parent="$(dirname -- "${stage_root}")"
+    mkdir -p "${stage_parent}"
+    temporary="$(mktemp -d "${stage_parent}/.nvattest.XXXXXXXX")"
     trap 'rm -rf -- "${temporary}"' EXIT
     install -d -m 0755 "${temporary}/usr/bin" "${temporary}/usr/lib/x86_64-linux-gnu"
     install -m 0755 "${cache_root}/${NVATTEST_DIGEST}" "${temporary}/usr/bin/nvattest"

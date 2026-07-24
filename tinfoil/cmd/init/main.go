@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	bootTimeout          = 5 * time.Minute
 	containerdReadyLimit = 30 * time.Second
 	dockerReadyLimit     = 60 * time.Second
 	shimReadyLimit       = 30 * time.Second
@@ -71,8 +70,8 @@ func runPID1() {
 		initLogf("warning: running with pid %d, expected pid 1", os.Getpid())
 	}
 
-	// This is the lifetime context. The boot deadline is deliberately created
-	// inside run and can never end post-boot supervision.
+	// This signal-notified context owns both startup and supervision. Narrow
+	// readiness checks apply their own operation-specific timeouts.
 	parent, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	err := run(parent)
@@ -106,7 +105,6 @@ type lifecycleDeps struct {
 	limits       func() error
 	syslog       func(context.Context)
 	exists       func(string) (bool, error)
-	timeout      time.Duration
 	term         time.Duration
 	kill         time.Duration
 }
@@ -147,7 +145,6 @@ func run(parent context.Context) (result error) {
 		limits:       hardening.ApplyRuntimeLimits,
 		syslog:       startOptionalSyslogSink,
 		exists:       pathExists,
-		timeout:      bootTimeout,
 		term:         serviceTermGrace,
 		kill:         serviceKillGrace,
 	}
@@ -155,8 +152,7 @@ func run(parent context.Context) (result error) {
 }
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
-	bootCtx, cancelBoot := context.WithTimeout(parent, deps.timeout)
-	defer cancelBoot()
+	bootCtx := parent
 	runtimeCtx, cancelRuntime := context.WithCancel(parent)
 	defer func() {
 		readiness.FailClosed()
@@ -254,7 +250,6 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
 	initLogf("boot complete")
-	cancelBoot()
 	<-parent.Done()
 	initLogf("shutdown requested")
 	return nil

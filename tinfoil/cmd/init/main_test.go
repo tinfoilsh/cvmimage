@@ -96,7 +96,6 @@ func newLifecycleHarness() *lifecycleHarness {
 		exists: func(path string) (bool, error) {
 			return harness.existing[path], nil
 		},
-		timeout: time.Hour,
 	}
 	return harness
 }
@@ -616,7 +615,7 @@ func TestAnnotateOneShotFailureFallsBackToChildError(t *testing.T) {
 	}
 }
 
-func TestBootDeadlineDoesNotEndSupervisionAndRequiredDeathFailsClosed(t *testing.T) {
+func TestRequiredServiceDeathFailsClosedDuringSupervision(t *testing.T) {
 	harness := newLifecycleHarness()
 	parent, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -627,11 +626,9 @@ func TestBootDeadlineDoesNotEndSupervisionAndRequiredDeathFailsClosed(t *testing
 	if ready := receiveTest(t, harness.ready); !ready {
 		t.Fatal("lifecycle did not become ready")
 	}
-	// runLifecycle cancels its boot context immediately after publishing
-	// readiness. The signal-only parent must remain the sole lifetime gate.
 	select {
 	case err := <-result:
-		t.Fatalf("boot context ended supervision: %v", err)
+		t.Fatalf("lifecycle ended before shutdown: %v", err)
 	default:
 	}
 	harness.services.state(dockerName, false)

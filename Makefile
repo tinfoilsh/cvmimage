@@ -55,7 +55,7 @@ clean:
 
 deepclean:
 	$(MKOSI) clean
-	sudo env PATH="$(TRUSTED_PATH)" rm -f packages/nvattest_*.deb packages/libnvat_*.deb
+	sudo env PATH="$(TRUSTED_PATH)" rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"
 
 runtime-builder:
 	./scripts/build-runtime-builder.sh
@@ -177,17 +177,17 @@ rebuild: shipping-image
 
 build: shipping-image
 
-# Reuse an existing worktree-local nvattest build. Rebuild only when either
-# runtime output is absent or regeneration is requested explicitly.
+# Normal image builds consume only the two fixed producer outputs. Building
+# nvattest is an explicit operation because it is expensive and release-only.
 nvattest:
-	@if [ ! -x "$(NVATTEST_RUNTIME_BINARY)" ] || [ ! -f "$(NVATTEST_RUNTIME_LIBRARY)" ]; then \
-	    ./scripts/build-runtime-builder.sh; \
-	    ./scripts/run-runtime-builder.sh nvattest; \
-	else \
-	    echo "Reusing existing nvattest runtime artifacts"; \
-	fi
-	test -x "$(NVATTEST_RUNTIME_BINARY)"
-	test -f "$(NVATTEST_RUNTIME_LIBRARY)"
+	@test -x "$(NVATTEST_RUNTIME_BINARY)" || { \
+		echo "missing nvattest runtime binary; run 'make regenerate-nvattest'" >&2; \
+		exit 1; \
+	}
+	@test -f "$(NVATTEST_RUNTIME_LIBRARY)" || { \
+		echo "missing libnvat runtime library; run 'make regenerate-nvattest'" >&2; \
+		exit 1; \
+	}
 
 regenerate-nvattest:
 	rm -rf "$(NVATTEST_RUNTIME_OUTPUT)"

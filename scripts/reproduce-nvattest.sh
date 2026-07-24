@@ -9,9 +9,8 @@ trap 'rm -rf -- "$temporary"' EXIT
 
 build_one() {
     local name=$1
-    mkdir -p "$temporary/$name/packages" "$temporary/$name/runtime"
-    TINFOIL_NVATTEST_DEB_OUTPUT="$temporary/$name/packages" \
-        TINFOIL_NVATTEST_RUNTIME_OUTPUT="$temporary/$name/runtime" \
+    mkdir -p "$temporary/$name/runtime"
+    TINFOIL_NVATTEST_RUNTIME_OUTPUT="$temporary/$name/runtime" \
         TINFOIL_RUNTIME_BUILDER_CACHE="$temporary/$name/cache" \
         "$repo_dir/scripts/run-runtime-builder.sh" nvattest
 }

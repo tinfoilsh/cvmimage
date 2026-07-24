@@ -11,9 +11,9 @@ NVATTEST_RUNTIME_BINARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/bin/nvattest
 NVATTEST_RUNTIME_LIBRARY = $(NVATTEST_RUNTIME_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
 .PHONY: all build rebuild shipping-image release-image clean deepclean hash nvattest regenerate-nvattest \
-	runtime-builder builder-initrd bazel-rootfs additive-initrd \
+	runtime-builder builder-initrd bazel-initrd-command bazel-rootfs additive-initrd \
 	builder-debug-init bazel-debug-layer debug-image test-debug-image-contract \
-	test-additive-initrd reproducible-additive-initrd test-roothash-artifacts \
+	test-additive-initrd test-roothash-artifacts \
 	test-runtime-locks \
 	verify-runtime-sources update-runtime-locks \
 	test-nvattest-artifacts reproducible-nvattest custom-kernel-artifacts \
@@ -95,19 +95,19 @@ nvidia-module-artifacts: custom-kernel-artifacts
 test-nvidia-module-producer:
 	./scripts/test-nvidia-module-producer.sh
 
-additive-initrd: builder-initrd
-	TINFOIL_BUILDER_OUTPUT="$(CURDIR)/build/builder-work/output" ./scripts/build-additive-initrd.sh
+bazel-initrd-command:
+	$(BAZEL) build -c opt --lockfile_mode=error //tinfoil/cmd/initrd:tinfoil-initrd
+
+additive-initrd: bazel-initrd-command
+	./scripts/build-additive-initrd.sh
 
 test-additive-initrd:
 	./scripts/test-additive-initrd.sh
 
-reproducible-additive-initrd:
-	./scripts/reproduce-additive-initrd.sh
-
 reproducible-nvidia-modules:
 	./scripts/reproduce-nvidia-modules.sh
 
-reproducible-runtime-artifacts: reproducible-additive-initrd reproducible-nvattest reproducible-nvidia-modules
+reproducible-runtime-artifacts: reproducible-nvattest reproducible-nvidia-modules
 
 test-runtime-locks:
 	BAZEL="$(BAZEL)" ./scripts/update-runtime-locks.sh --check

@@ -11,7 +11,7 @@ parser, fallback shell, or runtime activation mechanism. The release PID1 is
 built without the tag, and `shipping-image` never consumes the debug rootfs.
 
 The normal Bazel rootfs is not rebuilt or duplicated in that layer. The debug
-measurement is diagnostic and must never be promoted. Run
-`make test-debug-image-contract` to verify the shipping rootfs and release PID1
-remain shell-free and that the debug rootfs contains the exact pinned shell.
-IBT and NVIDIA qualification remain separate evidence-driven work.
+measurement is diagnostic and must never be promoted. The separate tagged Go
+target and fixed Bazel layer make the compile-time boundary explicit; actual
+debug-image boots qualify the console behavior. IBT and NVIDIA qualification
+remain separate evidence-driven work.

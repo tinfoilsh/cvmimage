@@ -2,51 +2,25 @@
 set -Eeuo pipefail
 
 if [ "$#" -ne 1 ]; then
-    echo "usage: $0 {debug-init|initrd|nvattest|kernel|nvidia}" >&2
+    echo "usage: $0 {debug-init|runtime-go|nvattest|kernel|nvidia}" >&2
     exit 2
 fi
 
 producer=$1
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-base_image="$(<"$repo_dir/scripts/runtime-builder-base-image.txt")"
-snapshot="$(<"$repo_dir/scripts/runtime-builder-snapshot.txt")"
-builder_image="cvmimage-runtime-builder:${snapshot%%T*}"
+builder_image=cvmimage-runtime-builder
 host_uid="$(id -u)"
 host_gid="$(id -g)"
-cache_root="${TINFOIL_RUNTIME_BUILDER_CACHE:-$repo_dir/build/runtime-builder-cache}"
-recipe_sha256="$(
-    cd "$repo_dir"
-    sha256sum \
-        builder/Dockerfile \
-        builder/build-debug-init.sh \
-        builder/build-initrd.sh \
-        scripts/runtime-builder-base-image.txt \
-        scripts/runtime-builder-snapshot.txt | sha256sum | awk '{print $1}'
-)"
-
-if [[ ! "$snapshot" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
-    echo "invalid runtime builder snapshot: $snapshot" >&2
-    exit 1
-fi
-
-actual_base="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.base" }}' "$builder_image" 2>/dev/null || true)"
-actual_snapshot="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.snapshot" }}' "$builder_image" 2>/dev/null || true)"
-actual_recipe="$(docker image inspect --format '{{ index .Config.Labels "org.tinfoil.runtime-builder.recipe" }}' "$builder_image" 2>/dev/null || true)"
-if [ "$actual_base" != "$base_image" ] ||
-    [ "$actual_snapshot" != "$snapshot" ] ||
-    [ "$actual_recipe" != "$recipe_sha256" ]; then
-    echo "missing or stale runtime builder; run scripts/build-runtime-builder.sh" >&2
-    exit 1
-fi
+cache_root="$repo_dir/build/runtime-builder-cache"
+repo_mount="type=bind,src=$repo_dir,dst=/workspace,readonly"
 
 mkdir -p "$cache_root"
-repo_mount="type=bind,src=$repo_dir,dst=/workspace,readonly"
 
 case "$producer" in
     debug-init)
-        output="${TINFOIL_DEBUG_BUILDER_OUTPUT:-$repo_dir/build/debug-work/output}"
+        output="$repo_dir/build/debug-work/output"
         mkdir -p "$output" "$cache_root/go-build" "$cache_root/go-mod"
-        docker run --rm \
+        docker run --pull=never --rm \
             --user "$host_uid:$host_gid" \
             --mount "$repo_mount" \
             --mount "type=bind,src=$output,dst=/output" \
@@ -57,10 +31,10 @@ case "$producer" in
             "$builder_image" \
             /workspace/builder/build-debug-init.sh /workspace /output
         ;;
-    initrd)
-        output="${TINFOIL_BUILDER_OUTPUT:-$repo_dir/build/builder-work/output}"
+    runtime-go)
+        output="$repo_dir/build/builder-work/output"
         mkdir -p "$output" "$cache_root/go-build" "$cache_root/go-mod"
-        docker run --rm \
+        docker run --pull=never --rm \
             --user "$host_uid:$host_gid" \
             --mount "$repo_mount" \
             --mount "type=bind,src=$output,dst=/output" \
@@ -69,13 +43,13 @@ case "$producer" in
             --env GOCACHE=/cache/go-build \
             --env GOMODCACHE=/cache/go-mod \
             "$builder_image" \
-            /usr/local/bin/build-initrd /workspace /output
+            /usr/local/bin/build-runtime-go /workspace /output
         ;;
     nvattest)
-        runtime_output="${TINFOIL_NVATTEST_RUNTIME_OUTPUT:-$repo_dir/build/rootfs-artifacts/nvattest}"
+        runtime_output="$repo_dir/build/rootfs-artifacts/nvattest"
         nvattest_home="$cache_root/nvattest-home"
         mkdir -p "$runtime_output" "$nvattest_home"
-        docker run --rm \
+        docker run --pull=never --rm \
             --user "$host_uid:$host_gid" \
             --mount "$repo_mount" \
             --mount "type=bind,src=$runtime_output,dst=/output/runtime" \
@@ -85,14 +59,13 @@ case "$producer" in
             --env "HOST_UID=$host_uid" \
             --env "HOST_GID=$host_gid" \
             "$builder_image" \
-            /workspace/build-nvattest.sh \
-                --runtime-output /output/runtime
+            /workspace/build-nvattest.sh --runtime-output /output/runtime
         ;;
     kernel)
-        build_root="${TINFOIL_KERNEL_BUILD_ROOT:-$repo_dir/kernel/build}"
-        output="${TINFOIL_KERNEL_OUT_DIR:-$repo_dir/kernel/out}"
+        build_root="$repo_dir/kernel/build"
+        output="$repo_dir/kernel/out"
         mkdir -p "$build_root" "$output"
-        docker run --rm \
+        docker run --pull=never --rm \
             --user "$host_uid:$host_gid" \
             --mount "$repo_mount" \
             --mount "type=bind,src=$build_root,dst=/kernel-build" \
@@ -105,14 +78,12 @@ case "$producer" in
             /workspace/kernel/build-local.sh
         ;;
     nvidia)
-        build_root="${TINFOIL_KERNEL_BUILD_ROOT:-$repo_dir/kernel/build}"
-        kernel_output="${TINFOIL_KERNEL_OUT_DIR:-$repo_dir/kernel/out}"
-        output="${TINFOIL_NVIDIA_OUTPUT_DIR:-$kernel_output/rootfs-artifacts/nvidia-modules}"
-        output_parent="$(dirname -- "$output")"
-        output_name="$(basename -- "$output")"
-        package_cache="${TINFOIL_NVIDIA_PACKAGE_CACHE:-$cache_root/nvidia-packages}"
+        build_root="$repo_dir/kernel/build"
+        kernel_output="$repo_dir/kernel/out"
+        output_parent="$kernel_output/rootfs-artifacts"
+        package_cache="$cache_root/nvidia-packages"
         mkdir -p "$build_root" "$kernel_output" "$output_parent" "$package_cache"
-        docker run --rm \
+        docker run --pull=never --rm \
             --cap-add SYS_ADMIN \
             --security-opt apparmor=unconfined \
             --security-opt seccomp=unconfined \
@@ -125,9 +96,9 @@ case "$producer" in
             --env "HOST_GID=$host_gid" \
             --env TINFOIL_KERNEL_BUILD_ROOT=/kernel-build \
             --env TINFOIL_KERNEL_OUT_DIR=/kernel-output \
-            --env "TINFOIL_NVIDIA_OUTPUT_DIR=/nvidia-output-parent/$output_name" \
+            --env TINFOIL_NVIDIA_OUTPUT_DIR=/nvidia-output-parent/nvidia-modules \
             --env TINFOIL_NVIDIA_PACKAGE_CACHE=/nvidia-cache \
-            --env "TINFOIL_OFFLINE=${TINFOIL_OFFLINE:-0}" \
+            --env TINFOIL_OFFLINE=0 \
             "$builder_image" \
             /workspace/kernel/build-nvidia-open-local.sh
         ;;

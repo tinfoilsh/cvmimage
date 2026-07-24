@@ -35,24 +35,10 @@ builder filesystem contents are discarded and are not eligible rootfs inputs.
 The normal producer command is:
 
 ```sh
-./scripts/build-runtime-builder.sh
-./scripts/run-runtime-builder.sh nvidia
-```
-
-Full reproduction is intentionally release-only because it performs two
-complete isolated kernel and NVIDIA builds. It does not run in routine PR CI:
-
-```sh
-./scripts/reproduce-nvidia-modules.sh
+make runtime-builder
+./builder/run.sh nvidia
 ```
 
 The pinned kernel source package is verified and stored inside the disposable
-builder image. NVIDIA source packages are downloaded into each isolated build
-cache and verified against their committed SHA-256 values before use.
-
-The comparison succeeds only when all three module files are byte-identical.
-It does not publish artifacts or authenticate a builder.
-
-Build-time denial of service is accepted. A failed or malicious builder can
-delay a release, but only byte-identical named outputs from the pinned release
-process can contribute to the promoted image measurement.
+builder image. NVIDIA source packages are downloaded into the build cache and
+verified against their committed SHA-256 values before use.

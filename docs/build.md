@@ -60,7 +60,7 @@ The builder owns:
 - five CGO runtime commands: `tinfoil-boot`, `tinfoil-container-status`,
   `tinfoil-egress`, `tinfoil-init`, and `tinfoil-shim`;
 - the custom kernel;
-- the three NVIDIA modules described in `nvidia-module-producer.md`; and
+- three fixed NVIDIA modules; and
 - `nvattest` plus its required `libnvat` shared library.
 
 The fixed handoff paths are:
@@ -82,6 +82,29 @@ is expensive. `make regenerate-nvattest` is the explicit producer operation.
 There is no nvattest output digest protocol, artifact cache identity layer, or
 second builder verifier.
 
+#### NVIDIA modules
+
+`kernel/build-nvidia-open-local.sh` builds exactly `nvidia.ko`,
+`nvidia-uvm.ko`, and `nvidia-modeset.ko`. It pins the NVIDIA source packages
+and host toolchain versions, uses the pinned custom Linux 7.0 source tree,
+fixes the kernel build environment, and builds serially. Before publication it
+checks each module's vermagic and selected symbol CRCs against the custom
+kernel.
+
+This is the only shared builder producer that receives `CAP_SYS_ADMIN`. The
+capability is used for the fixed mount namespace and bind mounts required by
+the canonical module build; the builder receives no host devices. Package
+installation and maintainer scripts remain confined to the disposable builder
+filesystem.
+
+The producer publishes only the three named modules beneath
+`kernel/out/rootfs-artifacts/nvidia-modules`. The checked-in
+`//kernel/out/rootfs-artifacts/nvidia-modules:modules` filegroup exposes them to
+Bazel, which installs them at `/usr/lib/tinfoil/kernel-modules`. Temporary
+source trees, package state, compiler caches, logs, and other builder contents
+are not eligible rootfs inputs. Cached NVIDIA source packages are verified
+against their committed SHA-256 values before each build.
+
 ### Bazel
 
 Bazel owns:
@@ -97,7 +120,10 @@ Bazel owns:
 `//image:rootfs` packages complete declared payloads, repository configuration,
 and the fixed external producer outputs. Bazel does not compile the CGO runtime
 commands, kernel, NVIDIA modules, or nvattest, and it does not create the final
-disk image.
+disk image. The additive rootfs declaration is the sole metadata owner for
+source-controlled rootfs files: it assigns their paths, modes, and UID/GID
+without a second validator restating the complete file set. The resulting
+guest configuration is summarized in the [measured runtime policy](runtime-policy.md).
 
 Runtime package updates use the upstream resolver directly:
 
@@ -140,9 +166,23 @@ authentication protocol, or hidden internal target graph.
 - `tinfoilcvm.vmlinuz`; and
 - `tinfoilcvm.initrd`.
 
-`make debug-image` uses the same release kernel and initrd with the compile-time
-debug PID1 and pinned static shell described in `debug-image.md`. Its distinct
-measurement is diagnostic and must not be promoted.
+## Debug image
+
+`make debug-image` builds `tinfoilcvm-debug.*` with the pinned release kernel
+and additive initrd. The root filesystem intentionally differs by adding one
+debug-only layer containing the pinned Ubuntu `busybox-static` payload and a
+`tinfoil_debug_image` build-tag replacement for `/usr/bin/tinfoil-init`.
+
+The debug PID1 launches one fixed interactive BusyBox `ash` child on
+`/dev/hvc0` before normal boot continues. There is no kernel command-line
+switch, path parser, fallback shell, or runtime activation mechanism. The
+shipping PID1 is built without the tag, and `shipping-image` never consumes the
+debug rootfs layer.
+
+The normal Bazel rootfs is neither rebuilt nor duplicated in the debug layer.
+Its distinct measurement is diagnostic and must never be promoted. Actual
+debug-image boots qualify the console behavior; IBT and NVIDIA qualification
+remain separate evidence-driven work.
 
 ## Reproducibility and release qualification
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [ "$#" -ne 1 ]; then
+if [ "$#" -ne 1 ] || [ -z "$1" ]; then
     echo "usage: $0 CACHE_ROOT" >&2
     exit 2
 fi

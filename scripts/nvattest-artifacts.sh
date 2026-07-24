@@ -34,7 +34,7 @@ nvattest_verify_runtime_artifacts() {
     local so_version=$2
     local binary="${root}/usr/bin/nvattest"
     local library="${root}/usr/lib/x86_64-linux-gnu/libnvat.so.${so_version}"
-    local binary_dynamic library_dynamic smoke_directory
+    local binary_dynamic library_dynamic smoke_directory smoke_library_path
 
     nvattest_require_tool grep || return
     nvattest_require_tool readelf || return
@@ -77,7 +77,11 @@ nvattest_verify_runtime_artifacts() {
         return 1
     fi
     ln -s "${library}" "${smoke_directory}/libnvat.so.1"
-    if ! LD_LIBRARY_PATH="${smoke_directory}:${library%/*}" \
+    smoke_library_path="${smoke_directory}:${library%/*}"
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+        smoke_library_path="${smoke_library_path}:${LD_LIBRARY_PATH}"
+    fi
+    if ! LD_LIBRARY_PATH="${smoke_library_path}" \
         "${binary}" --help >/dev/null; then
         rm -rf -- "${smoke_directory}"
         echo "nvattest --help smoke test failed" >&2
@@ -130,25 +134,81 @@ nvattest_publish_content_addressed_runtime_artifacts() {
     local library_directory="${cache_root}/sha256/${library_sha256}"
     local binary_tmp="${binary_directory}/nvattest.tmp.$$"
     local library_tmp="${library_directory}/libnvat.so.${so_version}.tmp.$$"
+    local binary_destination="${binary_directory}/nvattest"
+    local library_destination="${library_directory}/libnvat.so.${so_version}"
+    local binary_exists=0
+    local library_exists=0
+    local binary_published=0
+    local library_published=0
 
     nvattest_verify_sha256 "${binary}" "${binary_sha256}" nvattest || return
     nvattest_verify_sha256 "${library}" "${library_sha256}" libnvat || return
     nvattest_verify_runtime_artifacts "${source_root}" "${so_version}" || return
 
     mkdir -p "${binary_directory}" "${library_directory}" || return
+    if [ -e "${binary_destination}" ] || [ -L "${binary_destination}" ]; then
+        if [ ! -f "${binary_destination}" ] || [ -L "${binary_destination}" ]; then
+            echo "cached nvattest destination is not a regular file" >&2
+            return 1
+        fi
+        nvattest_verify_sha256 \
+            "${binary_destination}" "${binary_sha256}" nvattest || return
+        binary_exists=1
+    fi
+    if [ -e "${library_destination}" ] || [ -L "${library_destination}" ]; then
+        if [ ! -f "${library_destination}" ] || [ -L "${library_destination}" ]; then
+            echo "cached libnvat destination is not a regular file" >&2
+            return 1
+        fi
+        nvattest_verify_sha256 \
+            "${library_destination}" "${library_sha256}" libnvat || return
+        library_exists=1
+    fi
+
     rm -f -- "${binary_tmp}" "${library_tmp}"
     install -m 0755 "${binary}" "${binary_tmp}" || return
     if ! install -m 0644 "${library}" "${library_tmp}"; then
         rm -f -- "${binary_tmp}" "${library_tmp}"
         return 1
     fi
-    if ! mv -f "${binary_tmp}" "${binary_directory}/nvattest"; then
+    if ! nvattest_verify_sha256 "${binary_tmp}" "${binary_sha256}" nvattest || \
+        ! nvattest_verify_sha256 "${library_tmp}" "${library_sha256}" libnvat; then
         rm -f -- "${binary_tmp}" "${library_tmp}"
         return 1
     fi
-    if ! mv -f "${library_tmp}" \
-        "${library_directory}/libnvat.so.${so_version}"; then
+
+    if [ "${binary_exists}" -eq 0 ]; then
+        if ! mv -fT "${binary_tmp}" "${binary_destination}"; then
+            rm -f -- "${binary_tmp}" "${library_tmp}"
+            return 1
+        fi
+        binary_published=1
+    else
+        rm -f -- "${binary_tmp}"
+    fi
+    if [ "${library_exists}" -eq 0 ]; then
+        if ! mv -fT "${library_tmp}" "${library_destination}"; then
+            if [ "${binary_published}" -eq 1 ]; then
+                rm -f -- "${binary_destination}"
+            fi
+            rm -f -- "${library_tmp}"
+            return 1
+        fi
+        library_published=1
+    else
         rm -f -- "${library_tmp}"
+    fi
+
+    if ! nvattest_verify_sha256 \
+        "${binary_destination}" "${binary_sha256}" nvattest || \
+        ! nvattest_verify_sha256 \
+            "${library_destination}" "${library_sha256}" libnvat; then
+        if [ "${binary_published}" -eq 1 ]; then
+            rm -f -- "${binary_destination}"
+        fi
+        if [ "${library_published}" -eq 1 ]; then
+            rm -f -- "${library_destination}"
+        fi
         return 1
     fi
 }

@@ -6,7 +6,7 @@ source "${repo_dir}/scripts/nvattest-artifacts.sh"
 
 publish_cache=
 if [ "$#" -gt 0 ]; then
-    if [ "$#" -ne 2 ] || [ "$1" != "--publish-cache" ]; then
+    if [ "$#" -ne 2 ] || [ "$1" != "--publish-cache" ] || [ -z "$2" ]; then
         echo "usage: $0 [--publish-cache CACHE_ROOT]" >&2
         exit 2
     fi

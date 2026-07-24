@@ -18,5 +18,12 @@ tinfoil/shim
 /build/
 /kernel/build/
 /kernel/out/
+!/kernel/out/
+/kernel/out/*
+!/kernel/out/rootfs-artifacts/
+/kernel/out/rootfs-artifacts/*
+!/kernel/out/rootfs-artifacts/nvidia-modules/
+/kernel/out/rootfs-artifacts/nvidia-modules/*
+!/kernel/out/rootfs-artifacts/nvidia-modules/BUILD.bazel
 /bazel-*
 /evidence/

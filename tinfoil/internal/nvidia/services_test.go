@@ -345,6 +345,9 @@ func TestCreateAndPublishCDIAtomically(t *testing.T) {
 	if filepath.Dir(temporary) != filepath.Dir(services.paths.cdiSpec) {
 		t.Fatalf("temporary directory = %s", filepath.Dir(temporary))
 	}
+	if filepath.Ext(temporary) != ".yaml" || filepath.Base(temporary)[0] != '.' || temporary == services.paths.cdiSpec {
+		t.Fatalf("temporary path = %s, want hidden distinct YAML file", temporary)
+	}
 	if err := os.WriteFile(temporary, []byte("new\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -47,6 +47,9 @@ jobs:
       - name: Test
         run: cd tinfoil && go test ./...
 
+      - name: Test debug-tagged PID1
+        run: cd tinfoil && go test -tags=tinfoil_debug_image ./cmd/init
+
       - name: Test direct roothash contract
         run: ./scripts/test-roothash-artifacts.sh
 

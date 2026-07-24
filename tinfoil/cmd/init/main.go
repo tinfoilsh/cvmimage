@@ -95,24 +95,32 @@ type serviceControl interface {
 }
 
 type lifecycleDeps struct {
-	services    serviceControl
-	oneShot     func(context.Context, supervisor.Command) error
-	nvidia      func(context.Context) error
-	lockModules func() error
-	setupFS     func(pidruntime.LogFunc) error
-	sysctls     func(pidruntime.LogFunc) error
-	ramdisk     func(pidruntime.LogFunc) error
-	limits      func() error
-	syslog      func(context.Context)
-	exists      func(string) (bool, error)
-	timeout     time.Duration
-	term        time.Duration
-	kill        time.Duration
+	services     serviceControl
+	oneShot      func(context.Context, supervisor.Command) error
+	nvidia       func(context.Context) error
+	lockModules  func() error
+	debugFailure func(context.Context, error)
+	setupFS      func(pidruntime.LogFunc) error
+	sysctls      func(pidruntime.LogFunc) error
+	ramdisk      func(pidruntime.LogFunc) error
+	limits       func() error
+	syslog       func(context.Context)
+	exists       func(string) (bool, error)
+	timeout      time.Duration
+	term         time.Duration
+	kill         time.Duration
 }
 
-func run(parent context.Context) error {
+func run(parent context.Context) (result error) {
 	readiness := newReadiness(requiredServiceNames(), setReady)
 	manager := supervisor.NewManager(initLogf)
+	console, err := startDebugConsole(parent, manager)
+	if err != nil {
+		return fmt.Errorf("start debug console: %w", err)
+	}
+	defer func() {
+		result = errors.Join(result, console.stop(serviceTermGrace, serviceKillGrace))
+	}()
 	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
 	deps := lifecycleDeps{
 		services: services,
@@ -131,16 +139,17 @@ func run(parent context.Context) error {
 				},
 			)
 		},
-		lockModules: hardening.LockKernelModules,
-		setupFS:     pidruntime.SetupFilesystems,
-		sysctls:     pidruntime.ApplySysctls,
-		ramdisk:     pidruntime.SetupRamdisk,
-		limits:      hardening.ApplyRuntimeLimits,
-		syslog:      startOptionalSyslogSink,
-		exists:      pathExists,
-		timeout:     bootTimeout,
-		term:        serviceTermGrace,
-		kill:        serviceKillGrace,
+		debugFailure: parkDebugFailure,
+		lockModules:  hardening.LockKernelModules,
+		setupFS:      pidruntime.SetupFilesystems,
+		sysctls:      pidruntime.ApplySysctls,
+		ramdisk:      pidruntime.SetupRamdisk,
+		limits:       hardening.ApplyRuntimeLimits,
+		syslog:       startOptionalSyslogSink,
+		exists:       pathExists,
+		timeout:      bootTimeout,
+		term:         serviceTermGrace,
+		kill:         serviceKillGrace,
 	}
 	return runLifecycle(parent, deps, readiness)
 }
@@ -157,6 +166,11 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 			result = drainErr
 		} else {
 			result = errors.Join(result, drainErr)
+		}
+	}()
+	defer func() {
+		if result != nil && deps.debugFailure != nil {
+			deps.debugFailure(parent, result)
 		}
 	}()
 

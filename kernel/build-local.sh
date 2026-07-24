@@ -89,6 +89,7 @@ source_tarball="$(extract_pinned_source_tarball)"
 
 rm -rf "$source_dir"
 tar -xaf "$source_tarball" -C "$build_root"
+"$kernel_dir/apply-pinned-patch.sh" "$source_dir"
 sed -i 's/--build-id=sha1/--build-id=none/g' \
     "$source_dir/Makefile" \
     "$source_dir/arch/x86/entry/vdso/common/Makefile.include"

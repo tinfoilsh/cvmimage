@@ -1,0 +1,50 @@
+--- a/drivers/acpi/acpica/exregion.c
++++ b/drivers/acpi/acpica/exregion.c
+@@ -16,0 +17,42 @@
++#if defined(CONFIG_ARCH_HAS_CC_PLATFORM) && defined(CONFIG_X86)
++#include <asm/coco.h>
++#include <asm/pgtable.h>
++#include <linux/cc_platform.h>
++#include <linux/overflow.h>
++
++static bool acpi_ex_system_memory_access_allowed(void *logical_address,
++						 u32 length)
++{
++	unsigned long end;
++	unsigned long page;
++
++	if (!cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
++		return true;
++
++	if (check_add_overflow((unsigned long)logical_address, length - 1, &end))
++		return false;
++
++	page = (unsigned long)logical_address & PAGE_MASK;
++	for (;;) {
++		unsigned int level;
++		pte_t entry_value;
++		pte_t *entry;
++
++		entry = lookup_address(page, &level);
++		if (!entry)
++			return false;
++
++		entry_value = READ_ONCE(*entry);
++		if (!pte_present(entry_value) ||
++		    pte_val(entry_value) != cc_mkdec(pte_val(entry_value)))
++			return false;
++
++		if (page == (end & PAGE_MASK))
++			return true;
++
++		if (check_add_overflow(page, PAGE_SIZE, &page))
++			return false;
++	}
++}
++#endif
++
+@@ -177,0 +220,4 @@
++#if defined(CONFIG_ARCH_HAS_CC_PLATFORM) && defined(CONFIG_X86)
++	if (!acpi_ex_system_memory_access_allowed(logical_addr_ptr, length))
++		return_ACPI_STATUS(AE_AML_ILLEGAL_ADDRESS);
++#endif

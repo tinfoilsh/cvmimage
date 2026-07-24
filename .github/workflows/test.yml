@@ -73,3 +73,6 @@ jobs:
 
       - name: Test NVIDIA named module contract
         run: make test-nvidia-module-producer
+
+      - name: Test pinned ACPI AML patch contract
+        run: ./kernel/test-acpi-aml-patch.sh

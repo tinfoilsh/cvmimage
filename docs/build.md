@@ -1,7 +1,7 @@
 # Build boundary
 
 The image build deliberately uses three tools with separate ownership. The
-pinned disposable builder compiles artifacts that do not fit cleanly in Bazel,
+pinned disposable builder compiles artifacts that do not fit cleanly in Bazel yet,
 Bazel assembles the measured filesystem inputs, and mkosi creates the final
 root disk and dm-verity metadata.
 
@@ -151,12 +151,6 @@ normalizes the metadata it controls. These properties support reproducible
 builds, but no individual tool proves that the complete image is reproducible.
 A Bazel sandbox also does not make the external builder or privileged mkosi
 steps hermetic.
-
-Routine PR and release CI perform one ordinary build. Promotion is a protected,
-release-only process using two isolated builds, `sha256sum` and `cmp`, optional
-`diffoscope` on mismatch, functional boot and workload tests, hardware-specific
-GPU qualification, attestation, approval, and promotion of the exact qualified
-measurement.
 
 The threat model accepts build-time disruption and denial of service. A broken
 or malicious builder may prevent a release, but it must not make an unapproved

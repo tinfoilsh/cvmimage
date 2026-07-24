@@ -99,7 +99,7 @@ type lifecycleDeps struct {
 	oneShot      func(context.Context, supervisor.Command) error
 	nvidia       func(context.Context) error
 	lockModules  func() error
-	debugFailure func(error)
+	debugFailure func(context.Context, error)
 	setupFS      func(pidruntime.LogFunc) error
 	sysctls      func(pidruntime.LogFunc) error
 	ramdisk      func(pidruntime.LogFunc) error
@@ -170,7 +170,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}()
 	defer func() {
 		if result != nil && deps.debugFailure != nil {
-			deps.debugFailure(result)
+			deps.debugFailure(parent, result)
 		}
 	}()
 

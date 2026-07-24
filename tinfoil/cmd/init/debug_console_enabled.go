@@ -6,8 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"tinfoil/internal/pid1/supervisor"
@@ -41,12 +39,9 @@ func (console *debugConsole) stop(termGrace, killGrace time.Duration) error {
 	return console.process.StopConsole(termGrace, killGrace)
 }
 
-func parkDebugFailure(err error) {
+func parkDebugFailure(ctx context.Context, err error) {
 	initLogf("debug image: lifecycle failed: %v; console remains available until shutdown", err)
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(shutdown)
-	<-shutdown
+	<-ctx.Done()
 }
 
 func debugConsoleCommand() supervisor.Command {

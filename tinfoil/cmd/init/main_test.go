@@ -87,7 +87,7 @@ func newLifecycleHarness() *lifecycleHarness {
 		oneShot:      func(context.Context, supervisor.Command) error { return nil },
 		nvidia:       func(context.Context) error { return nil },
 		lockModules:  func() error { return nil },
-		debugFailure: func(error) {},
+		debugFailure: func(context.Context, error) {},
 		setupFS:      noSetup,
 		sysctls:      noSetup,
 		ramdisk:      noSetup,
@@ -477,7 +477,7 @@ func TestLifecycleFailureParksBeforeServiceDrain(t *testing.T) {
 	harness.deps.setupFS = func(pidruntime.LogFunc) error { return setupErr }
 	parked := make(chan error, 1)
 	release := make(chan struct{})
-	harness.deps.debugFailure = func(err error) {
+	harness.deps.debugFailure = func(_ context.Context, err error) {
 		parked <- err
 		<-release
 	}

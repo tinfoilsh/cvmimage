@@ -41,8 +41,8 @@ make regenerate-nvattest
 
 The release workflow calls `make release-image`, which first regenerates
 nvattest from pinned inputs on the fresh release worker and then builds the
-shipping image. `make reproducible-nvattest` remains a release-qualification
-tool and is not part of routine PR CI.
+shipping image. Repeated full-build comparison is deferred rather than
+embedded in routine PR CI.
 
 Initrd, nvattest, and kernel producers use ordinary unprivileged containers.
 NVIDIA alone receives `CAP_SYS_ADMIN` with confined host-device access for its

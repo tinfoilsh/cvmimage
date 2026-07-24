@@ -58,7 +58,7 @@ func (m *Manager) StartConsole(command Command, console *os.File) (*Process, err
 
 func newConsoleProcess(process *os.Process, name string) *Process {
 	pid := process.Pid
-	child := osChild{process: process, processID: pid}
+	child := &osChild{process: process, processID: pid}
 	return &Process{pid: pid, name: name, child: child, done: make(chan struct{})}
 }
 

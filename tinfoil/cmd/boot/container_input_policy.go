@@ -63,8 +63,9 @@ func validateContainerInputPolicyForMode(index int, container *Container, debug 
 	if container.IPC != "" && container.IPC != "private" && container.IPC != "host" {
 		return fmt.Errorf("containers[%d].ipc must be private or host", index)
 	}
+	allowDebugDockerSocket := reservedDebugRuntimeEnabled(container.Name, debug)
 	for volumeIndex, volume := range container.Volumes {
-		if _, err := canonicalizeContainerVolume(volume, debug); err != nil {
+		if _, err := canonicalizeContainerVolume(volume, allowDebugDockerSocket); err != nil {
 			return fmt.Errorf("containers[%d].volumes[%d] %w", index, volumeIndex, err)
 		}
 	}
@@ -76,8 +77,8 @@ func validateContainerInputPolicyForMode(index int, container *Container, debug 
 	return nil
 }
 
-func canonicalizeContainerVolume(volume string, debug bool) (string, error) {
-	if debug {
+func canonicalizeContainerVolume(volume string, allowDebugDockerSocket bool) (string, error) {
+	if allowDebugDockerSocket {
 		if canonical, ok := canonicalizeDebugDockerSocketBind(volume); ok {
 			return canonical, nil
 		}

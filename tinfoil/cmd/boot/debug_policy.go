@@ -15,7 +15,7 @@ const (
 	reservedDebugContainerName = "tinfoil-ssh-installer"
 	reservedDebugPort          = "2222/tcp"
 	reservedDebugHostPort      = 2222
-	reservedDebugSerialDevice  = "/dev/hvc0"
+	reservedDebugSerialDevice  = "/dev/hvc1"
 	debugDockerSocketBind      = "/run/docker.sock:/var/run/docker.sock"
 )
 
@@ -80,6 +80,10 @@ func canonicalizeDebugDockerSocketBind(volume string) (string, bool) {
 		return volume, true
 	}
 	return "", false
+}
+
+func reservedDebugRuntimeEnabled(containerName string, debug bool) bool {
+	return debug && containerName == reservedDebugContainerName
 }
 
 func hasReservedDebugContainer(config *Config) bool {

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -216,7 +219,45 @@ func TestBuildContainerCreateSpec_DebugInstallerGetsFixedRuntime(t *testing.T) {
 		t.Fatalf("Devices = %v, want one synthesized serial mapping", hostConfig.Devices)
 	}
 	if got := hostConfig.Devices[0]; got.PathOnHost != reservedDebugSerialDevice || got.PathInContainer != reservedDebugSerialDevice || got.CgroupPermissions != "rw" {
-		t.Fatalf("Devices[0] = %+v, want exact /dev/hvc0 rw mapping", got)
+		t.Fatalf("Devices[0] = %+v, want exact /dev/hvc1 rw mapping", got)
+	}
+}
+
+func TestBuildContainerCreateSpec_NonReservedDebugContainerGetsNoDebugAuthority(t *testing.T) {
+	c := Container{
+		Name:    "workload",
+		Image:   "example.invalid/workload",
+		Volumes: []string{debugDockerSocketBind},
+	}
+
+	if _, _, _, _, err := buildContainerCreateSpec(c, &Config{}, &shimconfig.ExternalConfig{}, true); err == nil || !strings.Contains(err.Error(), "named volume source") {
+		t.Fatalf("buildContainerCreateSpec error = %v, want docker socket rejection", err)
+	}
+
+	c.Volumes = nil
+	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, &Config{}, &shimconfig.ExternalConfig{}, true)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	if len(containerConfig.ExposedPorts) != 0 || len(hostConfig.PortBindings) != 0 || len(hostConfig.Devices) != 0 {
+		t.Fatalf("non-reserved debug runtime escaped: exposed=%v bindings=%v devices=%v", containerConfig.ExposedPorts, hostConfig.PortBindings, hostConfig.Devices)
+	}
+}
+
+func TestBuildContainerCreateSpec_RejectsUserSuppliedSerialDevices(t *testing.T) {
+	for _, debug := range []bool{false, true} {
+		for _, containerName := range []string{"workload", reservedDebugContainerName} {
+			for _, device := range []string{"/dev/hvc0", "/dev/hvc1"} {
+				name := fmt.Sprintf("debug=%t/container=%s/device=%s", debug, containerName, device)
+				t.Run(name, func(t *testing.T) {
+					c := Container{Name: containerName, Image: "example.invalid/workload", Devices: []string{device}}
+					_, _, _, _, err := buildContainerCreateSpec(c, &Config{}, &shimconfig.ExternalConfig{}, debug)
+					if err == nil || !strings.Contains(err.Error(), "devices are unsupported") {
+						t.Fatalf("buildContainerCreateSpec error = %v, want device rejection", err)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -241,5 +282,49 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 		if dev.PathOnHost == reservedDebugSerialDevice || dev.PathInContainer == reservedDebugSerialDevice {
 			t.Fatalf("Devices = %v, want no synthesized serial device in production", hostConfig.Devices)
 		}
+	}
+}
+
+func TestBuildContainerCreateSpec_ProductionInstallerRejectsDockerSocket(t *testing.T) {
+	c := Container{
+		Name:    reservedDebugContainerName,
+		Image:   "example.invalid/installer",
+		Volumes: []string{debugDockerSocketBind},
+	}
+
+	_, _, _, _, err := buildContainerCreateSpec(c, &Config{}, &shimconfig.ExternalConfig{}, false)
+	if err == nil || !strings.Contains(err.Error(), "named volume source") {
+		t.Fatalf("buildContainerCreateSpec error = %v, want docker socket rejection", err)
+	}
+}
+
+func TestBuildContainerCreateSpec_DoesNotMutateSharedConfig(t *testing.T) {
+	cfg := &Config{}
+	c := Container{Name: "workload", Image: "example.invalid/workload"}
+
+	const workers = 32
+	var waitGroup sync.WaitGroup
+	start := make(chan struct{})
+	errors := make(chan error, workers)
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			_, _, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, false)
+			errors <- err
+		}()
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errors)
+
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("buildContainerCreateSpec: %v", err)
+		}
+	}
+	if cfg.Networks != nil {
+		t.Fatalf("buildContainerCreateSpec mutated cfg.Networks: %v", cfg.Networks)
 	}
 }

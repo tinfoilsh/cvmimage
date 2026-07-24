@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	healthPollInterval       = 5 * time.Second
-	defaultPidsLimit   int64 = 65536
+	healthPollInterval         = 5 * time.Second
+	defaultPidsLimit     int64 = 65536
+	openEgressGwPriority       = 100
 )
 
 func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config, debug bool) error {
@@ -374,11 +375,6 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 	return first, rest
 }
 
-// createAndStartContainer creates and starts a container (image must already be pulled).
-func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig) error {
-	return createAndStartContainerWithMode(cli, c, cfg, extConfig, false)
-}
-
 func createAndStartContainerWithMode(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
 	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, debug)
 	if err != nil {
@@ -393,11 +389,7 @@ func createAndStartContainerWithMode(cli *client.Client, c Container, cfg *Confi
 	}
 
 	for _, n := range rest {
-		gwPriority := 0
-		if cfg.Networks[n] != nil && cfg.Networks[n].Egress != "closed" {
-			gwPriority = 100
-		}
-		ep := endpointSettings(n, gwPriority)
+		ep := endpointSettings(n, gatewayPriorityForNetwork(cfg, n))
 		if err := cli.NetworkConnect(context.Background(), n, resp.ID, ep); err != nil {
 			return fmt.Errorf("connecting container %s to %s: %w", c.Name, n, err)
 		}
@@ -417,9 +409,6 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 	if cfg == nil {
 		cfg = &Config{}
-	}
-	if cfg.Networks == nil {
-		cfg.Networks = map[string]*NetworkSpec{}
 	}
 	if extConfig == nil {
 		extConfig = &shimconfig.ExternalConfig{}
@@ -501,23 +490,21 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		hostConfig.Resources.NanoCPUs = int64(c.CPUs * 1e9)
 	}
 
-	// Devices
-	for _, dev := range c.Devices {
-		hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
-			PathOnHost: dev, PathInContainer: dev, CgroupPermissions: "rwm",
-		})
+	if len(c.Devices) != 0 {
+		return nil, nil, nil, nil, fmt.Errorf("container %q devices are unsupported", c.Name)
 	}
 
 	// Volume mounts
+	reservedDebugRuntime := reservedDebugRuntimeEnabled(c.Name, debug)
 	for _, vol := range c.Volumes {
-		canonical, err := canonicalizeContainerVolume(vol, debug)
+		canonical, err := canonicalizeContainerVolume(vol, reservedDebugRuntime)
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("container %q volume %q %w", c.Name, vol, err)
 		}
 		hostConfig.Binds = append(hostConfig.Binds, canonical)
 	}
 
-	if debug && c.Name == reservedDebugContainerName {
+	if reservedDebugRuntime {
 		applyReservedDebugRuntime(containerConfig, hostConfig)
 	}
 
@@ -528,23 +515,23 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 
 	// Pin the egress-capable network's GwPriority so Docker installs the
 	// default route through it; equal priorities are non-deterministic.
-	gwPriority := func(name string) int {
-		if cfg.Networks[name] != nil && cfg.Networks[name].Egress != "closed" {
-			return 100
-		}
-		return 0
-	}
-
 	var networkingConfig *dockernetwork.NetworkingConfig
 	if first != "" {
 		networkingConfig = &dockernetwork.NetworkingConfig{
 			EndpointsConfig: map[string]*dockernetwork.EndpointSettings{
-				first: endpointSettings(first, gwPriority(first)),
+				first: endpointSettings(first, gatewayPriorityForNetwork(cfg, first)),
 			},
 		}
 	}
 
 	return containerConfig, hostConfig, networkingConfig, rest, nil
+}
+
+func gatewayPriorityForNetwork(cfg *Config, name string) int {
+	if cfg != nil && cfg.Networks[name] != nil && cfg.Networks[name].Egress != "closed" {
+		return openEgressGwPriority
+	}
+	return 0
 }
 
 func applyReservedDebugRuntime(containerConfig *container.Config, hostConfig *container.HostConfig) {

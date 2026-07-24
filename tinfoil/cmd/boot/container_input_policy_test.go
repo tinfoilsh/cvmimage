@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -68,13 +69,16 @@ func TestContainerInputPolicyRejectsUnsupportedInputs(t *testing.T) {
 
 func TestContainerInputPolicyDebugSocketPolicy(t *testing.T) {
 	tests := []struct {
-		name  string
-		debug bool
-		body  string
-		want  string
+		name          string
+		containerName string
+		debug         bool
+		body          string
+		want          string
 	}{
 		{name: "production rejects socket bind", body: "volumes: [/run/docker.sock:/var/run/docker.sock]", want: "named volume source"},
-		{name: "debug accepts exact socket bind", debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock]"},
+		{name: "generic debug rejects exact socket bind", debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock]", want: "named volume source"},
+		{name: "reserved production rejects exact socket bind", containerName: reservedDebugContainerName, body: "volumes: [/run/docker.sock:/var/run/docker.sock]", want: "named volume source"},
+		{name: "reserved debug accepts exact socket bind", containerName: reservedDebugContainerName, debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock]"},
 		{name: "debug rejects rw socket bind alias", debug: true, body: "volumes: [/run/docker.sock:/var/run/docker.sock:rw]", want: "named volume source"},
 		{name: "debug rejects source alias", debug: true, body: "volumes: [/var/run/docker.sock:/var/run/docker.sock]", want: "named volume source"},
 		{name: "debug rejects target alias", debug: true, body: "volumes: [/run/docker.sock:/run/docker.sock]", want: "named volume source"},
@@ -84,7 +88,11 @@ func TestContainerInputPolicyDebugSocketPolicy(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			config := decodePolicyConfig(t, "containers:\n  - name: workload\n    image: example.invalid/workload\n    "+test.body+"\n")
+			containerName := test.containerName
+			if containerName == "" {
+				containerName = "workload"
+			}
+			config := decodePolicyConfig(t, "containers:\n  - name: "+containerName+"\n    image: example.invalid/workload\n    "+test.body+"\n")
 			err := validateConfigShapeForMode(&config, test.debug)
 			if test.want == "" {
 				if err != nil {
@@ -96,6 +104,23 @@ func TestContainerInputPolicyDebugSocketPolicy(t *testing.T) {
 				t.Fatalf("validateConfigShapeForMode error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestContainerInputPolicyRejectsUserSuppliedSerialDevices(t *testing.T) {
+	for _, debug := range []bool{false, true} {
+		for _, containerName := range []string{"workload", reservedDebugContainerName} {
+			for _, device := range []string{"/dev/hvc0", "/dev/hvc1"} {
+				name := fmt.Sprintf("debug=%t/container=%s/device=%s", debug, containerName, device)
+				t.Run(name, func(t *testing.T) {
+					config := decodePolicyConfig(t, "containers:\n  - name: "+containerName+"\n    image: example.invalid/workload\n    devices: ["+device+"]\n")
+					err := validateConfigShapeForMode(&config, debug)
+					if err == nil || !strings.Contains(err.Error(), ".devices is unsupported") {
+						t.Fatalf("validateConfigShapeForMode error = %v, want device rejection", err)
+					}
+				})
+			}
+		}
 	}
 }
 

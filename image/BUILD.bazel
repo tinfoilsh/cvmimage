@@ -67,7 +67,8 @@ cacerts(
 exports_files([
     "runtime-packages.lock.json",
     "runtime-packages.yaml",
-    "runtime-sources.lock.json",
+    "runtime-source-deb.BUILD.bazel",
+    "runtime-source-docker.BUILD.bazel",
 ])
 
 sh_test(
@@ -127,14 +128,8 @@ sh_test(
 sh_test(
     name = "nvidia-compute-rootfs-contract-test",
     srcs = ["//scripts:test-nvidia-compute-rootfs.sh"],
-    args = [
-        "$(location :rootfs)",
-        "$(location :runtime-sources.lock.json)",
-    ],
-    data = [
-        ":rootfs",
-        ":runtime-sources.lock.json",
-    ],
+    args = ["$(location :rootfs)"],
+    data = [":rootfs"],
 )
 
 filegroup(

@@ -125,7 +125,7 @@ DESTDIR="${INSTALL}" cmake --install "${BUILD}/nv-attestation-sdk-build"
     "${INSTALL}/usr/bin/nvattest" \
     "${INSTALL}/usr/lib/x86_64-linux-gnu/libnvat.so.${SO_VERSION}"
 
-rm -rf -- "${RUNTIME_OUT_DIR}"
+rm -rf -- "${RUNTIME_OUT_DIR}/usr"
 install -d -m 0755 \
     "${RUNTIME_OUT_DIR}/usr/bin" \
     "${RUNTIME_OUT_DIR}/usr/lib/x86_64-linux-gnu"

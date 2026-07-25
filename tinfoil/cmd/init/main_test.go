@@ -439,7 +439,10 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	lock := slices.Index(events, "module-lock")
 	nftables := slices.Index(events, "nftables")
 	containerd := slices.Index(events, containerdName)
-	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables {
+	docker := slices.Index(events, dockerName)
+	shim := slices.Index(events, shimName)
+	boot := slices.Index(events, string(hardening.ServiceBoot))
+	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || shim <= docker || boot <= shim {
 		t.Fatalf("startup events = %v", events)
 	}
 }

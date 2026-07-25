@@ -212,3 +212,75 @@ func TestPublishContainerStatusWritesJSON(t *testing.T) {
 		t.Fatal("expected observed_at to be set")
 	}
 }
+
+func TestPublishContainerStatusCountsManualRestart(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	outputPath := filepath.Join(dir, "container-status.json")
+	if err := os.WriteFile(configPath, []byte("containers:\n  - name: model\n    image: model:latest\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := fakeContainerClient{inspect: map[string]container.InspectResponse{
+		"model": {
+			ContainerJSONBase: &container.ContainerJSONBase{
+				ID:    "container-id",
+				State: &container.State{Status: "running", StartedAt: "2026-07-25T01:00:00Z"},
+			},
+		},
+	}}
+	if err := publishContainerStatus(context.Background(), client, configPath, outputPath); err != nil {
+		t.Fatal(err)
+	}
+	client.inspect["model"].State.StartedAt = "2026-07-25T01:01:00Z"
+	client.inspect["model"].State.FinishedAt = "2026-07-25T01:00:59Z"
+	if err := publishContainerStatus(context.Background(), client, configPath, outputPath); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got containersResponse
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Containers) != 1 || got.Containers[0].ContainerID != "container-id" || got.Containers[0].RestartCount != 1 {
+		t.Fatalf("unexpected lifecycle status: %#v", got.Containers)
+	}
+}
+
+func TestMergeContainerLifecyclesCountsReplacement(t *testing.T) {
+	current := []containerStatus{{
+		Name:        "model",
+		ContainerID: "replacement-id",
+		Created:     true,
+		StartedAt:   "2026-07-25T01:00:00Z",
+	}}
+	mergeContainerLifecycles([]containerStatus{{
+		Name:         "model",
+		ContainerID:  "original-id",
+		Created:      true,
+		RestartCount: 2,
+		StartedAt:    current[0].StartedAt,
+	}}, current)
+	if current[0].RestartCount != 3 {
+		t.Fatalf("restart_count = %d, want 3", current[0].RestartCount)
+	}
+}
+
+func TestPreservePreviousContainerStatusesAfterInspectFailure(t *testing.T) {
+	declared := []declaredContainer{{Name: "first"}, {Name: "second"}}
+	previous := []containerStatus{
+		{Name: "first", ContainerID: "first-old", Created: true},
+		{Name: "second", ContainerID: "second-old", Created: true, RestartCount: 4},
+	}
+	current := []containerStatus{{Name: "first", ContainerID: "first-new", Created: true}}
+
+	got := preservePreviousContainerStatuses(declared, previous, current)
+	if len(got) != 2 {
+		t.Fatalf("statuses = %#v", got)
+	}
+	if got[0].ContainerID != "first-new" || got[1].ContainerID != "second-old" || got[1].RestartCount != 4 {
+		t.Fatalf("statuses = %#v", got)
+	}
+}

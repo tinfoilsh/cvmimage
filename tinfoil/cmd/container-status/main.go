@@ -47,6 +47,7 @@ type containersResponse struct {
 
 type containerStatus struct {
 	Name          string           `json:"name"`
+	ContainerID   string           `json:"container_id,omitempty"`
 	Image         string           `json:"image"`
 	Declared      bool             `json:"declared"`
 	Created       bool             `json:"created"`
@@ -110,7 +111,15 @@ func publishContainerStatus(ctx context.Context, cli containerStatusClient, conf
 		return fmt.Errorf("loading declared containers: %w", err)
 	}
 
+	previous, err := loadPreviousContainerStatus(outputPath)
+	if err != nil {
+		return fmt.Errorf("loading previous status: %w", err)
+	}
 	states, inspectErr := inspectDeclaredContainers(ctx, cli, declared)
+	if inspectErr != nil {
+		states = preservePreviousContainerStatuses(declared, previous, states)
+	}
+	mergeContainerLifecycles(previous, states)
 	resp := containersResponse{
 		ObservedAt: time.Now().UTC(),
 		Containers: states,
@@ -128,6 +137,61 @@ func publishContainerStatus(ctx context.Context, cli containerStatusClient, conf
 		return fmt.Errorf("writing status: %w", err)
 	}
 	return inspectErr
+}
+
+func preservePreviousContainerStatuses(declared []declaredContainer, previous, current []containerStatus) []containerStatus {
+	previousByName := make(map[string]containerStatus, len(previous))
+	for _, status := range previous {
+		previousByName[status.Name] = status
+	}
+	currentByName := make(map[string]containerStatus, len(current))
+	for _, status := range current {
+		currentByName[status.Name] = status
+	}
+	preserved := make([]containerStatus, 0, len(declared))
+	for _, container := range declared {
+		if status, ok := currentByName[container.Name]; ok {
+			preserved = append(preserved, status)
+		} else if status, ok := previousByName[container.Name]; ok {
+			preserved = append(preserved, status)
+		}
+	}
+	return preserved
+}
+
+func loadPreviousContainerStatus(path string) ([]containerStatus, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var response containersResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, err
+	}
+	return response.Containers, nil
+}
+
+func mergeContainerLifecycles(previous, current []containerStatus) {
+	byName := make(map[string]containerStatus, len(previous))
+	for _, status := range previous {
+		byName[status.Name] = status
+	}
+	for i := range current {
+		prior, ok := byName[current[i].Name]
+		if !ok || !prior.Created || !current[i].Created {
+			continue
+		}
+		observedReplacement := prior.ContainerID != "" && current[i].ContainerID != "" && prior.ContainerID != current[i].ContainerID
+		observedRestart := prior.StartedAt != "" && current[i].StartedAt != "" && prior.StartedAt != current[i].StartedAt
+		if observedReplacement || observedRestart {
+			current[i].RestartCount = max(current[i].RestartCount, prior.RestartCount+1)
+		} else {
+			current[i].RestartCount = max(current[i].RestartCount, prior.RestartCount)
+		}
+	}
 }
 
 func loadDeclaredContainers(path string) ([]declaredContainer, error) {
@@ -171,6 +235,7 @@ func inspectDeclaredContainers(ctx context.Context, cli containerStatusClient, d
 func containerStatusFromInspect(declared declaredContainer, inspect container.InspectResponse) containerStatus {
 	status := containerStatus{
 		Name:          declared.Name,
+		ContainerID:   inspect.ID,
 		Image:         declared.Image,
 		Declared:      true,
 		Created:       true,

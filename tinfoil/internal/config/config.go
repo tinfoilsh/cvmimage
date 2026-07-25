@@ -6,7 +6,6 @@ import (
 	"io"
 	"slices"
 
-	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,16 +18,16 @@ type Config struct {
 	Paths         []string `yaml:"paths"`
 	OriginDomains []string `yaml:"origins"`
 
-	TLSMode          string `yaml:"tls-mode" default:"cert-proxy"`      // self-signed | acme | cert-proxy
-	TLSEnv           string `yaml:"tls-env" default:"production"`       // production | staging
-	TLSChallengeMode string `yaml:"tls-challenge" default:"dns"`        // tls | dns | http
-	TLSWildcard      bool   `yaml:"tls-wildcard" default:"false"`       // include wildcard SAN (*.domain)
-	TLSOwnSANDomain  bool   `yaml:"tls-own-san-domain" default:"false"` // use own domain for encoded SANs instead of tinfoil.sh
+	TLSMode          string `yaml:"tls-mode"`           // self-signed | acme | cert-proxy
+	TLSEnv           string `yaml:"tls-env"`            // production | staging
+	TLSChallengeMode string `yaml:"tls-challenge"`      // tls | dns | http
+	TLSWildcard      bool   `yaml:"tls-wildcard"`       // include wildcard SAN (*.domain)
+	TLSOwnSANDomain  bool   `yaml:"tls-own-san-domain"` // use own domain for encoded SANs instead of tinfoil.sh
 
-	ControlPlane string `yaml:"control-plane" default:"https://api.tinfoil.sh"`
+	ControlPlane string `yaml:"control-plane"`
 	// Authenticated enables API key validation against the control plane.
 	// When false, no API key checks are performed regardless of AuthenticatedEndpoints.
-	Authenticated bool `yaml:"authenticated" default:"false"`
+	Authenticated bool `yaml:"authenticated"`
 	// AuthenticatedEndpoints is the list of endpoint patterns that require API key authentication.
 	// If absent (nil), defaults to ["/v1/chat/completions"] for backwards compatibility.
 	// If present but empty, no endpoints require authentication.
@@ -37,14 +36,25 @@ type Config struct {
 
 	RateLimit float64 `yaml:"rate-limit"`
 	RateBurst int     `yaml:"rate-burst"`
-	Email     string  `yaml:"email" default:"tls@tinfoil.sh"`
+	Email     string  `yaml:"email"`
 
-	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
-	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
+	PublishAttestation bool `yaml:"publish-attestation"`
+	DummyAttestation   bool `yaml:"dummy-attestation"`
 
 	// ExpectedGPUs is copied from the attested top-level boot config so the
 	// shim does not need to probe hardware on its public request path.
-	ExpectedGPUs int `yaml:"expected-gpus" default:"0"`
+	ExpectedGPUs int `yaml:"expected-gpus"`
+}
+
+func newConfig() Config {
+	return Config{
+		TLSMode:            "cert-proxy",
+		TLSEnv:             "production",
+		TLSChallengeMode:   "dns",
+		ControlPlane:       "https://api.tinfoil.sh",
+		Email:              "tls@tinfoil.sh",
+		PublishAttestation: true,
+	}
 }
 
 const (
@@ -84,6 +94,10 @@ type ExternalConfig struct {
 	Extra map[string]yaml.Node `yaml:",inline"`
 }
 
+func newExternalConfig() ExternalConfig {
+	return ExternalConfig{}
+}
+
 func (e *ExternalConfig) GetSecret(key string) string {
 	if e == nil || e.Secrets == nil {
 		return ""
@@ -101,7 +115,7 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 	if _, err := decodeYAMLDocument(data); err != nil {
 		return nil, fmt.Errorf("failed to decode external config: %v", err)
 	}
-	var config ExternalConfig
+	config := newExternalConfig()
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&config); err != nil {
@@ -113,9 +127,6 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 			return nil, fmt.Errorf("failed to decode external config: multiple YAML documents")
 		}
 		return nil, fmt.Errorf("failed to decode external config: %v", err)
-	}
-	if err := defaults.Set(&config); err != nil {
-		return nil, fmt.Errorf("failed to set external config defaults: %v", err)
 	}
 	if err := config.validateBounds(); err != nil {
 		return nil, fmt.Errorf("invalid external config: %v", err)
@@ -133,10 +144,7 @@ func Decode(n *yaml.Node) (*Config, error) {
 	if err := validateYAMLTree(n); err != nil {
 		return nil, fmt.Errorf("failed to decode config: %v", err)
 	}
-	var config Config
-	if err := defaults.Set(&config); err != nil {
-		return nil, fmt.Errorf("failed to set defaults: %v", err)
-	}
+	config := newConfig()
 	if err := n.Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to decode config: %v", err)
 	}

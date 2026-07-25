@@ -158,15 +158,6 @@ func EvidenceHash(data []byte) []byte {
 	return h[:]
 }
 
-// RandomNonce generates a cryptographically random 32-byte nonce.
-func RandomNonce() ([]byte, error) {
-	nonce := make([]byte, 32)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generating random nonce: %w", err)
-	}
-	return nonce, nil
-}
-
 // BuildAttestation constructs and signs a fresh attestation document.
 // It collects a fresh CPU report with evidence hashes bound into REPORT_DATA,
 // then signs the entire payload with the TLS private key.

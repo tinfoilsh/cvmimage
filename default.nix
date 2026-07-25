@@ -19,6 +19,17 @@ let
   kernel = import ./nix/kernel.nix { inherit pkgs; };
   nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
   nvattest = import ./nix/nvattest.nix { inherit pkgs; };
+  rootfs = import ./nix/rootfs.nix {
+    inherit pkgs;
+    runtimeGo = go.packages."runtime-go";
+    debugInit = go.packages."debug-init";
+    inherit (nvattest) nvattest;
+    nvidiaModules = map (name: "${nvidia.modules}/${name}") [
+      "nvidia.ko"
+      "nvidia-uvm.ko"
+      "nvidia-modeset.ko"
+    ];
+  };
 in
 go.packages
 // {
@@ -27,4 +38,6 @@ go.packages
   "kernel-artifacts" = kernel.artifacts;
   "nvidia-modules" = nvidia.modules;
   inherit (nvattest) nvattest;
+  "rootfs-archive" = rootfs.rootfs;
+  "debug-rootfs-layer" = rootfs.debugLayer;
 }

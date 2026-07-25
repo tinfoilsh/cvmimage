@@ -3,12 +3,12 @@ MKOSI ?= sudo env PATH="$(TRUSTED_PATH)" mkosi
 BAZEL ?= bazel
 BUILDER_IMAGE := cvmimage-runtime-builder
 SHIPPING_KERNEL := kernel/out/tinfoil-custom.vmlinuz
-SHIPPING_INITRD := bazel-bin/image/initrd/initrd.cpio.zst
+SHIPPING_INITRD := build/stage/initrd.cpio.zst
 NVATTEST_OUTPUT := build/rootfs-artifacts/nvattest
 NVATTEST_BINARY := $(NVATTEST_OUTPUT)/usr/bin/nvattest
 NVATTEST_LIBRARY := $(NVATTEST_OUTPUT)/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2
 
-.PHONY: rootfs shipping-image debug-image test regenerate-nvattest clean
+.PHONY: rootfs initrd debug-layer shipping-image debug-image test regenerate-nvattest clean
 
 rootfs:
 	docker build --pull --file builder/Dockerfile --tag $(BUILDER_IMAGE) builder
@@ -25,10 +25,20 @@ rootfs:
 	./builder/run.sh nvidia
 	$(BAZEL) build --lockfile_mode=error //image:rootfs
 	mkdir -p build/stage
-	install -m 0644 bazel-bin/image/bazel-rootfs.tar build/stage/bazel-rootfs.tar
+	install -m 0644 "$$($(BAZEL) info bazel-bin)/image/bazel-rootfs.tar" build/stage/bazel-rootfs.tar
 
-shipping-image: rootfs
+initrd: rootfs
 	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
+	mkdir -p build/stage
+	install -m 0644 "$$($(BAZEL) info -c opt bazel-bin)/image/initrd/initrd.cpio.zst" "$(SHIPPING_INITRD)"
+
+debug-layer: rootfs
+	./builder/run.sh debug-init
+	$(BAZEL) build --lockfile_mode=error //image:debug-layer
+	mkdir -p build/stage
+	install -m 0644 "$$($(BAZEL) info bazel-bin)/image/bazel-debug-layer.tar" build/stage/bazel-debug-layer.tar
+
+shipping-image: initrd
 	rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 		tinfoilcvm.vmlinuz tinfoilcvm.initrd
 	$(MKOSI) --force
@@ -44,12 +54,7 @@ shipping-image: rootfs
 	cp tinfoilcvm.roothash tinfoilcvm.hash
 	@echo "image hash: $$(cat tinfoilcvm.hash)"
 
-debug-image: rootfs
-	./builder/run.sh debug-init
-	$(BAZEL) build --lockfile_mode=error //image:debug-layer
-	mkdir -p build/stage
-	install -m 0644 bazel-bin/image/bazel-debug-layer.tar build/stage/bazel-debug-layer.tar
-	$(BAZEL) build -c opt --lockfile_mode=error //image/initrd:initrd
+debug-image: initrd debug-layer
 	rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
 		tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd
 	$(MKOSI) --force --output=tinfoilcvm-debug \

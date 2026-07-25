@@ -212,6 +212,13 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: shimName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
+		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
+	}); err != nil {
+		return err
+	}
 	if err := deps.oneShot(bootCtx, hardenedCommand(
 		hardening.ServiceBoot, boot.BootBinary,
 	)); err != nil {
@@ -227,13 +234,6 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		}); err != nil {
 			return err
 		}
-	}
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: shimName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
-		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-	}); err != nil {
-		return err
 	}
 	if exists, err := deps.exists(boot.EgressConfigPath); err != nil {
 		return err

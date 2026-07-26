@@ -5,12 +5,14 @@ TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 .PHONY: rootfs shipping-image debug-image test clean
 
 rootfs:
-	@mkdir -p build
-	@rootfs="$$($(NIX_BUILD) default.nix -A rootfs-archive $(NIX_FLAGS))"; \
+	@set -eu; \
+		mkdir -p build; \
+		rootfs="$$($(NIX_BUILD) default.nix -A rootfs-archive $(NIX_FLAGS))"; \
 		install -m 0644 "$$rootfs" build/rootfs.tar
 
 shipping-image:
-	@inputs="$$($(NIX_BUILD) default.nix -A image-inputs $(NIX_FLAGS))"; \
+	@set -eu; \
+		inputs="$$($(NIX_BUILD) default.nix -A image-inputs $(NIX_FLAGS))"; \
 		mkosi="$$($(NIX_BUILD) default.nix -A mkosi $(NIX_FLAGS))/bin/mkosi"; \
 		rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 			tinfoilcvm.vmlinuz tinfoilcvm.initrd; \
@@ -30,7 +32,8 @@ shipping-image:
 		echo "image hash: $$(cat tinfoilcvm.hash)"
 
 debug-image:
-	@inputs="$$($(NIX_BUILD) default.nix -A image-inputs $(NIX_FLAGS))"; \
+	@set -eu; \
+		inputs="$$($(NIX_BUILD) default.nix -A image-inputs $(NIX_FLAGS))"; \
 		mkosi="$$($(NIX_BUILD) default.nix -A mkosi $(NIX_FLAGS))/bin/mkosi"; \
 		rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
 			tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd; \

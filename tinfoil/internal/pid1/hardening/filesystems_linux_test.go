@@ -55,7 +55,7 @@ func TestRestrictServiceFilesystemsUsesFixedPrivateReadOnlyLayout(t *testing.T) 
 	want := []mountCall{
 		{source: "unshare", flags: unix.CLONE_NEWNS},
 		{target: "/", flags: unix.MS_REC | unix.MS_PRIVATE},
-		{source: "proc", target: "/proc", filesystemType: "proc", flags: baseFlags, data: "hidepid=2,subset=pid"},
+		{source: "proc", target: "/proc", filesystemType: "proc", flags: baseFlags, data: "hidepid=2"},
 		{target: "/proc", flags: baseFlags | unix.MS_REMOUNT | unix.MS_RDONLY},
 		{source: "tmpfs", target: "/dev", filesystemType: "tmpfs", flags: baseFlags, data: "size=4k,nr_inodes=1,mode=0555"},
 		{target: "/dev", flags: baseFlags | unix.MS_REMOUNT | unix.MS_RDONLY},

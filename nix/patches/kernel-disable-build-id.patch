@@ -1,0 +1,12 @@
+--- a/Makefile
++++ b/Makefile
+@@ -1158,2 +1158,2 @@
+-KBUILD_LDFLAGS_MODULE += --build-id=sha1
+-LDFLAGS_vmlinux += --build-id=sha1
++KBUILD_LDFLAGS_MODULE += --build-id=none
++LDFLAGS_vmlinux += --build-id=none
+--- a/arch/x86/entry/vdso/common/Makefile.include
++++ b/arch/x86/entry/vdso/common/Makefile.include
+@@ -64 +64 @@
+-VDSO_LDFLAGS := -shared --hash-style=both --build-id=sha1 --no-undefined \
++VDSO_LDFLAGS := -shared --hash-style=both --build-id=none --no-undefined \

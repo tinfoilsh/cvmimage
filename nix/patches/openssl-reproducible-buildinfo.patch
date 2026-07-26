@@ -1,0 +1,11 @@
+--- a/util/mkbuildinf.pl
++++ b/util/mkbuildinf.pl
+@@ -10,7 +10,7 @@
+ use strict;
+ use warnings;
+ 
+ my $platform = pop @ARGV;
+-my $cflags = join(' ', @ARGV);
++my $cflags = "gcc";
+ $cflags =~ s(\\)(\\\\)g;
+ $cflags = "compiler: $cflags";

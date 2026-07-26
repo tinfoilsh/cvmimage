@@ -17,10 +17,12 @@ let
     tinfoilInitrd = go.packages."tinfoil-initrd";
   };
   kernel = import ./nix/kernel.nix { inherit pkgs; };
+  nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
 in
 go.packages
 // {
   "fixed-cpio-writer" = initrd.writer;
   initrd = initrd.archive;
   "kernel-artifacts" = kernel.artifacts;
+  "nvidia-modules" = nvidia.modules;
 }

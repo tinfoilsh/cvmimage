@@ -30,6 +30,12 @@ let
       "nvidia-modeset.ko"
     ];
   };
+  imageInputs = pkgs.linkFarm "cvmimage-image-inputs" [
+    { name = "rootfs.tar"; path = rootfs.rootfs; }
+    { name = "debug-rootfs-layer.tar"; path = rootfs.debugLayer; }
+    { name = "initrd.cpio.zst"; path = initrd.archive; }
+    { name = "tinfoil-custom.vmlinuz"; path = "${kernel.artifacts}/tinfoil-custom.vmlinuz"; }
+  ];
 in
 go.packages
 // {
@@ -40,4 +46,6 @@ go.packages
   inherit (nvattest) nvattest;
   "rootfs-archive" = rootfs.rootfs;
   "debug-rootfs-layer" = rootfs.debugLayer;
+  "image-inputs" = imageInputs;
+  inherit (pkgs) mkosi;
 }

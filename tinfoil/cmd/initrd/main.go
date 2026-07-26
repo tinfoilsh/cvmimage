@@ -21,13 +21,13 @@ import (
 
 const (
 	// systemd-repart derives this salt as
-	// HMAC-SHA256(repartSeed, "verity-salt"). mkosi.conf pins the same seed.
+	// HMAC-SHA256(repartSeed, "verity-salt"). repart.d/seed pins the same seed.
 	// This is build policy, not secret material.
 	repartSeed = "48c56959-5579-5709-85af-f5393936a4d8"
 	veritySalt = "d8f43870af05f2fb613c2bb571f911da45cfa46a77e6efeabbdd5ed760ebabde"
 
 	// These are the systemd-repart dm-verity format invariants used by
-	// mkosi.repart/10-root.conf and 11-root-verity.conf. A mismatch fails
+	// repart.d/10-root.conf and 11-root-verity.conf. A mismatch fails
 	// closed because the resulting tree cannot match the measured roothash.
 	verityTableVersion   = 1
 	verityDataBlockSize  = 4096

@@ -1,6 +1,5 @@
 NIX_BUILD ?= nix-build
 NIX_FLAGS := --no-out-link --option sandbox true
-TRUSTED_PATH := /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 .PHONY: rootfs shipping-image debug-image test clean
 
@@ -16,10 +15,10 @@ shipping-image:
 		mkosi="$$($(NIX_BUILD) default.nix -A mkosi $(NIX_FLAGS))/bin/mkosi"; \
 		rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 			tinfoilcvm.vmlinuz tinfoilcvm.initrd; \
-		sudo env PATH="$(TRUSTED_PATH)" "$$mkosi" --force \
+		sudo "$$mkosi" --force \
 			--base-tree="$$inputs/rootfs.tar"; \
-		sudo env PATH="$(TRUSTED_PATH)" chmod 0644 tinfoilcvm.raw tinfoilcvm.roothash; \
-		sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" \
+		sudo chmod 0644 tinfoilcvm.raw tinfoilcvm.roothash; \
+		sudo chown "$$(id -u):$$(id -g)" \
 			tinfoilcvm.raw tinfoilcvm.roothash; \
 		install -m 0644 "$$inputs/tinfoil-custom.vmlinuz" tinfoilcvm.vmlinuz; \
 		install -m 0644 "$$inputs/initrd.cpio.zst" tinfoilcvm.initrd; \
@@ -37,13 +36,13 @@ debug-image:
 		mkosi="$$($(NIX_BUILD) default.nix -A mkosi $(NIX_FLAGS))/bin/mkosi"; \
 		rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
 			tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd; \
-		sudo env PATH="$(TRUSTED_PATH)" "$$mkosi" --force \
+		sudo "$$mkosi" --force \
 			--output=tinfoilcvm-debug \
 			--base-tree="$$inputs/rootfs.tar" \
 			--base-tree="$$inputs/debug-rootfs-layer.tar"; \
-		sudo env PATH="$(TRUSTED_PATH)" chmod 0644 \
+		sudo chmod 0644 \
 			tinfoilcvm-debug.raw tinfoilcvm-debug.roothash; \
-		sudo env PATH="$(TRUSTED_PATH)" chown "$$(id -u):$$(id -g)" \
+		sudo chown "$$(id -u):$$(id -g)" \
 			tinfoilcvm-debug.raw tinfoilcvm-debug.roothash; \
 		install -m 0644 "$$inputs/tinfoil-custom.vmlinuz" tinfoilcvm-debug.vmlinuz; \
 		install -m 0644 "$$inputs/initrd.cpio.zst" tinfoilcvm-debug.initrd; \
@@ -63,6 +62,6 @@ test:
 	$(NIX_BUILD) default.nix -A initrd $(NIX_FLAGS)
 
 clean:
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm tinfoilcvm.*
-	sudo env PATH="$(TRUSTED_PATH)" rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
+	sudo rm -rf tinfoilcvm tinfoilcvm.*
+	sudo rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
 	rm -rf build

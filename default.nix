@@ -19,6 +19,7 @@ let
   kernel = import ./nix/kernel.nix { inherit pkgs; };
   nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
   nvattest = import ./nix/nvattest.nix { inherit pkgs; };
+  mkosi = import ./nix/mkosi.nix { inherit pkgs; };
   rootfs = import ./nix/rootfs.nix {
     inherit pkgs;
     runtimeGo = go.packages."runtime-go";
@@ -47,5 +48,5 @@ go.packages
   "rootfs-archive" = rootfs.rootfs;
   "debug-rootfs-layer" = rootfs.debugLayer;
   "image-inputs" = imageInputs;
-  inherit (pkgs) mkosi;
+  inherit mkosi;
 }

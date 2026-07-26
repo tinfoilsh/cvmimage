@@ -1,235 +1,153 @@
-# Build boundary
+# Image build
 
-The image build deliberately uses three tools with separate ownership. The
-pinned disposable builder compiles artifacts that do not fit cleanly in Bazel yet,
-Bazel assembles the measured filesystem inputs, and mkosi creates the final
-root disk and dm-verity metadata.
+The image build has one implementation boundary:
 
-This is a declarative, pinned build graph. It is not a claim that Bazel builds
-the complete image, that every action is hermetic, or that Bazel itself proves
-full-image reproducibility.
+1. Nix builds every content input, runs source checks, and produces the final
+   partitioned image.
 
-## Nix Go and initrd producer
-
-The next release builds the five CGO runtime commands, compile-time debug PID1,
-pure-Go initrd command, fixed CPIO writer, and compressed initrd through the
-top-level `default.nix`. This boundary uses one checksum-pinned Nixpkgs source,
-imported with an empty configuration and no overlays so machine-local Nixpkgs
-configuration is not part of the build graph, and Nixpkgs' `buildGoModule`
-implementation with the pinned Nixpkgs Go 1.25 toolchain. The three NixOS-only
-patches that prepend Nix-store paths for timezone, MIME, and IANA databases
-are omitted so measured guest binaries retain upstream Linux lookup paths and
-contain no Nix-store references. It does not invoke Docker, Bazel, Make, or
-mkosi. CI installs the official Nix release pinned by `nix/nix-version` and
-its recorded SHA-256, with mandatory sandboxing and restricted evaluation:
-the only network input permitted at evaluation time is the hash-pinned
-Nixpkgs archive, so an unpinned evaluation-time fetch fails closed.
-
-Build the runtime commands or initrd with `nix-build`:
-
-```sh
-nix-build --option sandbox true -A runtime-go
-nix-build --option sandbox true -A debug-init
-nix-build --option sandbox true -A initrd
-```
-
-The CGO outputs retain the measured Ubuntu runtime ABI: they request
-`/lib64/ld-linux-x86-64.so.2`, have no effective runtime search path, and are
-required by Nix to contain no store references. The initrd command is static.
-The fixed writer runs its existing unit tests while it builds and emits
-`initrd.cpio.zst` directly from that command and pinned Zstandard. The
-`debug-init` derivation enables only the `tinfoil_debug_image` build tag. The
-existing Go test job runs the tag-specific PID1 tests before these artifacts
-are accepted.
-
-This PR establishes the producer boundary but does not switch the current
-rootfs or shipping-image consumers. That cutover belongs with Nix ownership of
-the additive rootfs, so no intermediate adapter or duplicated staging protocol
-is introduced here.
+The builder is trusted. Nix is used to make inputs, dependencies, and assembly
+explicit and reproducible, not to attest intermediate artifacts or to verify a
+second hidden construction of the same filesystem.
 
 ## Graph
 
 ```mermaid
 flowchart TD
-    S["Pinned source inputs"] --> PB["Pinned disposable builder"]
-    T["Pinned Go, C, kernel, and NVIDIA toolchains"] --> PB
+    S["Pinned repository sources"] --> N["Pinned Nix build graph"]
+    U["Locked Ubuntu and NVIDIA archives"] --> N
+    T["Pinned Go, C, Rust, kernel, and packaging tools"] --> N
+    C["Repository rootfs configuration"] --> N
 
-    PB --> GO["Fixed CGO Go binaries"]
-    PB --> K["Fixed custom kernel artifacts"]
-    K --> N["Fixed NVIDIA kernel modules"]
-    PB --> A["Fixed nvattest binary and library"]
+    N --> G["Runtime Go binaries"]
+    N --> A["nvattest and libnvat"]
+    N --> K["Custom kernel"]
+    K --> V["Three NVIDIA modules"]
+    N --> I["Fixed initrd.cpio.zst"]
 
-    P["Locked Ubuntu and vendor archives"] --> B["Bazel-owned packaging graph"]
-    C["Repository rootfs configuration"] --> B
-    G["Pinned Bazel Go toolchain"] --> B
-    GO --> B
-    N --> B
-    A --> B
+    G --> R["Additive rootfs.tar"]
+    A --> R
+    V --> R
+    C --> R
 
-    B --> R["Additive rootfs tar"]
-    B --> I["Fixed compressed initrd"]
-    B --> D["Debug-only rootfs layer"]
+    R --> M["Pinned systemd-repart finalizer"]
+    I --> X["Release artifact set"]
+    K --> X
+    M --> X
 
-    R --> M["Pinned offline mkosi finalizer"]
-    M --> DISK["Root disk and dm-verity roothash"]
-
-    K --> X["Exact release artifact set"]
-    I --> X
-    DISK --> X
-
-    X --> Q["Release-only repeated builds, hardware tests, and attestation"]
-    Q --> PM["Promoted measurement"]
+    X --> Q["Release-only repeated builds and hardware qualification"]
 ```
 
-There is no content-addressed artifact service between the builder and Bazel.
-The builder publishes a small fixed set of worktree-local files, and Bazel
-consumes those files as explicit packaging inputs.
+There is no Docker builder, Bazel packaging layer, generated manifest
+language, artifact cache protocol, or digest handoff between these steps.
 
-## Ownership
+## Nix ownership
 
-### Pinned builder
+The top-level `default.nix` pins one Nixpkgs source and exposes the complete set
+of image inputs:
 
-`builder/Dockerfile` pins the Ubuntu base digest, dated package snapshot, and
-build tool versions. `builder/run.sh` exposes only fixed producer names and
-fixed output paths.
+| Output | Owner | Declaration |
+| --- | --- | --- |
+| Runtime and debug Go binaries | Nixpkgs `buildGoModule` | `nix/go.nix`, `tinfoil/go.mod`, `tinfoil/go.sum` |
+| Fixed initrd | Nix-built Go CPIO writer and Zstandard | `nix/initrd.nix`, `image/initrd/writer.go` |
+| Custom kernel | Nixpkgs `linuxManualConfig` | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
+| Three NVIDIA modules | Nixpkgs kernel-module build | `nix/nvidia-modules.nix` |
+| nvattest and libnvat | Nixpkgs CMake and Rust builders | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock` |
+| Ubuntu package payloads | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix` |
+| NVIDIA, Docker, and debug payloads | Fixed-output archive fetches | `nix/runtime-sources.nix` |
+| Repository configuration | Direct additive copy | `image/rootfs/` |
+| Rootfs and debug layer archives | Fixed tar materializer | `nix/rootfs.nix` |
+| Shipping and debug disk images | Nix-owned fakeroot and `systemd-repart` | `nix/image.nix`, `repart.d/` |
 
-The builder owns:
+Go binaries and Go validation use the same Nixpkgs Go 1.25 toolchain. The
+three NixOS-only patches that prepend Nix-store paths for timezone, MIME, and
+IANA databases are omitted so measured guest binaries retain upstream Linux
+lookup paths and contain no Nix-store references. All other Nixpkgs Go patches
+and the upstream `buildGoModule` machinery remain unchanged.
 
-- five CGO runtime commands: `tinfoil-boot`, `tinfoil-container-status`,
-  `tinfoil-egress`, `tinfoil-init`, and `tinfoil-shim`;
-- the custom kernel;
-- three fixed NVIDIA modules; and
-- `nvattest` plus its required `libnvat` shared library.
+CI and release builders install the official Nix 2.35.1 binary release pinned
+by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the expected Nix store
+path. The installer refuses a pre-existing, unverified Nix installation. Box3,
+INF14, and release qualification builders must use the same official release
+for both the client and daemon, with `sandbox = true`,
+`sandbox-fallback = false`, `restrict-eval = true`, and
+`allowed-uris = https://github.com/NixOS/nixpkgs/archive/`. A sandbox setup
+failure therefore stops the build rather than changing its isolation boundary,
+and the only network input permitted at evaluation time is the hash-pinned
+Nixpkgs archive, so an unpinned evaluation-time fetch fails closed. Under
+restricted evaluation, invocations pass `-I .` from the repository root to
+allow reading the repository itself. The remaining host prerequisites
+are an x86_64 Linux host with systemd, `sudo`, `curl`, `tar`, `xz`, and the
+kernel features required by the Nix sandbox. GitHub runner images may float.
+Artifact construction runs inside the Nix sandbox.
 
-The fixed handoff paths are:
+The pinned Nixpkgs source is imported with an empty configuration and no
+overlays. Developer or machine-local Nixpkgs configuration is not part of the
+build graph.
 
-| Producer output | Worktree path |
-| --- | --- |
-| CGO Go binaries | `build/builder-work/output/artifacts/` |
-| Kernel | `kernel/out/` |
-| NVIDIA modules | `kernel/out/rootfs-artifacts/nvidia-modules/` |
-| nvattest | `build/rootfs-artifacts/nvattest/` |
+`nix/rootfs.nix` is additive: it starts from an empty tree and installs only
+the declared archive members, Nix-built outputs, and repository files. Package
+maintainer scripts do not run and no producer filesystem is copied into the
+image. Complete package payloads are accepted where they are the clearest
+contract; later TCB reduction should remove them only with evidence that the
+smaller contract is correct.
 
-Package installation and maintainer scripts may run in this environment. Its
-filesystem is disposable and is never copied into the runtime image. Only the
-named output files are eligible Bazel inputs. The NVIDIA producer alone uses
-its documented build-time privileges.
+The Nix expressions also reject store references in runtime binaries and use
+fixed ownership, modes, archive ordering, and timestamps. Reproducibility is a
+property demonstrated by repeated clean builds and cross-host comparison; it
+is not inferred merely from using Nix.
 
-Normal image builds require existing nvattest outputs because rebuilding them
-is expensive. `make regenerate-nvattest` is the explicit producer operation.
-There is no nvattest output digest protocol, artifact cache identity layer, or
-second builder verifier.
+## Image finalization
 
-#### NVIDIA modules
+`nix/image.nix` extracts the rootfs and optional debug layer within one
+fakeroot session, then invokes the pinned Nixpkgs `systemd-repart` directly.
+It receives only:
 
-`kernel/build-nvidia-open-local.sh` builds exactly `nvidia.ko`,
-`nvidia-uvm.ko`, and `nvidia-modeset.ko`. It pins the NVIDIA source packages
-and host toolchain versions, uses the pinned custom Linux 7.0 source tree,
-fixes the kernel build environment, and builds serially. Before publication it
-checks each module's vermagic and selected symbol CRCs against the custom
-kernel.
+- `rootfs.tar`;
+- the debug rootfs layer for `debug-image`; and
+- the fixed partition definitions and seed in `repart.d/`;
+- the Nix-built kernel and initrd.
 
-This is the only shared builder producer that receives `CAP_SYS_ADMIN`. The
-capability is used for the fixed mount namespace and bind mounts required by
-the canonical module build; the builder receives no host devices. Package
-installation and maintainer scripts remain confined to the disposable builder
-filesystem.
+It performs no package installation or network access. The derivation creates
+the root filesystem, partition table, dm-verity metadata, and one validated
+artifact directory. Missing, duplicate, or malformed root-hash output fails
+the build.
 
-The producer publishes only the three named modules beneath
-`kernel/out/rootfs-artifacts/nvidia-modules`. The checked-in
-`//kernel/out/rootfs-artifacts/nvidia-modules:modules` filegroup exposes them to
-Bazel, which installs them at `/usr/lib/tinfoil/kernel-modules`. Temporary
-source trees, package state, compiler caches, logs, and other builder contents
-are not eligible rootfs inputs. Cached NVIDIA source packages are verified
-against their committed SHA-256 values before each build.
+The disk contains only a fixed 2 GiB ext4 root partition and the exact
+dm-verity hash partition calculated by `systemd-repart`. QEMU supplies the
+kernel, initrd, and firmware directly, so the image has no empty ESP. The build
+fails if the additive rootfs does not fit the fixed root partition.
 
-### Bazel
+## Build interface
 
-Bazel owns:
-
-- the pure-Go initrd command and fixed CPIO/Zstandard packaging action;
-- resolution and extraction of the locked Ubuntu package closure;
-- pinned Docker and NVIDIA userspace archives;
-- rootfs paths, ownership, modes, links, and archive metadata;
-- the additive rootfs tar;
-- the debug-only rootfs layer; and
-- focused Go and initrd tests.
-
-`//image:rootfs` packages complete declared payloads, repository configuration,
-and the fixed external producer outputs. Bazel does not compile the CGO runtime
-commands, kernel, NVIDIA modules, or nvattest, and it does not create the final
-disk image. The additive rootfs declaration is the sole metadata owner for
-source-controlled rootfs files: it assigns their paths, modes, and UID/GID
-without a second validator restating the complete file set. The resulting
-guest configuration is summarized in the [measured runtime policy](runtime-policy.md).
-
-Runtime package updates use the upstream resolver directly:
+The supported interface is the named Nix outputs:
 
 ```sh
-bazel run @ubuntu_runtime//:lock
+nix-build -I . -A rootfs-archive -o result-rootfs
+nix-build -I . -A shipping-image -o result
+nix-build -I . -A debug-image -o result-debug
+nix-build -I . -A checks
 ```
 
-`MODULE.bazel.lock` is updated separately when Bazel module dependencies change.
+Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
+`nvidia-modules`, `nvattest`, and `initrd` remain directly buildable. There is
+no task-runner layer and deleting result symlinks or collecting the Nix store
+is a separate host operation.
 
-### mkosi
-
-mkosi consumes `build/stage/bazel-rootfs.tar` in offline custom-distribution
-mode. It owns only disk formatting, the fixed partition layout, dm-verity
-metadata, and the root-disk output. It does not resolve packages, compile
-sources, or copy a builder filesystem.
-
-The kernel and initrd are not embedded by mkosi. They are published beside the
-root disk as separate platform inputs.
-
-### Make
-
-Make is only the human-facing interface and visible ordering between owners:
+Regenerate the reviewed Ubuntu package lock only when changing package inputs
+or snapshot indexes:
 
 ```sh
-make rootfs
-make shipping-image
-make debug-image
-make test
-make regenerate-nvattest
-make clean
+nix-build --option sandbox true -I . -A runtime-package-lock -o result-package-lock
+cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
+rm result-package-lock
 ```
 
-It contains no package resolver, manifest language, filesystem parser, output
-authentication protocol, or hidden internal target graph.
+## Release qualification
 
-`make shipping-image` publishes:
-
-- `tinfoilcvm.raw`;
-- `tinfoilcvm.roothash` and its compatibility copy `tinfoilcvm.hash`;
-- `tinfoilcvm.vmlinuz`; and
-- `tinfoilcvm.initrd`.
-
-## Debug image
-
-`make debug-image` builds `tinfoilcvm-debug.*` with the pinned release kernel
-and additive initrd. The root filesystem intentionally differs by adding one
-debug-only layer containing the pinned Ubuntu `busybox-static` payload and a
-`tinfoil_debug_image` build-tag replacement for `/usr/bin/tinfoil-init`.
-
-The debug PID1 launches one fixed interactive BusyBox `ash` child on
-`/dev/hvc0` before normal boot continues. There is no kernel command-line
-switch, path parser, fallback shell, or runtime activation mechanism. The
-shipping PID1 is built without the tag, and `shipping-image` never consumes the
-debug rootfs layer.
-
-The normal Bazel rootfs is neither rebuilt nor duplicated in the debug layer.
-Its distinct measurement is diagnostic and must never be promoted. Actual
-debug-image boots qualify the console behavior; IBT and NVIDIA qualification
-remain separate evidence-driven work.
-
-## Reproducibility and release qualification
-
-External inputs and output-sensitive tools are pinned, and each artifact owner
-normalizes the metadata it controls. These properties support reproducible
-builds, but no individual tool proves that the complete image is reproducible.
-A Bazel sandbox also does not make the external builder or privileged mkosi
-steps hermetic.
-
-The threat model accepts build-time disruption and denial of service. A broken
-or malicious builder may prevent a release, but it must not make an unapproved
-measurement pass runtime attestation.
+Normal pull-request CI checks evaluation, focused builds, and source tests. It
+does not rebuild expensive producers twice. Before promoting a release, build
+the exact candidate independently on the qualified builders, compare the
+kernel, initrd, rootfs, raw disk, and dm-verity root, then boot and exercise the
+same artifacts on the required CPU and GPU hardware. Promote only the tested
+measurement. This is a release process, not another verifier embedded in the
+build graph.

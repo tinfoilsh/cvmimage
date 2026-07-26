@@ -1,5 +1,6 @@
 {
   pkgs,
+  ubuntuDebs,
   runtimeGo,
   debugInit,
   nvattest,
@@ -7,7 +8,6 @@
 }:
 
 let
-  lock = builtins.fromJSON (builtins.readFile ../image/runtime-packages.lock.json);
   sources = import ./runtime-sources.nix;
 
   fetchDeb = package: pkgs.fetchurl {
@@ -16,7 +16,6 @@ let
     sha256 = package.sha256;
   };
 
-  ubuntuDebs = map fetchDeb lock.packages;
   nvidiaDebs = map fetchDeb sources.nvidiaDebs;
   busyboxDeb = fetchDeb sources.busybox;
   dockerArchive = pkgs.fetchurl {

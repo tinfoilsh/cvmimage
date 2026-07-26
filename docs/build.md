@@ -55,7 +55,8 @@ of image inputs:
 | Custom kernel | Nixpkgs `linuxManualConfig` | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
 | Three NVIDIA modules | Nixpkgs kernel-module build | `nix/nvidia-modules.nix` |
 | nvattest and libnvat | Nixpkgs CMake and Rust builders | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock` |
-| Ubuntu and vendor payloads | Fixed-output archive fetches | `image/runtime-packages.lock.json`, `nix/runtime-sources.nix` |
+| Ubuntu package payloads | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix` |
+| NVIDIA, Docker, and debug payloads | Fixed-output archive fetches | `nix/runtime-sources.nix` |
 | Repository configuration | Direct additive copy | `image/rootfs/` |
 | Rootfs and debug layer archives | Fixed tar materializer | `nix/rootfs.nix` |
 
@@ -109,6 +110,15 @@ nix-build --option sandbox true -A nvidia-modules
 nix-build --option sandbox true -A nvattest
 nix-build --option sandbox true -A rootfs-archive
 nix-build --option sandbox true -A initrd
+```
+
+Regenerate the reviewed Ubuntu package lock only when changing package inputs
+or snapshot indexes:
+
+```sh
+nix-build --option sandbox true -A runtime-package-lock -o result-package-lock
+cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
+rm result-package-lock
 ```
 
 ## Release qualification

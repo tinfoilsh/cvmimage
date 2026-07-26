@@ -20,8 +20,10 @@ let
   nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
   nvattest = import ./nix/nvattest.nix { inherit pkgs; };
   mkosi = import ./nix/mkosi.nix { inherit pkgs; };
+  runtimePackages = import ./nix/runtime-packages.nix { inherit pkgs; };
   rootfs = import ./nix/rootfs.nix {
     inherit pkgs;
+    ubuntuDebs = runtimePackages.packages;
     runtimeGo = go.packages."runtime-go";
     debugInit = go.packages."debug-init";
     inherit (nvattest) nvattest;
@@ -47,6 +49,7 @@ go.packages
   inherit (nvattest) nvattest;
   "rootfs-archive" = rootfs.rootfs;
   "debug-rootfs-layer" = rootfs.debugLayer;
+  "runtime-package-lock" = runtimePackages.lock;
   "image-inputs" = imageInputs;
   inherit mkosi;
 }

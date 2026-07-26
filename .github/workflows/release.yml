@@ -40,7 +40,8 @@ jobs:
         env:
           PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
-          make shipping-image
+          /nix/var/nix/profiles/default/bin/nix-build \
+            -A shipping-image -o result
 
       - name: Resolve release upload CLI
         id: release-upload-cli
@@ -60,11 +61,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p /tmp/out
-          test -s tinfoilcvm.raw
-          test -s tinfoilcvm.initrd
-          test -s tinfoilcvm.vmlinuz
-          test "$(wc -c < tinfoilcvm.roothash)" -eq 64
-          grep -Eq '^[a-f0-9]{64}$' tinfoilcvm.roothash
+          test -s result/tinfoilcvm.raw
+          test -s result/tinfoilcvm.initrd
+          test -s result/tinfoilcvm.vmlinuz
+          test "$(wc -c < result/tinfoilcvm.roothash)" -eq 64
+          grep -Eq '^[a-f0-9]{64}$' result/tinfoilcvm.roothash
 
       - name: Generate manifest
         id: manifest
@@ -76,18 +77,18 @@ jobs:
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
           {
             "version": "${REF_NAME}",
-            "root": "$(tr -d '\n' < tinfoilcvm.roothash)",
-            "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
-            "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')",
-            "raw": "$(sha256sum tinfoilcvm.raw | awk '{print $1}')",
+            "root": "$(tr -d '\n' < result/tinfoilcvm.roothash)",
+            "initrd": "$(sha256sum result/tinfoilcvm.initrd | awk '{print $1}')",
+            "kernel": "$(sha256sum result/tinfoilcvm.vmlinuz | awk '{print $1}')",
+            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
             "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
 
           # Copy artifacts with versioned names
-          cp tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
-          cp tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
-          cp tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
+          cp result/tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
+          cp result/tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
+          cp result/tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
 
           # Generate checksums
           cd /tmp/out

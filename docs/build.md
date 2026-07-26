@@ -1,11 +1,9 @@
 # Image build
 
-The image build has one implementation boundary and one temporary user
-interface:
+The image build has one implementation boundary:
 
-1. Nix builds every content input and the final partitioned image.
-2. Make copies named Nix outputs into the working directory without owning
-   another build graph.
+1. Nix builds every content input, runs source checks, and produces the final
+   partitioned image.
 
 The builder is trusted. Nix is used to make inputs, dependencies, and assembly
 explicit and reproducible, not to attest intermediate artifacts or to verify a
@@ -60,13 +58,19 @@ of image inputs:
 | Rootfs and debug layer archives | Fixed tar materializer | `nix/rootfs.nix` |
 | Shipping and debug disk images | Nix-owned fakeroot and `systemd-repart` | `nix/image.nix`, `repart.d/` |
 
+Go binaries and Go validation use the same Nixpkgs Go 1.25 toolchain. The
+three NixOS-only patches that prepend Nix-store paths for timezone, MIME, and
+IANA databases are omitted so measured guest binaries retain upstream Linux
+lookup paths and contain no Nix-store references. All other Nixpkgs Go patches
+and the upstream `buildGoModule` machinery remain unchanged.
+
 CI and release builders install the official Nix 2.35.1 binary release pinned
 by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the expected Nix store
 path. The installer refuses a pre-existing, unverified Nix installation. Box3,
 INF14, and release qualification builders must use the same official release
 for both the client and daemon, with `sandbox = true`. The remaining host
 prerequisites are an x86_64 Linux host with systemd, `sudo`, `curl`, `tar`,
-`xz`, `make`, and the kernel features required by the Nix sandbox. GitHub
+`xz`, and the kernel features required by the Nix sandbox. GitHub
 runner images may float. Artifact construction runs inside the Nix sandbox.
 
 The pinned Nixpkgs source is imported with an empty configuration and no
@@ -106,35 +110,21 @@ dm-verity hash partition calculated by `systemd-repart`. QEMU supplies the
 kernel, initrd, and firmware directly, so the image has no empty ESP. The build
 fails if the additive rootfs does not fit the fixed root partition.
 
-## Make interface
+## Build interface
 
-The Makefile is intentionally not a second dependency graph:
-
-```sh
-make rootfs
-make shipping-image
-make debug-image
-make test
-make clean
-```
-
-Each build command asks Nix for named outputs. The image commands only copy the
-already-built artifacts into the working directory. `make test` owns
-repository Go tests, focused race and debug-tag tests, vet, and a fixed-initrd
-build until those checks move behind a Nix attribute.
-
-Direct Nix outputs remain available for focused work, for example:
+The supported interface is the named Nix outputs:
 
 ```sh
-nix-build --option sandbox true -A runtime-go
-nix-build --option sandbox true -A kernel-artifacts
-nix-build --option sandbox true -A nvidia-modules
-nix-build --option sandbox true -A nvattest
-nix-build --option sandbox true -A rootfs-archive
-nix-build --option sandbox true -A initrd
-nix-build --option sandbox true -A shipping-image
-nix-build --option sandbox true -A debug-image
+nix-build -A rootfs-archive -o result-rootfs
+nix-build -A shipping-image -o result
+nix-build -A debug-image -o result-debug
+nix-build -A checks
 ```
+
+Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
+`nvidia-modules`, `nvattest`, and `initrd` remain directly buildable. There is
+no task-runner layer and deleting result symlinks or collecting the Nix store
+is a separate host operation.
 
 Regenerate the reviewed Ubuntu package lock only when changing package inputs
 or snapshot indexes:

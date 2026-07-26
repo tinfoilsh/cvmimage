@@ -20,11 +20,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
-        with:
-          go-version: '1.25.12'
-
       - name: Install Nix
         uses: ./.github/actions/install-nix
 
@@ -52,8 +47,7 @@ jobs:
           PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -Eeuo pipefail
-          make test
-          for target in runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest; do
+          for target in checks runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest; do
             /nix/var/nix/profiles/default/bin/nix-build \
               --no-out-link -A "$target"
           done

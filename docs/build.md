@@ -99,6 +99,11 @@ create the root filesystem image, partition layout, and dm-verity metadata.
 The kernel and initrd are copied directly from their Nix outputs into the
 release artifact set.
 
+The disk contains only a fixed 2 GiB ext4 root partition and the exact
+dm-verity hash partition calculated by `systemd-repart`. QEMU supplies the
+kernel, initrd, and firmware directly, so the image has no empty ESP. The build
+fails if the additive rootfs does not fit the fixed root partition.
+
 ## Make interface
 
 The Makefile is intentionally not a second dependency graph:

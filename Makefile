@@ -11,17 +11,13 @@ rootfs:
 
 shipping-image:
 	@set -eu; \
-		inputs="$$($(NIX_BUILD) default.nix -A image-inputs $(NIX_FLAGS))"; \
-		mkosi="$$($(NIX_BUILD) default.nix -A mkosi $(NIX_FLAGS))/bin/mkosi"; \
+		image="$$($(NIX_BUILD) default.nix -A shipping-image $(NIX_FLAGS))"; \
 		rm -f tinfoilcvm tinfoilcvm.raw tinfoilcvm.roothash tinfoilcvm.hash \
 			tinfoilcvm.vmlinuz tinfoilcvm.initrd; \
-		sudo "$$mkosi" --force \
-			--base-tree="$$inputs/rootfs.tar"; \
-		sudo chmod 0644 tinfoilcvm.raw tinfoilcvm.roothash; \
-		sudo chown "$$(id -u):$$(id -g)" \
-			tinfoilcvm.raw tinfoilcvm.roothash; \
-		install -m 0644 "$$inputs/tinfoil-custom.vmlinuz" tinfoilcvm.vmlinuz; \
-		install -m 0644 "$$inputs/initrd.cpio.zst" tinfoilcvm.initrd; \
+		for artifact in raw roothash vmlinuz initrd; do \
+			install -m 0644 "$$image/tinfoilcvm.$$artifact" \
+				"tinfoilcvm.$$artifact"; \
+		done; \
 		test -s tinfoilcvm.raw; \
 		test -s tinfoilcvm.vmlinuz; \
 		test -s tinfoilcvm.initrd; \
@@ -32,20 +28,13 @@ shipping-image:
 
 debug-image:
 	@set -eu; \
-		inputs="$$($(NIX_BUILD) default.nix -A image-inputs $(NIX_FLAGS))"; \
-		mkosi="$$($(NIX_BUILD) default.nix -A mkosi $(NIX_FLAGS))/bin/mkosi"; \
+		image="$$($(NIX_BUILD) default.nix -A debug-image $(NIX_FLAGS))"; \
 		rm -f tinfoilcvm-debug tinfoilcvm-debug.raw tinfoilcvm-debug.roothash \
 			tinfoilcvm-debug.hash tinfoilcvm-debug.vmlinuz tinfoilcvm-debug.initrd; \
-		sudo "$$mkosi" --force \
-			--output=tinfoilcvm-debug \
-			--base-tree="$$inputs/rootfs.tar" \
-			--base-tree="$$inputs/debug-rootfs-layer.tar"; \
-		sudo chmod 0644 \
-			tinfoilcvm-debug.raw tinfoilcvm-debug.roothash; \
-		sudo chown "$$(id -u):$$(id -g)" \
-			tinfoilcvm-debug.raw tinfoilcvm-debug.roothash; \
-		install -m 0644 "$$inputs/tinfoil-custom.vmlinuz" tinfoilcvm-debug.vmlinuz; \
-		install -m 0644 "$$inputs/initrd.cpio.zst" tinfoilcvm-debug.initrd; \
+		for artifact in raw roothash vmlinuz initrd; do \
+			install -m 0644 "$$image/tinfoilcvm-debug.$$artifact" \
+				"tinfoilcvm-debug.$$artifact"; \
+		done; \
 		test -s tinfoilcvm-debug.raw; \
 		test -s tinfoilcvm-debug.vmlinuz; \
 		test -s tinfoilcvm-debug.initrd; \
@@ -62,6 +51,6 @@ test:
 	$(NIX_BUILD) default.nix -A initrd $(NIX_FLAGS)
 
 clean:
-	sudo rm -rf tinfoilcvm tinfoilcvm.*
-	sudo rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
+	rm -rf tinfoilcvm tinfoilcvm.*
+	rm -rf tinfoilcvm-debug tinfoilcvm-debug.*
 	rm -rf build

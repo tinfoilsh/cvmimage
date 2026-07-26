@@ -1,12 +1,11 @@
 # Image build
 
-The image build has two implementation boundaries and one small user
+The image build has one implementation boundary and one temporary user
 interface:
 
-1. Nix builds every content input to the image.
-2. mkosi turns those exact inputs into the partitioned disk and dm-verity
-   metadata.
-3. Make exposes the supported commands without owning another build graph.
+1. Nix builds every content input and the final partitioned image.
+2. Make copies named Nix outputs into the working directory without owning
+   another build graph.
 
 The builder is trusted. Nix is used to make inputs, dependencies, and assembly
 explicit and reproducible, not to attest intermediate artifacts or to verify a
@@ -32,7 +31,7 @@ flowchart TD
     V --> R
     C --> R
 
-    R --> M["Pinned offline mkosi finalizer"]
+    R --> M["Pinned systemd-repart finalizer"]
     I --> X["Release artifact set"]
     K --> X
     M --> X
@@ -59,6 +58,7 @@ of image inputs:
 | NVIDIA, Docker, and debug payloads | Fixed-output archive fetches | `nix/runtime-sources.nix` |
 | Repository configuration | Direct additive copy | `image/rootfs/` |
 | Rootfs and debug layer archives | Fixed tar materializer | `nix/rootfs.nix` |
+| Shipping and debug disk images | Nix-owned fakeroot and `systemd-repart` | `nix/image.nix`, `repart.d/` |
 
 CI and release builders install the official Nix 2.35.1 binary release pinned
 by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the expected Nix store
@@ -67,8 +67,7 @@ INF14, and release qualification builders must use the same official release
 for both the client and daemon, with `sandbox = true`. The remaining host
 prerequisites are an x86_64 Linux host with systemd, `sudo`, `curl`, `tar`,
 `xz`, `make`, and the kernel features required by the Nix sandbox. GitHub
-runner images may float. Nix-owned construction runs inside the sandbox; the
-temporary host-side mkosi finalization boundary is described below.
+runner images may float. Artifact construction runs inside the Nix sandbox.
 
 The pinned Nixpkgs source is imported with an empty configuration and no
 overlays. Developer or machine-local Nixpkgs configuration is not part of the
@@ -86,18 +85,21 @@ fixed ownership, modes, archive ordering, and timestamps. Reproducibility is a
 property demonstrated by repeated clean builds and cross-host comparison; it
 is not inferred merely from using Nix.
 
-## mkosi ownership
+## Image finalization
 
-mkosi is fetched from the pinned Nixpkgs revision. It receives only:
+`nix/image.nix` extracts the rootfs and optional debug layer within one
+fakeroot session, then invokes the pinned Nixpkgs `systemd-repart` directly.
+It receives only:
 
 - `rootfs.tar`;
 - the debug rootfs layer for `debug-image`; and
-- the fixed partition definitions in `mkosi.repart/`.
+- the fixed partition definitions and seed in `repart.d/`;
+- the Nix-built kernel and initrd.
 
-It performs no package installation or network access. Its narrow job is to
-create the root filesystem image, partition layout, and dm-verity metadata.
-The kernel and initrd are copied directly from their Nix outputs into the
-release artifact set.
+It performs no package installation or network access. The derivation creates
+the root filesystem, partition table, dm-verity metadata, and one validated
+artifact directory. Missing, duplicate, or malformed root-hash output fails
+the build.
 
 The disk contains only a fixed 2 GiB ext4 root partition and the exact
 dm-verity hash partition calculated by `systemd-repart`. QEMU supplies the
@@ -116,9 +118,10 @@ make test
 make clean
 ```
 
-Each build command asks Nix for named outputs. The two image commands then call
-the pinned mkosi binary with those exact paths. `make test` owns repository Go
-tests, focused race and debug-tag tests, vet, and a fixed-initrd build.
+Each build command asks Nix for named outputs. The image commands only copy the
+already-built artifacts into the working directory. `make test` owns
+repository Go tests, focused race and debug-tag tests, vet, and a fixed-initrd
+build until those checks move behind a Nix attribute.
 
 Direct Nix outputs remain available for focused work, for example:
 
@@ -129,6 +132,8 @@ nix-build --option sandbox true -A nvidia-modules
 nix-build --option sandbox true -A nvattest
 nix-build --option sandbox true -A rootfs-archive
 nix-build --option sandbox true -A initrd
+nix-build --option sandbox true -A shipping-image
+nix-build --option sandbox true -A debug-image
 ```
 
 Regenerate the reviewed Ubuntu package lock only when changing package inputs

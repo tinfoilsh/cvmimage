@@ -23,7 +23,6 @@ let
   kernel = import ./nix/kernel.nix { inherit pkgs; };
   nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
   nvattest = import ./nix/nvattest.nix { inherit pkgs; };
-  mkosi = import ./nix/mkosi.nix { inherit pkgs; };
   runtimePackages = import ./nix/runtime-packages.nix { inherit pkgs; };
   rootfs = import ./nix/rootfs.nix {
     inherit pkgs;
@@ -37,12 +36,27 @@ let
       "nvidia-modeset.ko"
     ];
   };
-  imageInputs = pkgs.linkFarm "cvmimage-image-inputs" [
-    { name = "rootfs.tar"; path = rootfs.rootfs; }
-    { name = "debug-rootfs-layer.tar"; path = rootfs.debugLayer; }
-    { name = "initrd.cpio.zst"; path = initrd.archive; }
-    { name = "tinfoil-custom.vmlinuz"; path = "${kernel.artifacts}/tinfoil-custom.vmlinuz"; }
-  ];
+  repartSeedText = builtins.readFile ./repart.d/seed;
+  repartSeedMatch = builtins.match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n" repartSeedText;
+  repartSeed = assert repartSeedMatch != null; builtins.head repartSeedMatch;
+  image = import ./nix/image.nix;
+  shippingImage = image {
+    inherit pkgs repartSeed;
+    rootfs = rootfs.rootfs;
+    kernel = "${kernel.artifacts}/tinfoil-custom.vmlinuz";
+    initrd = initrd.archive;
+    repartDefinitions = ./repart.d;
+    basename = "tinfoilcvm";
+  };
+  debugImage = image {
+    inherit pkgs repartSeed;
+    rootfs = rootfs.rootfs;
+    debugLayer = rootfs.debugLayer;
+    kernel = "${kernel.artifacts}/tinfoil-custom.vmlinuz";
+    initrd = initrd.archive;
+    repartDefinitions = ./repart.d;
+    basename = "tinfoilcvm-debug";
+  };
 in
 go.packages
 // {
@@ -54,6 +68,6 @@ go.packages
   "rootfs-archive" = rootfs.rootfs;
   "debug-rootfs-layer" = rootfs.debugLayer;
   "runtime-package-lock" = runtimePackages.lock;
-  "image-inputs" = imageInputs;
-  inherit mkosi;
+  "shipping-image" = shippingImage;
+  "debug-image" = debugImage;
 }

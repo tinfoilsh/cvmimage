@@ -41,11 +41,12 @@ jobs:
           sudo --preserve-env=HOME -u "$USER" -g nix-users \
             env NIX_REMOTE=daemon bash -Eeuo pipefail <<'NIX_BUILD'
             set -Eeuo pipefail
-            targets=(runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd)
-            for target in "${targets[@]}"; do
+            build_targets=(runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest)
+            for target in "${build_targets[@]}"; do
               nix-build --no-out-link -A "$target"
             done
-            for target in "${targets[@]}"; do
+            reproducibility_targets=(runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd)
+            for target in "${reproducibility_targets[@]}"; do
               nix-build --no-out-link --check -A "$target"
             done
           NIX_BUILD

@@ -36,7 +36,6 @@ let
     { source = ../image/rootfs/etc/passwd; target = "etc/passwd"; mode = "0644"; }
     { source = ../image/rootfs/etc/resolv.conf; target = "etc/resolv.conf"; mode = "0644"; }
     { source = ../image/rootfs/etc/shadow; target = "etc/shadow"; mode = "0640"; }
-    { source = ../image/rootfs/etc/systemd/system-preset/00-tinfoil.preset; target = "etc/systemd/system-preset/00-tinfoil.preset"; mode = "0644"; }
     { source = ../image/rootfs/usr/lib/clock-epoch; target = "usr/lib/clock-epoch"; mode = "0644"; }
     { source = ../image/rootfs/usr/lib/os-release; target = "usr/lib/os-release"; mode = "0644"; }
   ];

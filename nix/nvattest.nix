@@ -46,11 +46,11 @@ let
     src = regorusSource;
     cargoRoot = "bindings/ffi";
     buildAndTestSubdir = "bindings/ffi";
-    cargoLock.lockFile = ../builder/nvattest/regorus.Cargo.lock;
+    cargoLock.lockFile = ./locks/regorus.Cargo.lock;
     env.CARGO_INCREMENTAL = "0";
     patches = [ ./patches/regorus-pinned-revision.patch ];
     postPatch = ''
-      cp ${../builder/nvattest/regorus.Cargo.lock} bindings/ffi/Cargo.lock
+      cp ${./locks/regorus.Cargo.lock} bindings/ffi/Cargo.lock
       substituteInPlace build.rs \
         --replace-fail '@REGORUS_REVISION@' '${regorusRevision}'
     '';

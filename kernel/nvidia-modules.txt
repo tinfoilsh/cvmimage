@@ -1,3 +1,0 @@
-nvidia.ko
-nvidia-uvm.ko
-nvidia-modeset.ko

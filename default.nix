@@ -16,9 +16,11 @@ let
     inherit (go) upstreamGo;
     tinfoilInitrd = go.packages."tinfoil-initrd";
   };
+  kernel = import ./nix/kernel.nix { inherit pkgs; };
 in
 go.packages
 // {
   "fixed-cpio-writer" = initrd.writer;
   initrd = initrd.archive;
+  "kernel-artifacts" = kernel.artifacts;
 }

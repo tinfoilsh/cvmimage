@@ -23,34 +23,37 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
         with:
-          go-version: '1.25'
+          go-version: '1.25.12'
 
       - name: Install Nix
+        uses: ./.github/actions/install-nix
+
+      - name: Check isolated Nixpkgs evaluation
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends nix-bin nix-setup-systemd
-          sudo install -d -m 0755 /etc/nix
-          printf 'sandbox = true\nbuild-users-group = nixbld\n' |
-            sudo tee /etc/nix/nix.conf >/dev/null
-          sudo install -d -o root -g nixbld -m 1775 /nix/store
-          sudo usermod -aG nix-users "$USER"
-          sudo systemctl restart nix-daemon.service
-          nix-build --version
+          nix_instantiate=/nix/var/nix/profiles/default/bin/nix-instantiate
+          baseline="$("$nix_instantiate" --no-gc-warning -A runtime-go)"
+          test_home="$(mktemp -d)"
+          trap 'rm -rf "$test_home"' EXIT
+          mkdir -p "$test_home/.config/nixpkgs/overlays"
+          printf '%s\n' 'throw "user overlay affected evaluation"' > \
+            "$test_home/.config/nixpkgs/overlays/default.nix"
+          printf '%s\n' 'throw "user config affected evaluation"' > \
+            "$test_home/nixpkgs-config.nix"
+          configured="$(HOME="$test_home" \
+            NIXPKGS_CONFIG="$test_home/nixpkgs-config.nix" \
+            "$nix_instantiate" --no-gc-warning -A runtime-go)"
+          test "$configured" = "$baseline"
 
       - name: Test
         shell: bash
+        env:
+          PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -Eeuo pipefail
-          setup_go_bin="$(dirname "$(command -v go)")"
-          sudo --preserve-env=HOME -u "$USER" -g nix-users \
-            env NIX_REMOTE=daemon \
-              PATH="$setup_go_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-              bash -Eeuo pipefail <<'TEST'
-            make test
-            nix-build --no-out-link -A nvattest
-            for target in runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd; do
-              nix-build --no-out-link --check -A "$target"
-            done
-          TEST
+          make test
+          for target in runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest; do
+            /nix/var/nix/profiles/default/bin/nix-build \
+              --no-out-link -A "$target"
+          done

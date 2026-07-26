@@ -60,6 +60,20 @@ of image inputs:
 | Repository configuration | Direct additive copy | `image/rootfs/` |
 | Rootfs and debug layer archives | Fixed tar materializer | `nix/rootfs.nix` |
 
+CI and release builders install the official Nix 2.35.1 binary release pinned
+by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the expected Nix store
+path. The installer refuses a pre-existing, unverified Nix installation. Box3,
+INF14, and release qualification builders must use the same official release
+for both the client and daemon, with `sandbox = true`. The remaining host
+prerequisites are an x86_64 Linux host with systemd, `sudo`, `curl`, `tar`,
+`xz`, `make`, and the kernel features required by the Nix sandbox. GitHub
+runner images may float. Nix-owned construction runs inside the sandbox; the
+temporary host-side mkosi finalization boundary is described below.
+
+The pinned Nixpkgs source is imported with an empty configuration and no
+overlays. Developer or machine-local Nixpkgs configuration is not part of the
+build graph.
+
 `nix/rootfs.nix` is additive: it starts from an empty tree and installs only
 the declared archive members, Nix-built outputs, and repository files. Package
 maintainer scripts do not run and no producer filesystem is copied into the

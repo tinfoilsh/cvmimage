@@ -18,6 +18,7 @@ let
   };
   kernel = import ./nix/kernel.nix { inherit pkgs; };
   nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
+  nvattest = import ./nix/nvattest.nix { inherit pkgs; };
 in
 go.packages
 // {
@@ -25,4 +26,5 @@ go.packages
   initrd = initrd.archive;
   "kernel-artifacts" = kernel.artifacts;
   "nvidia-modules" = nvidia.modules;
+  inherit (nvattest) nvattest;
 }

@@ -1,0 +1,116 @@
+--- a/nv-attestation-sdk-cpp/CMakeLists.txt
++++ b/nv-attestation-sdk-cpp/CMakeLists.txt
+@@ -37,33 +37,10 @@
+ 
+ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+ 
+-FetchContent_Declare(
+-    Corrosion
+-    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+-    # Use a tag that has a fix for https://github.com/corrosion-rs/corrosion/issues/590
+-    GIT_TAG 6be991bb34c348dfb8344be22f3606288ea5c7fd
+-    EXCLUDE_FROM_ALL
+-)
+-FetchContent_MakeAvailable(Corrosion)
+-
+-FetchContent_Declare(
+-  regorus
+-  GIT_REPOSITORY https://github.com/microsoft/regorus.git
+-  GIT_TAG regorus-v0.4.0
++add_library(regorus_ffi STATIC IMPORTED GLOBAL)
++set_target_properties(regorus_ffi PROPERTIES
++  IMPORTED_LOCATION "@REGORUS_LIBRARY@"
+ )
+-FetchContent_MakeAvailable(regorus)
+-
+-corrosion_import_crate(
+-  MANIFEST_PATH "${regorus_SOURCE_DIR}/bindings/ffi/Cargo.toml"
+-  PROFILE "release"
+-  CRATES regorus-ffi
+-  FEATURES "regorus/semver"
+-  CRATE_TYPES "staticlib"
+-)
+-
+-if (ENABLE_SCCACHE)
+-  corrosion_set_env_vars(regorus_ffi "RUSTC_WRAPPER=${SCCACHE}")
+-endif()
+ 
+ set(JWT_DISABLE_PICOJSON ON CACHE BOOL "Disable picojson support in jwt-cpp")
+ set(JWT_BUILD_EXAMPLES OFF CACHE BOOL "Disable building jwt-cpp examples")
+@@ -179,16 +156,18 @@
+   set(_EP_CFLAGS "${CMAKE_C_FLAGS} -fPIC")
+ 
+   # Build OpenSSL statically — RHEL8 ships 1.1.1 but the code needs 3.x APIs
+-  set(OPENSSL_INSTALL_DIR "${CMAKE_BINARY_DIR}/openssl-install")
++  set(OPENSSL_STAGE_DIR "${CMAKE_BINARY_DIR}/openssl-stage")
++  set(OPENSSL_INSTALL_DIR "${OPENSSL_STAGE_DIR}/usr")
+ 
+   ExternalProject_Add(openssl_external
+-    URL https://github.com/openssl/openssl/releases/download/openssl-3.6.1/openssl-3.6.1.tar.gz
+-    URL_HASH SHA256=b1bfedcd5b289ff22aee87c9d600f515767ebf45f77168cb6d64f231f518a82e
++    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory "@OPENSSL_SOURCE@" <SOURCE_DIR>
++    COMMAND chmod -R u+w <SOURCE_DIR>
++    PATCH_COMMAND patch -d <SOURCE_DIR> -p1 -i "@OPENSSL_PATCH@"
+-    CONFIGURE_COMMAND <SOURCE_DIR>/Configure
++    CONFIGURE_COMMAND "@PERL@" <SOURCE_DIR>/Configure
+       "CC=${_EP_CC}"
+       "CFLAGS=${_EP_CFLAGS}"
+-      --prefix=${OPENSSL_INSTALL_DIR}
+-      --openssldir=${OPENSSL_INSTALL_DIR}
++      --prefix=/usr
++      --openssldir=/etc/ssl
+       --libdir=lib
+       no-shared
+       no-tests      # Skip ~100+ test binaries — not needed, saves link-time memory
+@@ -198,7 +177,10 @@
+       no-engine     # Disable deprecated ENGINE API — unused with static linking
+       no-dtls       # Disable DTLS — SDK uses TLS only, not UDP-based DTLS
+     BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
+-    INSTALL_COMMAND make install_sw install_ssldirs
++    INSTALL_COMMAND make DESTDIR=${OPENSSL_STAGE_DIR} install_sw
++    COMMAND sed -i "s|prefix=/usr|prefix=${OPENSSL_INSTALL_DIR}|" ${OPENSSL_INSTALL_DIR}/lib/pkgconfig/libcrypto.pc
++    COMMAND sed -i "s|prefix=/usr|prefix=${OPENSSL_INSTALL_DIR}|" ${OPENSSL_INSTALL_DIR}/lib/pkgconfig/libssl.pc
++    COMMAND sed -i "s|prefix=/usr|prefix=${OPENSSL_INSTALL_DIR}|" ${OPENSSL_INSTALL_DIR}/lib/pkgconfig/openssl.pc
+     BUILD_IN_SOURCE 1
+   )
+ 
+@@ -224,8 +206,8 @@
+ 
+   ExternalProject_Add(xmlsec_external
+     DEPENDS openssl_external
+-    URL https://github.com/lsh123/xmlsec/releases/download/xmlsec-1_2_39/xmlsec1-1.2.39.tar.gz
+-    URL_HASH SHA256=15f2f55ea5968e578fcd24b3b427e553876c86c147dc7f03923e98fc2768a1fa
++    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory "@XMLSEC_SOURCE@" <SOURCE_DIR>
++    COMMAND chmod -R u+w <SOURCE_DIR>
+     CONFIGURE_COMMAND <SOURCE_DIR>/configure
+       --prefix=${XMLSEC_INSTALL_DIR}
+       --disable-shared
+@@ -253,8 +235,8 @@
+ 
+   ExternalProject_Add(curl_external
+     DEPENDS openssl_external
+-    URL https://github.com/curl/curl/releases/download/curl-7_88_1/curl-7.88.1.tar.gz
+-    URL_HASH SHA256=cdb38b72e36bc5d33d5b8810f8018ece1baa29a8f215b4495e495ded82bbf3c7
++    DOWNLOAD_COMMAND ${CMAKE_COMMAND} -E copy_directory "@CURL_SOURCE@" <SOURCE_DIR>
++    COMMAND chmod -R u+w <SOURCE_DIR>
+     CONFIGURE_COMMAND <SOURCE_DIR>/configure
+       --prefix=${CURL_INSTALL_DIR}
+       --with-openssl=${OPENSSL_INSTALL_DIR}
+@@ -357,7 +339,7 @@
+   PRIVATE
+     src
+     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+-    ${regorus_SOURCE_DIR}/bindings/ffi
++    @REGORUS_INCLUDE@
+     # spdlog and fmt include dirs (linked statically via TARGET_FILE below)
+     ${spdlog_SOURCE_DIR}/include
+     ${fmt_SOURCE_DIR}/include
+@@ -408,7 +390,7 @@
+ )
+ 
+ # Ensure dependencies are built before nvat
+-add_dependencies(nvat regorus_ffi spdlog fmt curl_external xmlsec_external openssl_external)
++add_dependencies(nvat spdlog fmt curl_external xmlsec_external openssl_external)
+ 
+ # todo (p0): remove cmake configuration helpers
+ install(TARGETS nvat

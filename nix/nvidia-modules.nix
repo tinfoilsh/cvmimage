@@ -8,6 +8,7 @@ let
   _versionCheck =
     assert kernelPackages.nvidiaPackages.production.version == version;
     true;
+  kernelSource = "${kernelPackages.kernel.dev}/lib/modules/${release}/source";
   nvidiaOpen = kernelPackages.nvidiaPackages.production.open.overrideAttrs (old: {
     env = (old.env or { }) // {
       CONFIG_X86_KERNEL_IBT = "";
@@ -15,6 +16,7 @@ let
       NV_EXCLUDE_KERNEL_MODULES = "nvidia-drm nvidia-peermem";
       NV_BUILD_HOST = "tinfoil-builder";
       NV_BUILD_USER = "tinfoil";
+      KCFLAGS = "-ffile-prefix-map=${kernelSource}=/usr/src/linux -fmacro-prefix-map=${kernelSource}=/usr/src/linux -fdebug-prefix-map=${kernelSource}=/usr/src/linux";
     };
     makeFlags = builtins.filter (flag: !(lib.hasPrefix "KBUILD_BUILD_TIMESTAMP=" flag)) (
       old.makeFlags or [ ]
@@ -85,6 +87,10 @@ let
 
         for module in "''${expected_modules[@]}"; do
           module_path="$out/$module"
+          if grep -aFq /nix/store/ "$module_path"; then
+            echo "$module contains a Nix store path" >&2
+            exit 1
+          fi
           actual_version=$(modinfo -F version "$module_path")
           actual_vermagic=$(modinfo -F vermagic "$module_path")
           case "$module" in

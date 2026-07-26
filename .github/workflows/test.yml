@@ -43,8 +43,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          setup_go_bin="$(dirname "$(command -v go)")"
           sudo --preserve-env=HOME -u "$USER" -g nix-users \
-            env NIX_REMOTE=daemon bash -Eeuo pipefail <<'TEST'
+            env NIX_REMOTE=daemon \
+              PATH="$setup_go_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+              bash -Eeuo pipefail <<'TEST'
             make test
             nix-build --no-out-link -A nvattest
             for target in runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd; do

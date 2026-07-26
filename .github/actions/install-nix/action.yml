@@ -26,7 +26,7 @@ runs:
           "$tmp/$archive" | sha256sum --check --strict
         tar --extract --xz --file "$tmp/$archive" --directory "$tmp"
 
-        printf 'sandbox = true\n' > "$tmp/nix.conf"
+        printf 'sandbox = true\nsandbox-fallback = false\n' > "$tmp/nix.conf"
         "$tmp/nix-$version-x86_64-linux/install" \
           --daemon --yes --no-channel-add --no-modify-profile \
           --nix-extra-conf-file "$tmp/nix.conf"
@@ -40,3 +40,4 @@ runs:
           "$expected_store_path/bin/nix-daemon"
         test "$("$profile/bin/nix" --version)" = "nix (Nix) $version"
         test "$("$profile/bin/nix" config show sandbox)" = true
+        test "$("$profile/bin/nix" config show sandbox-fallback)" = false

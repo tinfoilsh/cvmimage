@@ -68,10 +68,12 @@ CI and release builders install the official Nix 2.35.1 binary release pinned
 by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the expected Nix store
 path. The installer refuses a pre-existing, unverified Nix installation. Box3,
 INF14, and release qualification builders must use the same official release
-for both the client and daemon, with `sandbox = true`. The remaining host
-prerequisites are an x86_64 Linux host with systemd, `sudo`, `curl`, `tar`,
-`xz`, and the kernel features required by the Nix sandbox. GitHub
-runner images may float. Artifact construction runs inside the Nix sandbox.
+for both the client and daemon, with `sandbox = true` and
+`sandbox-fallback = false`. A sandbox setup failure therefore stops the build
+rather than changing its isolation boundary. The remaining host prerequisites
+are an x86_64 Linux host with systemd, `sudo`, `curl`, `tar`, `xz`, and the
+kernel features required by the Nix sandbox. GitHub runner images may float.
+Artifact construction runs inside the Nix sandbox.
 
 The pinned Nixpkgs source is imported with an empty configuration and no
 overlays. Developer or machine-local Nixpkgs configuration is not part of the

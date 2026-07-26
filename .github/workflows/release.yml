@@ -42,6 +42,20 @@ jobs:
         run: |
           make shipping-image
 
+      - name: Resolve release upload CLI
+        id: release-upload-cli
+        run: |
+          set -Eeuo pipefail
+          output="$(/nix/var/nix/profiles/default/bin/nix-build \
+            --no-out-link -A release-upload-cli)"
+          aws="$output/bin/aws"
+          test -x "$aws"
+          case "$aws" in
+            /nix/store/*/bin/aws) ;;
+            *) exit 1 ;;
+          esac
+          echo "aws=$aws" >> "$GITHUB_OUTPUT"
+
       - name: Check release artifacts
         run: |
           set -Eeuo pipefail
@@ -77,7 +91,7 @@ jobs:
 
           # Generate checksums
           cd /tmp/out
-          sha256sum * | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
+          sha256sum ./* | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
 
           echo "digest=sha256:$(sha256sum "tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
@@ -89,16 +103,36 @@ jobs:
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
 
-      - name: Upload artifact
-        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c
-        with:
-          r2-account-id: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
-          r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
-          r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
-          r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
-          source-dir: /tmp/out
-          destination-dir: ./cvm
+      - name: Upload attested artifacts to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_CONFIG_FILE: /dev/null
+          AWS_SHARED_CREDENTIALS_FILE: /dev/null
+          AWS_CLI: ${{ steps.release-upload-cli.outputs.aws }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_IMAGES_BUCKET }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          destination="s3://${R2_BUCKET}/cvm"
+          artifacts=(
+            "tinfoil-inference-${REF_NAME}-manifest.json"
+            "tinfoil-inference-${REF_NAME}.initrd"
+            "tinfoil-inference-${REF_NAME}.vmlinuz"
+            "tinfoil-inference-${REF_NAME}.raw"
+            "tinfoil-inference-${REF_NAME}-checksums.sha256"
+          )
+          for artifact in "${artifacts[@]}"; do
+            "$AWS_CLI" --endpoint-url "$endpoint" s3 cp \
+              "/tmp/out/$artifact" "$destination/$artifact" \
+              --only-show-errors --no-progress
+          done
 
       - name: Create release
         env:

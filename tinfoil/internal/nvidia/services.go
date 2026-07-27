@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	"golang.org/x/sys/unix"
+
+	"tinfoil/internal/nvml"
 )
 
 const (

@@ -39,10 +39,12 @@ runs:
         profile=/nix/var/nix/profiles/default
         expected_store_path="$(cat \
           "$GITHUB_WORKSPACE/nix/nix-x86_64-linux-store-path")"
+        # Every tool in the release, nix-daemon included, is a symlink to
+        # the multi-call nix binary, so full resolution lands on bin/nix.
         test "$(readlink -f "$profile/bin/nix")" = \
           "$expected_store_path/bin/nix"
         test "$(readlink -f "$profile/bin/nix-daemon")" = \
-          "$expected_store_path/bin/nix-daemon"
+          "$expected_store_path/bin/nix"
         test "$("$profile/bin/nix" --version)" = "nix (Nix) $version"
         test "$("$profile/bin/nix" config show sandbox)" = true
         test "$("$profile/bin/nix" config show sandbox-fallback)" = false

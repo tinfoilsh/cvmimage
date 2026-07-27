@@ -46,6 +46,13 @@ runs:
         test "$(readlink -f "$profile/bin/nix-daemon")" = \
           "$expected_store_path/bin/nix"
         test "$("$profile/bin/nix" --version)" = "nix (Nix) $version"
-        test "$("$profile/bin/nix" config show sandbox)" = true
-        test "$("$profile/bin/nix" config show sandbox-fallback)" = false
-        test "$("$profile/bin/nix" config show restrict-eval)" = true
+
+        # config show lives behind the nix-command feature gate; enable it
+        # for these read-only assertions only, never in the installed config.
+        show_config() {
+          "$profile/bin/nix" --extra-experimental-features nix-command \
+            config show "$1"
+        }
+        test "$(show_config sandbox)" = true
+        test "$(show_config sandbox-fallback)" = false
+        test "$(show_config restrict-eval)" = true

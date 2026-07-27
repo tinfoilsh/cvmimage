@@ -28,14 +28,15 @@ let
     pkgs.runCommand "tinfoil-nvidia-open-${version}-${release}"
       {
         nativeBuildInputs = [
-          pkgs.binutils
           pkgs.coreutils
           pkgs.diffutils
           pkgs.findutils
-          pkgs.gawk
-          pkgs.gnugrep
           pkgs.kmod
         ];
+        # The measured modules must not depend on the Nix store. Symbol CRC
+        # compatibility with the custom kernel is enforced authoritatively by
+        # CONFIG_MODVERSIONS when the qualified image loads the modules.
+        allowedReferences = [ ];
       }
       ''
         source_root=${nvidiaOpen}/lib/modules/${release}
@@ -57,27 +58,6 @@ let
         done
 
         expected_vermagic='${release} SMP preempt mod_unload modversions '
-        : > kernel-crcs
-        awk '{ print $2, tolower($1) }' ${kernel.artifacts}/Module.symvers \
-          | sort -u > kernel-crcs
-        : > selected-crcs
-        for module in "$out"/*.ko; do
-          for section in __kcrctab __kcrctab_gpl; do
-            section_index=$(readelf -SW "$module" \
-              | sed -n "s/^ *\[ *\([0-9][0-9]*\)\] $section .*/\1/p")
-            test -n "$section_index" || continue
-            section_file=$(mktemp)
-            objcopy --dump-section "$section=$section_file" "$module" /dev/null
-            while read -r offset symbol; do
-              crc=$(od -An -tx4 -N4 -j "$((16#$offset))" "$section_file" \
-                | tr -d '[:space:]')
-              printf '%s 0x%s\n' "''${symbol#__crc_}" "$crc"
-            done < <(readelf -sW "$module" \
-              | awk -v section_index="$section_index" \
-                '$7 == section_index && $8 ~ /^__crc_/ { print $2, $8 }')
-            rm -f "$section_file"
-          done
-        done | sort -u > selected-crcs
 
         {
           printf 'version=%s\n' '${version}'
@@ -87,10 +67,6 @@ let
 
         for module in "''${expected_modules[@]}"; do
           module_path="$out/$module"
-          if grep -aFq /nix/store/ "$module_path"; then
-            echo "$module contains a Nix store path" >&2
-            exit 1
-          fi
           actual_version=$(modinfo -F version "$module_path")
           actual_vermagic=$(modinfo -F vermagic "$module_path")
           case "$module" in
@@ -103,31 +79,7 @@ let
           test "$actual_vermagic" = "$expected_vermagic"
           test "$actual_depends" = "$expected_depends"
 
-          kernel_imports=0
-          selected_imports=0
-          while read -r imported_crc symbol; do
-            imported_crc=$(printf '%s' "$imported_crc" | tr '[:upper:]' '[:lower:]')
-            kernel_crc=$(awk -v symbol="$symbol" '$1 == symbol { print $2 }' kernel-crcs)
-            if test -n "$kernel_crc"; then
-              test "$imported_crc" = "$kernel_crc"
-              kernel_imports=$((kernel_imports + 1))
-            else
-              selected_crc=$(awk -v symbol="$symbol" '$1 == symbol { print $2 }' selected-crcs)
-              if test -n "$selected_crc"; then
-                if test "$imported_crc" != "$selected_crc"; then
-                  echo "$module imports $symbol with CRC $imported_crc, selected module exports $selected_crc" >&2
-                  exit 1
-                fi
-                selected_imports=$((selected_imports + 1))
-              else
-                echo "$module imports unprovided symbol $symbol" >&2
-                exit 1
-              fi
-            fi
-          done < <(modprobe --dump-modversions "$module_path")
-
-          printf '%s kernel_imports=%s selected_module_imports=%s depends=%s\n' \
-            "$module" "$kernel_imports" "$selected_imports" "$actual_depends" \
+          printf '%s depends=%s\n' "$module" "$actual_depends" \
             >> "$out/validation.txt"
         done
 

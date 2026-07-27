@@ -13,9 +13,17 @@ full-image reproducibility.
 
 The next release builds the five CGO runtime commands, compile-time debug PID1,
 pure-Go initrd command, fixed CPIO writer, and compressed initrd through the
-top-level `default.nix`. This boundary uses one checksum-pinned Nixpkgs source
-and Nixpkgs' `buildGoModule` implementation with the checksum-pinned upstream
-Go toolchain. It does not invoke Docker, Bazel, Make, or mkosi.
+top-level `default.nix`. This boundary uses one checksum-pinned Nixpkgs source,
+imported with an empty configuration and no overlays so machine-local Nixpkgs
+configuration is not part of the build graph, and Nixpkgs' `buildGoModule`
+implementation with the pinned Nixpkgs Go 1.25 toolchain. The three NixOS-only
+patches that prepend Nix-store paths for timezone, MIME, and IANA databases
+are omitted so measured guest binaries retain upstream Linux lookup paths and
+contain no Nix-store references. It does not invoke Docker, Bazel, Make, or
+mkosi. CI installs the official Nix release pinned by `nix/nix-version` and
+its recorded SHA-256, with mandatory sandboxing and restricted evaluation:
+the only network input permitted at evaluation time is the hash-pinned
+Nixpkgs archive, so an unpinned evaluation-time fetch fails closed.
 
 Build the runtime commands or initrd with `nix-build`:
 

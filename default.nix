@@ -1,5 +1,5 @@
 {
-  system ? builtins.currentSystem,
+  system ? "x86_64-linux",
 }:
 
 assert system == "x86_64-linux";
@@ -9,7 +9,11 @@ let
   nixpkgs = builtins.fetchTarball {
     inherit (nixpkgsLock) url sha256;
   };
-  pkgs = import nixpkgs { inherit system; };
+  pkgs = import nixpkgs {
+    inherit system;
+    config = { };
+    overlays = [ ];
+  };
   go = import ./nix/go.nix { inherit pkgs; };
   initrd = import ./nix/initrd.nix {
     inherit pkgs;

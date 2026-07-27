@@ -35,10 +35,9 @@ let
   curlSource = source "curl"
     "https://github.com/curl/curl/releases/download/curl-7_88_1/curl-7.88.1.tar.gz"
     "sha256-A+ig2Cjyu4QE5gh9X5yvvHPjYMRT9jo45QmPAOBpgpA=";
-  regorusSource = pkgs.fetchzip {
-    url = "https://github.com/microsoft/regorus/archive/${regorusRevision}.tar.gz";
-    hash = "sha256-bb4rCGFItwXQB+JlIObzkVOfEi8y+PFR3xMufTwB94U=";
-  };
+  regorusSource = source "regorus"
+    "https://github.com/microsoft/regorus/archive/${regorusRevision}.tar.gz"
+    "sha256-bb4rCGFItwXQB+JlIObzkVOfEi8y+PFR3xMufTwB94U=";
 
   regorusFfi = pkgs.rustPlatform.buildRustPackage {
     pname = "regorus-ffi";
@@ -46,11 +45,11 @@ let
     src = regorusSource;
     cargoRoot = "bindings/ffi";
     buildAndTestSubdir = "bindings/ffi";
-    cargoLock.lockFile = ../builder/nvattest/regorus.Cargo.lock;
+    cargoLock.lockFile = ./locks/regorus.Cargo.lock;
     env.CARGO_INCREMENTAL = "0";
     patches = [ ./patches/regorus-pinned-revision.patch ];
     postPatch = ''
-      cp ${../builder/nvattest/regorus.Cargo.lock} bindings/ffi/Cargo.lock
+      cp ${./locks/regorus.Cargo.lock} bindings/ffi/Cargo.lock
       substituteInPlace build.rs \
         --replace-fail '@REGORUS_REVISION@' '${regorusRevision}'
     '';
@@ -119,7 +118,15 @@ let
     ];
     enableParallelBuilding = false;
     dontPatchELF = true;
-    env.SOURCE_DATE_EPOCH = "0";
+    # The published binary and library must not depend on the Nix store.
+    allowedReferences = [ ];
+    env = {
+      SOURCE_DATE_EPOCH = "0";
+      # Never seed self-referential -rpath tokens into NIX_LDFLAGS. The
+      # external openssl/xmlsec/curl steps keep default store rpaths so their
+      # configure-time test binaries run; only the final link is rpath-free.
+      NIX_NO_SELF_RPATH = "1";
+    };
     preConfigure = ''
       prefixMap="-ffile-prefix-map=$NIX_BUILD_TOP=/usr/src/nvattest -fmacro-prefix-map=$NIX_BUILD_TOP=/usr/src/nvattest -fdebug-prefix-map=$NIX_BUILD_TOP=/usr/src/nvattest"
       export CFLAGS="''${CFLAGS:-} $prefixMap -march=x86-64 -mtune=generic"
@@ -129,21 +136,7 @@ let
     buildPhase = ''
       runHook preBuild
       cmake --build . --target xmlsec_external curl_external --parallel 1
-      finalLdflags=()
-      skipNext=false
-      for flag in $NIX_LDFLAGS; do
-        if $skipNext; then
-          skipNext=false
-          continue
-        fi
-        case "$flag" in
-          -rpath) skipNext=true ;;
-          -rpath=*) ;;
-          *) finalLdflags+=("$flag") ;;
-        esac
-      done
-      NIX_DONT_SET_RPATH=1 NIX_LDFLAGS="''${finalLdflags[*]}" \
-        cmake --build . --target nvattest --parallel 1
+      NIX_DONT_SET_RPATH=1 cmake --build . --target nvattest --parallel 1
       runHook postBuild
     '';
     installPhase = ''

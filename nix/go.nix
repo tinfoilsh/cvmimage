@@ -3,35 +3,20 @@
 let
   commonEnv.GOTOOLCHAIN = "local";
 
-  upstreamGo = pkgs.stdenvNoCC.mkDerivation {
-    pname = "go";
-    version = "1.25.7";
-
-    src = pkgs.fetchurl {
-      url = "https://go.dev/dl/go1.25.7.linux-amd64.tar.gz";
-      hash = "sha256-EubWoZEJGuJ9wx9u/GMOOjuLpAm681c9lVsZb98IYAU=";
-    };
-
-    sourceRoot = "go";
-    dontBuild = true;
-    dontFixup = true;
-
-    installPhase = ''
-      runHook preInstall
-      cp -a . "$out"
-      runHook postInstall
-    '';
-
-    passthru = {
-      GOOS = "linux";
-      GOARCH = "amd64";
-      CGO_ENABLED = 1;
-    };
-  };
-
-  buildGoModule = pkgs.callPackage (pkgs.path + "/pkgs/build-support/go/module.nix") {
-    go = upstreamGo;
-  };
+  nixRuntimePatchSuffixes = [
+    "iana-etc-1.25.patch"
+    "mailcap-1.17.patch"
+    "tzdata-1.19.patch"
+  ];
+  upstreamGo = pkgs.go_1_25.overrideAttrs (old: {
+    patches = builtins.filter (
+      patch:
+      !pkgs.lib.any (
+        suffix: pkgs.lib.hasSuffix suffix (builtins.baseNameOf (toString patch))
+      ) nixRuntimePatchSuffixes
+    ) old.patches;
+  });
+  buildGoModule = pkgs.buildGoModule.override { go = upstreamGo; };
 
   common = {
     version = "0";

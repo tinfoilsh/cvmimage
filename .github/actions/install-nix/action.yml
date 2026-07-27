@@ -1,0 +1,49 @@
+name: Install pinned Nix
+description: Install the checksum-verified official Nix build driver
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -Eeuo pipefail
+
+        if command -v nix >/dev/null || test -e /nix; then
+          echo 'refusing an unverified preinstalled Nix' >&2
+          exit 1
+        fi
+
+        version="$(cat "$GITHUB_WORKSPACE/nix/nix-version")"
+        archive="nix-$version-x86_64-linux.tar.xz"
+        url="https://releases.nixos.org/nix/nix-$version/$archive"
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+
+        curl --fail --location --proto '=https' --tlsv1.2 \
+          "$url" --output "$tmp/$archive"
+        printf '%s  %s\n' \
+          "$(cat "$GITHUB_WORKSPACE/nix/nix-x86_64-linux.sha256")" \
+          "$tmp/$archive" | sha256sum --check --strict
+        tar --extract --xz --file "$tmp/$archive" --directory "$tmp"
+
+        {
+          printf 'sandbox = true\n'
+          printf 'sandbox-fallback = false\n'
+          printf 'restrict-eval = true\n'
+          printf 'allowed-uris = https://github.com/NixOS/nixpkgs/archive/\n'
+        } > "$tmp/nix.conf"
+        "$tmp/nix-$version-x86_64-linux/install" \
+          --daemon --yes --no-channel-add --no-modify-profile \
+          --nix-extra-conf-file "$tmp/nix.conf"
+
+        profile=/nix/var/nix/profiles/default
+        expected_store_path="$(cat \
+          "$GITHUB_WORKSPACE/nix/nix-x86_64-linux-store-path")"
+        test "$(readlink -f "$profile/bin/nix")" = \
+          "$expected_store_path/bin/nix"
+        test "$(readlink -f "$profile/bin/nix-daemon")" = \
+          "$expected_store_path/bin/nix-daemon"
+        test "$("$profile/bin/nix" --version)" = "nix (Nix) $version"
+        test "$("$profile/bin/nix" config show sandbox)" = true
+        test "$("$profile/bin/nix" config show sandbox-fallback)" = false
+        test "$("$profile/bin/nix" config show restrict-eval)" = true

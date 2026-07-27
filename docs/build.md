@@ -133,6 +133,24 @@ Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
 no task-runner layer and deleting result symlinks or collecting the Nix store
 is a separate host operation.
 
+Every external input of a target is a fixed-output derivation in its closure:
+a fetch that declares its expected hash before the sandbox permits network
+access. Enumerate them all, with their hashes, from the instantiated
+derivation graph:
+
+```sh
+drv="$(nix-instantiate -I . -A shipping-image)"
+nix --extra-experimental-features nix-command derivation show -r "$drv" \
+  | jq -r '.derivations | to_entries[]
+      | select(.value.outputs.out.hash?)
+      | [(.value.env.urls // .value.env.url // .value.name),
+         .value.outputs.out.hash] | @tsv' \
+  | sort -u
+```
+
+An empty hash column cannot occur: a derivation without a declared output
+hash builds with no network access at all.
+
 Regenerate the reviewed Ubuntu package lock only when changing package inputs
 or snapshot indexes:
 

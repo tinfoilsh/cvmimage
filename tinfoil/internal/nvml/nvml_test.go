@@ -1,6 +1,9 @@
 package nvml
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 // TestInitFailsClosedWithoutLibrary exercises the dlopen path. On hosts
 // without the NVIDIA library, Init must report ERROR_LIBRARY_NOT_FOUND
@@ -23,7 +26,7 @@ func TestInitFailsClosedWithoutLibrary(t *testing.T) {
 // TestUninitializedCallsFailClosed verifies entry points refuse to run
 // before the library is loaded rather than dereferencing a nil entry point.
 func TestUninitializedCallsFailClosed(t *testing.T) {
-	if loaded() {
+	if _, result := current(); result == SUCCESS {
 		t.Skip("library already loaded on this host")
 	}
 	if _, result := DeviceGetCount(); result != ERROR_UNINITIALIZED {
@@ -35,6 +38,25 @@ func TestUninitializedCallsFailClosed(t *testing.T) {
 	if result := SystemSetConfComputeGpusReadyState(CC_ACCEPTING_CLIENT_REQUESTS_FALSE); result != ERROR_UNINITIALIZED {
 		t.Fatalf("SystemSetConfComputeGpusReadyState before load: got %d", result)
 	}
+}
+
+// TestConcurrentInitAndCalls drives Init concurrently with other entry
+// points so the race detector validates the snapshot publication. Results
+// are not asserted because they depend on whether the library is present.
+func TestConcurrentInitAndCalls(t *testing.T) {
+	var group sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for i := 0; i < 100; i++ {
+				Init()
+				DeviceGetCount()
+				Shutdown()
+			}
+		}()
+	}
+	group.Wait()
 }
 
 func TestErrorStringCoversUnknownCodes(t *testing.T) {

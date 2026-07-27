@@ -217,12 +217,10 @@ type ConfComputeGpuCertificate struct {
 
 const libraryName = "libnvidia-ml.so.1"
 
-// library holds the dlopen handle and every resolved entry point. Loading
-// happens once; NVML itself reference-counts nvmlInit/nvmlShutdown pairs.
-var library struct {
-	sync.Mutex
-	handle unsafe.Pointer
-
+// entryPoints holds every resolved NVML entry point. A value is only ever
+// published complete and is never mutated afterwards, so callers work from
+// an immutable snapshot.
+type entryPoints struct {
 	init                                     unsafe.Pointer
 	shutdown                                 unsafe.Pointer
 	deviceGetCount                           unsafe.Pointer
@@ -236,101 +234,121 @@ var library struct {
 	systemSetConfComputeGpusReadyState       unsafe.Pointer
 }
 
-func load() Return {
+// library publishes the resolved entry points under one mutex. Loading is
+// retryable because Init is polled while the driver comes up; a failed
+// attempt publishes nothing. NVML itself reference-counts Init/Shutdown.
+var library struct {
+	sync.Mutex
+	resolved *entryPoints
+}
+
+// load resolves the library and every entry point, publishing the snapshot
+// on first success and returning the cached snapshot afterwards.
+func load() (*entryPoints, Return) {
 	library.Lock()
 	defer library.Unlock()
-	if library.handle != nil {
-		return SUCCESS
+	if library.resolved != nil {
+		return library.resolved, SUCCESS
 	}
 
 	name := C.CString(libraryName)
 	defer C.free(unsafe.Pointer(name))
 	handle := C.dlopen(name, C.RTLD_NOW|C.RTLD_LOCAL)
 	if handle == nil {
-		return ERROR_LIBRARY_NOT_FOUND
+		return nil, ERROR_LIBRARY_NOT_FOUND
 	}
 
-	entryPoints := []struct {
-		symbol string
+	resolved := &entryPoints{}
+	symbols := []struct {
+		name   string
 		target *unsafe.Pointer
 	}{
-		{"nvmlInit_v2", &library.init},
-		{"nvmlShutdown", &library.shutdown},
-		{"nvmlDeviceGetCount_v2", &library.deviceGetCount},
-		{"nvmlDeviceGetHandleByIndex_v2", &library.deviceGetHandleByIndex},
-		{"nvmlDeviceGetArchitecture", &library.deviceGetArchitecture},
-		{"nvmlDeviceGetName", &library.deviceGetName},
-		{"nvmlDeviceGetMemoryInfo_v2", &library.deviceGetMemoryInfo},
-		{"nvmlDeviceGetUtilizationRates", &library.deviceGetUtilizationRates},
-		{"nvmlDeviceGetConfComputeGpuAttestationReport", &library.deviceGetConfComputeGpuAttestationReport},
-		{"nvmlDeviceGetConfComputeGpuCertificate", &library.deviceGetConfComputeGpuCertificate},
-		{"nvmlSystemSetConfComputeGpusReadyState", &library.systemSetConfComputeGpusReadyState},
+		{"nvmlInit_v2", &resolved.init},
+		{"nvmlShutdown", &resolved.shutdown},
+		{"nvmlDeviceGetCount_v2", &resolved.deviceGetCount},
+		{"nvmlDeviceGetHandleByIndex_v2", &resolved.deviceGetHandleByIndex},
+		{"nvmlDeviceGetArchitecture", &resolved.deviceGetArchitecture},
+		{"nvmlDeviceGetName", &resolved.deviceGetName},
+		{"nvmlDeviceGetMemoryInfo_v2", &resolved.deviceGetMemoryInfo},
+		{"nvmlDeviceGetUtilizationRates", &resolved.deviceGetUtilizationRates},
+		{"nvmlDeviceGetConfComputeGpuAttestationReport", &resolved.deviceGetConfComputeGpuAttestationReport},
+		{"nvmlDeviceGetConfComputeGpuCertificate", &resolved.deviceGetConfComputeGpuCertificate},
+		{"nvmlSystemSetConfComputeGpusReadyState", &resolved.systemSetConfComputeGpusReadyState},
 	}
-	for _, entryPoint := range entryPoints {
-		symbol := C.CString(entryPoint.symbol)
-		address := C.dlsym(handle, symbol)
-		C.free(unsafe.Pointer(symbol))
+	for _, symbol := range symbols {
+		name := C.CString(symbol.name)
+		address := C.dlsym(handle, name)
+		C.free(unsafe.Pointer(name))
 		if address == nil {
 			C.dlclose(handle)
-			return ERROR_FUNCTION_NOT_FOUND
+			return nil, ERROR_FUNCTION_NOT_FOUND
 		}
-		*entryPoint.target = address
+		*symbol.target = address
 	}
-	library.handle = handle
-	return SUCCESS
+	library.resolved = resolved
+	return resolved, SUCCESS
 }
 
-func loaded() bool {
+// current returns the published snapshot without attempting to load.
+func current() (*entryPoints, Return) {
 	library.Lock()
 	defer library.Unlock()
-	return library.handle != nil
+	if library.resolved == nil {
+		return nil, ERROR_UNINITIALIZED
+	}
+	return library.resolved, SUCCESS
 }
 
 // Init loads the measured NVML library and initializes it.
 func Init() Return {
-	if result := load(); result != SUCCESS {
+	entry, result := load()
+	if result != SUCCESS {
 		return result
 	}
-	return Return(C.tinfoilNvmlCall(library.init))
+	return Return(C.tinfoilNvmlCall(entry.init))
 }
 
 // Shutdown releases one NVML initialization reference.
 func Shutdown() Return {
-	if !loaded() {
-		return ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return result
 	}
-	return Return(C.tinfoilNvmlCall(library.shutdown))
+	return Return(C.tinfoilNvmlCall(entry.shutdown))
 }
 
 // DeviceGetCount reports the number of NVML-visible GPUs.
 func DeviceGetCount() (int, Return) {
-	if !loaded() {
-		return 0, ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return 0, result
 	}
 	var count C.uint
-	result := Return(C.tinfoilNvmlGetUint(library.deviceGetCount, &count))
+	result = Return(C.tinfoilNvmlGetUint(entry.deviceGetCount, &count))
 	return int(count), result
 }
 
 // DeviceGetHandleByIndex resolves one GPU handle.
 func DeviceGetHandleByIndex(index int) (Device, Return) {
-	if !loaded() {
-		return Device{}, ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return Device{}, result
 	}
 	var device Device
-	result := Return(C.tinfoilNvmlDeviceByIndex(
-		library.deviceGetHandleByIndex, C.uint(index), &device.handle))
+	result = Return(C.tinfoilNvmlDeviceByIndex(
+		entry.deviceGetHandleByIndex, C.uint(index), &device.handle))
 	return device, result
 }
 
 // DeviceGetName reports the product name of a GPU.
 func DeviceGetName(device Device) (string, Return) {
-	if !loaded() {
-		return "", ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return "", result
 	}
 	var name [96]C.char
-	result := Return(C.tinfoilNvmlDeviceGetName(
-		library.deviceGetName, device.handle, &name[0], C.uint(len(name))))
+	result = Return(C.tinfoilNvmlDeviceGetName(
+		entry.deviceGetName, device.handle, &name[0], C.uint(len(name))))
 	if result != SUCCESS {
 		return "", result
 	}
@@ -339,12 +357,13 @@ func DeviceGetName(device Device) (string, Return) {
 
 // DeviceGetMemoryInfo_v2 reports versioned device memory information.
 func DeviceGetMemoryInfo_v2(device Device) (Memory_v2, Return) {
-	if !loaded() {
-		return Memory_v2{}, ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return Memory_v2{}, result
 	}
 	var memory C.nvmlMemory_v2_t
-	result := Return(C.tinfoilNvmlDeviceGetMemory(
-		library.deviceGetMemoryInfo, device.handle, &memory))
+	result = Return(C.tinfoilNvmlDeviceGetMemory(
+		entry.deviceGetMemoryInfo, device.handle, &memory))
 	return Memory_v2{
 		Version:  uint32(memory.version),
 		Total:    uint64(memory.total),
@@ -356,12 +375,13 @@ func DeviceGetMemoryInfo_v2(device Device) (Memory_v2, Return) {
 
 // DeviceGetUtilizationRates reports GPU and memory utilization.
 func DeviceGetUtilizationRates(device Device) (Utilization, Return) {
-	if !loaded() {
-		return Utilization{}, ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return Utilization{}, result
 	}
 	var utilization C.nvmlUtilization_t
-	result := Return(C.tinfoilNvmlDeviceGetUtilization(
-		library.deviceGetUtilizationRates, device.handle, &utilization))
+	result = Return(C.tinfoilNvmlDeviceGetUtilization(
+		entry.deviceGetUtilizationRates, device.handle, &utilization))
 	return Utilization{
 		Gpu:    uint32(utilization.gpu),
 		Memory: uint32(utilization.memory),
@@ -371,36 +391,39 @@ func DeviceGetUtilizationRates(device Device) (Utilization, Return) {
 // SystemSetConfComputeGpusReadyState marks the GPUs ready (or not) for
 // confidential-compute client work.
 func SystemSetConfComputeGpusReadyState(state uint32) Return {
-	if !loaded() {
-		return ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return result
 	}
 	return Return(C.tinfoilNvmlSetUint(
-		library.systemSetConfComputeGpusReadyState, C.uint(state)))
+		entry.systemSetConfComputeGpusReadyState, C.uint(state)))
 }
 
 // GetArchitecture reports the device architecture.
 func (device Device) GetArchitecture() (DeviceArchitecture, Return) {
-	if !loaded() {
-		return 0, ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return 0, result
 	}
 	var architecture C.uint
-	result := Return(C.tinfoilNvmlDeviceGetUint(
-		library.deviceGetArchitecture, device.handle, &architecture))
+	result = Return(C.tinfoilNvmlDeviceGetUint(
+		entry.deviceGetArchitecture, device.handle, &architecture))
 	return DeviceArchitecture(architecture), result
 }
 
 // GetConfComputeGpuAttestationReport fills report with a hardware-signed
 // attestation report over report.Nonce.
 func (device Device) GetConfComputeGpuAttestationReport(report *ConfComputeGpuAttestationReport) Return {
-	if !loaded() {
-		return ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return result
 	}
 	var native C.nvmlConfComputeGpuAttestationReport_t
 	for i, value := range report.Nonce {
 		native.nonce[i] = C.uchar(value)
 	}
-	result := Return(C.tinfoilNvmlDeviceGetReport(
-		library.deviceGetConfComputeGpuAttestationReport, device.handle, &native))
+	result = Return(C.tinfoilNvmlDeviceGetReport(
+		entry.deviceGetConfComputeGpuAttestationReport, device.handle, &native))
 	if result != SUCCESS {
 		return result
 	}
@@ -414,12 +437,13 @@ func (device Device) GetConfComputeGpuAttestationReport(report *ConfComputeGpuAt
 
 // GetConfComputeGpuCertificate reports the GPU certificate chains.
 func (device Device) GetConfComputeGpuCertificate() (ConfComputeGpuCertificate, Return) {
-	if !loaded() {
-		return ConfComputeGpuCertificate{}, ERROR_UNINITIALIZED
+	entry, result := current()
+	if result != SUCCESS {
+		return ConfComputeGpuCertificate{}, result
 	}
 	var native C.nvmlConfComputeGpuCertificate_t
-	result := Return(C.tinfoilNvmlDeviceGetCertificate(
-		library.deviceGetConfComputeGpuCertificate, device.handle, &native))
+	result = Return(C.tinfoilNvmlDeviceGetCertificate(
+		entry.deviceGetConfComputeGpuCertificate, device.handle, &native))
 	if result != SUCCESS {
 		return ConfComputeGpuCertificate{}, result
 	}

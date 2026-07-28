@@ -39,21 +39,18 @@ let
   repartSeedMatch = builtins.match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n" repartSeedText;
   repartSeed = assert repartSeedMatch != null; builtins.head repartSeedMatch;
   image = import ./nix/image.nix;
-  shippingImage = image {
+  buildImage = extraArgs: image ({
     inherit pkgs repartSeed;
     rootfs = rootfs.rootfs;
     kernel = "${kernel.artifacts}/tinfoil-custom.vmlinuz";
     initrd = initrd.archive;
     repartDefinitions = ./repart.d;
+  } // extraArgs);
+  shippingImage = buildImage {
     basename = "tinfoilcvm";
   };
-  debugImage = image {
-    inherit pkgs repartSeed;
-    rootfs = rootfs.rootfs;
+  debugImage = buildImage {
     debugLayer = rootfs.debugLayer;
-    kernel = "${kernel.artifacts}/tinfoil-custom.vmlinuz";
-    initrd = initrd.archive;
-    repartDefinitions = ./repart.d;
     basename = "tinfoilcvm-debug";
   };
 in

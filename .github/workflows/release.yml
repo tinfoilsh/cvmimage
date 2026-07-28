@@ -29,7 +29,7 @@ jobs:
             echo "WARN: This is a prerelease"
           fi
 
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
 
@@ -58,8 +58,7 @@ jobs:
             "root": "$(tr -d '\n' < result/tinfoilcvm.roothash)",
             "initrd": "$(sha256sum result/tinfoilcvm.initrd | awk '{print $1}')",
             "kernel": "$(sha256sum result/tinfoilcvm.vmlinuz | awk '{print $1}')",
-            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
-            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')"
           }
           EOF
 
@@ -70,7 +69,7 @@ jobs:
 
           # Generate checksums
           cd /tmp/out
-          sha256sum * | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
+          sha256sum ./* | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
 
           echo "digest=sha256:$(sha256sum "tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
@@ -82,16 +81,23 @@ jobs:
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
+            /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
 
-      - name: Upload artifact
-        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c
-        with:
-          r2-account-id: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
-          r2-access-key-id: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
-          r2-secret-access-key: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
-          r2-bucket: ${{ secrets.R2_IMAGES_BUCKET }}
-          source-dir: /tmp/out
-          destination-dir: ./cvm
+      - name: Upload attested artifacts to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://${{ secrets.R2_IMAGES_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          R2_BUCKET: ${{ secrets.R2_IMAGES_BUCKET }}
+        run: |
+          set -Eeuo pipefail
+          aws="$(/nix/var/nix/profiles/default/bin/nix-build \
+            --no-out-link -I . -A release-upload-cli)/bin/aws"
+          for file in /tmp/out/*; do
+            "$aws" s3 cp "$file" \
+              "s3://${R2_BUCKET}/cvm/$(basename "$file")" \
+              --only-show-errors --no-progress
+          done
 
       - name: Create release
         env:

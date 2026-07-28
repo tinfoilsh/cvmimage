@@ -17,6 +17,18 @@ let
     ) old.patches;
   });
   buildGoModule = pkgs.buildGoModule.override { go = upstreamGo; };
+  cgoEnv = {
+    CGO_ENABLED = "1";
+    NIX_DONT_SET_RPATH = "1";
+  }
+  // commonEnv;
+  cgoBase = {
+    env = cgoEnv;
+    # go-nvml leaves NVML symbols unresolved until the measured NVIDIA
+    # library is available in the guest. BIND_NOW resolves them before
+    # main and makes CPU-only boot fail with a symbol lookup error.
+    hardeningDisable = [ "bindnow" ];
+  };
 
   common = {
     version = "0";
@@ -34,15 +46,8 @@ let
     attributes:
     buildGoModule (
       common
+      // cgoBase
       // {
-        env = {
-          CGO_ENABLED = "1";
-          NIX_DONT_SET_RPATH = "1";
-        } // commonEnv;
-        # go-nvml leaves NVML symbols unresolved until the measured NVIDIA
-        # library is available in the guest. BIND_NOW resolves them before
-        # main and makes CPU-only boot fail with a symbol lookup error.
-        hardeningDisable = [ "bindnow" ];
         ldflags = common.ldflags ++ [
           "-linkmode=external"
           "-extldflags=-Wl,--build-id=none,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"
@@ -81,15 +86,46 @@ let
     // {
       pname = "tinfoil-initrd";
       subPackages = [ "cmd/initrd" ];
-      env = commonEnv // { CGO_ENABLED = "0"; };
+      env = commonEnv // {
+        CGO_ENABLED = "0";
+      };
       postInstall = ''
         mv "$out/bin/initrd" "$out/bin/tinfoil-initrd"
       '';
     }
   );
+
+  checkSource = pkgs.lib.fileset.toSource {
+    root = ../.;
+    fileset = pkgs.lib.fileset.unions [
+      ../image
+      ../repart.d
+      ../tinfoil
+    ];
+  };
+
+  checks = buildGoModule {
+    pname = "tinfoil-checks";
+    version = "0";
+    src = checkSource;
+    sourceRoot = "source/tinfoil";
+    inherit (common) vendorHash;
+    inherit (cgoBase) env hardeningDisable;
+    doCheck = true;
+    buildPhase = "true";
+    checkPhase = ''
+      runHook preCheck
+      go test ./...
+      go test -race ./cmd/init ./internal/boot/...
+      go test -tags=tinfoil_debug_image ./cmd/init
+      go vet ./...
+      runHook postCheck
+    '';
+    installPhase = "touch $out";
+  };
 in
 {
-  inherit upstreamGo;
+  inherit checks upstreamGo;
   packages = {
     "debug-init" = debugInit;
     "runtime-go" = runtime;

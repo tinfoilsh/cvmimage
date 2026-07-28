@@ -57,6 +57,7 @@ in
 go.packages
 // {
   "fixed-cpio-writer" = initrd.writer;
+  inherit (go) checks;
   initrd = initrd.archive;
   "kernel-artifacts" = kernel.artifacts;
   "nvidia-modules" = nvidia.modules;

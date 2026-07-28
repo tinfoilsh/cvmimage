@@ -1,9 +1,0 @@
-load("@rules_distroless//apt/private:deb_postfix.bzl", "deb_postfix")
-
-deb_postfix(
-    name = "payload",
-    srcs = glob(["data.tar*"]),
-    outs = ["layer.tar.gz"],
-    mergedusr = False,
-    visibility = ["//visibility:public"],
-)

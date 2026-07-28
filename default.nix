@@ -65,6 +65,7 @@ go.packages
   "rootfs-archive" = rootfs.rootfs;
   "debug-rootfs-layer" = rootfs.debugLayer;
   "runtime-package-lock" = runtimePackages.lock;
+  "release-upload-cli" = pkgs.awscli2;
   "shipping-image" = shippingImage;
   "debug-image" = debugImage;
 }

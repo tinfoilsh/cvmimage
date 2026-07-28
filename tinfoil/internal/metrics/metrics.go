@@ -8,12 +8,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	"github.com/mackerelio/go-osstat/cpu"
 	"github.com/mackerelio/go-osstat/memory"
 
 	"tinfoil/internal/auth"
 	"tinfoil/internal/config"
+	"tinfoil/internal/nvml"
 )
 
 func cpuVendor() string {

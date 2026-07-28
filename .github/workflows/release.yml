@@ -44,15 +44,6 @@ jobs:
           /nix/var/nix/profiles/default/bin/nix-build \
             -I . -A shipping-image -o result
 
-      - name: Resolve release upload CLI
-        id: release-upload-cli
-        run: |
-          set -Eeuo pipefail
-          output="$(/nix/var/nix/profiles/default/bin/nix-build \
-            --no-out-link -I . -A release-upload-cli)"
-          aws="$output/bin/aws"
-          test -x "$aws"
-          echo "aws=$aws" >> "$GITHUB_OUTPUT"
       - name: Generate manifest
         id: manifest
         env:
@@ -96,28 +87,15 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_IMAGES_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          AWS_EC2_METADATA_DISABLED: "true"
-          AWS_CONFIG_FILE: /dev/null
-          AWS_SHARED_CREDENTIALS_FILE: /dev/null
-          AWS_CLI: ${{ steps.release-upload-cli.outputs.aws }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_IMAGES_ACCOUNT_ID }}
+          AWS_ENDPOINT_URL: https://${{ secrets.R2_IMAGES_ACCOUNT_ID }}.r2.cloudflarestorage.com
           R2_BUCKET: ${{ secrets.R2_IMAGES_BUCKET }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
-          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          destination="s3://${R2_BUCKET}/cvm"
-          artifacts=(
-            "tinfoil-inference-${REF_NAME}-manifest.json"
-            "tinfoil-inference-${REF_NAME}.initrd"
-            "tinfoil-inference-${REF_NAME}.vmlinuz"
-            "tinfoil-inference-${REF_NAME}.raw"
-            "tinfoil-inference-${REF_NAME}-checksums.sha256"
-          )
-          for artifact in "${artifacts[@]}"; do
-            "$AWS_CLI" --endpoint-url "$endpoint" s3 cp \
-              "/tmp/out/$artifact" "$destination/$artifact" \
+          aws="$(/nix/var/nix/profiles/default/bin/nix-build \
+            --no-out-link -I . -A release-upload-cli)/bin/aws"
+          for file in /tmp/out/*; do
+            "$aws" s3 cp "$file" \
+              "s3://${R2_BUCKET}/cvm/$(basename "$file")" \
               --only-show-errors --no-progress
           done
 

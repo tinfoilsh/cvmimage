@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/go-nvml/pkg/nvml"
+	"tinfoil/internal/nvml"
 )
 
 type nvmlProbe struct {

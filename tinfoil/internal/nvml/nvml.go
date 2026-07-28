@@ -1,12 +1,34 @@
 // Package nvml is a minimal NVML binding covering exactly the calls this
-// repository makes. The measured NVIDIA library is opened with dlopen and
-// every entry point is resolved with dlsym at Init, so the runtime binaries
-// carry no undefined NVML symbols and link with full RELRO (BIND_NOW). On
-// CPU-only guests Init fails closed with ERROR_LIBRARY_NOT_FOUND instead of
-// the process failing at exec.
+// repository makes. The NVIDIA library is opened from its fixed measured path
+// with dlopen and every entry point is resolved with dlsym at Init, so the
+// runtime binaries carry no undefined NVML symbols and link with full RELRO
+// (BIND_NOW). A missing library or unavailable driver returns an NVML error
+// instead of the process failing at exec.
 //
 // The ABI below is transcribed from the NVML header shipped with go-nvml
 // v0.13.0-1, matching the pinned 595-series driver.
+//
+// Copyright 1993-2025 NVIDIA Corporation. All rights reserved.
+//
+// NVIDIA makes no representation about the suitability of this source code
+// for any purpose. It is provided "as is" without express or implied warranty
+// of any kind. NVIDIA disclaims all warranties with regard to this source
+// code, including all implied warranties of merchantability,
+// noninfringement, and fitness for a particular purpose. In no event shall
+// NVIDIA be liable for any special, indirect, incidental, or consequential
+// damages, or any damages whatsoever resulting from loss of use, data or
+// profits, whether in an action of contract, negligence or other tortious
+// action, arising out of or in connection with the use or performance of this
+// source code.
+//
+// U.S. Government End Users. This source code is a "commercial item" as that
+// term is defined at 48 C.F.R. 2.101 (OCT 1995), consisting of "commercial
+// computer software" and "commercial computer software documentation" as
+// such terms are used in 48 C.F.R. 12.212 (SEPT 1995), and is provided to the
+// U.S. Government only as a commercial end item. Consistent with 48 C.F.R.
+// 12.212 and 48 C.F.R. 227.7202-1 through 227.7202-4 (JUNE 1995), all U.S.
+// Government End Users acquire the source code with only those rights set
+// forth herein.
 package nvml
 
 /*
@@ -215,7 +237,7 @@ type ConfComputeGpuCertificate struct {
 	AttestationCertChain     [5120]byte
 }
 
-const libraryName = "libnvidia-ml.so.1"
+const libraryPath = "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 
 // entryPoints holds every resolved NVML entry point. A value is only ever
 // published complete and is never mutated afterwards, so callers work from
@@ -245,13 +267,17 @@ var library struct {
 // load resolves the library and every entry point, publishing the snapshot
 // on first success and returning the cached snapshot afterwards.
 func load() (*entryPoints, Return) {
+	return loadPath(libraryPath)
+}
+
+func loadPath(path string) (*entryPoints, Return) {
 	library.Lock()
 	defer library.Unlock()
 	if library.resolved != nil {
 		return library.resolved, SUCCESS
 	}
 
-	name := C.CString(libraryName)
+	name := C.CString(path)
 	defer C.free(unsafe.Pointer(name))
 	handle := C.dlopen(name, C.RTLD_NOW|C.RTLD_LOCAL)
 	if handle == nil {
@@ -330,6 +356,9 @@ func DeviceGetCount() (int, Return) {
 
 // DeviceGetHandleByIndex resolves one GPU handle.
 func DeviceGetHandleByIndex(index int) (Device, Return) {
+	if index < 0 || uint64(index) > uint64(^uint32(0)) {
+		return Device{}, ERROR_INVALID_ARGUMENT
+	}
 	entry, result := current()
 	if result != SUCCESS {
 		return Device{}, result
@@ -352,7 +381,11 @@ func DeviceGetName(device Device) (string, Return) {
 	if result != SUCCESS {
 		return "", result
 	}
-	return C.GoString(&name[0]), result
+	length := 0
+	for length < len(name) && name[length] != 0 {
+		length++
+	}
+	return C.GoStringN(&name[0], C.int(length)), result
 }
 
 // DeviceGetMemoryInfo_v2 reports versioned device memory information.
@@ -414,6 +447,9 @@ func (device Device) GetArchitecture() (DeviceArchitecture, Return) {
 // GetConfComputeGpuAttestationReport fills report with a hardware-signed
 // attestation report over report.Nonce.
 func (device Device) GetConfComputeGpuAttestationReport(report *ConfComputeGpuAttestationReport) Return {
+	if report == nil {
+		return ERROR_INVALID_ARGUMENT
+	}
 	entry, result := current()
 	if result != SUCCESS {
 		return result
@@ -426,6 +462,10 @@ func (device Device) GetConfComputeGpuAttestationReport(report *ConfComputeGpuAt
 		entry.deviceGetConfComputeGpuAttestationReport, device.handle, &native))
 	if result != SUCCESS {
 		return result
+	}
+	if uint32(native.attestationReportSize) > uint32(len(report.AttestationReport)) ||
+		uint32(native.cecAttestationReportSize) > uint32(len(report.CecAttestationReport)) {
+		return ERROR_INSUFFICIENT_SIZE
 	}
 	report.IsCecAttestationReportPresent = uint32(native.isCecAttestationReportPresent)
 	report.AttestationReportSize = uint32(native.attestationReportSize)
@@ -446,6 +486,10 @@ func (device Device) GetConfComputeGpuCertificate() (ConfComputeGpuCertificate, 
 		entry.deviceGetConfComputeGpuCertificate, device.handle, &native))
 	if result != SUCCESS {
 		return ConfComputeGpuCertificate{}, result
+	}
+	if uint32(native.certChainSize) > uint32(len(ConfComputeGpuCertificate{}.CertChain)) ||
+		uint32(native.attestationCertChainSize) > uint32(len(ConfComputeGpuCertificate{}.AttestationCertChain)) {
+		return ConfComputeGpuCertificate{}, ERROR_INSUFFICIENT_SIZE
 	}
 	return ConfComputeGpuCertificate{
 		CertChainSize:            uint32(native.certChainSize),

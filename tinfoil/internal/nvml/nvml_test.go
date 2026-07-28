@@ -1,6 +1,7 @@
 package nvml
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -44,19 +45,51 @@ func TestUninitializedCallsFailClosed(t *testing.T) {
 // points so the race detector validates the snapshot publication. Results
 // are not asserted because they depend on whether the library is present.
 func TestConcurrentInitAndCalls(t *testing.T) {
+	exerciseConcurrentCalls(t, false)
+}
+
+func exerciseConcurrentCalls(t *testing.T, requireSuccess bool) {
+	t.Helper()
 	var group sync.WaitGroup
+	failures := make(chan error, 8)
 	for worker := 0; worker < 8; worker++ {
 		group.Add(1)
 		go func() {
 			defer group.Done()
 			for i := 0; i < 100; i++ {
-				Init()
-				DeviceGetCount()
-				Shutdown()
+				if result := Init(); result != SUCCESS {
+					if requireSuccess {
+						failures <- fmt.Errorf("Init: %s", ErrorString(result))
+					}
+					return
+				}
+				_, countResult := DeviceGetCount()
+				shutdownResult := Shutdown()
+				if requireSuccess && (countResult != SUCCESS || shutdownResult != SUCCESS) {
+					failures <- fmt.Errorf("DeviceGetCount: %s; Shutdown: %s",
+						ErrorString(countResult), ErrorString(shutdownResult))
+					return
+				}
 			}
 		}()
 	}
 	group.Wait()
+	close(failures)
+	for failure := range failures {
+		t.Error(failure)
+	}
+}
+
+func TestNegativeDeviceIndexFailsClosed(t *testing.T) {
+	if _, result := DeviceGetHandleByIndex(-1); result != ERROR_INVALID_ARGUMENT {
+		t.Fatalf("DeviceGetHandleByIndex(-1): %s", ErrorString(result))
+	}
+}
+
+func TestNilAttestationReportFailsClosed(t *testing.T) {
+	if result := (Device{}).GetConfComputeGpuAttestationReport(nil); result != ERROR_INVALID_ARGUMENT {
+		t.Fatalf("GetConfComputeGpuAttestationReport(nil): %s", ErrorString(result))
+	}
 }
 
 func TestErrorStringCoversUnknownCodes(t *testing.T) {

@@ -24,10 +24,6 @@ let
   // commonEnv;
   cgoBase = {
     env = cgoEnv;
-    # go-nvml leaves NVML symbols unresolved until the measured NVIDIA
-    # library is available in the guest. BIND_NOW resolves them before
-    # main and makes CPU-only boot fail with a symbol lookup error.
-    hardeningDisable = [ "bindnow" ];
   };
 
   common = {
@@ -110,7 +106,7 @@ let
     src = checkSource;
     sourceRoot = "source/tinfoil";
     inherit (common) vendorHash;
-    inherit (cgoBase) env hardeningDisable;
+    inherit (cgoBase) env;
     doCheck = true;
     buildPhase = "true";
     checkPhase = ''

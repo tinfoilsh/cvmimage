@@ -66,7 +66,7 @@ nvmlReturn_t nvmlDeviceGetCount_v2(unsigned int *count) {
 }
 
 nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *device) {
-	if (index > 1) return NVML_ERROR_INVALID_ARGUMENT;
+	if (index > 2) return NVML_ERROR_INVALID_ARGUMENT;
 	*device = (nvmlDevice_t)(uintptr_t)(0x1000 + index);
 	return NVML_SUCCESS;
 }
@@ -78,7 +78,12 @@ nvmlReturn_t nvmlDeviceGetArchitecture(nvmlDevice_t device, unsigned int *archit
 }
 
 nvmlReturn_t nvmlDeviceGetName(nvmlDevice_t device, char *name, unsigned int length) {
-	if (!checkDevice(device) || length < sizeof("STUB-GPU-1")) return NVML_ERROR_INVALID_ARGUMENT;
+	if (length < sizeof("STUB-GPU-1")) return NVML_ERROR_INVALID_ARGUMENT;
+	if ((uintptr_t)device == 0x1000) {
+		memset(name, 'X', length);
+		return NVML_SUCCESS;
+	}
+	if (!checkDevice(device)) return NVML_ERROR_INVALID_ARGUMENT;
 	memcpy(name, "STUB-GPU-1", sizeof("STUB-GPU-1"));
 	return NVML_SUCCESS;
 }
@@ -104,6 +109,11 @@ nvmlReturn_t nvmlDeviceGetUtilizationRates(nvmlDevice_t device, nvmlUtilization_
 nvmlReturn_t nvmlDeviceGetConfComputeGpuAttestationReport(
 		nvmlDevice_t device, nvmlConfComputeGpuAttestationReport_t *report) {
 	if (!checkDevice(device)) return NVML_ERROR_INVALID_ARGUMENT;
+	if (report->nonce[0] == 0xFF) {
+		report->attestationReportSize = sizeof(report->attestationReport) + 1;
+		report->cecAttestationReportSize = sizeof(report->cecAttestationReport) + 1;
+		return NVML_SUCCESS;
+	}
 	report->isCecAttestationReportPresent = 1;
 	report->attestationReportSize = 64;
 	memcpy(report->attestationReport, report->nonce, sizeof(report->nonce));
@@ -115,6 +125,11 @@ nvmlReturn_t nvmlDeviceGetConfComputeGpuAttestationReport(
 
 nvmlReturn_t nvmlDeviceGetConfComputeGpuCertificate(
 		nvmlDevice_t device, nvmlConfComputeGpuCertificate_t *certificate) {
+	if ((uintptr_t)device == 0x1002) {
+		certificate->certChainSize = sizeof(certificate->certChain) + 1;
+		certificate->attestationCertChainSize = sizeof(certificate->attestationCertChain) + 1;
+		return NVML_SUCCESS;
+	}
 	if (!checkDevice(device)) return NVML_ERROR_INVALID_ARGUMENT;
 	certificate->certChainSize = 8;
 	memset(certificate->certChain, 0xC1, 8);
@@ -128,14 +143,15 @@ nvmlReturn_t nvmlSystemSetConfComputeGpusReadyState(unsigned int state) {
 }
 `
 
-const stubEnvironment = "TINFOIL_NVML_STUB"
+const (
+	stubEnvironment = "TINFOIL_NVML_STUB"
+	stubLibraryName = "libnvidia-ml.so.1"
+)
 
 // TestStubLibrary compiles the stub library and re-runs this test binary
-// against it in a child process. dlopen only honors LD_LIBRARY_PATH as it
-// was at process startup, so the stub cannot be injected into the current
-// process.
+// against its explicit path in a child process.
 func TestStubLibrary(t *testing.T) {
-	if os.Getenv(stubEnvironment) == "1" {
+	if os.Getenv(stubEnvironment) != "" {
 		t.Skip("already running against the stub")
 	}
 	compiler, err := exec.LookPath("cc")
@@ -148,17 +164,14 @@ func TestStubLibrary(t *testing.T) {
 	if err := os.WriteFile(source, []byte(stubSource), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	compile := exec.Command(compiler, "-shared", "-fPIC", "-o",
-		filepath.Join(directory, libraryName), source)
+	stubLibrary := filepath.Join(directory, stubLibraryName)
+	compile := exec.Command(compiler, "-shared", "-fPIC", "-o", stubLibrary, source)
 	if output, err := compile.CombinedOutput(); err != nil {
 		t.Fatalf("compiling stub: %v\n%s", err, output)
 	}
 
 	child := exec.Command(os.Args[0], "-test.run=TestStubDriven$", "-test.v")
-	child.Env = append(os.Environ(),
-		stubEnvironment+"=1",
-		"LD_LIBRARY_PATH="+directory,
-	)
+	child.Env = append(os.Environ(), stubEnvironment+"="+stubLibrary)
 	output, err := child.CombinedOutput()
 	if err != nil {
 		t.Fatalf("stub-driven test failed: %v\n%s", err, output)
@@ -174,8 +187,12 @@ func TestStubLibrary(t *testing.T) {
 // versioned-struct header, and the layout of every struct crossing the C
 // boundary (via the nonce echo, sizes, and fill patterns).
 func TestStubDriven(t *testing.T) {
-	if os.Getenv(stubEnvironment) != "1" {
+	stubLibrary := os.Getenv(stubEnvironment)
+	if stubLibrary == "" {
 		t.Skip("only run by TestStubLibrary against the stub library")
+	}
+	if _, result := loadPath(stubLibrary); result != SUCCESS {
+		t.Fatalf("loadPath: %s", ErrorString(result))
 	}
 
 	if result := Init(); result != SUCCESS {
@@ -196,6 +213,14 @@ func TestStubDriven(t *testing.T) {
 	name, result := DeviceGetName(device)
 	if result != SUCCESS || name != "STUB-GPU-1" {
 		t.Fatalf("DeviceGetName: %q, %s", name, ErrorString(result))
+	}
+	unterminatedDevice, result := DeviceGetHandleByIndex(0)
+	if result != SUCCESS {
+		t.Fatalf("DeviceGetHandleByIndex(0): %s", ErrorString(result))
+	}
+	unterminatedName, result := DeviceGetName(unterminatedDevice)
+	if result != SUCCESS || unterminatedName != string(bytes.Repeat([]byte{'X'}, 96)) {
+		t.Fatalf("unterminated DeviceGetName: %q, %s", unterminatedName, ErrorString(result))
 	}
 
 	architecture, result := device.GetArchitecture()
@@ -245,6 +270,11 @@ func TestStubDriven(t *testing.T) {
 	if !bytes.Equal(report.CecAttestationReport[:16], bytes.Repeat([]byte{0x5A}, 16)) {
 		t.Fatalf("cec report mismatch: %x", report.CecAttestationReport[:16])
 	}
+	var oversizedReport ConfComputeGpuAttestationReport
+	oversizedReport.Nonce[0] = 0xFF
+	if result := device.GetConfComputeGpuAttestationReport(&oversizedReport); result != ERROR_INSUFFICIENT_SIZE {
+		t.Fatalf("oversized report: %s", ErrorString(result))
+	}
 
 	certificate, result := device.GetConfComputeGpuCertificate()
 	if result != SUCCESS {
@@ -260,6 +290,13 @@ func TestStubDriven(t *testing.T) {
 	if !bytes.Equal(certificate.AttestationCertChain[:12], bytes.Repeat([]byte{0xC2}, 12)) {
 		t.Fatalf("attestation cert chain mismatch: %x", certificate.AttestationCertChain[:12])
 	}
+	oversizedDevice, result := DeviceGetHandleByIndex(2)
+	if result != SUCCESS {
+		t.Fatalf("DeviceGetHandleByIndex(2): %s", ErrorString(result))
+	}
+	if _, result := oversizedDevice.GetConfComputeGpuCertificate(); result != ERROR_INSUFFICIENT_SIZE {
+		t.Fatalf("oversized certificate: %s", ErrorString(result))
+	}
 
 	if result := SystemSetConfComputeGpusReadyState(CC_ACCEPTING_CLIENT_REQUESTS_TRUE); result != SUCCESS {
 		t.Fatalf("SystemSetConfComputeGpusReadyState(true): %s", ErrorString(result))
@@ -267,4 +304,5 @@ func TestStubDriven(t *testing.T) {
 	if result := SystemSetConfComputeGpusReadyState(CC_ACCEPTING_CLIENT_REQUESTS_FALSE); result != ERROR_INVALID_ARGUMENT {
 		t.Fatalf("SystemSetConfComputeGpusReadyState(false): %s", ErrorString(result))
 	}
+	exerciseConcurrentCalls(t, true)
 }

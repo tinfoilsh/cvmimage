@@ -1,0 +1,10 @@
+--- a/nv-attestation-sdk-cpp/CMakeLists.txt
++++ b/nv-attestation-sdk-cpp/CMakeLists.txt
+@@ -242,6 +242,7 @@
+     CONFIGURE_COMMAND <SOURCE_DIR>/configure
+       --prefix=${CURL_INSTALL_DIR}
+       --with-openssl=${OPENSSL_INSTALL_DIR}
++      --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt
+       --without-libssh2
+       --without-nghttp2
+       --without-brotli

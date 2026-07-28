@@ -1,0 +1,21 @@
+--- a/nv-attestation-cli/CMakeLists.txt
++++ b/nv-attestation-cli/CMakeLists.txt
+@@ -95,10 +95,18 @@
+     endif()
+ endif()
+ 
++find_package(LibXml2 REQUIRED)
++find_package(Threads REQUIRED)
++find_package(ZLIB REQUIRED)
++
+ target_link_libraries(nvattest PRIVATE
+     nvat::nvat
+     nlohmann_json::nlohmann_json
+     CLI11::CLI11
++    LibXml2::LibXml2
++    Threads::Threads
++    ZLIB::ZLIB
++    ${CMAKE_DL_LIBS}
+ )
+ 
+ # spdlog/fmt headers needed for compilation (nvat has them statically linked, no need to link again)

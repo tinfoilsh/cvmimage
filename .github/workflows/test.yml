@@ -9,6 +9,52 @@ on:
 permissions: {}
 
 jobs:
+  nix-go-initrd:
+    name: Nix Go and initrd
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: ./.github/actions/install-nix
+
+      - name: Check isolated Nixpkgs evaluation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          nix_instantiate=/nix/var/nix/profiles/default/bin/nix-instantiate
+          baseline="$("$nix_instantiate" --no-gc-warning -I . -A runtime-go)"
+          test_home="$(mktemp -d)"
+          trap 'rm -rf "$test_home"' EXIT
+          mkdir -p "$test_home/.config/nixpkgs/overlays"
+          printf '%s\n' 'throw "user overlay affected evaluation"' > \
+            "$test_home/.config/nixpkgs/overlays/default.nix"
+          printf '%s\n' 'throw "user config affected evaluation"' > \
+            "$test_home/nixpkgs-config.nix"
+          configured="$(HOME="$test_home" \
+            NIXPKGS_CONFIG="$test_home/nixpkgs-config.nix" \
+            "$nix_instantiate" --no-gc-warning -I . -A runtime-go)"
+          test "$configured" = "$baseline"
+
+      - name: Build and compare Nix outputs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          nix_build=/nix/var/nix/profiles/default/bin/nix-build
+          build_targets=(runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest)
+          for target in "${build_targets[@]}"; do
+            "$nix_build" --no-out-link -I . -A "$target"
+          done
+          reproducibility_targets=(runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd)
+          for target in "${reproducibility_targets[@]}"; do
+            "$nix_build" --no-out-link -I . --check -A "$target"
+          done
+
   test:
     name: Build and Test
     runs-on: ubuntu-latest

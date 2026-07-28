@@ -9,6 +9,44 @@ This is a declarative, pinned build graph. It is not a claim that Bazel builds
 the complete image, that every action is hermetic, or that Bazel itself proves
 full-image reproducibility.
 
+## Nix Go and initrd producer
+
+The next release builds the five CGO runtime commands, compile-time debug PID1,
+pure-Go initrd command, fixed CPIO writer, and compressed initrd through the
+top-level `default.nix`. This boundary uses one checksum-pinned Nixpkgs source,
+imported with an empty configuration and no overlays so machine-local Nixpkgs
+configuration is not part of the build graph, and Nixpkgs' `buildGoModule`
+implementation with the pinned Nixpkgs Go 1.25 toolchain. The three NixOS-only
+patches that prepend Nix-store paths for timezone, MIME, and IANA databases
+are omitted so measured guest binaries retain upstream Linux lookup paths and
+contain no Nix-store references. It does not invoke Docker, Bazel, Make, or
+mkosi. CI installs the official Nix release pinned by `nix/nix-version` and
+its recorded SHA-256, with mandatory sandboxing and restricted evaluation:
+the only network input permitted at evaluation time is the hash-pinned
+Nixpkgs archive, so an unpinned evaluation-time fetch fails closed.
+
+Build the runtime commands or initrd with `nix-build`:
+
+```sh
+nix-build --option sandbox true -A runtime-go
+nix-build --option sandbox true -A debug-init
+nix-build --option sandbox true -A initrd
+```
+
+The CGO outputs retain the measured Ubuntu runtime ABI: they request
+`/lib64/ld-linux-x86-64.so.2`, have no effective runtime search path, and are
+required by Nix to contain no store references. The initrd command is static.
+The fixed writer runs its existing unit tests while it builds and emits
+`initrd.cpio.zst` directly from that command and pinned Zstandard. The
+`debug-init` derivation enables only the `tinfoil_debug_image` build tag. The
+existing Go test job runs the tag-specific PID1 tests before these artifacts
+are accepted.
+
+This PR establishes the producer boundary but does not switch the current
+rootfs or shipping-image consumers. That cutover belongs with Nix ownership of
+the additive rootfs, so no intermediate adapter or duplicated staging protocol
+is introduced here.
+
 ## Graph
 
 ```mermaid

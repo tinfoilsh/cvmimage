@@ -1,0 +1,1 @@
+nix/patches/*.patch whitespace=-blank-at-eol,-blank-at-eof

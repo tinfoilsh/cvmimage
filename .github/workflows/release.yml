@@ -45,7 +45,6 @@ jobs:
             -I . -A shipping-image -o result
 
       - name: Generate manifest
-        id: manifest
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -70,8 +69,6 @@ jobs:
           # Generate checksums
           cd /tmp/out
           sha256sum ./* | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
-
-          echo "digest=sha256:$(sha256sum "tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0

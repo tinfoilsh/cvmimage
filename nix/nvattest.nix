@@ -157,6 +157,5 @@ let
   };
 in
 {
-  regorus-ffi = regorusFfi;
   nvattest = nvattestBuilt;
 }

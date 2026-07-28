@@ -107,7 +107,13 @@ let
 
   rootfs = pkgs.runCommand "cvmimage-rootfs.tar" {
     allowedReferences = [ ];
-    nativeBuildInputs = [ pkgs.coreutils pkgs.findutils pkgs.gnused pkgs.gnutar ];
+    nativeBuildInputs = [
+      pkgs.coreutils
+      pkgs.findutils
+      pkgs.gnused
+      pkgs.gnutar
+      pkgs.openssl
+    ];
   } ''
     set -o pipefail
     root="$TMPDIR/root"
@@ -163,18 +169,17 @@ let
       > "$root/etc/ca-certificates.conf"
     test -s "$root/etc/ca-certificates.conf"
 
-    bundle="$root/etc/ssl/certs/ca-certificates.crt"
-    : > "$bundle"
-    while IFS= read -r certificate || test -n "$certificate"; do
-      case "$certificate" in
-        "" | "#"*) continue ;;
-        "!"*) continue ;;
-      esac
-      certificate_source="$root/usr/share/ca-certificates/$certificate"
-      test -f "$certificate_source"
-      cat "$certificate_source" >> "$bundle"
-    done < "$root/etc/ca-certificates.conf"
-    chmod 0644 "$root/etc/ssl/certs/ca-certificates.crt"
+    # Keep update-ca-certificates' hashed symlinks as build intermediates.
+    ca_output="$TMPDIR/ca-certificates-output"
+    mkdir "$ca_output"
+    ${pkgs.dash}/bin/dash -e "$root/usr/sbin/update-ca-certificates" \
+      --certsconf "$root/etc/ca-certificates.conf" \
+      --certsdir "$root/usr/share/ca-certificates" \
+      --localcertsdir "$TMPDIR/no-local-certificates" \
+      --etccertsdir "$ca_output" \
+      --hooksdir "$TMPDIR/no-ca-hooks"
+    install_new 0644 "$ca_output/ca-certificates.crt" \
+      "$root/etc/ssl/certs/ca-certificates.crt"
 
     ${deterministicTar "$root" "$out"}
   '';

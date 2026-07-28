@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/NVIDIA/go-nvml/pkg/nvml"
+	"tinfoil/internal/nvml"
 )
 
 // GPUEvidence holds the raw attestation evidence and certificate for a single GPU.

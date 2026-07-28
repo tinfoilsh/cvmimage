@@ -24,16 +24,12 @@ let
   // commonEnv;
   cgoBase = {
     env = cgoEnv;
-    # go-nvml leaves NVML symbols unresolved until the measured NVIDIA
-    # library is available in the guest. BIND_NOW resolves them before
-    # main and makes CPU-only boot fail with a symbol lookup error.
-    hardeningDisable = [ "bindnow" ];
   };
 
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-gQi1zu60GGk89+RWnafiZ1Wqu0DR5N2uX1UbYTjqRHM=";
+    vendorHash = "sha256-WRg2Pu+9Wz7zfJUNLhq5jqTqN3ktU1nAhJxNpPAblWI=";
     ldflags = [
       "-s"
       "-w"
@@ -110,13 +106,13 @@ let
     src = checkSource;
     sourceRoot = "source/tinfoil";
     inherit (common) vendorHash;
-    inherit (cgoBase) env hardeningDisable;
+    inherit (cgoBase) env;
     doCheck = true;
     buildPhase = "true";
     checkPhase = ''
       runHook preCheck
       go test ./...
-      go test -race ./cmd/init ./internal/boot/...
+      go test -race ./cmd/init ./internal/boot/... ./internal/nvml
       go test -tags=tinfoil_debug_image ./cmd/init
       go vet ./...
       runHook postCheck

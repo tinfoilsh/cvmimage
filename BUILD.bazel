@@ -9,6 +9,6 @@ exports_files([
     "build/debug-work/output/artifacts/tinfoil-init",
     "build/rootfs-artifacts/nvattest/usr/bin/nvattest",
     "build/rootfs-artifacts/nvattest/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2",
-    "mkosi.conf",
-    "mkosi.repart/11-root-verity.conf",
+    "repart.d/11-root-verity.conf",
+    "repart.d/seed",
 ])

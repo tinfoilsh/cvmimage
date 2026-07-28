@@ -27,15 +27,15 @@ func TestPinnedVeritySaltMatchesRepartSeed(t *testing.T) {
 		t.Fatalf("derived salt = %s, want %s", got, veritySalt)
 	}
 
-	mkosiConfig, err := os.ReadFile("../../../mkosi.conf")
+	repartSeedFile, err := os.ReadFile("../../../repart.d/seed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(mkosiConfig), "Seed="+repartSeed+"\n") {
-		t.Fatalf("mkosi.conf does not pin repart seed %s", repartSeed)
+	if string(repartSeedFile) != repartSeed+"\n" {
+		t.Fatalf("repart.d/seed does not pin repart seed %s", repartSeed)
 	}
 
-	repartConfig, err := os.ReadFile("../../../mkosi.repart/11-root-verity.conf")
+	repartConfig, err := os.ReadFile("../../../repart.d/11-root-verity.conf")
 	if err != nil {
 		t.Fatal(err)
 	}

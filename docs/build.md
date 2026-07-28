@@ -160,12 +160,28 @@ cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
 rm result-package-lock
 ```
 
+## Continuous integration
+
+Pull-request CI always checks the pinned Nix installation and isolated Nixpkgs
+evaluation. It compares the `checks`, `runtime-go`, `debug-init`, and `initrd`
+derivation paths with the pull request's base and builds only the changed
+outputs. Changes to the Nix installer or this workflow build all four. The
+`initrd` output already builds the initrd command and fixed CPIO writer and runs
+the writer tests, so CI does not request those dependencies separately.
+
+Pushes to `main`, and explicit manual runs, build `checks`, `shipping-image`,
+and `debug-image` on one runner. The two image outputs transitively build the
+kernel, NVIDIA modules, nvattest, initrd, runtime binaries, and rootfs without a
+second producer list. These workflows neither publish artifacts nor qualify a
+release. Derivation comparison only schedules CI work; it is not an integrity
+check or a release policy.
+
 ## Release qualification
 
-Normal pull-request CI checks evaluation, focused builds, and source tests. It
-does not rebuild expensive producers twice. Before promoting a release, build
-the exact candidate independently on the qualified builders, compare the
-kernel, initrd, rootfs, raw disk, and dm-verity root, then boot and exercise the
-same artifacts on the required CPU and GPU hardware. Promote only the tested
-measurement. This is a release process, not another verifier embedded in the
-build graph.
+Before promoting a release, build the exact candidate independently on the
+qualified builders and compare the kernel, initrd, rootfs, raw disk, and
+dm-verity root. Boot and exercise the same artifacts through the operator-run
+CPU and GPU qualification that is available for the release; hardware
+qualification is not a GitHub Actions job and unavailable hardware blocks the
+corresponding gate. Promote only the tested measurement. This is a release
+process, not another verifier embedded in the build graph.

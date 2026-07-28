@@ -1,16 +1,17 @@
-name: Test
+name: PR checks
 
 on:
   pull_request:
-    branches: [main, jules/harden-tcb]
-  push:
-    branches: [main]
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    name: Build and Test
+    name: PR checks
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -18,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Nix
@@ -41,13 +43,56 @@ jobs:
             "$nix_instantiate" --no-gc-warning -I . -A runtime-go)"
           test "$configured" = "$baseline"
 
-      - name: Test
+      - name: Build changed check targets
         shell: bash
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -Eeuo pipefail
-          for target in checks runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest; do
-            /nix/var/nix/profiles/default/bin/nix-build \
-              --no-out-link -I . -A "$target"
+
+          base_parent="$(mktemp -d)"
+          base_tree="$base_parent/base"
+          cleanup() {
+            git worktree remove --force "$base_tree" 2>/dev/null || true
+            rmdir "$base_parent" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$base_tree" "$BASE_SHA"
+
+          force_all=false
+          while IFS= read -r path; do
+            case "$path" in
+              .github/actions/install-nix/* | .github/workflows/test.yml | nix/nix-*)
+                force_all=true
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" HEAD)
+
+          nix_instantiate=/nix/var/nix/profiles/default/bin/nix-instantiate
+          build_args=(--no-out-link -I .)
+          selected=()
+          for target in checks runtime-go debug-init initrd; do
+            head_drv="$("$nix_instantiate" --no-gc-warning -I . -A "$target")"
+            base_drv=""
+            if test "$force_all" = false; then
+              base_drv="$(
+                cd "$base_tree"
+                "$nix_instantiate" --no-gc-warning -I . -A "$target"
+              )" || true
+            fi
+            if test "$force_all" = true || test -z "$base_drv" || test "$head_drv" != "$base_drv"; then
+              selected+=("$target")
+              build_args+=(-A "$target")
+            else
+              echo "$target is unchanged"
+            fi
           done
+
+          if test "${#selected[@]}" -eq 0; then
+            echo "No check target changed"
+            exit 0
+          fi
+
+          printf 'Building %s\n' "${selected[*]}"
+          /nix/var/nix/profiles/default/bin/nix-build "${build_args[@]}"

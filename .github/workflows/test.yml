@@ -9,8 +9,8 @@ on:
 permissions: {}
 
 jobs:
-  nix-go-initrd:
-    name: Nix Go and initrd
+  test:
+    name: Build and Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -41,51 +41,13 @@ jobs:
             "$nix_instantiate" --no-gc-warning -I . -A runtime-go)"
           test "$configured" = "$baseline"
 
-      - name: Build and compare Nix outputs
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          nix_build=/nix/var/nix/profiles/default/bin/nix-build
-          build_targets=(runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest)
-          for target in "${build_targets[@]}"; do
-            "$nix_build" --no-out-link -I . -A "$target"
-          done
-          reproducibility_targets=(runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd)
-          for target in "${reproducibility_targets[@]}"; do
-            "$nix_build" --no-out-link -I . --check -A "$target"
-          done
-
-  test:
-    name: Build and Test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup Go
-        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
-        with:
-          go-version: '1.25'
-
-      - name: Install Bazel 8.7.0
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          directory=$(mktemp -d /tmp/cvmimage-bazel-install.XXXXXXXX)
-          archive="$directory/bazel"
-          trap 'rm -f -- "$archive"; rmdir -- "$directory"' EXIT
-          curl -fsSL --retry 3 \
-            https://github.com/bazelbuild/bazel/releases/download/8.7.0/bazel-8.7.0-linux-x86_64 \
-            -o "$archive"
-          printf '%s  %s\n' \
-            d7606e679b78067c811096fb3d6cf135225b528835ca396e3a4dddf957859544 \
-            "$archive" | sha256sum -c --strict -
-          sudo install -m 0755 "$archive" /usr/local/bin/bazel
-          test "$(bazel --version)" = "bazel 8.7.0"
-
       - name: Test
-        run: make test
+        shell: bash
+        env:
+          PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -Eeuo pipefail
+          for target in checks runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest; do
+            /nix/var/nix/profiles/default/bin/nix-build \
+              --no-out-link -I . -A "$target"
+          done

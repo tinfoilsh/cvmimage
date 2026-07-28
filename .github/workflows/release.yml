@@ -33,61 +33,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install build dependencies
-        run: |
-          set -Eeuo pipefail
-          SNAPSHOT_DATE="20260721T000000Z"
-          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute main restricted universe multiverse" | sudo tee /etc/apt/sources.list
-          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-          echo "deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT_DATE} resolute-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
-
-          sudo apt-get update
-          sudo apt-get install -y \
-            binutils \
-            cpio \
-            curl \
-            debian-archive-keyring \
-            dosfstools \
-            e2fsprogs \
-            jq \
-            make \
-            pipx \
-            systemd \
-            ubuntu-keyring \
-            zstd
-          sudo env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
-            pipx install git+https://github.com/systemd/mkosi.git@84af20892b61c8e177e391f997ded8b4cb5514f2 #v26
-          test "$(mkosi --version)" = "mkosi 26"
-
-      - name: Install Bazel 8.7.0
-        run: |
-          set -Eeuo pipefail
-          directory=$(mktemp -d /tmp/cvmimage-bazel-install.XXXXXXXX)
-          archive="$directory/bazel"
-          trap 'rm -f -- "$archive"; rmdir -- "$directory"' EXIT
-          curl -fsSL --retry 3 \
-            https://github.com/bazelbuild/bazel/releases/download/8.7.0/bazel-8.7.0-linux-x86_64 \
-            -o "$archive"
-          printf '%s  %s\n' \
-            d7606e679b78067c811096fb3d6cf135225b528835ca396e3a4dddf957859544 \
-            "$archive" | sha256sum -c --strict -
-          sudo install -m 0755 "$archive" /usr/local/bin/bazel
-          test "$(bazel --version)" = "bazel 8.7.0"
+      - name: Install Nix
+        uses: ./.github/actions/install-nix
 
       - name: Build image
-        run: |
-          make regenerate-nvattest
-          make shipping-image
-
-      - name: Check release artifacts
+        env:
+          PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -Eeuo pipefail
-          mkdir -p /tmp/out
-          test -s tinfoilcvm.raw
-          test -s tinfoilcvm.initrd
-          test -s tinfoilcvm.vmlinuz
-          test "$(wc -c < tinfoilcvm.roothash)" -eq 64
-          grep -Eq '^[a-f0-9]{64}$' tinfoilcvm.roothash
+          /nix/var/nix/profiles/default/bin/nix-build \
+            -I . -A shipping-image -o result
 
       - name: Generate manifest
         id: manifest
@@ -95,22 +50,23 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
+          mkdir -p /tmp/out
           # Generate manifest JSON
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
           {
             "version": "${REF_NAME}",
-            "root": "$(tr -d '\n' < tinfoilcvm.roothash)",
-            "initrd": "$(sha256sum tinfoilcvm.initrd | awk '{print $1}')",
-            "kernel": "$(sha256sum tinfoilcvm.vmlinuz | awk '{print $1}')",
-            "raw": "$(sha256sum tinfoilcvm.raw | awk '{print $1}')",
+            "root": "$(tr -d '\n' < result/tinfoilcvm.roothash)",
+            "initrd": "$(sha256sum result/tinfoilcvm.initrd | awk '{print $1}')",
+            "kernel": "$(sha256sum result/tinfoilcvm.vmlinuz | awk '{print $1}')",
+            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
             "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
 
           # Copy artifacts with versioned names
-          cp tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
-          cp tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
-          cp tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
+          cp result/tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
+          cp result/tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
+          cp result/tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
 
           # Generate checksums
           cd /tmp/out

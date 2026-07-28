@@ -1,46 +1,25 @@
 {
   pkgs,
-  upstreamGo,
   tinfoilInitrd,
 }:
 
-let
-  writer = pkgs.stdenvNoCC.mkDerivation {
-    pname = "fixed-cpio-writer";
-    version = "0";
-    src = pkgs.lib.cleanSource ../image/initrd;
-    nativeBuildInputs = [ upstreamGo ];
-    allowedReferences = [ ];
-    dontConfigure = true;
+pkgs.runCommand "initrd.cpio.zst" { allowedReferences = [ ]; } ''
+  set -Eeuo pipefail
+  umask 0022
 
-    buildPhase = ''
-      runHook preBuild
-      export GOCACHE="$TMPDIR/go-cache"
-      export GOTOOLCHAIN=local
-      GO111MODULE=off CGO_ENABLED=0 go test writer.go writer_test.go
-      GO111MODULE=off CGO_ENABLED=0 go build \
-        -trimpath \
-        -buildvcs=false \
-        -ldflags='-s -w -buildid=' \
-        -o write-fixed-cpio \
-        writer.go
-      runHook postBuild
-    '';
+  ${pkgs.coreutils}/bin/install -d -m0755 \
+    root/dev root/proc root/run root/sys root/usr root/usr/bin
+  ${pkgs.coreutils}/bin/ln -s usr/bin/tinfoil-initrd root/init
+  ${pkgs.coreutils}/bin/install -m0755 \
+    ${tinfoilInitrd}/bin/tinfoil-initrd root/usr/bin/tinfoil-initrd
+  ${pkgs.coreutils}/bin/touch -h -d @0 \
+    root/dev root/init root/proc root/run root/sys root/usr \
+    root/usr/bin root/usr/bin/tinfoil-initrd
 
-    installPhase = ''
-      runHook preInstall
-      install -D -m 0755 write-fixed-cpio "$out/bin/write-fixed-cpio"
-      runHook postInstall
-    '';
-  };
-
-  archive = pkgs.runCommand "initrd.cpio.zst" { allowedReferences = [ ]; } ''
-    ${writer}/bin/write-fixed-cpio \
-      ${tinfoilInitrd}/bin/tinfoil-initrd \
-      ${pkgs.zstd}/bin/zstd \
-      "$out"
-  '';
-in
-{
-  inherit writer archive;
-}
+  printf '%s\0' \
+    dev init proc run sys usr usr/bin usr/bin/tinfoil-initrd \
+    | (cd root && ${pkgs.cpio}/bin/cpio \
+        --quiet --create --format=newc --owner=+0:+0 \
+        --reproducible --null) \
+    | ${pkgs.zstd}/bin/zstd -q -T1 -19 --no-progress -c > "$out"
+''

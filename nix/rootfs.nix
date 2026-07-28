@@ -22,6 +22,21 @@ let
     inherit (sources.docker) name url;
     sha256 = sources.docker.sha256;
   };
+  matchesDebPackage = package: deb:
+    builtins.match ".*-${package}_[^/]+[.]deb"
+      (builtins.baseNameOf (toString deb)) != null;
+  caCertificatesDeb =
+    pkgs.lib.findFirst (matchesDebPackage "ca-certificates")
+      (throw "ca-certificates deb missing from runtime package closure")
+      ubuntuDebs;
+  provenanceOnlyUbuntuPackages = [
+    "debconf"
+    "libcap2-bin"
+  ];
+  isProvenanceOnlyDeb = deb:
+    pkgs.lib.any (package: matchesDebPackage package deb)
+      provenanceOnlyUbuntuPackages;
+  runtimeUbuntuDebs = pkgs.lib.filter (deb: !(isProvenanceOnlyDeb deb)) ubuntuDebs;
 
   repositoryFiles = [
     { source = ../image/rootfs/etc/.pwd.lock; target = "etc/.pwd.lock"; mode = "0600"; }
@@ -49,12 +64,10 @@ let
     ${pkgs.dpkg}/bin/dpkg-deb --fsys-tarfile ${deb} |
       ${pkgs.gnutar}/bin/tar --extract --file=- --directory "$root" \
         --no-same-owner --keep-old-files
-  '') (ubuntuDebs ++ nvidiaDebs);
+  '') (runtimeUbuntuDebs ++ nvidiaDebs);
 
   repositoryInstalls = pkgs.lib.concatMapStringsSep "\n" (file: ''
-    test ! -e "$root/${file.target}"
-    test ! -L "$root/${file.target}"
-    install -D -m ${file.mode} ${file.source} "$root/${file.target}"
+    install_new ${file.mode} ${file.source} "$root/${file.target}" -D
   '') repositoryFiles;
 
   repositoryReplacementInstalls = pkgs.lib.concatMapStringsSep "\n" (file: ''
@@ -62,11 +75,29 @@ let
   '') repositoryReplacements;
 
   moduleInstalls = pkgs.lib.concatMapStringsSep "\n" (module: ''
-    test ! -e "$root/usr/lib/tinfoil/kernel-modules/${builtins.baseNameOf module}"
-    test ! -L "$root/usr/lib/tinfoil/kernel-modules/${builtins.baseNameOf module}"
-    install -m 0644 ${module} \
+    install_new 0644 ${module} \
       "$root/usr/lib/tinfoil/kernel-modules/${builtins.baseNameOf module}"
   '') nvidiaModules;
+
+  shellInstallHelpers = ''
+    install_new() {
+      mode="$1"
+      source="$2"
+      target="$3"
+      shift 3
+      test ! -e "$target"
+      test ! -L "$target"
+      install "$@" -m "$mode" "$source" "$target"
+    }
+
+    link_new() {
+      source="$1"
+      target="$2"
+      test ! -e "$target"
+      test ! -L "$target"
+      ln -s "$source" "$target"
+    }
+  '';
 
   deterministicTar = root: output: ''
     ${pkgs.gnutar}/bin/tar --create --file ${output} --directory ${root} \
@@ -76,11 +107,12 @@ let
 
   rootfs = pkgs.runCommand "cvmimage-rootfs.tar" {
     allowedReferences = [ ];
-    nativeBuildInputs = [ pkgs.coreutils pkgs.findutils pkgs.gnutar ];
+    nativeBuildInputs = [ pkgs.coreutils pkgs.findutils pkgs.gnused pkgs.gnutar ];
   } ''
     set -o pipefail
     root="$TMPDIR/root"
     mkdir -p "$root"
+    ${shellInstallHelpers}
 
     ${extractDebs}
     chmod 0755 "$root"
@@ -90,28 +122,18 @@ let
     ${pkgs.gnutar}/bin/tar --extract --gzip --file ${dockerArchive} \
       --directory "$docker" --strip-components=1
     for command in containerd containerd-shim-runc-v2 dockerd runc; do
-      test ! -e "$root/usr/bin/$command"
-      test ! -L "$root/usr/bin/$command"
-      install -m 0755 "$docker/$command" "$root/usr/bin/$command"
+      install_new 0755 "$docker/$command" "$root/usr/bin/$command"
     done
 
     for command in boot container-status egress init shim; do
-      test ! -e "$root/usr/bin/tinfoil-$command"
-      test ! -L "$root/usr/bin/tinfoil-$command"
-      install -m 0755 ${runtimeGo}/bin/tinfoil-$command \
+      install_new 0755 ${runtimeGo}/bin/tinfoil-$command \
         "$root/usr/bin/tinfoil-$command"
     done
 
-    test ! -e "$root/usr/bin/nvattest"
-    test ! -L "$root/usr/bin/nvattest"
-    test ! -e "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2"
-    test ! -L "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2"
-    install -D -m 0755 ${nvattest}/usr/bin/nvattest "$root/usr/bin/nvattest"
-    install -D -m 0644 ${nvattest}/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2 \
-      "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2"
-    test ! -e "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1"
-    test ! -L "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1"
-    ln -s libnvat.so.1.2.2 \
+    install_new 0755 ${nvattest}/usr/bin/nvattest "$root/usr/bin/nvattest" -D
+    install_new 0644 ${nvattest}/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2 \
+      "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2" -D
+    link_new libnvat.so.1.2.2 \
       "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1"
 
     mkdir -p "$root/usr/lib/tinfoil/kernel-modules"
@@ -128,13 +150,29 @@ let
       "$root/proc" "$root/run" "$root/sys" "$root/tmp" "$root/var" \
       "$root/var/tmp"
 
-    ln -s usr/lib64 "$root/lib64"
-    ln -s usr/sbin "$root/sbin"
-    ln -s ../run "$root/var/run"
+    link_new usr/lib64 "$root/lib64"
+    link_new usr/sbin "$root/sbin"
+    link_new ../run "$root/var/run"
 
-    find "$root/usr/share/ca-certificates" -type f -name '*.crt' -print0 |
-      sort -z |
-      xargs -0 cat > "$root/etc/ssl/certs/ca-certificates.crt"
+    ca_control="$TMPDIR/ca-certificates-control"
+    mkdir -p "$ca_control"
+    ${pkgs.dpkg}/bin/dpkg-deb --control ${caCertificatesDeb} "$ca_control"
+    sed -n 's/^CERTS_LIST="\(.*\)"$/\1/p' "$ca_control/config" |
+      tr ',' '\n' |
+      sed -e 's/^[[:space:]]*//' -e '/^$/d' \
+      > "$root/etc/ca-certificates.conf"
+
+    bundle="$root/etc/ssl/certs/ca-certificates.crt"
+    : > "$bundle"
+    while IFS= read -r certificate || test -n "$certificate"; do
+      case "$certificate" in
+        "" | "#"*) continue ;;
+        "!"*) continue ;;
+      esac
+      certificate_source="$root/usr/share/ca-certificates/$certificate"
+      test -f "$certificate_source"
+      cat "$certificate_source" >> "$bundle"
+    done < "$root/etc/ca-certificates.conf"
     chmod 0644 "$root/etc/ssl/certs/ca-certificates.crt"
 
     ${deterministicTar "$root" "$out"}
@@ -147,13 +185,12 @@ let
     set -o pipefail
     root="$TMPDIR/root"
     mkdir -p "$root"
+    ${shellInstallHelpers}
     ${pkgs.dpkg}/bin/dpkg-deb --fsys-tarfile ${busyboxDeb} |
       ${pkgs.gnutar}/bin/tar --extract --file=- --directory "$root" \
         --no-same-owner --no-overwrite-dir
-    test ! -e "$root/usr/bin/tinfoil-init"
-    test ! -L "$root/usr/bin/tinfoil-init"
-    install -D -m 0755 ${debugInit}/bin/tinfoil-init \
-      "$root/usr/bin/tinfoil-init"
+    install_new 0755 ${debugInit}/bin/tinfoil-init \
+      "$root/usr/bin/tinfoil-init" -D
     install -d -m 0700 "$root/root"
     ${deterministicTar "$root" "$out"}
   '';

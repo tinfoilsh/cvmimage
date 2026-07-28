@@ -22,7 +22,7 @@ flowchart TD
     N --> A["nvattest and libnvat"]
     N --> K["Custom kernel"]
     K --> V["Three NVIDIA modules"]
-    N --> I["Fixed initrd.cpio.zst"]
+    N --> I["Reproducible initrd.cpio.zst"]
 
     G --> R["Additive rootfs.tar"]
     A --> R
@@ -48,7 +48,7 @@ of image inputs:
 | Output | Owner | Declaration |
 | --- | --- | --- |
 | Runtime and debug Go binaries | Nixpkgs `buildGoModule` | `nix/go.nix`, `tinfoil/go.mod`, `tinfoil/go.sum` |
-| Fixed initrd | Nix-built Go CPIO writer and Zstandard | `nix/initrd.nix`, `image/initrd/writer.go` |
+| Fixed initrd | Pinned GNU cpio and Zstandard | `nix/initrd.nix` |
 | Custom kernel | Nixpkgs `linuxManualConfig` | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
 | Three NVIDIA modules | Nixpkgs kernel-module build | `nix/nvidia-modules.nix` |
 | nvattest and libnvat | Nixpkgs CMake and Rust builders | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock` |
@@ -166,8 +166,8 @@ Pull-request CI always checks the pinned Nix installation and isolated Nixpkgs
 evaluation. It compares the `checks`, `runtime-go`, `debug-init`, and `initrd`
 derivation paths with the pull request's base and builds only the changed
 outputs. Changes to the Nix installer or this workflow build all four. The
-`initrd` output already builds the initrd command and fixed CPIO writer and runs
-the writer tests, so CI does not request those dependencies separately.
+`initrd` output builds the initrd command and constructs the fixed archive with
+the pinned GNU cpio implementation.
 
 Pushes to `main`, and explicit manual runs, build `checks`, `shipping-image`,
 and `debug-image` on one runner. The two image outputs transitively build the

@@ -17,7 +17,6 @@ let
   go = import ./nix/go.nix { inherit pkgs; };
   initrd = import ./nix/initrd.nix {
     inherit pkgs;
-    inherit (go) upstreamGo;
     tinfoilInitrd = go.packages."tinfoil-initrd";
   };
   kernel = import ./nix/kernel.nix { inherit pkgs; };
@@ -43,7 +42,7 @@ let
     inherit pkgs repartSeed;
     rootfs = rootfs.rootfs;
     kernel = "${kernel.artifacts}/tinfoil-custom.vmlinuz";
-    initrd = initrd.archive;
+    inherit initrd;
     repartDefinitions = ./repart.d;
   } // extraArgs);
   shippingImage = buildImage {
@@ -56,9 +55,8 @@ let
 in
 go.packages
 // {
-  "fixed-cpio-writer" = initrd.writer;
   inherit (go) checks;
-  initrd = initrd.archive;
+  inherit initrd;
   "kernel-artifacts" = kernel.artifacts;
   "nvidia-modules" = nvidia.modules;
   inherit (nvattest) nvattest;

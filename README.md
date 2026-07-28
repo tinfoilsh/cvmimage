@@ -19,11 +19,10 @@ nix-build -I . -A <target>
 | `debug-rootfs-layer` | Debug overlay used only by `debug-image` |
 | `kernel-artifacts` | Custom kernel, modules, and `Module.symvers` |
 | `nvidia-modules` | Validated NVIDIA open kernel modules |
-| `initrd` | Compressed fixed-CPIO initrd |
+| `initrd` | Reproducible GNU cpio and Zstandard initrd |
 | `runtime-go` | The five CGO runtime commands |
 | `debug-init` | Compile-time debug PID1 |
 | `tinfoil-initrd` | Pure-Go initrd command |
-| `fixed-cpio-writer` | Deterministic CPIO writer used by `initrd` |
 | `nvattest` | NVIDIA attestation CLI and `libnvat` |
 | `checks` | Go source tests |
 | `runtime-package-lock` | Regenerated Ubuntu package lock (only when changing package inputs) |

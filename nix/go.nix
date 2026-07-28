@@ -121,7 +121,7 @@ let
   };
 in
 {
-  inherit checks upstreamGo;
+  inherit checks;
   packages = {
     "debug-init" = debugInit;
     "runtime-go" = runtime;

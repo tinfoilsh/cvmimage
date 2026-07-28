@@ -161,6 +161,7 @@ let
       tr ',' '\n' |
       sed -e 's/^[[:space:]]*//' -e '/^$/d' \
       > "$root/etc/ca-certificates.conf"
+    test -s "$root/etc/ca-certificates.conf"
 
     bundle="$root/etc/ssl/certs/ca-certificates.crt"
     : > "$bundle"

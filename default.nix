@@ -35,6 +35,11 @@ let
     inherit (nvattest) nvattest;
     nvidiaModules = map (name: "${nvidia.modules}/${name}") nvidiaModuleNames;
   };
+  tcbCheck = import ./nix/tcb-check.nix {
+    inherit pkgs;
+    rootfs = rootfs.rootfs;
+    initrd = initrd.archive;
+  };
   repartSeedText = builtins.readFile ./repart.d/seed;
   repartSeedMatch = builtins.match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n" repartSeedText;
   repartSeed = assert repartSeedMatch != null; builtins.head repartSeedMatch;
@@ -58,6 +63,7 @@ go.packages
 // {
   "fixed-cpio-writer" = initrd.writer;
   inherit (go) checks;
+  "tcb-check" = tcbCheck;
   initrd = initrd.archive;
   "kernel-artifacts" = kernel.artifacts;
   "nvidia-modules" = nvidia.modules;

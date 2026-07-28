@@ -47,7 +47,7 @@ jobs:
           PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -Eeuo pipefail
-          for target in checks runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest; do
+          for target in checks tcb-check runtime-go debug-init tinfoil-initrd fixed-cpio-writer initrd nvattest; do
             /nix/var/nix/profiles/default/bin/nix-build \
               --no-out-link -I . -A "$target"
           done

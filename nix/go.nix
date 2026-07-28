@@ -17,6 +17,18 @@ let
     ) old.patches;
   });
   buildGoModule = pkgs.buildGoModule.override { go = upstreamGo; };
+  cgoEnv = {
+    CGO_ENABLED = "1";
+    NIX_DONT_SET_RPATH = "1";
+  }
+  // commonEnv;
+  cgoBase = {
+    env = cgoEnv;
+    # go-nvml leaves NVML symbols unresolved until the measured NVIDIA
+    # library is available in the guest. BIND_NOW resolves them before
+    # main and makes CPU-only boot fail with a symbol lookup error.
+    hardeningDisable = [ "bindnow" ];
+  };
 
   common = {
     version = "0";
@@ -34,16 +46,8 @@ let
     attributes:
     buildGoModule (
       common
+      // cgoBase
       // {
-        env = {
-          CGO_ENABLED = "1";
-          NIX_DONT_SET_RPATH = "1";
-        }
-        // commonEnv;
-        # go-nvml leaves NVML symbols unresolved until the measured NVIDIA
-        # library is available in the guest. BIND_NOW resolves them before
-        # main and makes CPU-only boot fail with a symbol lookup error.
-        hardeningDisable = [ "bindnow" ];
         ldflags = common.ldflags ++ [
           "-linkmode=external"
           "-extldflags=-Wl,--build-id=none,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"
@@ -106,12 +110,7 @@ let
     src = checkSource;
     sourceRoot = "source/tinfoil";
     inherit (common) vendorHash;
-    env = {
-      CGO_ENABLED = "1";
-      NIX_DONT_SET_RPATH = "1";
-    }
-    // commonEnv;
-    hardeningDisable = [ "bindnow" ];
+    inherit (cgoBase) env hardeningDisable;
     doCheck = true;
     buildPhase = "true";
     checkPhase = ''

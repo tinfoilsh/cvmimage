@@ -35,6 +35,24 @@ let
     inherit (nvattest) nvattest;
     nvidiaModules = map (name: "${nvidia.modules}/${name}") nvidiaModuleNames;
   };
+  repartSeedText = builtins.readFile ./repart.d/seed;
+  repartSeedMatch = builtins.match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n" repartSeedText;
+  repartSeed = assert repartSeedMatch != null; builtins.head repartSeedMatch;
+  image = import ./nix/image.nix;
+  buildImage = extraArgs: image ({
+    inherit pkgs repartSeed;
+    rootfs = rootfs.rootfs;
+    kernel = "${kernel.artifacts}/tinfoil-custom.vmlinuz";
+    initrd = initrd.archive;
+    repartDefinitions = ./repart.d;
+  } // extraArgs);
+  shippingImage = buildImage {
+    basename = "tinfoilcvm";
+  };
+  debugImage = buildImage {
+    debugLayer = rootfs.debugLayer;
+    basename = "tinfoilcvm-debug";
+  };
 in
 go.packages
 // {
@@ -46,4 +64,6 @@ go.packages
   "rootfs-archive" = rootfs.rootfs;
   "debug-rootfs-layer" = rootfs.debugLayer;
   "runtime-package-lock" = runtimePackages.lock;
+  "shipping-image" = shippingImage;
+  "debug-image" = debugImage;
 }

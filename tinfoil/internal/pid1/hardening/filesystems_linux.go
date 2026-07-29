@@ -45,7 +45,7 @@ func restrictServiceFilesystems(kernel filesystemKernel) error {
 
 func mountRestrictedProc(kernel filesystemKernel) error {
 	flags := uintptr(unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC)
-	if err := kernel.mount("proc", "/proc", "proc", flags, "hidepid=2,subset=pid"); err != nil {
+	if err := kernel.mount("proc", "/proc", "proc", flags, "hidepid=2"); err != nil {
 		return fmt.Errorf("mount restricted /proc: %w", err)
 	}
 	if err := kernel.mount("", "/proc", "", flags|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {

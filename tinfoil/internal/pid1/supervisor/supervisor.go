@@ -402,6 +402,7 @@ func (s *Supervisor) stopInitial(record *serviceRecord, process *Process) error 
 	if _, err := process.Wait(context.Background()); err != nil {
 		errs = append(errs, err)
 	}
+	removePIDFile(record.spec.PIDFile, process.PID())
 	s.mu.Lock()
 	s.retireLocked(record)
 	s.mu.Unlock()

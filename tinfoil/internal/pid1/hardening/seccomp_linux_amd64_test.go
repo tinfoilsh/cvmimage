@@ -61,6 +61,7 @@ func TestServiceSocketDomains(t *testing.T) {
 	}{
 		{name: "containers-unix", service: ServiceContainers, domain: unix.AF_UNIX, allowed: true},
 		{name: "containers-inet", service: ServiceContainers, domain: unix.AF_INET, allowed: true},
+		{name: "containers-inet6", service: ServiceContainers, domain: unix.AF_INET6, allowed: true},
 		{name: "containers-netlink", service: ServiceContainers, domain: unix.AF_NETLINK, allowed: true},
 		{name: "containers-packet", service: ServiceContainers, domain: unix.AF_PACKET},
 		{name: "containers-vsock", service: ServiceContainers, domain: unix.AF_VSOCK},

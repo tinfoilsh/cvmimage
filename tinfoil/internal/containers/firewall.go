@@ -42,7 +42,7 @@ type egressPopulator interface {
 // Must be called after the bridge interfaces exist so iif/oif resolve
 // by index.
 func setupContainerNetworkFirewall(ctx context.Context, cfg *Config, debug bool) error {
-	return setupContainerNetworkFirewallWith(ctx, cfg, debug, runNft, func() (egressPopulator, error) {
+	return setupContainerNetworkFirewallWith(ctx, cfg, debug, RunNft, func() (egressPopulator, error) {
 		return egress.Load()
 	})
 }
@@ -61,6 +61,8 @@ func setupContainerNetworkFirewallWith(
 	sort.Strings(names)
 
 	var script strings.Builder
+	script.WriteString("flush chain inet tinfoil container_input\n")
+	script.WriteString("flush chain inet tinfoil container_forward\n")
 	for _, name := range names {
 		writeBridgeRules(&script, name, cfg.Networks[name])
 	}
@@ -102,39 +104,39 @@ func setupContainerNetworkFirewallWith(
 }
 
 func writeReservedDebugForwardRules(script *strings.Builder) {
-	fmt.Fprintf(script, "add rule inet tinfoil forward oifname %q ct status dnat tcp dport %d accept\n", "docker0", reservedDebugHostPort)
-	fmt.Fprintf(script, "add rule inet tinfoil forward iifname %q ct state established,related accept\n", "docker0")
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct status dnat tcp dport %d accept\n", "docker0", reservedDebugHostPort)
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ct state established,related accept\n", "docker0")
 }
 
 func writeBridgeRules(script *strings.Builder, bridge string, spec *NetworkSpec) {
 	// Allow container ↔ container traffic. Only fires when br_netfilter is
 	// loaded with bridge-nf-call-iptables=1, in which case bridged frames
 	// also traverse this L3 forward hook and would otherwise be dropped.
-	fmt.Fprintf(script, "add rule inet tinfoil forward iif %q oif %q accept\n", bridge, bridge)
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q oif %q accept\n", bridge, bridge)
 
 	// Allow return traffic into containers for connections they initiated.
-	fmt.Fprintf(script, "add rule inet tinfoil forward oif %q ct state established,related accept\n", bridge)
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward oif %q ct state established,related accept\n", bridge)
 
 	// Block new connections from the bridge to the host. Scoped to
 	// `ct state new` so reply traffic on host→container connections
 	// (e.g. the shim's responses) still matches the static
 	// `ct state established,related accept` rule.
-	fmt.Fprintf(script, "insert rule inet tinfoil input iif %q ct state new drop\n", bridge)
+	fmt.Fprintf(script, "add rule inet tinfoil container_input iif %q ct state new drop\n", bridge)
 
 	switch spec.Egress {
 	case "open":
-		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip daddr != %s accept\n",
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip daddr != %s accept\n",
 			bridge, nonPublicIPv4Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip6 daddr != %s accept\n",
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip6 daddr != %s accept\n",
 			bridge, nonPublicIPv6Ranges)
 	case "allowlist":
 		setName := containernet.AllowSetPrefix + bridge
-		fmt.Fprintf(script, "add set inet tinfoil %s { type ipv4_addr; }\n", setName)
-		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip daddr %s drop\n",
+		fmt.Fprintf(script, "create set inet tinfoil %s { type ipv4_addr; }\n", setName)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip daddr %s drop\n",
 			bridge, nonPublicIPv4Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip6 daddr %s drop\n",
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip6 daddr %s drop\n",
 			bridge, nonPublicIPv6Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil forward iif %q ip daddr @%s accept\n",
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip daddr @%s accept\n",
 			bridge, setName)
 	}
 }
@@ -145,14 +147,14 @@ func shimUpstreamSet(cfg *Config) bool {
 
 // setupFirewall opens additional inbound ports beyond the shim's listen-port
 // (which is already allowed by the static nftables.conf baked into the image).
-func setupFirewall(config *Config) error {
-	ports := config.CVMNetwork.InboundPorts
+func SetupInboundFirewall(ports []int) error {
 	if len(ports) == 0 {
 		log.Println("No additional inbound ports to open")
 		return nil
 	}
 
 	var script strings.Builder
+	script.WriteString("flush chain inet tinfoil inbound\n")
 	for _, port := range ports {
 		if port < 1 || port > math.MaxUint16 {
 			return fmt.Errorf("invalid port number: %d", port)
@@ -161,7 +163,7 @@ func setupFirewall(config *Config) error {
 		fmt.Fprintf(&script, "add rule inet tinfoil input tcp dport %d accept\n", port)
 	}
 
-	if err := runNft(script.String()); err != nil {
+	if err := RunNft(script.String()); err != nil {
 		return fmt.Errorf("opening inbound ports %v: %w", ports, err)
 	}
 
@@ -170,7 +172,7 @@ func setupFirewall(config *Config) error {
 }
 
 // runNft pipes script to `nft -f -` so it commits as one netlink transaction.
-func runNft(script string) error {
+func RunNft(script string) error {
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {

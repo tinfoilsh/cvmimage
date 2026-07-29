@@ -174,15 +174,18 @@ func run(ctx context.Context) error {
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
 
 	// 11. Containers + health checks
+	start = time.Now()
 	log.Println("Launching containers")
 	request, err := containerapi.NewApplyRequest(config, externalConfig, cmdline.Debug)
 	if err != nil {
+		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
 	if err := containerapi.Apply(ctx, request); err != nil {
-		tracker.Record(boot.StageContainers, boot.StatusFailed, 0, err.Error())
+		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
+	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
 
 	return nil
 }

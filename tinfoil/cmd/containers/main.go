@@ -22,7 +22,9 @@ import (
 )
 
 type server struct {
-	applyMu sync.Mutex
+	applyMu     sync.Mutex
+	ctx         context.Context
+	initialized bool
 }
 
 func main() {
@@ -49,14 +51,19 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	handler := &server{}
+	runtimeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	handler := &server{ctx: runtimeCtx}
 	mux := http.NewServeMux()
 	mux.HandleFunc(containerapi.ApplyPath, handler.apply)
 	httpServer := &http.Server{Handler: mux}
 	statusDone := make(chan error, 1)
-	go func() { statusDone <- containerstatus.Run(ctx) }()
 	go func() {
-		<-ctx.Done()
+		statusDone <- containerstatus.Run(runtimeCtx)
+		cancel()
+	}()
+	go func() {
+		<-runtimeCtx.Done()
 		_ = httpServer.Shutdown(context.Background())
 	}()
 	log.Printf("tinfoil-containers: listening on %s", boot.ContainersSocket)
@@ -64,12 +71,8 @@ func run(ctx context.Context) error {
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
-	select {
-	case statusErr := <-statusDone:
-		return errors.Join(err, statusErr)
-	default:
-		return err
-	}
+	cancel()
+	return errors.Join(err, <-statusDone)
 }
 
 func (s *server) apply(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +82,10 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	if s.initialized {
+		writeError(w, http.StatusConflict, errors.New("runtime configuration is already initialized"))
+		return
+	}
 
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
 	decoder.DisallowUnknownFields()
@@ -102,10 +109,11 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := containers.LaunchAndWaitHealthy(r.Context(), tracker, &config, &external, request.Debug); err != nil {
+	if err := containers.LaunchAndWaitHealthy(s.ctx, tracker, &config, &external, request.Debug); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.initialized = true
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -245,7 +245,7 @@ func TestFirewall_AllowlistEmitsSetAndAcceptRule(t *testing.T) {
 		"control": {Egress: "allowlist", Allow: []string{"api.tinfoil.sh"}},
 	}}
 	script := renderFirewallScript(cfg, false)
-	if !strings.Contains(script, `add set inet tinfoil allow-control`) {
+	if !strings.Contains(script, `create set inet tinfoil allow-control`) {
 		t.Errorf("allowlist must declare its set; got:\n%s", script)
 	}
 	if !strings.Contains(script, `iif "control" ip daddr @allow-control accept`) {

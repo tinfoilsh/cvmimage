@@ -46,6 +46,7 @@ func Apply(ctx context.Context, request ApplyRequest) error {
 			return (&net.Dialer{}).DialContext(ctx, "unix", boot.ContainersSocket)
 		},
 	}
+	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix"+ApplyPath, bytes.NewReader(body))
 	if err != nil {
@@ -60,7 +61,10 @@ func Apply(ctx context.Context, request ApplyRequest) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if readErr != nil {
+		return fmt.Errorf("reading tinfoil-containers error response: %w", readErr)
+	}
 	var failure ErrorResponse
 	if json.Unmarshal(data, &failure) == nil && failure.Error != "" {
 		return fmt.Errorf("tinfoil-containers: %s", failure.Error)

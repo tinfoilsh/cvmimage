@@ -1,4 +1,4 @@
-package containerstatus
+package containers
 
 import (
 	"context"
@@ -68,7 +68,7 @@ type containerHealth struct {
 	LastCheckExitCode *int       `json:"last_check_exit_code,omitempty"`
 }
 
-func Run(ctx context.Context) error {
+func RunStatusPublisher(ctx context.Context) error {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return fmt.Errorf("creating docker client: %w", err)

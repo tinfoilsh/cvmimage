@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"tinfoil/internal/boot"
-	"tinfoil/internal/containerapi"
+	"tinfoil/internal/containersapi"
+	"tinfoil/internal/firewall"
 	"tinfoil/internal/nvidia"
 )
 
@@ -158,7 +159,7 @@ func run(ctx context.Context) error {
 	// 9. Firewall
 	start = time.Now()
 	log.Println("Configuring firewall")
-	if err := setupFirewall(config); err != nil {
+	if err := firewall.ApplyInbound(config.CVMNetwork.InboundPorts); err != nil {
 		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("firewall setup failed: %w", err)
 	}
@@ -176,12 +177,12 @@ func run(ctx context.Context) error {
 	// 11. Containers + health checks
 	start = time.Now()
 	log.Println("Launching containers")
-	request, err := containerapi.NewApplyRequest(config, externalConfig, cmdline.Debug)
+	request, err := containersapi.NewApplyRequest(config, externalConfig, cmdline.Debug)
 	if err != nil {
 		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	if err := containerapi.Apply(ctx, request); err != nil {
+	if err := containersapi.Apply(ctx, request); err != nil {
 		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}

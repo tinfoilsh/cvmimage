@@ -1,4 +1,4 @@
-package containerstatus
+package containers
 
 import (
 	"context"

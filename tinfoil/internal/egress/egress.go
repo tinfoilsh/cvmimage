@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/firewall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -151,7 +151,5 @@ func resolve(ctx context.Context, domains []string) ([]string, error) {
 }
 
 func applyDelta(script string) ([]byte, error) {
-	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(script)
-	return cmd.CombinedOutput()
+	return firewall.ApplyOutput(script)
 }

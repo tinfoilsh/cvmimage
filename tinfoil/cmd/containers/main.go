@@ -15,9 +15,8 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/containerapi"
 	"tinfoil/internal/containers"
-	"tinfoil/internal/containerstatus"
+	"tinfoil/internal/containersapi"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -55,11 +54,11 @@ func run(ctx context.Context) error {
 	defer cancel()
 	handler := &server{ctx: runtimeCtx}
 	mux := http.NewServeMux()
-	mux.HandleFunc(containerapi.ApplyPath, handler.apply)
+	mux.HandleFunc(containersapi.ApplyPath, handler.apply)
 	httpServer := &http.Server{Handler: mux}
 	statusDone := make(chan error, 1)
 	go func() {
-		statusDone <- containerstatus.Run(runtimeCtx)
+		statusDone <- containers.RunStatusPublisher(runtimeCtx)
 		cancel()
 	}()
 	go func() {
@@ -89,7 +88,7 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
 	decoder.DisallowUnknownFields()
-	var request containerapi.ApplyRequest
+	var request containersapi.ApplyRequest
 	if err := decoder.Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -120,5 +119,5 @@ func (s *server) apply(w http.ResponseWriter, r *http.Request) {
 func writeError(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(containerapi.ErrorResponse{Error: err.Error()})
+	_ = json.NewEncoder(w).Encode(containersapi.ErrorResponse{Error: err.Error()})
 }

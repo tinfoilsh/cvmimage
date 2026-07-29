@@ -1,4 +1,4 @@
-package containerapi
+package containersapi
 
 import (
 	"bytes"

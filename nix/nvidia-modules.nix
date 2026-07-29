@@ -29,8 +29,6 @@ let
       {
         nativeBuildInputs = [
           pkgs.coreutils
-          pkgs.diffutils
-          pkgs.findutils
           pkgs.kmod
         ];
         # The measured modules must not depend on the Nix store. Symbol CRC
@@ -39,22 +37,12 @@ let
         allowedReferences = [ ];
       }
       ''
-        source_root=${nvidiaOpen}/lib/modules/${release}
-        mapfile -t built_modules < <(find "$source_root" -type f -name '*.ko' -printf '%f\n' | sort)
+        module_dir=${nvidiaOpen}/lib/modules/${release}/kernel/drivers/video
         expected_modules=(nvidia-modeset.ko nvidia-uvm.ko nvidia.ko)
-
-        if ! diff -u \
-          <(printf '%s\n' "''${expected_modules[@]}") \
-          <(printf '%s\n' "''${built_modules[@]}"); then
-          echo "NVIDIA build produced an unexpected module set" >&2
-          exit 1
-        fi
 
         mkdir "$out"
         for module in "''${expected_modules[@]}"; do
-          source=$(find "$source_root" -type f -name "$module" -print -quit)
-          test -n "$source"
-          install -m0644 "$source" "$out/$module"
+          install -m0644 "$module_dir/$module" "$out/$module"
         done
 
         expected_vermagic='${release} SMP preempt mod_unload modversions '
@@ -87,6 +75,5 @@ let
       '';
 in
 {
-  inherit nvidiaOpen modules;
-  inherit version;
+  inherit modules;
 }

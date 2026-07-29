@@ -126,13 +126,6 @@ let
       '';
 in
 {
-  config = configFile;
-  inherit
-    source
-    kernel
-    artifacts
-    release
-    version
-    ;
+  inherit artifacts release;
   kernelPackages = pkgs.linuxPackagesFor kernel;
 }

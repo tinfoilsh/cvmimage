@@ -16,6 +16,7 @@ let
     sha256 = package.sha256;
   };
 
+  nvidiaComputeDeb = fetchDeb sources.nvidiaCompute;
   nvidiaDebs = map fetchDeb sources.nvidiaDebs;
   busyboxDeb = fetchDeb sources.busybox;
   dockerArchive = pkgs.fetchurl {
@@ -241,6 +242,13 @@ let
     ${pkgs.dpkg}/bin/dpkg-deb --fsys-tarfile ${busyboxDeb} |
       ${pkgs.gnutar}/bin/tar --extract --file=- --directory "$root" \
         --no-same-owner --no-overwrite-dir
+    nvidia="$TMPDIR/nvidia"
+    mkdir "$nvidia"
+    ${pkgs.dpkg}/bin/dpkg-deb --fsys-tarfile ${nvidiaComputeDeb} |
+      ${pkgs.gnutar}/bin/tar --extract --file=- --directory "$nvidia" \
+        --no-same-owner ./usr/bin/nvidia-smi
+    install_new 0755 "$nvidia/usr/bin/nvidia-smi" \
+      "$root/usr/bin/nvidia-smi" -D
     install_new 0755 ${debugInit}/bin/tinfoil-init \
       "$root/usr/bin/tinfoil-init" -D
     install -d -m 0700 "$root/root"

@@ -96,7 +96,9 @@ integration, systemd units, Turing-only firmware, and legacy NVIDIA
 runtime-hook compatibility are likewise excluded. The CUDA compute, CDI
 container, attestation, firmware, and NVSwitch payloads remain; diagnostic
 commands belong inside debug or workload containers rather than the measured
-host rootfs.
+shipping rootfs. The separately measured debug image adds the pinned
+`nvidia-smi` client so CDI can expose it to GPU workload containers inspected
+through the SSH toolbox.
 
 The Nix expressions also reject store references in runtime binaries and use
 fixed ownership, modes, archive ordering, and timestamps. Reproducibility is a

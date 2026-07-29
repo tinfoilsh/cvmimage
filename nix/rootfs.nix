@@ -22,21 +22,59 @@ let
     inherit (sources.docker) name url;
     sha256 = sources.docker.sha256;
   };
-  matchesDebPackage = package: deb:
-    builtins.match ".*-${package}_[^/]+[.]deb"
-      (builtins.baseNameOf (toString deb)) != null;
-  caCertificatesDeb =
-    pkgs.lib.findFirst (matchesDebPackage "ca-certificates")
-      (throw "ca-certificates deb missing from runtime package closure")
-      ubuntuDebs;
-  provenanceOnlyUbuntuPackages = [
-    "debconf"
-    "libcap2-bin"
+  # Keep library directories whole for NSS, provider, and other dlopen-only edges.
+  ubuntuPayloadPaths = [
+    "etc/bindresvport.blacklist"
+    "etc/gai.conf"
+    "etc/ld.so.conf"
+    "etc/ld.so.conf.d"
+    "etc/netconfig"
+    "etc/ssl/openssl.cnf"
+    "usr/bin/ip"
+    "usr/lib/ssl/cert.pem"
+    "usr/lib/ssl/certs"
+    "usr/lib/ssl/openssl.cnf"
+    "usr/lib/ssl/private"
+    "usr/lib/x86_64-linux-gnu"
+    "usr/lib64/ld-linux-x86-64.so.2"
+    "usr/sbin/ip"
+    "usr/sbin/ldconfig"
+    "usr/sbin/nft"
   ];
-  isProvenanceOnlyDeb = deb:
-    pkgs.lib.any (package: matchesDebPackage package deb)
-      provenanceOnlyUbuntuPackages;
-  runtimeUbuntuDebs = pkgs.lib.filter (deb: !(isProvenanceOnlyDeb deb)) ubuntuDebs;
+
+  # The measured host owns CUDA, CDI, attestation, and fabric operation only.
+  nvidiaPayloadPaths = [
+    "lib/firmware/nvidia/595.71.05/gsp_ga10x.bin"
+    "usr/bin/nv-fabricmanager"
+    "usr/bin/nvidia-cdi-hook"
+    "usr/bin/nvidia-container-runtime"
+    "usr/bin/nvidia-ctk"
+    "usr/bin/nvidia-persistenced"
+    "usr/lib/x86_64-linux-gnu/libcuda.so"
+    "usr/lib/x86_64-linux-gnu/libcuda.so.1"
+    "usr/lib/x86_64-linux-gnu/libcuda.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvfm.so.1"
+    "usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.1"
+    "usr/lib/x86_64-linux-gnu/libnvidia-cfg.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
+    "usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-nscq.so"
+    "usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.2"
+    "usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.2.0"
+    "usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-nvvm.so.4"
+    "usr/lib/x86_64-linux-gnu/libnvidia-nvvm.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-nvvm70.so.4"
+    "usr/lib/x86_64-linux-gnu/libnvidia-pkcs11-openssl3.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1"
+    "usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-sandboxutils.so.1"
+    "usr/lib/x86_64-linux-gnu/libnvidia-sandboxutils.so.595.71.05"
+    "usr/lib/x86_64-linux-gnu/libnvidia-tileiras.so.595.71.05"
+    "usr/share/nvidia/files.d"
+    "usr/share/nvidia/nvswitch"
+  ];
 
   repositoryFiles = [
     { source = ../image/rootfs/etc/.pwd.lock; target = "etc/.pwd.lock"; mode = "0600"; }
@@ -60,11 +98,19 @@ let
     { source = ../image/rootfs/usr/share/nvidia/nvswitch/fabricmanager.cfg; target = "usr/share/nvidia/nvswitch/fabricmanager.cfg"; mode = "0644"; }
   ];
 
-  extractDebs = pkgs.lib.concatMapStringsSep "\n" (deb: ''
+  stageDebs = debs: destination:
+    pkgs.lib.concatMapStringsSep "\n" (deb: ''
     ${pkgs.dpkg}/bin/dpkg-deb --fsys-tarfile ${deb} |
+      ${pkgs.gnutar}/bin/tar --extract --file=- --directory ${destination} \
+        --no-same-owner --keep-old-files
+  '') debs;
+
+  copyPayload = source: paths: ''
+    ${pkgs.gnutar}/bin/tar --create --file=- --directory ${source} \
+      ${pkgs.lib.escapeShellArgs paths} |
       ${pkgs.gnutar}/bin/tar --extract --file=- --directory "$root" \
         --no-same-owner --keep-old-files
-  '') (runtimeUbuntuDebs ++ nvidiaDebs);
+  '';
 
   repositoryInstalls = pkgs.lib.concatMapStringsSep "\n" (file: ''
     install_new ${file.mode} ${file.source} "$root/${file.target}" -D
@@ -117,10 +163,15 @@ let
   } ''
     set -o pipefail
     root="$TMPDIR/root"
-    mkdir -p "$root"
+    ubuntu="$TMPDIR/ubuntu"
+    nvidia="$TMPDIR/nvidia"
+    mkdir -p "$root" "$ubuntu" "$nvidia"
     ${shellInstallHelpers}
 
-    ${extractDebs}
+    ${stageDebs ubuntuDebs "$ubuntu"}
+    ${stageDebs nvidiaDebs "$nvidia"}
+    ${copyPayload "$ubuntu" ubuntuPayloadPaths}
+    ${copyPayload "$nvidia" nvidiaPayloadPaths}
     chmod 0755 "$root"
 
     docker="$TMPDIR/docker"
@@ -151,7 +202,8 @@ let
 
     mkdir -p "$root/dev" "$root/mnt/ramdisk" "$root/proc" "$root/run" \
       "$root/sys" "$root/tmp" "$root/var/tmp" "$root/usr/lib64" \
-      "$root/etc/ssl/certs"
+      "$root/etc/ssl/certs" "$root/var/cache/ldconfig"
+    install -d -m 0700 "$root/etc/ssl/private"
     chmod 0755 "$root" "$root/dev" "$root/mnt" "$root/mnt/ramdisk" \
       "$root/proc" "$root/run" "$root/sys" "$root/tmp" "$root/var" \
       "$root/var/tmp"
@@ -160,21 +212,15 @@ let
     link_new usr/sbin "$root/sbin"
     link_new ../run "$root/var/run"
 
-    ca_control="$TMPDIR/ca-certificates-control"
-    mkdir -p "$ca_control"
-    ${pkgs.dpkg}/bin/dpkg-deb --control ${caCertificatesDeb} "$ca_control"
-    sed -n 's/^CERTS_LIST="\(.*\)"$/\1/p' "$ca_control/config" |
-      tr ',' '\n' |
-      sed -e 's/^[[:space:]]*//' -e '/^$/d' \
-      > "$root/etc/ca-certificates.conf"
-    test -s "$root/etc/ca-certificates.conf"
-
     # Keep update-ca-certificates' hashed symlinks as build intermediates.
     ca_output="$TMPDIR/ca-certificates-output"
+    ca_config="$TMPDIR/ca-certificates.conf"
     mkdir "$ca_output"
-    ${pkgs.dash}/bin/dash -e "$root/usr/sbin/update-ca-certificates" \
-      --certsconf "$root/etc/ca-certificates.conf" \
-      --certsdir "$root/usr/share/ca-certificates" \
+    touch "$ca_config"
+    ${pkgs.dash}/bin/dash -e "$ubuntu/usr/sbin/update-ca-certificates" \
+      --default \
+      --certsconf "$ca_config" \
+      --certsdir "$ubuntu/usr/share/ca-certificates" \
       --localcertsdir "$TMPDIR/no-local-certificates" \
       --etccertsdir "$ca_output" \
       --hooksdir "$TMPDIR/no-ca-hooks"

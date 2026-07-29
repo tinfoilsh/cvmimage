@@ -14,17 +14,11 @@
   nvidiaDebs = [
     { name = "libnvidia-cfg1"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-cfg1_595.71.05-1ubuntu1_amd64.deb"; sha256 = "dc18f61a73350cb4c19a775172c3090d794aae93eba5e0413a559b2337dff092"; }
     { name = "libnvidia-compute"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-compute_595.71.05-1ubuntu1_amd64.deb"; sha256 = "6e934848e693668ee678bd5346d7688774925700a0a35d943a2adfff2c8b4076"; }
-    { name = "libnvidia-container-tools"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-container-tools_1.19.1-1_amd64.deb"; sha256 = "c6e01e92ded92e6819df0db183cc74e65d1d8c421ca2a0d1bb5a7f2b244a11f6"; }
-    { name = "libnvidia-container1"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-container1_1.19.1-1_amd64.deb"; sha256 = "661f8cf7a97eb0c6dbf0786d0814d781235a96c4730fe012bba4436b6de4417f"; }
-    { name = "libnvidia-decode"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-decode_595.71.05-1ubuntu1_amd64.deb"; sha256 = "cf32fee8eefcca3be9181b94b2103886ac9dda577d1667b8d6f2544b2ea24138"; }
-    { name = "libnvidia-gl"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-gl_595.71.05-1ubuntu1_amd64.deb"; sha256 = "28debe13d2032f2216954a925e1f937956017c1557e6c47251b7694dd205f379"; }
     { name = "libnvidia-gpucomp"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-gpucomp_595.71.05-1ubuntu1_amd64.deb"; sha256 = "c541c308a25773471a5826897e8025d1fcf9cb742e0da566de19d4ca15f6050e"; }
     { name = "libnvidia-nscq"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/libnvidia-nscq_595.71.05-1ubuntu1_amd64.deb"; sha256 = "d02d606e3ab10db7ae5c7abd9c4dc803365d19de75261e1424f5af723992ea0f"; }
-    { name = "nvidia-container-toolkit"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/nvidia-container-toolkit_1.19.1-1_amd64.deb"; sha256 = "721a0e18ea6a25d1a2d4b569e3f4fa057c86badc64cfb441f782c020d8ca1535"; }
     { name = "nvidia-container-toolkit-base"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/nvidia-container-toolkit-base_1.19.1-1_amd64.deb"; sha256 = "3ee2a9202294fdd27cd79e23f35b7a1f24ea0fa934ab03229f25c89b3245defe"; }
     { name = "nvidia-fabricmanager"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/nvidia-fabricmanager_595.71.05-1ubuntu1_amd64.deb"; sha256 = "480d185ebb109cc3f1ebe73a6c5cff4a072a1b0ddde08017fd2f1bf9048afe66"; }
     { name = "nvidia-firmware"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/nvidia-firmware_595.71.05-1ubuntu1_amd64.deb"; sha256 = "105ceeae7c20cce66109a636f5a9bcd4bb4a820e0937f7407b91945dceaa5086"; }
-    { name = "nvidia-kernel-common"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/nvidia-kernel-common_595.71.05-1ubuntu1_amd64.deb"; sha256 = "6529833b65de8aeeafd176cf063686963ceaddd3ca159e7a28c05881f11267c4"; }
     { name = "nvidia-persistenced"; url = "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/nvidia-persistenced_595.71.05-1ubuntu1_amd64.deb"; sha256 = "6c4c02e6a9f596fa95ff036d87ff7d0c9040faf3e7f51ad8fdc8f6e6bf938f65"; }
   ];
 }

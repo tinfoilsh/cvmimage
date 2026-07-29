@@ -85,11 +85,18 @@ overlays. Developer or machine-local Nixpkgs configuration is not part of the
 build graph.
 
 `nix/rootfs.nix` is additive: it starts from an empty tree and installs only
-the declared archive members, Nix-built outputs, and repository files. Package
-maintainer scripts do not run and no producer filesystem is copied into the
-image. Complete package payloads are accepted where they are the clearest
-contract; later TCB reduction should remove them only with evidence that the
-smaller contract is correct.
+the declared package paths, Nix-built outputs, and repository files. Package
+archives are extracted into build-only staging trees; package maintainer
+scripts do not run, and manuals, headers, service units, package helpers, and
+other undeclared paths never enter the image. The Ubuntu package closure is
+still the pinned source of runtime libraries and the CA bundle, but the
+measured rootfs contains only its declared runtime payload. NVIDIA graphics,
+video, OpenCL, host diagnostics, CUDA debugger and MPS tools, distro boot
+integration, service-manager payloads, Turing-only firmware, and legacy NVIDIA
+runtime-hook compatibility are likewise excluded. The CUDA compute, CDI
+container, attestation, firmware, and NVSwitch payloads remain; diagnostic
+commands belong inside debug or workload containers rather than the measured
+host rootfs.
 
 The Nix expressions also reject store references in runtime binaries and use
 fixed ownership, modes, archive ordering, and timestamps. Reproducibility is a

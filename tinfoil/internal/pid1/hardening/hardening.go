@@ -20,10 +20,10 @@ const (
 type Service string
 
 const (
-	ServiceBoot            Service = "tinfoil-boot"
-	ServiceContainerStatus Service = "tinfoil-container-status"
-	ServiceEgress          Service = "tinfoil-egress"
-	ServiceShim            Service = "tinfoil-shim"
+	ServiceBoot       Service = "tinfoil-boot"
+	ServiceContainers Service = "tinfoil-containers"
+	ServiceEgress     Service = "tinfoil-egress"
+	ServiceShim       Service = "tinfoil-shim"
 )
 
 type servicePolicy struct {
@@ -108,14 +108,14 @@ func policyFor(service Service) (servicePolicy, bool) {
 			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD},
 			deniedSyscalls:    kernelManagementSyscalls,
 		}, true
-	case ServiceContainerStatus:
+	case ServiceContainers:
 		return servicePolicy{
 			noNewPrivileges:      true,
-			boundCapabilities:    []int{},
+			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
 			restrictFilesystems:  true,
 			deniedSyscalls:       restrictedServiceSyscalls,
 			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX},
+			allowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		}, true
 	case ServiceEgress:
 		return servicePolicy{

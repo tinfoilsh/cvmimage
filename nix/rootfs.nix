@@ -2,7 +2,7 @@
   pkgs,
   ubuntuDebs,
   runtimeGo,
-  debugInit,
+  debugPID1,
   nvattest,
   nvidiaModules,
 }:
@@ -183,7 +183,7 @@ let
       install_new 0755 "$docker/$command" "$root/usr/bin/$command"
     done
 
-    for command in boot container-status egress init shim; do
+    for command in boot containers egress pid1 shim; do
       install_new 0755 ${runtimeGo}/bin/tinfoil-$command \
         "$root/usr/bin/tinfoil-$command"
     done
@@ -249,8 +249,8 @@ let
         --no-same-owner ./usr/bin/nvidia-smi
     install_new 0755 "$nvidia/usr/bin/nvidia-smi" \
       "$root/usr/bin/nvidia-smi" -D
-    install_new 0755 ${debugInit}/bin/tinfoil-init \
-      "$root/usr/bin/tinfoil-init" -D
+    install_new 0755 ${debugPID1}/bin/tinfoil-pid1 \
+      "$root/usr/bin/tinfoil-pid1" -D
     install -d -m 0700 "$root/root"
     ${deterministicTar "$root" "$out"}
   '';

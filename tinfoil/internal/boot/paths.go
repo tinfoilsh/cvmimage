@@ -40,11 +40,12 @@ const (
 	HTTPChallengePort = 80
 
 	// InitBinary is PID 1 after the measured root replaces the initrd.
-	InitBinary            = "/usr/bin/tinfoil-init"
-	BootBinary            = "/usr/bin/tinfoil-boot"
-	ContainerStatusBinary = "/usr/bin/tinfoil-container-status"
-	EgressBinary          = "/usr/bin/tinfoil-egress"
-	ShimBinary            = "/usr/bin/tinfoil-shim"
+	InitBinary       = "/usr/bin/tinfoil-pid1"
+	BootBinary       = "/usr/bin/tinfoil-boot"
+	ContainersBinary = "/usr/bin/tinfoil-containers"
+	ContainersSocket = "/run/tinfoil/containers.sock"
+	EgressBinary     = "/usr/bin/tinfoil-egress"
+	ShimBinary       = "/usr/bin/tinfoil-shim"
 
 	// ExternalNICPCIAddress is the measured virtio-net topology ABI. It MUST
 	// match tinfoild/admin/guest_topology.go.

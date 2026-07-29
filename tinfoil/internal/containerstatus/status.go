@@ -1,4 +1,4 @@
-package main
+package containerstatus
 
 import (
 	"context"
@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -70,14 +68,10 @@ type containerHealth struct {
 	LastCheckExitCode *int       `json:"last_check_exit_code,omitempty"`
 }
 
-func main() {
-	log.SetFlags(0)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+func Run(ctx context.Context) error {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Fatalf("creating docker client: %v", err)
+		return fmt.Errorf("creating docker client: %w", err)
 	}
 	defer cli.Close()
 
@@ -89,7 +83,7 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			publishAndLog(ctx, cli)
 		}

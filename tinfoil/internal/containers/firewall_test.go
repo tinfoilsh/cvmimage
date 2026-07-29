@@ -1,4 +1,4 @@
-package main
+package containers
 
 import (
 	"context"

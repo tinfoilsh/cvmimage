@@ -59,10 +59,11 @@ func TestServiceSocketDomains(t *testing.T) {
 		domain  int
 		allowed bool
 	}{
-		{name: "container-status-unix", service: ServiceContainerStatus, domain: unix.AF_UNIX, allowed: true},
-		{name: "container-status-inet", service: ServiceContainerStatus, domain: unix.AF_INET},
-		{name: "container-status-packet", service: ServiceContainerStatus, domain: unix.AF_PACKET},
-		{name: "container-status-vsock", service: ServiceContainerStatus, domain: unix.AF_VSOCK},
+		{name: "containers-unix", service: ServiceContainers, domain: unix.AF_UNIX, allowed: true},
+		{name: "containers-inet", service: ServiceContainers, domain: unix.AF_INET, allowed: true},
+		{name: "containers-netlink", service: ServiceContainers, domain: unix.AF_NETLINK, allowed: true},
+		{name: "containers-packet", service: ServiceContainers, domain: unix.AF_PACKET},
+		{name: "containers-vsock", service: ServiceContainers, domain: unix.AF_VSOCK},
 		{name: "shim-inet", service: ServiceShim, domain: unix.AF_INET, allowed: true},
 		{name: "shim-inet6", service: ServiceShim, domain: unix.AF_INET6, allowed: true},
 		{name: "shim-unix", service: ServiceShim, domain: unix.AF_UNIX},
@@ -151,11 +152,11 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 		{name: "boot-cannot-io-uring-setup", service: ServiceBoot, operation: "io-uring-setup"},
 		{name: "shim-cannot-io-uring-setup", service: ServiceShim, operation: "io-uring-setup"},
 		{name: "egress-cannot-io-uring-enter", service: ServiceEgress, operation: "io-uring-enter"},
-		{name: "status-cannot-io-uring-register", service: ServiceContainerStatus, operation: "io-uring-register"},
+		{name: "containers-cannot-io-uring-register", service: ServiceContainers, operation: "io-uring-register"},
 		{name: "shim-cannot-mount", service: ServiceShim, operation: "mount"},
 		{name: "shim-forces-clone3-fallback", service: ServiceShim, operation: "clone3"},
 		{name: "egress-cannot-clone-namespace", service: ServiceEgress, operation: "namespace-clone"},
-		{name: "status-rejects-x32", service: ServiceContainerStatus, operation: "x32"},
+		{name: "containers-rejects-x32", service: ServiceContainers, operation: "x32"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

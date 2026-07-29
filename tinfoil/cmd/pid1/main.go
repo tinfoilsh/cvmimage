@@ -36,15 +36,15 @@ const (
 
 	containerdName   = "containerd"
 	dockerName       = "dockerd"
-	statusName       = "tinfoil-container-status"
+	containersName   = "tinfoil-containers"
 	shimName         = "tinfoil-shim"
 	egressName       = "tinfoil-egress"
 	containerdSocket = "/run/containerd/containerd.sock"
 	dockerSocket     = "/run/docker.sock"
-	readyPath        = "/run/tinfoil-init.ready"
+	readyPath        = "/run/tinfoil-pid1.ready"
 	selfExecPath     = "/proc/self/exe"
 	pid1Env          = "TINFOIL_PID1"
-	pid1EnvValue     = "tinfoil-init"
+	pid1EnvValue     = "tinfoil-pid1"
 	kmsgInfoPrefix   = "<6>"
 	fabricConfigPath = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
 )
@@ -55,7 +55,7 @@ func main() {
 	log.SetFlags(0)
 	if len(os.Args) > 1 && os.Args[1] == "--exec-service" {
 		if err := execService(os.Args[2:], hardening.ApplyService, syscall.Exec); err != nil {
-			fmt.Fprintf(os.Stderr, "tinfoil-init: exec-service: %v\n", err)
+			fmt.Fprintf(os.Stderr, "tinfoil-pid1: exec-service: %v\n", err)
 			os.Exit(127)
 		}
 		panic("syscall.Exec returned without an error")
@@ -213,9 +213,17 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: containersName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary),
+		Ready:   endpointReady("unix", boot.ContainersSocket, containerdReadyLimit),
+	}); err != nil {
+		return err
+	}
+	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: shimName, Required: true, Restart: true,
 		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
 		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
+		PIDFile: "/run/tinfoil/pids/tinfoil-shim.pid",
 	}); err != nil {
 		return err
 	}
@@ -225,22 +233,13 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 
-	if exists, err := deps.exists(boot.ContainerStatusBinary); err != nil {
-		return err
-	} else if exists {
-		if err := deps.services.Start(bootCtx, supervisor.Service{
-			Name: statusName, Restart: true,
-			Command: hardenedCommand(hardening.ServiceContainerStatus, boot.ContainerStatusBinary),
-		}); err != nil {
-			return err
-		}
-	}
 	if exists, err := deps.exists(boot.EgressConfigPath); err != nil {
 		return err
 	} else if exists {
 		if err := deps.services.Start(bootCtx, supervisor.Service{
 			Name: egressName, Restart: true,
 			Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
+			PIDFile: "/run/tinfoil/pids/tinfoil-egress.pid",
 		}); err != nil {
 			return err
 		}
@@ -499,12 +498,13 @@ func fabricManagerCommand() supervisor.Command {
 }
 
 func requiredServiceNames() []string {
-	return []string{containerdName, dockerName, shimName}
+	return []string{containerdName, dockerName, containersName, shimName}
 }
 
 func shutdownGroups() [][]string {
 	return [][]string{
-		{egressName, shimName, statusName},
+		{egressName, shimName},
+		{containersName},
 		{dockerName},
 		{containerdName},
 	}
@@ -773,16 +773,16 @@ func initLogf(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 	consoleMu.Lock()
 	defer consoleMu.Unlock()
-	log.Print("tinfoil-init: " + message)
+	log.Print("tinfoil-pid1: " + message)
 	for _, path := range []string{"/dev/kmsg", "/dev/ttyS0", "/dev/console"} {
 		file, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			continue
 		}
 		if path == "/dev/kmsg" {
-			_, _ = fmt.Fprintf(file, kmsgInfoPrefix+"tinfoil-init: %s\n", message)
+			_, _ = fmt.Fprintf(file, kmsgInfoPrefix+"tinfoil-pid1: %s\n", message)
 		} else {
-			_, _ = fmt.Fprintf(file, "tinfoil-init: %s\n", message)
+			_, _ = fmt.Fprintf(file, "tinfoil-pid1: %s\n", message)
 		}
 		_ = file.Close()
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/containerapi"
 	"tinfoil/internal/nvidia"
 )
 
@@ -174,7 +175,12 @@ func run(ctx context.Context) error {
 
 	// 11. Containers + health checks
 	log.Println("Launching containers")
-	if err := launchContainersAndWaitHealthy(ctx, tracker, config, externalConfig, cmdline.Debug); err != nil {
+	request, err := containerapi.NewApplyRequest(config, externalConfig, cmdline.Debug)
+	if err != nil {
+		return err
+	}
+	if err := containerapi.Apply(ctx, request); err != nil {
+		tracker.Record(boot.StageContainers, boot.StatusFailed, 0, err.Error())
 		return err
 	}
 

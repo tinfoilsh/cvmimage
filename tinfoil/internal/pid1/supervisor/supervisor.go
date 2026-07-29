@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -265,6 +267,7 @@ type Service struct {
 	Required bool
 	Restart  bool
 	Ready    func(context.Context) error
+	PIDFile  string
 }
 
 type Clock interface {
@@ -380,6 +383,11 @@ func (s *Supervisor) startLocked(record *serviceRecord) (*Process, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := writePIDFile(record.spec.PIDFile, process.PID()); err != nil {
+		_ = process.Signal(syscall.SIGKILL)
+		_, _ = process.Wait(context.Background())
+		return nil, fmt.Errorf("writing %s pid file: %w", record.spec.Name, err)
+	}
 	record.process = process
 	record.groups[process] = struct{}{}
 	record.started = s.clock.Now()
@@ -428,6 +436,7 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 		if err != nil {
 			return
 		}
+		removePIDFile(record.spec.PIDFile, process.PID())
 		s.mu.Lock()
 		if record.process == process {
 			record.process = nil
@@ -492,6 +501,45 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 			break
 		}
 	}
+}
+
+func writePIDFile(path string, pid int) error {
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(dir, ".pid-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := fmt.Fprintf(temporary, "%d\n", pid); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+func removePIDFile(path string, pid int) {
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(data)) != strconv.Itoa(pid) {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 func nextDelay(current, maximum time.Duration) time.Duration {

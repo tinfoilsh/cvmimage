@@ -16,3 +16,27 @@
 +#ifdef CONFIG_DMI
 @@ -483,0 +487 @@
 +#endif
+--- a/drivers/firmware/efi/efi.c
++++ b/drivers/firmware/efi/efi.c
+@@ -146,0 +147 @@
++#ifdef CONFIG_DMI
+@@ -155,0 +157 @@
++#endif
+@@ -622,0 +625 @@
++#ifdef CONFIG_DMI
+@@ -624,0 +628 @@
++#endif
+--- a/arch/x86/platform/efi/efi.c
++++ b/arch/x86/platform/efi/efi.c
+@@ -70,0 +71 @@
++#ifdef CONFIG_DMI
+@@ -72,0 +74 @@
++#endif
+--- a/arch/x86/platform/efi/quirks.c
++++ b/arch/x86/platform/efi/quirks.c
+@@ -574,0 +575,3 @@
++#ifndef CONFIG_DMI
++	return 0;
++#else
+@@ -625,0 +629 @@
++#endif

@@ -175,11 +175,6 @@ func validateNetwork(config *Config) error {
 		}
 	}
 	for name, spec := range config.Networks {
-		if spec == nil {
-			config.Networks[name] = &NetworkSpec{Egress: "closed"}
-		}
-	}
-	for name, spec := range config.Networks {
 		if err := validateNetworkEntry(name, spec); err != nil {
 			return fmt.Errorf("networks.%s: %w", name, err)
 		}

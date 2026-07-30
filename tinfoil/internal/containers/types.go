@@ -29,7 +29,3 @@ func hasReservedDebugContainer(config *Config) bool {
 	}
 	return false
 }
-
-func shimUpstreamSet(config *Config) bool {
-	return config.ShimCfg != nil && config.ShimCfg.UpstreamContainer != ""
-}

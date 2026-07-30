@@ -78,7 +78,7 @@ func RunStatusPublisher(ctx context.Context) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
-	log.Printf("Starting tinfoil container-status publisher")
+	log.Printf("Starting tinfoil-containers status publisher")
 	publishAndLog(ctx, cli)
 	for {
 		select {

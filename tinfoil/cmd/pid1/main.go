@@ -213,6 +213,14 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: shimName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
+		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
+		PIDFile: "/run/tinfoil/pids/tinfoil-shim.pid",
+	}); err != nil {
+		return err
+	}
 	if err := deps.oneShot(bootCtx, hardenedCommand(
 		hardening.ServiceBoot, boot.BootBinary,
 	)); err != nil {
@@ -222,15 +230,6 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		Name: containersName, Required: true, Restart: true,
 		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary),
 		Ready:   fileReady(boot.ContainersReadyPath, containersReadyLimit),
-	}); err != nil {
-		return err
-	}
-
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: shimName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
-		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile: "/run/tinfoil/pids/tinfoil-shim.pid",
 	}); err != nil {
 		return err
 	}

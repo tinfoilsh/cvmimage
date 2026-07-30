@@ -24,6 +24,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -38,7 +39,7 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config,
 			return err
 		}
 	}
-	if shimUpstreamSet(cfg) {
+	if runtimeconfig.ShimUpstreamSet(cfg) {
 		if err := ensureShimNetwork(cli, cfg.ShimCfg.UpstreamContainer); err != nil {
 			return err
 		}
@@ -342,7 +343,7 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 		first = closed[0]
 		rest = append(rest, closed[1:]...)
 	}
-	if shimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
+	if runtimeconfig.ShimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
 		if first == "" {
 			first = containernet.ShimNetName
 		} else {

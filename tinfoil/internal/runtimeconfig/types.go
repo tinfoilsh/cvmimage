@@ -119,20 +119,42 @@ type containerInputFields struct {
 	securityOpt bool
 }
 
+var containerFields = map[string]bool{
+	"name": true, "image": true, "command": true, "entrypoint": true,
+	"working_dir": true, "user": true, "env": true, "secrets": true,
+	"volumes": true, "devices": true, "cap_add": true, "runtime": true,
+	"networks": true, "ipc": true, "pid": true, "gpus": true,
+	"shm_size": true, "memory": true, "cpus": true, "tmpfs": true,
+	"read_only": true, "pids_limit": true, "restart": true,
+	"stop_signal": true, "stop_timeout": true, "healthcheck": true,
+	"privileged": true, "cap_drop": true, "security_opt": true,
+}
+
 func (c *Container) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("container entry must be a mapping")
+	}
 	var fields containerInputFields
-	if node.Kind == yaml.MappingNode {
-		for index := 0; index < len(node.Content); index += 2 {
-			switch node.Content[index].Value {
-			case "<<":
-				return fmt.Errorf("container YAML merge keys are unsupported")
-			case "privileged":
-				fields.privileged = true
-			case "cap_drop":
-				fields.capDrop = true
-			case "security_opt":
-				fields.securityOpt = true
-			}
+	seen := map[string]bool{}
+	for index := 0; index < len(node.Content); index += 2 {
+		field := node.Content[index].Value
+		if field == "<<" {
+			return fmt.Errorf("container YAML merge keys are unsupported")
+		}
+		if seen[field] {
+			return fmt.Errorf("duplicate container field %q", field)
+		}
+		seen[field] = true
+		if !containerFields[field] {
+			return fmt.Errorf("unknown container field %q", field)
+		}
+		switch field {
+		case "privileged":
+			fields.privileged = true
+		case "cap_drop":
+			fields.capDrop = true
+		case "security_opt":
+			fields.securityOpt = true
 		}
 	}
 	type rawContainer Container
@@ -180,10 +202,23 @@ func Decode(data []byte, debug bool) (*Config, error) {
 		shimCfg.UpstreamContainer = config.Containers[0].Name
 	}
 	config.ShimCfg = shimCfg
+	setNetworkDefaults(&config)
 	if err := Validate(&config, debug); err != nil {
 		return nil, err
 	}
 	return &config, nil
+}
+
+func setNetworkDefaults(config *Config) {
+	for name, spec := range config.Networks {
+		if spec == nil {
+			config.Networks[name] = &NetworkSpec{Egress: "closed"}
+		}
+	}
+}
+
+func ShimUpstreamSet(config *Config) bool {
+	return config.ShimCfg != nil && config.ShimCfg.UpstreamContainer != ""
 }
 
 func HasReservedDebugContainer(config *Config) bool {

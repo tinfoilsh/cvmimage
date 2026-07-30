@@ -48,7 +48,7 @@ func Load() (*Engine, error) {
 		config:  cfg,
 		resolve: resolve,
 		nft: nftClient{
-			apply: applyDelta,
+			apply: firewall.ApplyOutput,
 		},
 		interval: refreshInterval,
 	}, nil
@@ -148,8 +148,4 @@ func resolve(ctx context.Context, domains []string) ([]string, error) {
 		return nil, fmt.Errorf("no IPv4 addresses resolved for %v", domains)
 	}
 	return ips, nil
-}
-
-func applyDelta(script string) ([]byte, error) {
-	return firewall.ApplyOutput(script)
 }

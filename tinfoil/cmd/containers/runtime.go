@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	shimPIDPath   = "/run/tinfoil/pids/tinfoil-shim.pid"
-	egressPIDPath = "/run/tinfoil/pids/tinfoil-egress.pid"
+	shimPIDPath         = "/run/tinfoil/pids/tinfoil-shim.pid"
+	egressPIDPath       = "/run/tinfoil/pids/tinfoil-egress.pid"
+	restartWaitTimeout  = 15 * time.Second
+	restartPollInterval = 100 * time.Millisecond
 )
 
 func loadRuntimeConfig() (*runtimeconfig.Config, error) {
@@ -92,9 +94,9 @@ func restartFromPIDFile(ctx context.Context, path string) error {
 	if err := syscall.Kill(oldPID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("signaling pid %d: %w", oldPID, err)
 	}
-	deadline := time.NewTimer(15 * time.Second)
+	deadline := time.NewTimer(restartWaitTimeout)
 	defer deadline.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(restartPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -103,12 +105,27 @@ func restartFromPIDFile(ctx context.Context, path string) error {
 		case <-deadline.C:
 			return fmt.Errorf("waiting for %s to restart", path)
 		case <-ticker.C:
-			current, err := os.ReadFile(path)
-			if errors.Is(err, os.ErrNotExist) || err == nil && strings.TrimSpace(string(current)) != strconv.Itoa(oldPID) {
+			restarted, err := replacementPIDAvailable(path, oldPID)
+			if err != nil {
+				return err
+			}
+			if restarted {
 				return nil
 			}
 		}
 	}
+}
+
+func replacementPIDAvailable(path string, oldPID int) (bool, error) {
+	current, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	newPID, err := strconv.Atoi(strings.TrimSpace(string(current)))
+	return err == nil && newPID > 1 && newPID != oldPID, nil
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

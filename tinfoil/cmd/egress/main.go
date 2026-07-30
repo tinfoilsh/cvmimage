@@ -40,7 +40,9 @@ func runWith(ctx context.Context, load func() (egressRunner, error)) error {
 		return err
 	}
 	if !engine.Configured() {
-		log.Println("no allowlist networks configured, exiting")
+		log.Println("no allowlist networks configured, waiting for restart")
+		<-ctx.Done()
+		log.Println("shutting down")
 		return nil
 	}
 	// Boot owns the readiness-gating initial population. This service only

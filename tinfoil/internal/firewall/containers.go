@@ -23,7 +23,7 @@ func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
 	for name, network := range config.Networks {
 		log.Printf("Firewall: network %q egress=%s", name, network.Egress)
 	}
-	if shimUpstreamSet(config) {
+	if runtimeconfig.ShimUpstreamSet(config) {
 		log.Printf("Firewall: network %q egress=closed (implicit shim channel)", containernet.ShimNetName)
 	}
 	return nil
@@ -41,7 +41,7 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) stri
 	for _, name := range names {
 		writeBridgeRules(&script, name, config.Networks[name])
 	}
-	if shimUpstreamSet(config) {
+	if runtimeconfig.ShimUpstreamSet(config) {
 		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"})
 	}
 	if debug && hasReservedDebugContainer(config) {
@@ -56,24 +56,20 @@ func writeReservedDebugForwardRules(script *strings.Builder) {
 }
 
 func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeconfig.NetworkSpec) {
-	fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q oif %q accept\n", bridge, bridge)
-	fmt.Fprintf(script, "add rule inet tinfoil container_forward oif %q ct state established,related accept\n", bridge)
-	fmt.Fprintf(script, "add rule inet tinfoil container_input iif %q ct state new drop\n", bridge)
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q oifname %q accept\n", bridge, bridge)
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct state established,related accept\n", bridge)
+	fmt.Fprintf(script, "add rule inet tinfoil container_input iifname %q ct state new drop\n", bridge)
 	switch network.Egress {
 	case "open":
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip daddr != %s accept\n", bridge, nonPublicIPv4Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip6 daddr != %s accept\n", bridge, nonPublicIPv6Ranges)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr != %s accept\n", bridge, nonPublicIPv4Ranges)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr != %s accept\n", bridge, nonPublicIPv6Ranges)
 	case "allowlist":
 		setName := containernet.AllowSetPrefix + bridge
 		fmt.Fprintf(script, "create set inet tinfoil %s { type ipv4_addr; }\n", setName)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip daddr %s drop\n", bridge, nonPublicIPv4Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip6 daddr %s drop\n", bridge, nonPublicIPv6Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iif %q ip daddr @%s accept\n", bridge, setName)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr @%s accept\n", bridge, setName)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr %s drop\n", bridge, nonPublicIPv4Ranges)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr %s drop\n", bridge, nonPublicIPv6Ranges)
 	}
-}
-
-func shimUpstreamSet(config *runtimeconfig.Config) bool {
-	return config.ShimCfg != nil && config.ShimCfg.UpstreamContainer != ""
 }
 
 func hasReservedDebugContainer(config *runtimeconfig.Config) bool {

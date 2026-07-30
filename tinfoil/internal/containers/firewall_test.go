@@ -73,7 +73,8 @@ func TestFirewallPopulationHasFixedDeadline(t *testing.T) {
 		func() (egressPopulator, error) {
 			return fakeEgressPopulator{populate: func(ctx context.Context) error {
 				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > egressInitialPopulationTimeout {
+				remaining := time.Until(deadline)
+				if !ok || remaining > egressInitialPopulationTimeout || remaining < egressInitialPopulationTimeout-time.Second {
 					t.Fatal("population context has no fixed deadline")
 				}
 				return nil

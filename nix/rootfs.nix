@@ -51,6 +51,7 @@ let
     "usr/bin/nvidia-container-runtime"
     "usr/bin/nvidia-ctk"
     "usr/bin/nvidia-persistenced"
+    "usr/bin/nvidia-smi"
     "usr/lib/x86_64-linux-gnu/libcuda.so"
     "usr/lib/x86_64-linux-gnu/libcuda.so.1"
     "usr/lib/x86_64-linux-gnu/libcuda.so.595.71.05"
@@ -242,13 +243,6 @@ let
     ${pkgs.dpkg}/bin/dpkg-deb --fsys-tarfile ${busyboxDeb} |
       ${pkgs.gnutar}/bin/tar --extract --file=- --directory "$root" \
         --no-same-owner --no-overwrite-dir
-    nvidia="$TMPDIR/nvidia"
-    mkdir "$nvidia"
-    ${pkgs.dpkg}/bin/dpkg-deb --fsys-tarfile ${nvidiaComputeDeb} |
-      ${pkgs.gnutar}/bin/tar --extract --file=- --directory "$nvidia" \
-        --no-same-owner ./usr/bin/nvidia-smi
-    install_new 0755 "$nvidia/usr/bin/nvidia-smi" \
-      "$root/usr/bin/nvidia-smi" -D
     install_new 0755 ${debugPID1}/bin/tinfoil-pid1 \
       "$root/usr/bin/tinfoil-pid1" -D
     install -d -m 0700 "$root/root"

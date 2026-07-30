@@ -699,10 +699,7 @@ func (r *readinessState) Publish() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.published = true
-	if r.failed || !r.allReadyLocked() {
-		return errors.New("required services are not ready")
-	}
-	if err := r.set(true); err != nil {
+	if err := r.set(!r.failed && r.allReadyLocked()); err != nil {
 		return err
 	}
 	return nil

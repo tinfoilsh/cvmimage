@@ -19,6 +19,7 @@ const (
 )
 
 type Config struct {
+	CVMVersion string                  `yaml:"cvm-version"`
 	ShimRaw    yaml.Node               `yaml:"shim"`
 	ShimCfg    *shimconfig.Config      `yaml:"-"`
 	CVMNetwork CVMNetworkConfig        `yaml:"cvm-network"`

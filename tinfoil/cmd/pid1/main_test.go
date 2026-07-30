@@ -234,22 +234,16 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 	control := newFakeNVIDIA(t, 8)
 	control.fabricMode = nvidia.FabricModeFabricManager
 	var commands []supervisor.Command
-	var persistencedLimit time.Duration
+	var services []supervisor.Service
 	oneShot := func(ctx context.Context, command supervisor.Command) error {
 		control.calls = append(control.calls, "exec:"+command.Name)
 		commands = append(commands, command)
-		if command.Name == "nvidia-persistenced" {
-			deadline, ok := ctx.Deadline()
-			if !ok {
-				t.Fatal("nvidia-persistenced context has no deadline")
-			}
-			persistencedLimit = time.Until(deadline)
-		}
 		return nil
 	}
 	startService := func(ctx context.Context, service supervisor.Service) error {
 		control.calls = append(control.calls, "exec:"+service.Command.Name)
 		commands = append(commands, service.Command)
+		services = append(services, service)
 		return startTestService(ctx, service)
 	}
 	var statuses []nvidia.BootstrapStatus
@@ -272,9 +266,6 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 	if !slices.Equal(control.calls, wantOrder) {
 		t.Fatalf("calls = %v, want %v", control.calls, wantOrder)
 	}
-	if persistencedLimit > nvidiaChildLimit || persistencedLimit < nvidiaChildLimit-time.Second {
-		t.Fatalf("persistenced child limit = %s, want %s", persistencedLimit, nvidiaChildLimit)
-	}
 	if len(statuses) != 1 || statuses[0] != nvidia.ReadyBootstrapStatus(8) {
 		t.Fatalf("statuses = %#v", statuses)
 	}
@@ -287,6 +278,9 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 		[]string{"-c", fabricConfigPath})
 	assertCommand(t, commands[2], "nvidia-ctk-cdi", "/usr/bin/nvidia-ctk",
 		[]string{"cdi", "generate", "--output=" + control.temporary})
+	if len(services) != 2 || !services[0].Forking || !services[0].Restart || services[1].Forking || !services[1].Restart {
+		t.Fatalf("NVIDIA services = %#v", services)
+	}
 	env := environmentMap(commands[1].Env)
 	if _, ok := env["FM_CONFIG_FILE"]; ok {
 		t.Fatalf("Fabric Manager inherited FM_CONFIG_FILE: %#v", env)

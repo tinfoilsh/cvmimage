@@ -118,6 +118,25 @@ func (p *Process) Stop(termGrace, killGrace time.Duration) error {
 func (p *Process) cgroupPopulated() (bool, error) {
 	return p.child.cgroupPopulated()
 }
+
+func (p *Process) waitCgroupEmpty(ctx context.Context) error {
+	ticker := time.NewTicker(cgroupPollInterval)
+	defer ticker.Stop()
+	for {
+		populated, err := p.cgroupPopulated()
+		if err != nil {
+			return err
+		}
+		if !populated {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
 func (p *Process) killCgroup() error   { return p.child.killCgroup() }
 func (p *Process) removeCgroup() error { return p.child.removeCgroup() }
 
@@ -445,12 +464,14 @@ type State struct {
 }
 
 // Service is a long-lived child. Ready is called after every start and must
-// return only when that instance is usable.
+// return only when that instance is usable. Forking permits a successful
+// launcher to exit while the service remains contained in its cgroup.
 type Service struct {
 	Name     string
 	Command  Command
 	Required bool
 	Restart  bool
+	Forking  bool
 	Ready    func(context.Context) error
 	PIDFile  string
 }
@@ -523,6 +544,9 @@ func New(parent context.Context, manager *Manager, config Config) *Supervisor {
 }
 
 func (s *Supervisor) Start(ctx context.Context, service Service) error {
+	if service.Forking && service.Ready == nil {
+		return fmt.Errorf("forking service %s requires readiness", service.Name)
+	}
 	record := &serviceRecord{
 		spec: service, delay: s.base, done: make(chan struct{}),
 	}
@@ -617,7 +641,17 @@ func (s *Supervisor) ready(ctx context.Context, record *serviceRecord, process *
 		if err := exit.Err(); err != nil {
 			return err
 		}
-		return fmt.Errorf("%s exited before readiness", record.spec.Name)
+		if !record.spec.Forking {
+			return fmt.Errorf("%s exited before readiness", record.spec.Name)
+		}
+		populated, err := process.cgroupPopulated()
+		if err != nil {
+			return fmt.Errorf("inspect %s cgroup after launcher exit: %w", record.spec.Name, err)
+		}
+		if !populated {
+			return fmt.Errorf("%s cgroup emptied before readiness", record.spec.Name)
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -628,6 +662,15 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 		exit, err := process.Wait(context.Background())
 		if err != nil {
 			return
+		}
+		serviceErr := exit.Err()
+		if serviceErr == nil && record.spec.Forking {
+			if err := process.waitCgroupEmpty(s.context); err != nil {
+				if s.context.Err() != nil {
+					return
+				}
+				serviceErr = fmt.Errorf("wait for %s cgroup: %w", record.spec.Name, err)
+			}
 		}
 		removePIDFile(record.spec.PIDFile, process.PID())
 		s.mu.Lock()
@@ -641,7 +684,7 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 		if !draining {
 			cleanupErr = stopProcesses([]*Process{process}, 0, initialCleanupGrace, realClock{})
 		}
-		s.emit(State{Name: record.spec.Name, Required: record.spec.Required, Err: errors.Join(exit.Err(), cleanupErr)})
+		s.emit(State{Name: record.spec.Name, Required: record.spec.Required, Err: errors.Join(serviceErr, cleanupErr)})
 		if draining || !record.spec.Restart {
 			return
 		}

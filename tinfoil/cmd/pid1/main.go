@@ -32,24 +32,25 @@ const (
 	oneShotStopGrace     = 2 * time.Second
 	serviceTermGrace     = 10 * time.Second
 	serviceKillGrace     = 5 * time.Second
-	nvidiaChildLimit     = 4 * time.Minute
 	nvidiaDeviceWait     = 15 * time.Second
 	nvidiaDevicePoll     = 500 * time.Millisecond
 	cdiGenerateLimit     = 30 * time.Second
 
-	containerdName   = "containerd"
-	dockerName       = "dockerd"
-	containersName   = "tinfoil-containers"
-	shimName         = "tinfoil-shim"
-	egressName       = "tinfoil-egress"
-	containerdSocket = "/run/containerd/containerd.sock"
-	dockerSocket     = "/run/docker.sock"
-	readyPath        = "/run/tinfoil-pid1.ready"
-	selfExecPath     = "/proc/self/exe"
-	pid1Env          = "TINFOIL_PID1"
-	pid1EnvValue     = "tinfoil-pid1"
-	kmsgInfoPrefix   = "<6>"
-	fabricConfigPath = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
+	containerdName    = "containerd"
+	dockerName        = "dockerd"
+	containersName    = "tinfoil-containers"
+	shimName          = "tinfoil-shim"
+	egressName        = "tinfoil-egress"
+	persistencedName  = "nvidia-persistenced"
+	fabricManagerName = "nvidia-fabricmanager"
+	containerdSocket  = "/run/containerd/containerd.sock"
+	dockerSocket      = "/run/docker.sock"
+	readyPath         = "/run/tinfoil-pid1.ready"
+	selfExecPath      = "/proc/self/exe"
+	pid1Env           = "TINFOIL_PID1"
+	pid1EnvValue      = "tinfoil-pid1"
+	kmsgInfoPrefix    = "<6>"
+	fabricConfigPath  = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
 )
 
 var consoleMu sync.Mutex
@@ -410,18 +411,16 @@ func runNVIDIABootstrapSteps(
 	if err := control.PreparePersistencedRuntime(); err != nil {
 		return fmt.Errorf("prepare nvidia-persistenced runtime: %w", err)
 	}
-	persistencedCtx, cancelPersistenced := context.WithTimeout(ctx, nvidiaChildLimit)
-	err := oneShot(persistencedCtx, command(
-		"nvidia-persistenced",
+	persistenced := command(
+		persistencedName,
 		"/usr/bin/nvidia-persistenced",
 		"--user", "nvidia-persistenced", "--uvm-persistence-mode", "--verbose",
-	))
-	cancelPersistenced()
-	if err != nil {
+	)
+	if err := startService(ctx, supervisor.Service{
+		Name: persistenced.Name, Restart: true, Forking: true, Command: persistenced,
+		Ready: control.WaitForPersistenced,
+	}); err != nil {
 		return fmt.Errorf("start nvidia-persistenced: %w", err)
-	}
-	if err := control.WaitForPersistenced(ctx); err != nil {
-		return fmt.Errorf("wait for nvidia-persistenced: %w", err)
 	}
 	if err := control.LoadUVMKernelModules(); err != nil {
 		return fmt.Errorf("load NVIDIA UVM kernel modules: %w", err)
@@ -510,7 +509,7 @@ func waitForNVIDIADeviceNodes(
 
 func fabricManagerCommand() supervisor.Command {
 	cmd := command(
-		"nvidia-fabricmanager",
+		fabricManagerName,
 		"/usr/bin/nv-fabricmanager",
 		"-c", fabricConfigPath,
 	)
@@ -533,6 +532,7 @@ func shutdownGroups() [][]string {
 	return [][]string{
 		{egressName, shimName},
 		{containersName},
+		{fabricManagerName, persistencedName},
 		{dockerName},
 		{containerdName},
 	}

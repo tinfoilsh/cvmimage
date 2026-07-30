@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,6 +22,18 @@ import (
 	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/runtimeconfig"
 )
+
+const bootPath = "/v1/boot"
+
+type manager struct {
+	bootMu sync.Mutex
+	ctx    context.Context
+	debug  bool
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
+}
 
 func main() {
 	log.SetFlags(0)
@@ -31,9 +48,27 @@ func run(ctx context.Context) error {
 	if err := os.MkdirAll("/run/tinfoil", 0o700); err != nil {
 		return err
 	}
+	debug, err := kernelcmdline.DebugEnabled()
+	if err != nil {
+		return err
+	}
+	runtimeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	manager := &manager{ctx: runtimeCtx, debug: debug}
+
+	var listener net.Listener
+	if debug {
+		listener, err = listenDebugSocket()
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+		defer os.Remove(boot.ContainersSocket)
+	}
+
 	_ = os.Remove(boot.ContainersReadyPath)
 	if _, err := os.Stat(boot.RuntimeBootedPath); errors.Is(err, os.ErrNotExist) {
-		if err := bootDefaultRuntime(ctx); err != nil {
+		if err := manager.boot(nil); err != nil {
 			return err
 		}
 		if err := atomicWrite(boot.RuntimeBootedPath, []byte("booted\n"), 0o600); err != nil {
@@ -46,19 +81,74 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
 
-	return containers.RunStatusPublisher(ctx)
+	statusDone := make(chan error, 1)
+	go func() { statusDone <- containers.RunStatusPublisher(runtimeCtx) }()
+	if !debug {
+		return <-statusDone
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(bootPath, manager.handleBoot)
+	httpServer := &http.Server{Handler: mux}
+	go func() {
+		<-runtimeCtx.Done()
+		_ = httpServer.Shutdown(context.Background())
+	}()
+	log.Printf("tinfoil-containers: debug API listening on %s", boot.ContainersSocket)
+	serveErr := httpServer.Serve(listener)
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	cancel()
+	return errors.Join(serveErr, <-statusDone)
 }
 
-func bootDefaultRuntime(ctx context.Context) error {
-	debug, err := kernelcmdline.DebugEnabled()
+func listenDebugSocket() (net.Listener, error) {
+	_ = os.Remove(boot.ContainersSocket)
+	listener, err := net.Listen("unix", boot.ContainersSocket)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("listening on %s: %w", boot.ContainersSocket, err)
 	}
-	source, err := os.ReadFile(boot.ConfigPath)
+	if err := os.Chmod(boot.ContainersSocket, 0o660); err != nil {
+		listener.Close()
+		return nil, err
+	}
+	return listener, nil
+}
+
+func (m *manager) handleBoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	override, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 	if err != nil {
-		return fmt.Errorf("reading verified config: %w", err)
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
-	config, err := runtimeconfig.Decode(source, debug)
+	if err := m.boot(override); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := containers.PublishStatus(m.ctx); err != nil {
+		log.Printf("container status publish failed after debug boot: %v", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (m *manager) boot(override []byte) error {
+	m.bootMu.Lock()
+	defer m.bootMu.Unlock()
+
+	source := override
+	if len(source) == 0 {
+		var err error
+		source, err = os.ReadFile(boot.ConfigPath)
+		if err != nil {
+			return fmt.Errorf("reading verified config: %w", err)
+		}
+	}
+	config, err := runtimeconfig.Decode(source, m.debug)
 	if err != nil {
 		return err
 	}
@@ -74,12 +164,20 @@ func bootDefaultRuntime(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reading installed config: %w", err)
 	}
-	if err := containers.RemoveManagedExcept(ctx, previous, nil); err != nil {
+	preserved := map[string]bool{}
+	if previous != nil && runtimeconfig.HasReservedDebugContainer(previous) {
+		if !runtimeconfig.HasReservedDebugContainer(config) {
+			return errors.New("debug config must retain tinfoil-debug-toolbox")
+		}
+		preserved[runtimeconfig.ReservedDebugContainerName] = true
+	}
+	if err := containers.RemoveManagedExcept(m.ctx, previous, preserved); err != nil {
 		return err
 	}
 	if err := writeRuntimeArtifacts(config, source); err != nil {
 		return err
 	}
+	launchConfig := withoutPreservedContainers(config, preserved)
 	tracker, err := boot.ResumeTracker()
 	if err != nil {
 		return err
@@ -90,5 +188,28 @@ func bootDefaultRuntime(ctx context.Context) error {
 		return err
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-	return containers.LaunchAndWaitHealthy(ctx, tracker, config, external, debug)
+	if err := containers.LaunchAndWaitHealthy(m.ctx, tracker, launchConfig, external, m.debug); err != nil {
+		return err
+	}
+	return restartRuntimeServices(m.ctx)
+}
+
+func withoutPreservedContainers(config *runtimeconfig.Config, preserved map[string]bool) *runtimeconfig.Config {
+	if len(preserved) == 0 {
+		return config
+	}
+	copy := *config
+	copy.Containers = nil
+	for _, container := range config.Containers {
+		if !preserved[container.Name] {
+			copy.Containers = append(copy.Containers, container)
+		}
+	}
+	return &copy
+}
+
+func writeError(w http.ResponseWriter, status int, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(errorResponse{Error: err.Error()})
 }

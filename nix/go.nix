@@ -56,24 +56,24 @@ let
     pname = "tinfoil-runtime";
     subPackages = [
       "cmd/boot"
-      "cmd/container-status"
+      "cmd/containers"
       "cmd/egress"
-      "cmd/init"
+      "cmd/pid1"
       "cmd/shim"
     ];
     postInstall = ''
-      for command in boot container-status egress init shim; do
+      for command in boot containers egress pid1 shim; do
         mv "$out/bin/$command" "$out/bin/tinfoil-$command"
       done
     '';
   };
 
-  debugInit = buildCgoCommand {
-    pname = "tinfoil-debug-init";
-    subPackages = [ "cmd/init" ];
+  debugPID1 = buildCgoCommand {
+    pname = "tinfoil-debug-pid1";
+    subPackages = [ "cmd/pid1" ];
     tags = [ "tinfoil_debug_image" ];
     postInstall = ''
-      mv "$out/bin/init" "$out/bin/tinfoil-init"
+      mv "$out/bin/pid1" "$out/bin/tinfoil-pid1"
     '';
   };
 
@@ -112,8 +112,8 @@ let
     checkPhase = ''
       runHook preCheck
       go test ./...
-      go test -race ./cmd/init ./internal/boot/... ./internal/nvml
-      go test -tags=tinfoil_debug_image ./cmd/init
+      go test -race ./cmd/pid1 ./internal/boot/... ./internal/nvml
+      go test -tags=tinfoil_debug_image ./cmd/pid1
       go vet ./...
       runHook postCheck
     '';
@@ -123,7 +123,7 @@ in
 {
   inherit checks;
   packages = {
-    "debug-init" = debugInit;
+    "debug-pid1" = debugPID1;
     "runtime-go" = runtime;
     "tinfoil-initrd" = initrd;
   };

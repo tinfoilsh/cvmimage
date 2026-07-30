@@ -18,6 +18,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/dcode"
+	"tinfoil/internal/firewall"
 	tlsutil "tinfoil/internal/tls"
 )
 
@@ -182,7 +183,7 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 }
 
 func withHTTP01Firewall(requestCertificate func() (*tls.Certificate, error)) (*tls.Certificate, error) {
-	return withHTTP01FirewallWith(runNft, requestCertificate)
+	return withHTTP01FirewallWith(firewall.Apply, requestCertificate)
 }
 
 func withHTTP01FirewallWith(run func(string) error, requestCertificate func() (*tls.Certificate, error)) (cert *tls.Certificate, retErr error) {

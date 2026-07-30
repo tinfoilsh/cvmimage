@@ -172,7 +172,7 @@ rm result-package-lock
 ## Continuous integration
 
 Pull-request CI always checks the pinned Nix installation and isolated Nixpkgs
-evaluation. It compares the `checks`, `runtime-go`, `debug-init`, and `initrd`
+evaluation. It compares the `checks`, `runtime-go`, `debug-pid1`, and `initrd`
 derivation paths with the pull request's base and builds only the changed
 outputs. Changes to the Nix installer or this workflow build all four. The
 `initrd` output builds the initrd command and constructs the fixed archive with

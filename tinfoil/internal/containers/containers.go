@@ -1,9 +1,10 @@
-package main
+package containers
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +24,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -37,7 +39,7 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config,
 			return err
 		}
 	}
-	if shimUpstreamSet(cfg) {
+	if runtimeconfig.ShimUpstreamSet(cfg) {
 		if err := ensureShimNetwork(cli, cfg.ShimCfg.UpstreamContainer); err != nil {
 			return err
 		}
@@ -111,7 +113,7 @@ func networkCreateOptions(name string) dockernetwork.CreateOptions {
 // launchContainersAndWaitHealthy launches all containers in parallel with
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
-func launchContainersAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
+func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
@@ -178,6 +180,28 @@ func launchContainersAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, 
 
 	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
 	return nil
+}
+
+func RemoveManagedExcept(ctx context.Context, config *Config, preserved map[string]bool) error {
+	if config == nil {
+		return nil
+	}
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("creating docker client: %w", err)
+	}
+	defer cli.Close()
+	var errs []error
+	for _, declared := range config.Containers {
+		if preserved[declared.Name] {
+			continue
+		}
+		err := cli.ContainerRemove(ctx, declared.Name, container.RemoveOptions{Force: true})
+		if err != nil && !cerrdefs.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("removing %s: %w", declared.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // runContainer handles the full lifecycle of a single container:
@@ -319,7 +343,7 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 		first = closed[0]
 		rest = append(rest, closed[1:]...)
 	}
-	if shimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
+	if runtimeconfig.ShimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
 		if first == "" {
 			first = containernet.ShimNetName
 		} else {

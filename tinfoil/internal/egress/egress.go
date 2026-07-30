@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/firewall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -48,7 +48,7 @@ func Load() (*Engine, error) {
 		config:  cfg,
 		resolve: resolve,
 		nft: nftClient{
-			apply: applyDelta,
+			apply: firewall.ApplyOutput,
 		},
 		interval: refreshInterval,
 	}, nil
@@ -148,10 +148,4 @@ func resolve(ctx context.Context, domains []string) ([]string, error) {
 		return nil, fmt.Errorf("no IPv4 addresses resolved for %v", domains)
 	}
 	return ips, nil
-}
-
-func applyDelta(script string) ([]byte, error) {
-	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(script)
-	return cmd.CombinedOutput()
 }

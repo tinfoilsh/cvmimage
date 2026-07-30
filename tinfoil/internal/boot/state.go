@@ -105,6 +105,20 @@ func NewTracker(stages []string) *Tracker {
 	}
 }
 
+// ResumeTracker loads the current boot state so another process can continue
+// recording stages without discarding work already completed by tinfoil-boot.
+func ResumeTracker() (*Tracker, error) {
+	data, err := os.ReadFile(StatePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading boot state: %w", err)
+	}
+	var state State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("parsing boot state: %w", err)
+	}
+	return &Tracker{state: state}, nil
+}
+
 // Record updates an existing stage by name or appends a new one. Auto-flushes.
 func (t *Tracker) Record(name, status string, duration time.Duration, detail string) {
 	t.mu.Lock()

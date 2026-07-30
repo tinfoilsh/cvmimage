@@ -43,8 +43,10 @@ func TestRunWithPropagatesLoadFailure(t *testing.T) {
 }
 
 func TestRunWithSkipsUnconfiguredEngine(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	runner := &fakeRunner{}
-	if err := runWith(context.Background(), func() (egressRunner, error) { return runner, nil }); err != nil {
+	if err := runWith(ctx, func() (egressRunner, error) { return runner, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if runner.runCalls != 0 {

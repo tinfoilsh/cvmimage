@@ -72,7 +72,7 @@ jobs:
           nix_instantiate=/nix/var/nix/profiles/default/bin/nix-instantiate
           build_args=(--no-out-link -I .)
           selected=()
-          for target in checks runtime-go debug-init initrd; do
+          for target in checks runtime-go debug-pid1 initrd; do
             head_drv="$("$nix_instantiate" --no-gc-warning -I . -A "$target")"
             base_drv=""
             if test "$force_all" = false; then

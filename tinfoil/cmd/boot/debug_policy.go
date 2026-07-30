@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -12,10 +14,10 @@ const (
 	tinfoilConfigHashParam = "tinfoil-config-hash"
 	tinfoilDebugParam      = "tinfoil-debug"
 
-	reservedDebugContainerName = "tinfoil-ssh-installer"
-	reservedDebugPort          = "2222/tcp"
-	reservedDebugHostPort      = 2222
-	reservedDebugSerialDevice  = "/dev/hvc1"
+	reservedDebugContainerName = runtimeconfig.ReservedDebugContainerName
+	reservedDebugPort          = runtimeconfig.ReservedDebugPort
+	reservedDebugHostPort      = runtimeconfig.ReservedDebugHostPort
+	reservedDebugSerialDevice  = runtimeconfig.ReservedDebugSerialDevice
 	debugDockerSocketBind      = "/run/docker.sock:/var/run/docker.sock"
 )
 

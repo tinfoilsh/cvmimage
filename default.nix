@@ -30,7 +30,7 @@ let
     inherit pkgs;
     ubuntuDebs = runtimePackages.packages;
     runtimeGo = go.packages."runtime-go";
-    debugInit = go.packages."debug-init";
+    debugPID1 = go.packages."debug-pid1";
     inherit (nvattest) nvattest;
     nvidiaModules = map (name: "${nvidia.modules}/${name}") nvidiaModuleNames;
   };

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -224,8 +225,10 @@ func TestInitialReadinessFailureKillsGroupWaitsAndPermitsRetry(t *testing.T) {
 	supervisor := New(context.Background(), manager, Config{})
 	var failedRecord *serviceRecord
 	readyCalls := 0
+	pidFile := filepath.Join(t.TempDir(), "service.pid")
 	service := Service{
 		Name: "service", Command: Command{Name: "service", Path: "/service"},
+		PIDFile: pidFile,
 		Ready: func(context.Context) error {
 			readyCalls++
 			if readyCalls > 1 {
@@ -259,6 +262,9 @@ func TestInitialReadinessFailureKillsGroupWaitsAndPermitsRetry(t *testing.T) {
 	supervisor.mu.Unlock()
 	if registered {
 		t.Fatal("readiness-failed service remained registered")
+	}
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pid file survived readiness failure: %v", err)
 	}
 	if err := supervisor.Start(context.Background(), service); err != nil {
 		t.Fatalf("retry start: %v", err)

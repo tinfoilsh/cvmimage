@@ -1,4 +1,4 @@
-package main
+package containers
 
 import (
 	"context"
@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -70,26 +68,22 @@ type containerHealth struct {
 	LastCheckExitCode *int       `json:"last_check_exit_code,omitempty"`
 }
 
-func main() {
-	log.SetFlags(0)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+func RunStatusPublisher(ctx context.Context) error {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		log.Fatalf("creating docker client: %v", err)
+		return fmt.Errorf("creating docker client: %w", err)
 	}
 	defer cli.Close()
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
-	log.Printf("Starting tinfoil container-status publisher")
+	log.Printf("Starting tinfoil-containers status publisher")
 	publishAndLog(ctx, cli)
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			publishAndLog(ctx, cli)
 		}
@@ -97,7 +91,7 @@ func main() {
 }
 
 func publishAndLog(ctx context.Context, cli containerStatusClient) {
-	if err := publishContainerStatus(ctx, cli, boot.ConfigPath, boot.ContainerStatusPath); err != nil {
+	if err := publishContainerStatus(ctx, cli, boot.RuntimeConfigPath, boot.ContainerStatusPath); err != nil {
 		log.Printf("container status publish failed: %v", err)
 	}
 }

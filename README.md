@@ -21,7 +21,7 @@ nix-build -I . -A <target>
 | `nvidia-modules` | Validated NVIDIA open kernel modules |
 | `initrd` | Reproducible GNU cpio and Zstandard initrd |
 | `runtime-go` | The five CGO runtime commands |
-| `debug-init` | Compile-time debug PID1 |
+| `debug-pid1` | Compile-time debug PID 1 |
 | `tinfoil-initrd` | Pure-Go initrd command |
 | `nvattest` | NVIDIA attestation CLI and `libnvat` |
 | `checks` | Go source tests |

@@ -568,18 +568,13 @@ func runOneShot(ctx context.Context, manager *supervisor.Manager, cmd supervisor
 	}
 	exit, waitErr := process.Wait(ctx)
 	if waitErr == nil {
-		return annotateOneShotFailure(cmd.Name, exit.Err(), boot.Load)
+		return errors.Join(
+			annotateOneShotFailure(cmd.Name, exit.Err(), boot.Load),
+			process.Stop(0, grace),
+		)
 	}
-	_ = process.Signal(syscall.SIGTERM)
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	select {
-	case <-process.Done():
-	case <-timer.C:
-	}
-	cleanupErr := process.KillCgroup()
+	cleanupErr := process.Stop(grace, grace)
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), grace)
-	cleanupErr = errors.Join(cleanupErr, process.WaitCgroupEmpty(cleanupCtx))
 	_, directWaitErr := process.Wait(cleanupCtx)
 	cancelCleanup()
 	return fmt.Errorf("%s interrupted: %w", cmd.Name, errors.Join(waitErr, cleanupErr, directWaitErr))

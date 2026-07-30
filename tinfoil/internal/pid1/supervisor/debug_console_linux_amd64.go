@@ -4,96 +4,24 @@ package supervisor
 
 import (
 	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
-	"syscall"
 	"time"
 )
 
 // StartConsole starts one debug-image child as a new session with console as
 // its controlling terminal. The manager remains the sole wait4 owner.
 func (m *Manager) StartConsole(command Command, console *os.File) (*Process, error) {
-	if command.Name == "" {
-		return nil, errors.New("child name is required")
-	}
-	if !filepath.IsAbs(command.Path) {
-		return nil, fmt.Errorf("child path must be absolute: %q", command.Path)
-	}
 	if console == nil {
 		return nil, errors.New("console is required")
 	}
-
-	reply := make(chan startResponse, 1)
-	m.ops <- func(children map[int]*Process) {
-		backend, ok := m.backend.(*osBackend)
-		if !ok {
-			reply <- startResponse{err: errors.New("debug console requires the OS process backend")}
-			return
-		}
-		cgroup, cgroupFD, err := backend.createCgroup()
-		if err != nil {
-			reply <- startResponse{err: fmt.Errorf("prepare cgroup for %s: %w", command.Name, err)}
-			return
-		}
-		defer cgroupFD.Close()
-		environment := command.Env
-		if environment == nil {
-			environment = os.Environ()
-		}
-		process, err := os.StartProcess(
-			command.Path,
-			append([]string{command.Path}, command.Args...),
-			&os.ProcAttr{
-				Dir:   command.Dir,
-				Env:   environment,
-				Files: []*os.File{console, console, console},
-				Sys: &syscall.SysProcAttr{
-					Setsid:      true,
-					Setctty:     true,
-					Ctty:        0,
-					UseCgroupFD: true,
-					CgroupFD:    int(cgroupFD.Fd()),
-				},
-			},
-		)
-		if err != nil {
-			_ = os.Remove(cgroup.path)
-			reply <- startResponse{err: fmt.Errorf("start %s: %w", command.Name, err)}
-			return
-		}
-		managed := newConsoleProcess(process, command.Name, cgroup)
-		children[managed.PID()] = managed
-		reply <- startResponse{process: managed}
-	}
-	response := <-reply
-	return response.process, response.err
-}
-
-func newConsoleProcess(process *os.Process, name string, cgroup *processCgroup) *Process {
-	pid := process.Pid
-	child := &osChild{process: process, processID: pid, cgroup: cgroup}
-	return &Process{pid: pid, name: name, child: child, done: make(chan struct{})}
+	return m.start(command, "", startOptions{
+		files:   []*os.File{console, console, console},
+		console: true,
+	})
 }
 
 // StopConsole terminates the complete console process group with bounded
 // escalation, including background descendants left after the shell exits.
 func (p *Process) StopConsole(termGrace, killGrace time.Duration) error {
-	var errs []error
-	if err := p.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		errs = append(errs, err)
-	}
-	alive, waitErrs := waitProcessGroups([]*Process{p}, time.After(termGrace))
-	errs = append(errs, waitErrs...)
-	for _, process := range alive {
-		if err := process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			errs = append(errs, err)
-		}
-	}
-	alive, waitErrs = waitProcessGroups(alive, time.After(killGrace))
-	errs = append(errs, waitErrs...)
-	for _, process := range alive {
-		errs = append(errs, fmt.Errorf("debug console process group %d survived SIGKILL", process.PID()))
-	}
-	return errors.Join(errs...)
+	return p.Stop(termGrace, killGrace)
 }

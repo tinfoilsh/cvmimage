@@ -35,6 +35,7 @@ const (
 	nvidiaChildLimit     = 4 * time.Minute
 	nvidiaDeviceWait     = 15 * time.Second
 	nvidiaDevicePoll     = 500 * time.Millisecond
+	cdiGenerateLimit     = 30 * time.Second
 
 	containerdName   = "containerd"
 	dockerName       = "dockerd"
@@ -133,10 +134,17 @@ func run(parent context.Context) (result error) {
 			return runOneShot(ctx, manager, command, oneShotStopGrace)
 		},
 		nvidia: func(ctx context.Context) error {
+			control := newSystemNVIDIA()
 			return runNVIDIABootstrap(
 				ctx,
-				newSystemNVIDIA(),
+				control,
 				func(childCtx context.Context, command supervisor.Command) error {
+					if command.Name == "nvidia-fabricmanager" {
+						return services.Start(childCtx, supervisor.Service{
+							Name: command.Name, Restart: true, Command: command,
+							Ready: control.WaitForFabricManager,
+						})
+					}
 					return runOneShot(childCtx, manager, command, oneShotStopGrace)
 				},
 				func(status nvidia.BootstrapStatus) error {
@@ -449,7 +457,9 @@ func runNVIDIABootstrapSteps(
 		return fmt.Errorf("create NVIDIA CDI temporary file: %w", err)
 	}
 	defer os.Remove(temporary)
-	if err := oneShot(ctx, command(
+	cdiCtx, cancelCDI := context.WithTimeout(ctx, cdiGenerateLimit)
+	defer cancelCDI()
+	if err := oneShot(cdiCtx, command(
 		"nvidia-ctk-cdi",
 		"/usr/bin/nvidia-ctk",
 		"cdi", "generate", "--output="+temporary,

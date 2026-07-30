@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
@@ -79,12 +80,15 @@ func bootDefaultRuntime(ctx context.Context) error {
 	if err := writeRuntimeArtifacts(config, source); err != nil {
 		return err
 	}
-	if err := firewall.ApplyInbound(config.CVMNetwork.InboundPorts); err != nil {
-		return err
-	}
 	tracker, err := boot.ResumeTracker()
 	if err != nil {
 		return err
 	}
+	start := time.Now()
+	if err := firewall.ApplyInbound(config.CVMNetwork.InboundPorts); err != nil {
+		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
 	return containers.LaunchAndWaitHealthy(ctx, tracker, config, external, debug)
 }

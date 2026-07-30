@@ -20,12 +20,18 @@ func TestContainerNetworkPolicyModes(t *testing.T) {
 		"flush chain inet tinfoil container_forward",
 		`iifname "closed" oifname "closed" accept`,
 		`iifname "open" ip daddr != {`,
+		"destroy set inet tinfoil allow-control",
 		"create set inet tinfoil allow-control",
 		`iifname "control" ip daddr @allow-control accept`,
 	} {
 		if !strings.Contains(script, fragment) {
 			t.Errorf("missing %q from:\n%s", fragment, script)
 		}
+	}
+	destroy := strings.Index(script, "destroy set inet tinfoil allow-control")
+	create := strings.Index(script, "create set inet tinfoil allow-control")
+	if destroy < 0 || create < 0 || destroy > create {
+		t.Fatalf("allowlist set must be replaced before use:\n%s", script)
 	}
 	accept := strings.Index(script, `iifname "control" ip daddr @allow-control accept`)
 	drop := strings.Index(script, `iifname "control" ip daddr {`)

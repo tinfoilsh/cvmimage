@@ -65,6 +65,7 @@ func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeco
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr != %s accept\n", bridge, nonPublicIPv6Ranges)
 	case "allowlist":
 		setName := containernet.AllowSetPrefix + bridge
+		fmt.Fprintf(script, "destroy set inet tinfoil %s\n", setName)
 		fmt.Fprintf(script, "create set inet tinfoil %s { type ipv4_addr; }\n", setName)
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr @%s accept\n", bridge, setName)
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr %s drop\n", bridge, nonPublicIPv4Ranges)

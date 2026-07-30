@@ -1,6 +1,7 @@
 package runtimeconfig
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -29,7 +30,7 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "duplicate container", yaml: strings.Replace(validConfig, "containers:\n", "containers:\n  - name: app\n    image: duplicate\n", 1), want: "duplicates"},
 		{name: "undeclared network", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [missing]", 1), want: "not declared"},
 		{name: "production docker socket", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [/run/docker.sock:/var/run/docker.sock]", 1), want: "named volume"},
-		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", "name: tinfoil-ssh-installer\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", 1)},
+		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", ReservedDebugContainerName), 1)},
 		{name: "invalid allowlist", yaml: strings.Replace(validConfig, "egress: closed", "egress: allowlist\n    allow: ['*.example.com']", 1), want: "wildcards"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

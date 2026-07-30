@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"log"
@@ -16,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
 )
 
@@ -66,21 +66,13 @@ func run() error {
 	}
 	roothash = strings.ToLower(roothash)
 
-	// systemd-repart assigns the data partition the first 128 bits of the
-	// roothash and the hash partition the final 128 bits.
-	rootHex32, verityHex32 := splitRoothash(roothash)
-	rootPartUUID := guidFromHex32(rootHex32)
-	verityPartUUID := guidFromHex32(verityHex32)
-
-	initrdLogf("waiting for root PARTUUID %s", rootPartUUID)
-	rootDevice, err := findPartUUID(rootPartUUID, 30*time.Second)
+	initrdLogf("waiting for measured root at its fixed controller")
+	rootDevice, verityDevice, err := device.RootPartitions()
 	if err != nil {
-		return fmt.Errorf("root data partition not found: %w", err)
+		return fmt.Errorf("measured root not found: %w", err)
 	}
-	initrdLogf("waiting for verity PARTUUID %s", verityPartUUID)
-	verityDevice, err := findPartUUID(verityPartUUID, 30*time.Second)
-	if err != nil {
-		return fmt.Errorf("root verity partition not found: %w", err)
+	if !isBlockDevice(rootDevice) || !isBlockDevice(verityDevice) {
+		return errors.New("measured root partition is not a block device")
 	}
 
 	// Partition size comes from kernel sysfs. Every other verity parameter is
@@ -240,68 +232,6 @@ func isHex64(value string) bool {
 		}
 	}
 	return true
-}
-
-func splitRoothash(roothash string) (string, string) {
-	return roothash[:32], roothash[32:]
-}
-
-func guidFromHex32(value string) string {
-	value = strings.ToLower(value)
-	return fmt.Sprintf(
-		"%s-%s-%s-%s-%s",
-		value[:8], value[8:12], value[12:16], value[16:20], value[20:],
-	)
-}
-
-func findPartUUID(want string, timeout time.Duration) (string, error) {
-	want = strings.ToLower(want)
-	deadline := time.Now().Add(timeout)
-	for {
-		var matches []string
-		uevents, _ := filepath.Glob("/sys/block/*/*/uevent")
-		for _, path := range uevents {
-			fields, err := readUevent(path)
-			if err != nil ||
-				fields["DEVTYPE"] != "partition" ||
-				strings.ToLower(fields["PARTUUID"]) != want {
-				continue
-			}
-			device := filepath.Join("/dev", fields["DEVNAME"])
-			if isBlockDevice(device) {
-				matches = append(matches, device)
-			}
-		}
-		switch len(matches) {
-		case 1:
-			return matches[0], nil
-		case 0:
-			if time.Now().After(deadline) {
-				return "", os.ErrNotExist
-			}
-			time.Sleep(100 * time.Millisecond)
-		default:
-			return "", fmt.Errorf("PARTUUID %s is ambiguous", want)
-		}
-	}
-}
-
-func readUevent(path string) (map[string]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	fields := make(map[string]string)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		key, value, ok := strings.Cut(scanner.Text(), "=")
-		if ok {
-			fields[key] = value
-		}
-	}
-	return fields, scanner.Err()
 }
 
 func isBlockDevice(path string) bool {

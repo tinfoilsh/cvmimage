@@ -3,6 +3,7 @@ package device
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -48,6 +49,64 @@ func TestConfigDiskUsesFixedController(t *testing.T) {
 	if want := filepath.Join(fixture.dev, "sda"); got != want {
 		t.Fatalf("ConfigDisk() = %q, want %q", got, want)
 	}
+}
+
+func TestRootPartitionsUseFixedControllerAndPositions(t *testing.T) {
+	fixture := withFixture(t)
+	addPCIDisk(t, fixture, rootDiskPCIAddress, "sda")
+	addPartition(t, fixture, "sda", "sda1", rootDataPartition)
+	addPartition(t, fixture, "sda", "sda2", rootVerityPartition)
+	addPCIDisk(t, fixture, configDiskPCIAddress, "sdb")
+	addPartition(t, fixture, "sdb", "sdb1", rootDataPartition)
+
+	root, verity, err := RootPartitions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(fixture.dev, "sda1"); root != want {
+		t.Fatalf("root partition = %q, want %q", root, want)
+	}
+	if want := filepath.Join(fixture.dev, "sda2"); verity != want {
+		t.Fatalf("verity partition = %q, want %q", verity, want)
+	}
+}
+
+func TestRootPartitionsRejectInvalidTopology(t *testing.T) {
+	t.Run("wrong controller", func(t *testing.T) {
+		fixture := withFixture(t)
+		addPCIDisk(t, fixture, configDiskPCIAddress, "sda")
+		addPartition(t, fixture, "sda", "sda1", rootDataPartition)
+		addPartition(t, fixture, "sda", "sda2", rootVerityPartition)
+		if _, _, err := RootPartitions(); err == nil {
+			t.Fatal("root partitions below the wrong controller were accepted")
+		}
+	})
+	t.Run("ambiguous controller", func(t *testing.T) {
+		fixture := withFixture(t)
+		addPCIDisk(t, fixture, rootDiskPCIAddress, "sda")
+		addPCIDisk(t, fixture, rootDiskPCIAddress, "sdb")
+		if _, _, err := RootPartitions(); err == nil {
+			t.Fatal("ambiguous root controller was accepted")
+		}
+	})
+	t.Run("missing partition", func(t *testing.T) {
+		fixture := withFixture(t)
+		addPCIDisk(t, fixture, rootDiskPCIAddress, "sda")
+		addPartition(t, fixture, "sda", "sda1", rootDataPartition)
+		if _, _, err := RootPartitions(); err == nil {
+			t.Fatal("missing root verity partition was accepted")
+		}
+	})
+	t.Run("extra partition", func(t *testing.T) {
+		fixture := withFixture(t)
+		addPCIDisk(t, fixture, rootDiskPCIAddress, "sda")
+		addPartition(t, fixture, "sda", "sda1", rootDataPartition)
+		addPartition(t, fixture, "sda", "sda2", rootVerityPartition)
+		addPartition(t, fixture, "sda", "sda3", 3)
+		if _, _, err := RootPartitions(); err == nil {
+			t.Fatal("extra root partition was accepted")
+		}
+	})
 }
 
 func TestExternalConfigDiskUsesFixedController(t *testing.T) {
@@ -133,6 +192,14 @@ func addPCIDisk(t *testing.T, fixture deviceFixture, controller, name string) {
 	)
 	mustMkdir(t, blockDir)
 	mustMkdir(t, filepath.Join(fixture.sys, name))
+	mustWrite(t, filepath.Join(fixture.dev, name), "")
+}
+
+func addPartition(t *testing.T, fixture deviceFixture, disk, name string, number int) {
+	t.Helper()
+	partitionDir := filepath.Join(fixture.sys, disk, name)
+	mustMkdir(t, partitionDir)
+	mustWrite(t, filepath.Join(partitionDir, "partition"), strconv.Itoa(number)+"\n")
 	mustWrite(t, filepath.Join(fixture.dev, name), "")
 }
 

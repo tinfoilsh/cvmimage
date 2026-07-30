@@ -74,23 +74,6 @@ func TestIsHex64(t *testing.T) {
 	}
 }
 
-func TestSplitRoothashAndGUID(t *testing.T) {
-	roothash := "0123456789abcdef0123456789abcdefabcDEF0123456789ABCDef0123456789"
-	root, verity := splitRoothash(roothash)
-	if root != "0123456789abcdef0123456789abcdef" {
-		t.Fatalf("root half = %q", root)
-	}
-	if verity != "abcDEF0123456789ABCDef0123456789" {
-		t.Fatalf("verity half = %q", verity)
-	}
-	if got := guidFromHex32(root); got != "01234567-89ab-cdef-0123-456789abcdef" {
-		t.Fatalf("root GUID = %q", got)
-	}
-	if got := guidFromHex32(verity); got != "abcdef01-2345-6789-abcd-ef0123456789" {
-		t.Fatalf("verity GUID = %q", got)
-	}
-}
-
 func TestCmdlineValueFromRejectsAmbiguity(t *testing.T) {
 	value, err := cmdlineValueFrom("console=hvc0 roothash=abcd", "roothash")
 	if err != nil || value != "abcd" {

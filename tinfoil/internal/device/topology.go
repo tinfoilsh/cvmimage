@@ -13,15 +13,40 @@ import (
 const (
 	// These are the measured PCI addresses QEMU assigned before tinfoild made
 	// them explicit. They MUST match tinfoild/admin/guest_topology.go.
+	rootDiskPCIAddress     = "0000:00:04.0"
 	configDiskPCIAddress   = "0000:00:05.0"
 	externalDiskPCIAddress = "0000:00:06.0"
 	firstModelDiskPCISlot  = 7
 	lastUsableDiskPCISlot  = 30 // Q35 reserves slot 31 for ISA/SATA/SMBus.
 
+	rootDataPartition    = 1
+	rootVerityPartition  = 2
 	EMWPPayloadPartition = 1
 	// MaxModelDisks is the number of Q35 slots reserved for model disks.
 	MaxModelDisks = lastUsableDiskPCISlot - firstModelDiskPCISlot + 1
 )
+
+// RootPartitions returns the fixed data and verity partitions below the
+// measured root controller.
+func RootPartitions() (string, string, error) {
+	deadline := time.Now().Add(deviceWaitTimeout)
+	var lastErr error
+	for {
+		disk, err := findDiskByPCIAddress(rootDiskPCIAddress)
+		if err == nil {
+			root, verity, partitionErr := findRootPartitions(disk)
+			if partitionErr == nil {
+				return root, verity, nil
+			}
+			err = partitionErr
+		}
+		lastErr = err
+		if !time.Now().Before(deadline) {
+			return "", "", lastErr
+		}
+		time.Sleep(deviceWaitDelay)
+	}
+}
 
 var (
 	sysBusPCIDevices = "/sys/bus/pci/devices"
@@ -108,21 +133,63 @@ func findDiskByPCIAddress(pciAddress string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("finding disk below PCI device %s: %w", pciAddress, err)
 	}
-	var matches []string
-	for _, blockPath := range blockPaths {
-		path := filepath.Join(devDir, filepath.Base(blockPath))
-		if _, err := os.Stat(path); err == nil {
-			matches = append(matches, path)
+	sort.Strings(blockPaths)
+	if len(blockPaths) != 1 {
+		return "", fmt.Errorf(
+			"expected one disk below PCI device %s, found %d",
+			pciAddress, len(blockPaths),
+		)
+	}
+	path := filepath.Join(devDir, filepath.Base(blockPaths[0]))
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("disk node %s not ready: %w", path, err)
+	}
+	return path, nil
+}
+
+func findRootPartitions(diskPath string) (string, string, error) {
+	disk := filepath.Base(diskPath)
+	partitionFiles, err := filepath.Glob(filepath.Join(sysBlockDir, disk, "*", "partition"))
+	if err != nil {
+		return "", "", fmt.Errorf("reading partitions for %s: %w", diskPath, err)
+	}
+	var root, verity string
+	for _, partitionFile := range partitionFiles {
+		name := filepath.Base(filepath.Dir(partitionFile))
+		data, err := os.ReadFile(partitionFile)
+		if err != nil {
+			return "", "", fmt.Errorf("reading partition number for %s: %w", name, err)
+		}
+		number, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil {
+			return "", "", fmt.Errorf("invalid partition number for %s", name)
+		}
+		path := filepath.Join(devDir, name)
+		if _, err := os.Stat(path); err != nil {
+			return "", "", fmt.Errorf("partition node %s not ready: %w", path, err)
+		}
+		switch number {
+		case rootDataPartition:
+			if root != "" {
+				return "", "", fmt.Errorf("duplicate root data partition on %s", diskPath)
+			}
+			root = path
+		case rootVerityPartition:
+			if verity != "" {
+				return "", "", fmt.Errorf("duplicate root verity partition on %s", diskPath)
+			}
+			verity = path
+		default:
+			return "", "", fmt.Errorf("unexpected partition %d on %s", number, diskPath)
 		}
 	}
-	sort.Strings(matches)
-	if len(matches) == 1 {
-		return matches[0], nil
+	if root == "" || verity == "" {
+		return "", "", fmt.Errorf(
+			"expected root partitions %d and %d on %s",
+			rootDataPartition, rootVerityPartition, diskPath,
+		)
 	}
-	return "", fmt.Errorf(
-		"expected one disk below PCI device %s, found %d",
-		pciAddress, len(matches),
-	)
+	return root, verity, nil
 }
 
 func findPartition(diskPath string, partition int) (string, error) {

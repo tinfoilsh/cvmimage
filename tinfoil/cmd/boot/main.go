@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"tinfoil/internal/boot"
-	"tinfoil/internal/containersapi"
 	"tinfoil/internal/nvidia"
 )
 
@@ -163,15 +162,6 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("model mount failed: %w", err)
 	}
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
-
-	// 10. Install runtime configuration and launch containers
-	start = time.Now()
-	log.Println("Launching containers")
-	if err := containersapi.Boot(ctx, nil); err != nil {
-		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
 
 	return nil
 }

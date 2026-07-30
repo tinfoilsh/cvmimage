@@ -443,7 +443,7 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	containers := slices.Index(events, containersName)
 	shim := slices.Index(events, shimName)
 	boot := slices.Index(events, string(hardening.ServiceBoot))
-	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || containers <= docker || boot <= containers || shim <= boot {
+	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || boot <= docker || containers <= boot || shim <= containers {
 		t.Fatalf("startup events = %v", events)
 	}
 }

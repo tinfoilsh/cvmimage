@@ -32,6 +32,7 @@ const (
 	// NVIDIABootstrapStatusPath is the fixed PID 1 to tinfoil-boot handoff
 	// for NVIDIA bring-up readiness.
 	NVIDIABootstrapStatusPath = "/run/tinfoil/nvidia-bootstrap-status"
+	ContainersReadyPath       = "/run/tinfoil/containers.ready"
 
 	// ShimListenPort is the public TLS port served by tinfoil-shim.
 	ShimListenPort = 443
@@ -44,7 +45,6 @@ const (
 	InitBinary       = "/usr/bin/tinfoil-pid1"
 	BootBinary       = "/usr/bin/tinfoil-boot"
 	ContainersBinary = "/usr/bin/tinfoil-containers"
-	ContainersSocket = "/run/tinfoil/containers.sock"
 	EgressBinary     = "/usr/bin/tinfoil-egress"
 	ShimBinary       = "/usr/bin/tinfoil-shim"
 

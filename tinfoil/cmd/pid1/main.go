@@ -26,6 +26,7 @@ import (
 const (
 	containerdReadyLimit = 30 * time.Second
 	dockerReadyLimit     = 60 * time.Second
+	containersReadyLimit = 30 * time.Minute
 	shimReadyLimit       = 30 * time.Second
 	oneShotStopGrace     = 2 * time.Second
 	serviceTermGrace     = 10 * time.Second
@@ -212,16 +213,16 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: containersName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary),
-		Ready:   endpointReady("unix", boot.ContainersSocket, containerdReadyLimit),
-	}); err != nil {
-		return err
-	}
 	if err := deps.oneShot(bootCtx, hardenedCommand(
 		hardening.ServiceBoot, boot.BootBinary,
 	)); err != nil {
+		return err
+	}
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: containersName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary),
+		Ready:   fileReady(boot.ContainersReadyPath, containersReadyLimit),
+	}); err != nil {
 		return err
 	}
 
@@ -588,6 +589,15 @@ func endpointReady(network, address string, limit time.Duration) func(context.Co
 			if err == nil {
 				_ = connection.Close()
 			}
+			return err
+		})
+	}
+}
+
+func fileReady(path string, limit time.Duration) func(context.Context) error {
+	return func(parent context.Context) error {
+		return waitForEndpoint(parent, limit, func(context.Context) error {
+			_, err := os.Stat(path)
 			return err
 		})
 	}

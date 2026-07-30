@@ -106,10 +106,10 @@ func TestMemoryKBUsesKernelUnit(t *testing.T) {
 }
 
 func TestIsMountPointUsesKernelMountIDs(t *testing.T) {
-	if !isMountPoint("/proc") {
+	if mounted, err := isMountPoint("/proc"); err != nil || !mounted {
 		t.Fatal("/proc is not detected as a mount point")
 	}
-	if isMountPoint(t.TempDir()) {
+	if mounted, err := isMountPoint(t.TempDir()); err != nil || mounted {
 		t.Fatal("ordinary temporary directory detected as a mount point")
 	}
 }
@@ -183,6 +183,12 @@ func TestApplySysctlsVerifiesKernelState(t *testing.T) {
 
 func TestSysctlPolicyHardensPinnedKernelInterfaces(t *testing.T) {
 	want := map[string]string{
+		"fs/protected_hardlinks":           "1",
+		"fs/protected_symlinks":            "1",
+		"fs/protected_regular":             "2",
+		"fs/protected_fifos":               "1",
+		"kernel/dmesg_restrict":            "1",
+		"kernel/kptr_restrict":             "1",
 		"kernel/oops_limit":                "1",
 		"kernel/panic_on_oops":             "1",
 		"kernel/panic_on_warn":             "0",
@@ -190,8 +196,15 @@ func TestSysctlPolicyHardensPinnedKernelInterfaces(t *testing.T) {
 		"kernel/unprivileged_bpf_disabled": "1",
 		"kernel/unprivileged_userns_clone": "0",
 		"kernel/warn_limit":                "10",
+		"kernel/yama/ptrace_scope":         "1",
 		"net/core/bpf_jit_harden":          "2",
+		"net/core/default_qdisc":           "fq_codel",
 		"net/ipv4/ip_forward":              "1",
+		"net/ipv4/conf/default/rp_filter":  "2",
+		"net/ipv4/conf/all/rp_filter":      "2",
+		"vm/max_map_count":                 "1048576",
+		"vm/mmap_min_addr":                 "65536",
+		"kernel/printk":                    "4 4 1 7",
 	}
 
 	for _, setting := range sysctlPolicy {
@@ -202,7 +215,7 @@ func TestSysctlPolicyHardensPinnedKernelInterfaces(t *testing.T) {
 			if setting.value != value {
 				t.Errorf("sysctl %s = %q, want %q", setting.path, setting.value, value)
 			}
-			if setting.optional {
+			if setting.optional && setting.path != "net/core/default_qdisc" {
 				t.Errorf("security sysctl %s is optional", setting.path)
 			}
 			delete(want, setting.path)

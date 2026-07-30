@@ -34,6 +34,8 @@ const (
 	// for NVIDIA bring-up readiness.
 	NVIDIABootstrapStatusPath = "/run/tinfoil/nvidia-bootstrap-status"
 	ContainersReadyPath       = "/run/tinfoil/containers.ready"
+	ShimPIDPath               = "/run/tinfoil/pids/tinfoil-shim.pid"
+	EgressPIDPath             = "/run/tinfoil/pids/tinfoil-egress.pid"
 
 	// ShimListenPort is the public TLS port served by tinfoil-shim.
 	ShimListenPort = 443

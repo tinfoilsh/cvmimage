@@ -35,6 +35,7 @@ const (
 	nvidiaChildLimit     = 4 * time.Minute
 	nvidiaDeviceWait     = 15 * time.Second
 	nvidiaDevicePoll     = 500 * time.Millisecond
+	cdiGenerateLimit     = 30 * time.Second
 
 	containerdName   = "containerd"
 	dockerName       = "dockerd"
@@ -133,12 +134,14 @@ func run(parent context.Context) (result error) {
 			return runOneShot(ctx, manager, command, oneShotStopGrace)
 		},
 		nvidia: func(ctx context.Context) error {
+			control := newSystemNVIDIA()
 			return runNVIDIABootstrap(
 				ctx,
-				newSystemNVIDIA(),
+				control,
 				func(childCtx context.Context, command supervisor.Command) error {
 					return runOneShot(childCtx, manager, command, oneShotStopGrace)
 				},
+				services.Start,
 				func(status nvidia.BootstrapStatus) error {
 					return nvidia.WriteBootstrapStatus(boot.NVIDIABootstrapStatusPath, status)
 				},
@@ -226,7 +229,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		Name: shimName, Required: true, Restart: true,
 		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
 		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile: "/run/tinfoil/pids/tinfoil-shim.pid",
+		PIDFile: boot.ShimPIDPath,
 	}); err != nil {
 		return err
 	}
@@ -248,7 +251,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: egressName, Restart: true,
 		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
-		PIDFile: "/run/tinfoil/pids/tinfoil-egress.pid",
+		PIDFile: boot.EgressPIDPath,
 	}); err != nil {
 		return err
 	}
@@ -340,6 +343,7 @@ func runNVIDIABootstrap(
 	ctx context.Context,
 	control nvidiaBootstrapControl,
 	oneShot func(context.Context, supervisor.Command) error,
+	startService func(context.Context, supervisor.Service) error,
 	writeStatus func(nvidia.BootstrapStatus) error,
 ) error {
 	gpuCount, err := control.GPUCount()
@@ -354,7 +358,7 @@ func runNVIDIABootstrap(
 		}
 	}
 	if err == nil {
-		err = runNVIDIABootstrapSteps(ctx, control, oneShot, gpuCount)
+		err = runNVIDIABootstrapSteps(ctx, control, oneShot, startService, gpuCount)
 	}
 	if err != nil {
 		initLogf("NVIDIA bootstrap failed: %v", err)
@@ -373,6 +377,7 @@ func runNVIDIABootstrapSteps(
 	ctx context.Context,
 	control nvidiaBootstrapControl,
 	oneShot func(context.Context, supervisor.Command) error,
+	startService func(context.Context, supervisor.Service) error,
 	gpuCount int,
 ) error {
 	if gpuCount < 1 {
@@ -432,11 +437,12 @@ func runNVIDIABootstrapSteps(
 		if err := control.PrepareFabricManagerRuntime(); err != nil {
 			return fmt.Errorf("prepare NVIDIA Fabric Manager runtime: %w", err)
 		}
-		if err := oneShot(ctx, fabricManagerCommand()); err != nil {
+		command := fabricManagerCommand()
+		if err := startService(ctx, supervisor.Service{
+			Name: command.Name, Restart: true, Command: command,
+			Ready: control.WaitForFabricManager,
+		}); err != nil {
 			return fmt.Errorf("start NVIDIA Fabric Manager: %w", err)
-		}
-		if err := control.WaitForFabricManager(ctx); err != nil {
-			return fmt.Errorf("wait for NVIDIA Fabric Manager: %w", err)
 		}
 	default:
 		return fmt.Errorf("unsupported NVIDIA fabric mode %d", fabricMode)
@@ -449,7 +455,9 @@ func runNVIDIABootstrapSteps(
 		return fmt.Errorf("create NVIDIA CDI temporary file: %w", err)
 	}
 	defer os.Remove(temporary)
-	if err := oneShot(ctx, command(
+	cdiCtx, cancelCDI := context.WithTimeout(ctx, cdiGenerateLimit)
+	defer cancelCDI()
+	if err := oneShot(cdiCtx, command(
 		"nvidia-ctk-cdi",
 		"/usr/bin/nvidia-ctk",
 		"cdi", "generate", "--output="+temporary,
@@ -560,18 +568,16 @@ func runOneShot(ctx context.Context, manager *supervisor.Manager, cmd supervisor
 	}
 	exit, waitErr := process.Wait(ctx)
 	if waitErr == nil {
-		return annotateOneShotFailure(cmd.Name, exit.Err(), boot.Load)
+		return errors.Join(
+			annotateOneShotFailure(cmd.Name, exit.Err(), boot.Load),
+			process.Stop(0, grace),
+		)
 	}
-	_ = process.Signal(syscall.SIGTERM)
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	select {
-	case <-process.Done():
-	case <-timer.C:
-		_ = process.Signal(syscall.SIGKILL)
-		_, _ = process.Wait(context.Background())
-	}
-	return fmt.Errorf("%s interrupted: %w", cmd.Name, waitErr)
+	cleanupErr := process.Stop(grace, grace)
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), grace)
+	_, directWaitErr := process.Wait(cleanupCtx)
+	cancelCleanup()
+	return fmt.Errorf("%s interrupted: %w", cmd.Name, errors.Join(waitErr, cleanupErr, directWaitErr))
 }
 
 func annotateOneShotFailure(

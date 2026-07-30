@@ -109,34 +109,33 @@ func policyFor(service Service) (servicePolicy, bool) {
 			deniedSyscalls:    kernelManagementSyscalls,
 		}, true
 	case ServiceContainers:
-		return servicePolicy{
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
-		}, true
+		return restrictedServicePolicy(
+			[]int{unix.CAP_NET_ADMIN},
+			[]uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
+		), true
 	case ServiceEgress:
-		return servicePolicy{
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
-		}, true
+		return restrictedServicePolicy(
+			[]int{unix.CAP_NET_ADMIN},
+			[]uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
+		), true
 	case ServiceShim:
-		return servicePolicy{
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_BIND_SERVICE},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6},
-		}, true
+		return restrictedServicePolicy(
+			[]int{unix.CAP_NET_BIND_SERVICE},
+			[]uint32{unix.AF_INET, unix.AF_INET6},
+		), true
 	default:
 		return servicePolicy{}, false
+	}
+}
+
+func restrictedServicePolicy(capabilities []int, socketDomains []uint32) servicePolicy {
+	return servicePolicy{
+		noNewPrivileges:      true,
+		boundCapabilities:    capabilities,
+		restrictFilesystems:  true,
+		deniedSyscalls:       restrictedServiceSyscalls,
+		restrictNamespaceOps: true,
+		allowedSocketDomains: socketDomains,
 	}
 }
 

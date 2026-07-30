@@ -7,17 +7,32 @@ import (
 	"testing"
 )
 
-func TestNewConsoleProcessCachesIdentity(t *testing.T) {
-	const (
-		pid  = 1234
-		name = "debug-console"
-	)
-	process := newConsoleProcess(&os.Process{Pid: pid}, name)
-	if process.PID() != pid || process.name != name {
-		t.Fatalf("process identity = (%d, %q), want (%d, %q)", process.PID(), process.name, pid, name)
+func TestStartConsoleUsesManagedEphemeralScope(t *testing.T) {
+	sigchld := make(chan os.Signal, 1)
+	backend := newFakeBackend(sigchld)
+	manager := newManager(backend, sigchld, nil)
+	console, err := os.CreateTemp(t.TempDir(), "console")
+	if err != nil {
+		t.Fatal(err)
 	}
-	child, ok := process.child.(osChild)
-	if !ok || child.processID != pid {
-		t.Fatalf("child process ID = %d, %v; want %d, true", child.processID, ok, pid)
+	defer console.Close()
+
+	process, err := manager.StartConsole(Command{Name: "debug-console", Path: "/bin/sh"}, console)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	child := backend.children[process.PID()]
+	backend.mu.Unlock()
+	if child.scope != "" {
+		t.Fatalf("console scope = %q, want ephemeral scope", child.scope)
+	}
+	if !child.options.console || len(child.options.files) != 3 {
+		t.Fatalf("console options = %#v", child.options)
+	}
+	for index, file := range child.options.files {
+		if file != console {
+			t.Fatalf("console file %d = %p, want %p", index, file, console)
+		}
 	}
 }

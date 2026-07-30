@@ -89,9 +89,6 @@ func Decode(domains []string) (*attestation.Document, error) {
 		if len(label) < 3 || len(label) > 63 {
 			return nil, fmt.Errorf("malformed domain chunk: %q", d)
 		}
-		if label[0] < '0' || label[0] > '9' || label[1] < '0' || label[1] > '9' {
-			return nil, fmt.Errorf("malformed domain chunk index: %q", d)
-		}
 	}
 
 	// Sort domains by their NN prefix

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"sort"
 	"strings"
@@ -38,7 +39,7 @@ type Engine struct {
 	interval time.Duration
 }
 
-// Load reads the boot-generated config and previous resolved-address state.
+// Load reads the boot-generated allowlist config.
 func Load() (*Engine, error) {
 	cfg, err := loadConfig(boot.EgressConfigPath)
 	if err != nil {
@@ -134,13 +135,15 @@ func resolve(ctx context.Context, domains []string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolving %s: %w", domain, err)
 		}
-		for _, addr := range addrs {
-			if net.ParseIP(addr).To4() == nil {
+		for _, value := range addrs {
+			addr, err := netip.ParseAddr(value)
+			if err != nil || !publicIPv4(addr) {
 				continue
 			}
-			if !seen[addr] {
-				seen[addr] = true
-				ips = append(ips, addr)
+			canonical := addr.String()
+			if !seen[canonical] {
+				seen[canonical] = true
+				ips = append(ips, canonical)
 			}
 		}
 	}
@@ -148,4 +151,26 @@ func resolve(ctx context.Context, domains []string) ([]string, error) {
 		return nil, fmt.Errorf("no IPv4 addresses resolved for %v", domains)
 	}
 	return ips, nil
+}
+
+func publicIPv4(addr netip.Addr) bool {
+	if !addr.Is4() {
+		return false
+	}
+	for _, prefix := range nonPublicIPv4Prefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
+var nonPublicIPv4Prefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"), netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"), netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"), netip.MustParsePrefix("240.0.0.0/4"),
 }

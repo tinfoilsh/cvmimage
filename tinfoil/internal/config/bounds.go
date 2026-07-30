@@ -24,7 +24,7 @@ const (
 
 func readConfigFile(path string) ([]byte, error) {
 	descriptor, err := unix.Openat2(unix.AT_FDCWD, path, &unix.OpenHow{
-		Flags:   unix.O_RDONLY | unix.O_CLOEXEC,
+		Flags:   unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NONBLOCK,
 		Resolve: unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
 	})
 	if err != nil {
@@ -171,9 +171,14 @@ func validateYAMLStructureBudget(data []byte) error {
 					potentialNodes += 2
 				}
 				lineOnlySpace = false
-			case '-', '?':
+			case '-':
 				if lineOnlySpace && (index+1 == len(line) || isYAMLSeparation(line[index+1])) {
 					potentialNodes++
+				}
+				lineOnlySpace = false
+			case '?':
+				if lineOnlySpace && (index+1 == len(line) || isYAMLSeparation(line[index+1])) {
+					potentialNodes += 2
 				}
 				lineOnlySpace = false
 			case '|', '>':

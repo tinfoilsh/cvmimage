@@ -136,7 +136,7 @@ func SetupRamdisk(log LogFunc) error {
 		logf(log, "warning: not enough RAM for full ramdisk, falling back to %dG", sizeGB)
 	}
 
-	if err := mountIfNeeded("tmpfs", boot.RamdiskDir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, fmt.Sprintf("size=%dG,mode=0755", sizeGB), log); err != nil {
+	if err := mountIfNeeded("tmpfs", boot.RamdiskDir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, fmt.Sprintf("size=%dG,mode=0755", sizeGB), log); err != nil {
 		return err
 	}
 	if err := ensureDir(boot.PrivateDir, 0700); err != nil {
@@ -145,10 +145,10 @@ func SetupRamdisk(log LogFunc) error {
 	if err := ensureDir(boot.PublicDir, 0755); err != nil {
 		return err
 	}
-	if err := mountIfNeeded("tmpfs", "/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, tmpfs512M, log); err != nil {
+	if err := mountIfNeeded("tmpfs", "/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, tmpfs512M, log); err != nil {
 		return err
 	}
-	if err := mountIfNeeded("tmpfs", "/var/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, tmpfs512M, log); err != nil {
+	if err := mountIfNeeded("tmpfs", "/var/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, tmpfs512M, log); err != nil {
 		return err
 	}
 	logf(log, "ramdisk ready")
@@ -193,13 +193,20 @@ func ramdiskSizeGB(memTotalKB uint64) (uint64, bool, error) {
 }
 
 func mountIfNeeded(source, target, fstype string, flags uintptr, data string, log LogFunc) error {
-	if isMountPoint(target) {
-		return nil
-	}
 	if err := os.MkdirAll(target, 0755); err != nil {
 		return err
 	}
+	mounted, err := isMountPoint(target)
+	if err != nil {
+		return fmt.Errorf("check mount point %s: %w", target, err)
+	}
+	if mounted {
+		return nil
+	}
 	if err := syscall.Mount(source, target, fstype, flags, data); err != nil {
+		if errors.Is(err, syscall.EBUSY) {
+			return nil
+		}
 		return fmt.Errorf("mount %s on %s: %w", fstype, target, err)
 	}
 	logf(log, "mounted %s on %s", fstype, target)
@@ -245,19 +252,22 @@ func ensureSymlink(target, linkPath string) error {
 	return nil
 }
 
-func isMountPoint(target string) bool {
+func isMountPoint(target string) (bool, error) {
 	target = filepath.Clean(target)
 	parent := filepath.Dir(target)
 	var targetStat, parentStat unix.Statx_t
 	if err := unix.Statx(unix.AT_FDCWD, target, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &targetStat); err != nil {
-		return false
+		return false, err
 	}
 	if err := unix.Statx(unix.AT_FDCWD, parent, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &parentStat); err != nil {
-		return false
+		return false, err
+	}
+	if targetStat.Mask&unix.STATX_MNT_ID == 0 || parentStat.Mask&unix.STATX_MNT_ID == 0 {
+		return false, errors.New("statx mount ID unavailable")
 	}
 	return targetStat.Mask&unix.STATX_MNT_ID != 0 &&
 		parentStat.Mask&unix.STATX_MNT_ID != 0 &&
-		targetStat.Mnt_id != parentStat.Mnt_id
+		targetStat.Mnt_id != parentStat.Mnt_id, nil
 }
 
 func applySysctls(procSysRoot string, policy []sysctlSetting, log LogFunc) error {

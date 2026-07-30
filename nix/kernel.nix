@@ -115,6 +115,7 @@ let
   artifacts =
     pkgs.runCommand "tinfoil-kernel-${release}-artifacts"
       {
+        allowedReferences = [ ];
         nativeBuildInputs = [ pkgs.coreutils ];
       }
       ''

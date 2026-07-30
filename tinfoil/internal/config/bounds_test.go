@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
@@ -51,6 +52,13 @@ func TestYAMLStructureBudgetRejectsNodeBombBeforeDecode(t *testing.T) {
 	data := []byte(strings.Repeat("- x\n", maxYAMLNodes))
 	if err := validateYAMLStructureBudget(data); err == nil {
 		t.Fatal("validateYAMLStructureBudget accepted an oversized sequence")
+	}
+}
+
+func TestYAMLStructureBudgetCountsExplicitKeyNullValues(t *testing.T) {
+	data := []byte(strings.Repeat("? key\n", maxYAMLNodes/2))
+	if err := validateYAMLStructureBudget(data); err == nil {
+		t.Fatal("validateYAMLStructureBudget accepted oversized explicit-key mapping")
 	}
 }
 
@@ -165,5 +173,25 @@ func TestLoadRejectsSymlinkAndOversizedFiles(t *testing.T) {
 	}
 	if _, err := readConfigFile(oversized); err == nil {
 		t.Fatal("readConfigFile accepted oversized file")
+	}
+}
+
+func TestReadConfigFileRejectsFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.fifo")
+	if err := unix.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := readConfigFile(path)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("readConfigFile accepted FIFO")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readConfigFile blocked opening FIFO")
 	}
 }

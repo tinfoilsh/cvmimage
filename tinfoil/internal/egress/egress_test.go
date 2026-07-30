@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -96,5 +97,18 @@ func TestRefreshThreadsCancellationIntoResolution(t *testing.T) {
 
 	if err := engine.Refresh(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Refresh() error = %v, want context cancellation", err)
+	}
+}
+
+func TestPublicIPv4RejectsNonPublicAnswers(t *testing.T) {
+	for _, value := range []string{"10.0.0.1", "192.0.0.8", "192.0.0.9", "192.0.0.10", "192.0.2.1", "224.0.0.1", "2001:db8::1"} {
+		if publicIPv4(netip.MustParseAddr(value)) {
+			t.Errorf("publicIPv4(%s) = true", value)
+		}
+	}
+	for _, value := range []string{"8.8.8.8"} {
+		if !publicIPv4(netip.MustParseAddr(value)) {
+			t.Errorf("publicIPv4(%s) = false", value)
+		}
 	}
 }

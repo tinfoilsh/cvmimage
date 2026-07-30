@@ -1,64 +1,16 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"strings"
-
 	"tinfoil/internal/runtimeconfig"
 )
 
 const (
-	kernelCmdlinePath = "/proc/cmdline"
-
-	tinfoilConfigHashParam = "tinfoil-config-hash"
-	tinfoilDebugParam      = "tinfoil-debug"
-
 	reservedDebugContainerName = runtimeconfig.ReservedDebugContainerName
 	reservedDebugPort          = runtimeconfig.ReservedDebugPort
 	reservedDebugHostPort      = runtimeconfig.ReservedDebugHostPort
 	reservedDebugSerialDevice  = runtimeconfig.ReservedDebugSerialDevice
 	debugDockerSocketBind      = "/run/docker.sock:/var/run/docker.sock"
 )
-
-type kernelCmdline struct {
-	ConfigHash string
-	Debug      bool
-}
-
-func readKernelCmdline() (kernelCmdline, error) {
-	data, err := os.ReadFile(kernelCmdlinePath)
-	if err != nil {
-		return kernelCmdline{}, fmt.Errorf("reading %s: %w", kernelCmdlinePath, err)
-	}
-	return parseKernelCmdline(string(data)), nil
-}
-
-func parseKernelCmdline(cmdline string) kernelCmdline {
-	var parsed kernelCmdline
-	configPrefix := tinfoilConfigHashParam + "="
-
-	for _, field := range strings.Fields(cmdline) {
-		if value, found := strings.CutPrefix(field, configPrefix); found {
-			if parsed.ConfigHash == "" {
-				parsed.ConfigHash = value
-			}
-			continue
-		}
-		if field == tinfoilDebugParam+"=on" {
-			parsed.Debug = true
-		}
-	}
-
-	return parsed
-}
-
-func (cmdline kernelCmdline) requiredConfigHash() (string, error) {
-	if cmdline.ConfigHash == "" {
-		return "", fmt.Errorf("parameter %s not found in cmdline", tinfoilConfigHashParam)
-	}
-	return cmdline.ConfigHash, nil
-}
 
 func reservedDebugRuntimeEnabled(containerName string, debug bool) bool {
 	return debug && containerName == reservedDebugContainerName

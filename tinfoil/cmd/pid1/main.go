@@ -96,8 +96,13 @@ type serviceControl interface {
 	Drain([][]string, time.Duration, time.Duration) error
 }
 
+type consoleControl interface {
+	stop(time.Duration, time.Duration) error
+}
+
 type lifecycleDeps struct {
 	services     serviceControl
+	startConsole func(context.Context) (consoleControl, error)
 	oneShot      func(context.Context, supervisor.Command) error
 	nvidia       func(context.Context) error
 	lockModules  func() error
@@ -120,16 +125,12 @@ func run(parent context.Context) (result error) {
 	}
 	readiness := newReadiness(requiredServiceNames(), setReady)
 	manager := supervisor.NewManager(initLogf)
-	console, err := startDebugConsole(parent, manager)
-	if err != nil {
-		return fmt.Errorf("start debug console: %w", err)
-	}
-	defer func() {
-		result = errors.Join(result, console.stop(serviceTermGrace, serviceKillGrace))
-	}()
 	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
 	deps := lifecycleDeps{
 		services: services,
+		startConsole: func(ctx context.Context) (consoleControl, error) {
+			return startDebugConsole(ctx, manager)
+		},
 		oneShot: func(ctx context.Context, command supervisor.Command) error {
 			return runOneShot(ctx, manager, command, oneShotStopGrace)
 		},
@@ -163,6 +164,12 @@ func run(parent context.Context) (result error) {
 }
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
+	var console consoleControl
+	defer func() {
+		if console != nil {
+			result = errors.Join(result, console.stop(deps.term, deps.kill))
+		}
+	}()
 	bootCtx := parent
 	runtimeCtx, cancelRuntime := context.WithCancel(parent)
 	defer func() {
@@ -176,7 +183,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		}
 	}()
 	defer func() {
-		if result != nil && deps.debugFailure != nil {
+		if result != nil && console != nil && deps.debugFailure != nil {
 			deps.debugFailure(parent, result)
 		}
 	}()
@@ -184,6 +191,11 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	initLogf("starting CPU lifecycle")
 	if err := deps.setupFS(initLogf); err != nil {
 		return fmt.Errorf("runtime filesystems: %w", err)
+	}
+	var err error
+	console, err = deps.startConsole(parent)
+	if err != nil {
+		return fmt.Errorf("start debug console: %w", err)
 	}
 	if err := deps.sysctls(initLogf); err != nil {
 		return fmt.Errorf("runtime sysctls: %w", err)

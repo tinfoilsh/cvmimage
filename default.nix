@@ -23,16 +23,13 @@ let
   nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
   nvattest = import ./nix/nvattest.nix { inherit pkgs; };
   runtimePackages = import ./nix/runtime-packages.nix { inherit pkgs; };
-  nvidiaModuleNames =
-    pkgs.lib.filter (name: name != "" && !(pkgs.lib.hasPrefix "#" name))
-      (pkgs.lib.splitString "\n" (builtins.readFile ./kernel/nvidia-modules.txt));
   rootfs = import ./nix/rootfs.nix {
     inherit pkgs;
     ubuntuDebs = runtimePackages.packages;
     runtimeGo = go.packages."runtime-go";
     debugPID1 = go.packages."debug-pid1";
     inherit (nvattest) nvattest;
-    nvidiaModules = map (name: "${nvidia.modules}/${name}") nvidiaModuleNames;
+    nvidiaModules = map (name: "${nvidia.modules}/${name}") nvidia.moduleNames;
   };
   repartSeedText = builtins.readFile ./repart.d/seed;
   repartSeedMatch = builtins.match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n" repartSeedText;

@@ -3,9 +3,9 @@
 @@ -86,2 +86,3 @@
 -lib-$(CONFIG_ARM64)		+= kaslr.o arm64.o arm64-stub.o smbios.o
 -lib-$(CONFIG_X86)		+= x86-stub.o smbios.o
-+lib-$(CONFIG_ARM64)		+= kaslr.o arm64.o arm64-stub.o
++lib-$(CONFIG_ARM64)		+= kaslr.o arm64.o arm64-stub.o smbios.o
 +lib-$(CONFIG_X86)		+= x86-stub.o
-+lib-$(CONFIG_DMI)		+= smbios.o
++lib-$(CONFIG_X86)		+= $(if $(CONFIG_DMI),smbios.o)
 --- a/drivers/firmware/efi/libstub/x86-stub.c
 +++ b/drivers/firmware/efi/libstub/x86-stub.c
 @@ -205,0 +206 @@

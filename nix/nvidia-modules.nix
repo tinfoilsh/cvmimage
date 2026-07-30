@@ -4,6 +4,11 @@ let
   inherit (pkgs) lib;
   inherit (kernel) kernelPackages release;
   version = "595.71.05";
+  moduleNames = [
+    "nvidia.ko"
+    "nvidia-uvm.ko"
+    "nvidia-modeset.ko"
+  ];
 
   _versionCheck =
     assert kernelPackages.nvidiaPackages.production.version == version;
@@ -38,7 +43,7 @@ let
       }
       ''
         module_dir=${nvidiaOpen}/lib/modules/${release}/kernel/drivers/video
-        expected_modules=(nvidia-modeset.ko nvidia-uvm.ko nvidia.ko)
+        expected_modules=(${lib.escapeShellArgs moduleNames})
 
         mkdir "$out"
         for module in "''${expected_modules[@]}"; do
@@ -75,5 +80,5 @@ let
       '';
 in
 {
-  inherit modules;
+  inherit moduleNames modules;
 }

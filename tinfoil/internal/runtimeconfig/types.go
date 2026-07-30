@@ -176,6 +176,34 @@ type Healthcheck struct {
 	StartPeriod string   `yaml:"start_period,omitempty"`
 }
 
+func (h *Healthcheck) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("healthcheck must be a mapping")
+	}
+	allowed := map[string]bool{
+		"test": true, "interval": true, "timeout": true,
+		"retries": true, "start_period": true,
+	}
+	seen := map[string]bool{}
+	for index := 0; index < len(node.Content); index += 2 {
+		field := node.Content[index].Value
+		if seen[field] {
+			return fmt.Errorf("duplicate healthcheck field %q", field)
+		}
+		seen[field] = true
+		if !allowed[field] {
+			return fmt.Errorf("unknown healthcheck field %q", field)
+		}
+	}
+	type rawHealthcheck Healthcheck
+	var raw rawHealthcheck
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	*h = Healthcheck(raw)
+	return nil
+}
+
 func ReservedDebugRuntimeEnabled(containerName string, debug bool) bool {
 	return debug && containerName == ReservedDebugContainerName
 }

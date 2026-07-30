@@ -44,7 +44,7 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) stri
 	if runtimeconfig.ShimUpstreamSet(config) {
 		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"})
 	}
-	if debug && hasReservedDebugContainer(config) {
+	if debug && runtimeconfig.HasReservedDebugContainer(config) {
 		writeReservedDebugForwardRules(&script)
 	}
 	return script.String()
@@ -70,14 +70,6 @@ func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeco
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr @%s accept\n", bridge, setName)
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr %s drop\n", bridge, nonPublicIPv4Ranges)
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr %s drop\n", bridge, nonPublicIPv6Ranges)
+	case "closed":
 	}
-}
-
-func hasReservedDebugContainer(config *runtimeconfig.Config) bool {
-	for _, container := range config.Containers {
-		if container.Name == runtimeconfig.ReservedDebugContainerName {
-			return true
-		}
-	}
-	return false
 }

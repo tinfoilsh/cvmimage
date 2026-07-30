@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
@@ -34,7 +34,7 @@ type declaredConfig struct {
 }
 
 type containerStatusClient interface {
-	ContainerInspect(context.Context, string) (container.InspectResponse, error)
+	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 }
 
 type containersResponse struct {
@@ -215,7 +215,7 @@ func inspectDeclaredContainers(ctx context.Context, cli containerStatusClient, d
 		if c.Name == "" {
 			continue
 		}
-		inspect, err := cli.ContainerInspect(ctx, c.Name)
+		result, err := cli.ContainerInspect(ctx, c.Name, client.ContainerInspectOptions{})
 		if err != nil {
 			if errdefs.IsNotFound(err) {
 				states = append(states, containerStatus{
@@ -230,7 +230,7 @@ func inspectDeclaredContainers(ctx context.Context, cli containerStatusClient, d
 			}
 			return states, fmt.Errorf("inspecting %s: %w", c.Name, err)
 		}
-		states = append(states, containerStatusFromInspect(c, inspect))
+		states = append(states, containerStatusFromInspect(c, result.Container))
 	}
 	return states, nil
 }
@@ -248,10 +248,6 @@ func containerStatusFromInspect(declared declaredContainer, inspect container.In
 	if inspect.Config != nil && inspect.Config.Image != "" {
 		status.Image = inspect.Config.Image
 	}
-	if inspect.ContainerJSONBase == nil {
-		return status
-	}
-
 	if inspect.Name != "" {
 		status.Name = strings.TrimPrefix(inspect.Name, "/")
 	}

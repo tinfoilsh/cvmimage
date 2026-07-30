@@ -79,6 +79,10 @@ let
         name = "disable-build-id";
         patch = ./patches/kernel-disable-build-id.patch;
       }
+      {
+        name = "gate-efi-smbios-on-dmi";
+        patch = ./patches/kernel-gate-efi-smbios-on-dmi.patch;
+      }
     ];
     extraMakeFlags = [
       "KBUILD_BUILD_USER=tinfoil"

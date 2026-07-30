@@ -1,0 +1,48 @@
+--- a/drivers/firmware/efi/libstub/Makefile
++++ b/drivers/firmware/efi/libstub/Makefile
+@@ -86,2 +86,3 @@
+-lib-$(CONFIG_ARM64)		+= kaslr.o arm64.o arm64-stub.o smbios.o
+-lib-$(CONFIG_X86)		+= x86-stub.o smbios.o
++lib-$(CONFIG_ARM64)		+= kaslr.o arm64.o arm64-stub.o
++lib-$(CONFIG_X86)		+= x86-stub.o
++lib-$(CONFIG_DMI)		+= smbios.o
+--- a/drivers/firmware/efi/libstub/x86-stub.c
++++ b/drivers/firmware/efi/libstub/x86-stub.c
+@@ -205,0 +206 @@
++#ifdef CONFIG_DMI
+@@ -365,0 +367 @@
++#endif
+@@ -482,0 +485 @@
++#ifdef CONFIG_DMI
+@@ -483,0 +487 @@
++#endif
+--- a/drivers/firmware/efi/efi.c
++++ b/drivers/firmware/efi/efi.c
+@@ -146,0 +147 @@
++#ifdef CONFIG_DMI
+@@ -155,0 +157 @@
++#endif
+@@ -622,0 +625 @@
++#ifdef CONFIG_DMI
+@@ -624,0 +628 @@
++#endif
+--- a/arch/x86/platform/efi/efi.c
++++ b/arch/x86/platform/efi/efi.c
+@@ -70,0 +71 @@
++#ifdef CONFIG_DMI
+@@ -72,0 +74 @@
++#endif
+--- a/arch/x86/platform/efi/quirks.c
++++ b/arch/x86/platform/efi/quirks.c
+@@ -574,0 +575,3 @@
++#ifndef CONFIG_DMI
++	return 0;
++#else
+@@ -625,0 +629 @@
++#endif
+--- a/arch/x86/coco/sev/core.c
++++ b/arch/x86/coco/sev/core.c
+@@ -1274,0 +1275 @@
++#ifdef CONFIG_DMI
+@@ -1276,0 +1278 @@
++#endif

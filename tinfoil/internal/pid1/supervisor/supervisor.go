@@ -537,7 +537,7 @@ func (s *Supervisor) Start(ctx context.Context, service Service) error {
 	}
 	s.services[service.Name] = record
 	process, err := s.startLocked(record)
-	if err != nil {
+	if err != nil && record.process == nil {
 		s.retireLocked(record)
 	}
 	s.mu.Unlock()
@@ -566,12 +566,21 @@ func (s *Supervisor) startLocked(record *serviceRecord) (*Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := writePIDFile(record.spec.PIDFile, process.PID()); err != nil {
-		_ = stopProcesses([]*Process{process}, 0, initialCleanupGrace, realClock{})
-		_, _ = process.Wait(context.Background())
-		return nil, fmt.Errorf("writing %s pid file: %w", record.spec.Name, err)
-	}
 	record.process = process
+	if err := writePIDFile(record.spec.PIDFile, process.PID()); err != nil {
+		cleanupErr := stopProcesses([]*Process{process}, 0, initialCleanupGrace, realClock{})
+		waitCtx, cancel := context.WithTimeout(context.Background(), initialCleanupGrace)
+		_, waitErr := process.Wait(waitCtx)
+		cancel()
+		if cleanupErr == nil && waitErr == nil {
+			record.process = nil
+		}
+		return nil, fmt.Errorf(
+			"writing %s pid file: %w",
+			record.spec.Name,
+			errors.Join(err, cleanupErr, waitErr),
+		)
+	}
 	record.started = s.clock.Now()
 	return process, nil
 }
@@ -860,5 +869,8 @@ func processSlice(processes map[*Process]bool) []*Process {
 	for process := range processes {
 		result = append(result, process)
 	}
+	sort.Slice(result, func(left, right int) bool {
+		return result[left].PID() < result[right].PID()
+	})
 	return result
 }

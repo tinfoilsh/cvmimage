@@ -30,6 +30,7 @@ type fakeBackend struct {
 	beforeStart    func()
 	exitOnTERM     map[string]bool
 	cgroupSurvives map[string]bool
+	cgroupKillErrs map[string]error
 	orphanPIDs     map[string][]int
 }
 
@@ -48,7 +49,7 @@ func newFakeBackend(sigchld chan os.Signal) *fakeBackend {
 	return &fakeBackend{
 		nextPID: 100, children: map[int]*fakeProcess{}, sigchld: sigchld,
 		started: make(chan int, 32), signaled: make(chan string, 32),
-		exitOnTERM: map[string]bool{}, cgroupSurvives: map[string]bool{},
+		exitOnTERM: map[string]bool{}, cgroupSurvives: map[string]bool{}, cgroupKillErrs: map[string]error{},
 		orphanPIDs: map[string][]int{},
 	}
 }
@@ -129,6 +130,7 @@ func (p *fakeProcess) killCgroup() error {
 	p.backend.signaled <- fmt.Sprintf("%s:cgroup.kill", p.name)
 	p.backend.mu.Lock()
 	exited := p.exited
+	killErr := p.backend.cgroupKillErrs[p.name]
 	p.cgroupRunning = false
 	orphans := append([]int(nil), p.backend.orphanPIDs[p.name]...)
 	p.backend.orphanPIDs[p.name] = nil
@@ -139,7 +141,7 @@ func (p *fakeProcess) killCgroup() error {
 	for _, pid := range orphans {
 		p.backend.exit(pid, syscall.WaitStatus(uint32(syscall.SIGKILL)&0x7f))
 	}
-	return nil
+	return killErr
 }
 
 func (p *fakeProcess) removeCgroup() error { return nil }
@@ -262,6 +264,54 @@ func TestInitialStartFailureRetiresRegistrationAndPermitsRetry(t *testing.T) {
 		t.Fatalf("retry start: %v", err)
 	}
 	_ = receive(t, backend.started)
+}
+
+func TestPIDFileFailureReportsCleanupAndRetainsFailedCleanup(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		cleanupErr error
+		retained   bool
+	}{
+		{name: "cleaned"},
+		{name: "cleanup failed", cleanupErr: errors.New("cgroup kill failed"), retained: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sigchld := make(chan os.Signal, 4)
+			backend := newFakeBackend(sigchld)
+			backend.cgroupKillErrs["service"] = test.cleanupErr
+			manager := newManager(backend, sigchld, nil)
+			supervisor := New(context.Background(), manager, Config{})
+			parent := filepath.Join(t.TempDir(), "not-a-directory")
+			if err := os.WriteFile(parent, []byte("blocked"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := supervisor.Start(context.Background(), Service{
+				Name: "service", Command: Command{Name: "service", Path: "/service"},
+				PIDFile: filepath.Join(parent, "service.pid"),
+			})
+			if err == nil {
+				t.Fatal("PID file failure was ignored")
+			}
+			if test.cleanupErr != nil && !errors.Is(err, test.cleanupErr) {
+				t.Fatalf("cleanup error missing from %v", err)
+			}
+			if got := receive(t, backend.signaled); got != "service:terminated" {
+				t.Fatalf("graceful cleanup signal = %q", got)
+			}
+			if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
+				t.Fatalf("forced cleanup signal = %q", got)
+			}
+			supervisor.mu.Lock()
+			record := supervisor.services["service"]
+			supervisor.mu.Unlock()
+			if (record != nil) != test.retained {
+				t.Fatalf("retained registration = %t, want %t", record != nil, test.retained)
+			}
+			if record != nil && record.process == nil {
+				t.Fatal("retained registration lost its process")
+			}
+		})
+	}
 }
 
 func TestInitialReadinessFailureKillsCgroupWaitsAndPermitsRetry(t *testing.T) {

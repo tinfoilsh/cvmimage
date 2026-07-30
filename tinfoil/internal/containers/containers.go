@@ -46,6 +46,15 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config,
 	return setupContainerNetworkFirewall(ctx, cfg, debug)
 }
 
+func PrepareNetworks(ctx context.Context, config *Config, debug bool) error {
+	cli, err := newDockerClient()
+	if err != nil {
+		return fmt.Errorf("creating docker client: %w", err)
+	}
+	defer cli.Close()
+	return setupContainerNetwork(ctx, cli, config, debug)
+}
+
 func ensureNetwork(ctx context.Context, cli *client.Client, name string) error {
 	_, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
 	if err == nil {
@@ -129,9 +138,6 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(ctx, cli, config, debug); err != nil {
-		return fmt.Errorf("creating container network: %w", err)
-	}
 	launchContainers := containersToLaunch(config.Containers, preserved)
 	if len(launchContainers) == 0 {
 		log.Println("No containers to launch")

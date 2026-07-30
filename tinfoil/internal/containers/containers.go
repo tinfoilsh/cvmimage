@@ -8,18 +8,17 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	dockerconfig "github.com/docker/cli/cli/config"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	dockernetwork "github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/container"
+	dockernetwork "github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
@@ -48,7 +47,7 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config,
 }
 
 func ensureNetwork(cli *client.Client, name string) error {
-	_, err := cli.NetworkInspect(context.Background(), name, dockernetwork.InspectOptions{})
+	_, err := cli.NetworkInspect(context.Background(), name, client.NetworkInspectOptions{})
 	if err == nil {
 		return nil
 	}
@@ -64,7 +63,7 @@ func ensureNetwork(cli *client.Client, name string) error {
 
 func ensureShimNetwork(cli *client.Client, upstreamContainer string) error {
 	ctx := context.Background()
-	existing, err := cli.NetworkInspect(ctx, containernet.ShimNetName, dockernetwork.InspectOptions{})
+	result, err := cli.NetworkInspect(ctx, containernet.ShimNetName, client.NetworkInspectOptions{})
 	if cerrdefs.IsNotFound(err) {
 		_, err = cli.NetworkCreate(ctx, containernet.ShimNetName, networkCreateOptions(containernet.ShimNetName))
 		if err != nil {
@@ -75,10 +74,11 @@ func ensureShimNetwork(cli *client.Client, upstreamContainer string) error {
 	if err != nil {
 		return fmt.Errorf("checking whether docker network %q exists: %w", containernet.ShimNetName, err)
 	}
+	existing := result.Network
 
 	if len(existing.IPAM.Config) != 1 ||
-		existing.IPAM.Config[0].Subnet != containernet.ShimNetSubnetCIDR ||
-		existing.IPAM.Config[0].Gateway != containernet.ShimNetGatewayIP {
+		existing.IPAM.Config[0].Subnet.String() != containernet.ShimNetSubnetCIDR ||
+		existing.IPAM.Config[0].Gateway.String() != containernet.ShimNetGatewayIP {
 		return fmt.Errorf("docker network %q must use subnet %s", containernet.ShimNetName, containernet.ShimNetSubnetCIDR)
 	}
 	if len(existing.Containers) > 1 {
@@ -92,8 +92,8 @@ func ensureShimNetwork(cli *client.Client, upstreamContainer string) error {
 	return nil
 }
 
-func networkCreateOptions(name string) dockernetwork.CreateOptions {
-	opts := dockernetwork.CreateOptions{
+func networkCreateOptions(name string) client.NetworkCreateOptions {
+	opts := client.NetworkCreateOptions{
 		Driver: "bridge",
 		Options: map[string]string{
 			"com.docker.network.bridge.name": name,
@@ -102,8 +102,8 @@ func networkCreateOptions(name string) dockernetwork.CreateOptions {
 	if name == containernet.ShimNetName {
 		opts.IPAM = &dockernetwork.IPAM{
 			Config: []dockernetwork.IPAMConfig{{
-				Subnet:  containernet.ShimNetSubnetCIDR,
-				Gateway: containernet.ShimNetGatewayIP,
+				Subnet:  netip.MustParsePrefix(containernet.ShimNetSubnetCIDR),
+				Gateway: netip.MustParseAddr(containernet.ShimNetGatewayIP),
 			}},
 		}
 	}
@@ -219,7 +219,7 @@ func RemoveManagedExcept(ctx context.Context, config *Config, preserved map[stri
 		if preserved[declared.Name] {
 			continue
 		}
-		err := cli.ContainerRemove(ctx, declared.Name, container.RemoveOptions{Force: true})
+		_, err := cli.ContainerRemove(ctx, declared.Name, client.ContainerRemoveOptions{Force: true})
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("removing %s: %w", declared.Name, err))
 		}
@@ -284,7 +284,8 @@ func runContainer(
 	healthStart := time.Now()
 	for {
 		time.Sleep(healthPollInterval)
-		info, err := cli.ContainerInspect(context.Background(), c.Name)
+		result, err := cli.ContainerInspect(context.Background(), c.Name, client.ContainerInspectOptions{})
+		info := result.Container
 		if err != nil || info.State == nil || info.State.Health == nil {
 			continue
 		}
@@ -384,19 +385,27 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 
 	log.Printf("Creating container %s", c.Name)
 
-	resp, err := cli.ContainerCreate(context.Background(), containerConfig, hostConfig, networkingConfig, nil, c.Name)
+	resp, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+		Config:           containerConfig,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkingConfig,
+		Name:             c.Name,
+	})
 	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
 	}
 
 	for _, n := range rest {
 		ep := endpointSettings(n, gatewayPriorityForNetwork(cfg, n))
-		if err := cli.NetworkConnect(context.Background(), n, resp.ID, ep); err != nil {
+		if _, err := cli.NetworkConnect(context.Background(), n, client.NetworkConnectOptions{
+			Container:      resp.ID,
+			EndpointConfig: ep,
+		}); err != nil {
 			return fmt.Errorf("connecting container %s to %s: %w", c.Name, n, err)
 		}
 	}
 
-	if err := cli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(context.Background(), resp.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("starting container: %w", err)
 	}
 
@@ -523,15 +532,15 @@ func gatewayPriorityForNetwork(cfg *Config, name string) int {
 
 func applyReservedDebugRuntime(containerConfig *container.Config, hostConfig *container.HostConfig) {
 	hostConfig.NetworkMode = "bridge"
-	port := nat.Port(reservedDebugPort)
+	port := dockernetwork.MustParsePort(reservedDebugPort)
 	if containerConfig.ExposedPorts == nil {
-		containerConfig.ExposedPorts = nat.PortSet{}
+		containerConfig.ExposedPorts = dockernetwork.PortSet{}
 	}
 	containerConfig.ExposedPorts[port] = struct{}{}
 	if hostConfig.PortBindings == nil {
-		hostConfig.PortBindings = nat.PortMap{}
+		hostConfig.PortBindings = dockernetwork.PortMap{}
 	}
-	hostConfig.PortBindings[port] = []nat.PortBinding{{
+	hostConfig.PortBindings[port] = []dockernetwork.PortBinding{{
 		HostPort: fmt.Sprintf("%d", reservedDebugHostPort),
 	}}
 	hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
@@ -545,7 +554,7 @@ func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettin
 	ep := &dockernetwork.EndpointSettings{GwPriority: gwPriority}
 	if name == containernet.ShimNetName {
 		ep.IPAMConfig = &dockernetwork.EndpointIPAMConfig{
-			IPv4Address: containernet.ShimUpstreamIP,
+			IPv4Address: netip.MustParseAddr(containernet.ShimUpstreamIP),
 		}
 	}
 	return ep
@@ -555,7 +564,7 @@ func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettin
 func pullImage(cli *client.Client, imageName string) error {
 	ctx := context.Background()
 
-	opts := image.PullOptions{}
+	opts := client.ImagePullOptions{}
 
 	// Extract registry host and get auth
 	host := "docker.io"

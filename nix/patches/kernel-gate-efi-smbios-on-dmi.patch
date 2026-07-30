@@ -1,0 +1,18 @@
+--- a/drivers/firmware/efi/libstub/Makefile
++++ b/drivers/firmware/efi/libstub/Makefile
+@@ -86,2 +86,3 @@
+-lib-$(CONFIG_ARM64)		+= kaslr.o arm64.o arm64-stub.o smbios.o
+-lib-$(CONFIG_X86)		+= x86-stub.o smbios.o
++lib-$(CONFIG_ARM64)		+= kaslr.o arm64.o arm64-stub.o
++lib-$(CONFIG_X86)		+= x86-stub.o
++lib-$(CONFIG_DMI)		+= smbios.o
+--- a/drivers/firmware/efi/libstub/x86-stub.c
++++ b/drivers/firmware/efi/libstub/x86-stub.c
+@@ -205,0 +206 @@
++#ifdef CONFIG_DMI
+@@ -365,0 +367 @@
++#endif
+@@ -482,0 +485 @@
++#ifdef CONFIG_DMI
+@@ -483,0 +487 @@
++#endif

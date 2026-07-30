@@ -177,7 +177,6 @@ func (m *manager) boot(override []byte) error {
 	if err := writeRuntimeArtifacts(config, source); err != nil {
 		return err
 	}
-	launchConfig := withoutPreservedContainers(config, preserved)
 	tracker, err := boot.ResumeTracker()
 	if err != nil {
 		return err
@@ -188,24 +187,10 @@ func (m *manager) boot(override []byte) error {
 		return err
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-	if err := containers.LaunchAndWaitHealthy(m.ctx, tracker, launchConfig, external, m.debug); err != nil {
+	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, m.debug, preserved); err != nil {
 		return err
 	}
 	return restartRuntimeServices(m.ctx)
-}
-
-func withoutPreservedContainers(config *runtimeconfig.Config, preserved map[string]bool) *runtimeconfig.Config {
-	if len(preserved) == 0 {
-		return config
-	}
-	copy := *config
-	copy.Containers = nil
-	for _, container := range config.Containers {
-		if !preserved[container.Name] {
-			copy.Containers = append(copy.Containers, container)
-		}
-	}
-	return &copy
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

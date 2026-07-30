@@ -40,3 +40,9 @@
 +#else
 @@ -625,0 +629 @@
 +#endif
+--- a/arch/x86/coco/sev/core.c
++++ b/arch/x86/coco/sev/core.c
+@@ -1274,0 +1275 @@
++#ifdef CONFIG_DMI
+@@ -1276,0 +1278 @@
++#endif

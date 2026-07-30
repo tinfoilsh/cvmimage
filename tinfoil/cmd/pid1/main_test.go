@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/nvidia"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
@@ -98,6 +99,40 @@ func newLifecycleHarness() *lifecycleHarness {
 		},
 	}
 	return harness
+}
+
+func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
+	harness := newLifecycleHarness()
+	harness.deps.cmdline = kernelcmdline.Values{ConfigHash: "abc", Debug: true}
+	var bootCommand supervisor.Command
+	harness.deps.oneShot = func(_ context.Context, command supervisor.Command) error {
+		if command.Name == string(hardening.ServiceBoot) {
+			bootCommand = command
+		}
+		return nil
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runLifecycle(parent, harness.deps, harness.readiness) }()
+	if ready := receiveTest(t, harness.ready); !ready {
+		t.Fatal("lifecycle did not become ready")
+	}
+	cancel()
+	if err := receiveTest(t, result); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(bootCommand.Args); !strings.Contains(got, "--config-hash=abc --debug=true") {
+		t.Fatalf("boot args = %s", got)
+	}
+	var containersCommand supervisor.Command
+	for _, service := range harness.services.started {
+		if service.Name == containersName {
+			containersCommand = service.Command
+		}
+	}
+	if got := fmt.Sprint(containersCommand.Args); !strings.Contains(got, "--debug=true") {
+		t.Fatalf("containers args = %s", got)
+	}
 }
 
 type fakeNVIDIA struct {

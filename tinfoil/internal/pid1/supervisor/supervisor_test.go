@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -370,6 +371,69 @@ func TestInitialReadinessFailureKillsCgroupWaitsAndPermitsRetry(t *testing.T) {
 		t.Fatalf("retry start: %v", err)
 	}
 	_ = receive(t, backend.started)
+}
+
+func TestForkingServiceTracksCgroupAfterLauncherExit(t *testing.T) {
+	sigchld := make(chan os.Signal, 8)
+	backend := newFakeBackend(sigchld)
+	backend.cgroupSurvives["service"] = true
+	manager := newManager(backend, sigchld, nil)
+	clock := newFakeClock()
+	states := make(chan State, 8)
+	var readyCalls atomic.Int32
+	supervisor := New(context.Background(), manager, Config{
+		Clock: clock,
+		Observe: func(state State) {
+			states <- state
+		},
+	})
+	service := Service{
+		Name: "service", Restart: true, Forking: true,
+		Command: Command{Name: "service", Path: "/service"},
+		Ready: func(context.Context) error {
+			if readyCalls.Add(1) == 1 {
+				backend.exit(receive(t, backend.started), 0)
+			}
+			return nil
+		},
+	}
+	if err := supervisor.Start(context.Background(), service); err != nil {
+		t.Fatal(err)
+	}
+	if state := receive(t, states); !state.Ready || state.Err != nil {
+		t.Fatalf("initial state = %+v", state)
+	}
+	select {
+	case state := <-states:
+		t.Fatalf("forking service failed while its cgroup remained populated: %+v", state)
+	case <-time.After(4 * cgroupPollInterval):
+	}
+
+	backend.mu.Lock()
+	for _, process := range backend.children {
+		process.cgroupRunning = false
+	}
+	backend.mu.Unlock()
+	if state := receive(t, states); state.Ready || state.Err != nil {
+		t.Fatalf("empty cgroup state = %+v", state)
+	}
+	clock.fire(t, 2*time.Second)
+	_ = receive(t, backend.started)
+	if err := supervisor.Drain([][]string{{"service"}}, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestForkingServiceRequiresReadiness(t *testing.T) {
+	sigchld := make(chan os.Signal, 1)
+	supervisor := New(context.Background(), newManager(newFakeBackend(sigchld), sigchld, nil), Config{})
+	err := supervisor.Start(context.Background(), Service{
+		Name: "service", Forking: true,
+		Command: Command{Name: "service", Path: "/service"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires readiness") {
+		t.Fatalf("forking service error = %v", err)
+	}
 }
 
 func TestRestartMaximumIsNeverBelowBase(t *testing.T) {

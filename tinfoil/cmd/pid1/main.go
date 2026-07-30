@@ -32,24 +32,25 @@ const (
 	oneShotStopGrace     = 2 * time.Second
 	serviceTermGrace     = 10 * time.Second
 	serviceKillGrace     = 5 * time.Second
-	nvidiaChildLimit     = 4 * time.Minute
 	nvidiaDeviceWait     = 15 * time.Second
 	nvidiaDevicePoll     = 500 * time.Millisecond
 	cdiGenerateLimit     = 30 * time.Second
 
-	containerdName   = "containerd"
-	dockerName       = "dockerd"
-	containersName   = "tinfoil-containers"
-	shimName         = "tinfoil-shim"
-	egressName       = "tinfoil-egress"
-	containerdSocket = "/run/containerd/containerd.sock"
-	dockerSocket     = "/run/docker.sock"
-	readyPath        = "/run/tinfoil-pid1.ready"
-	selfExecPath     = "/proc/self/exe"
-	pid1Env          = "TINFOIL_PID1"
-	pid1EnvValue     = "tinfoil-pid1"
-	kmsgInfoPrefix   = "<6>"
-	fabricConfigPath = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
+	containerdName    = "containerd"
+	dockerName        = "dockerd"
+	containersName    = "tinfoil-containers"
+	shimName          = "tinfoil-shim"
+	egressName        = "tinfoil-egress"
+	persistencedName  = "nvidia-persistenced"
+	fabricManagerName = "nvidia-fabricmanager"
+	containerdSocket  = "/run/containerd/containerd.sock"
+	dockerSocket      = "/run/docker.sock"
+	readyPath         = "/run/tinfoil-pid1.ready"
+	selfExecPath      = "/proc/self/exe"
+	pid1Env           = "TINFOIL_PID1"
+	pid1EnvValue      = "tinfoil-pid1"
+	kmsgInfoPrefix    = "<6>"
+	fabricConfigPath  = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
 )
 
 var consoleMu sync.Mutex
@@ -96,8 +97,13 @@ type serviceControl interface {
 	Drain([][]string, time.Duration, time.Duration) error
 }
 
+type consoleControl interface {
+	stop(time.Duration, time.Duration) error
+}
+
 type lifecycleDeps struct {
 	services     serviceControl
+	startConsole func(context.Context) (consoleControl, error)
 	oneShot      func(context.Context, supervisor.Command) error
 	nvidia       func(context.Context) error
 	lockModules  func() error
@@ -120,16 +126,12 @@ func run(parent context.Context) (result error) {
 	}
 	readiness := newReadiness(requiredServiceNames(), setReady)
 	manager := supervisor.NewManager(initLogf)
-	console, err := startDebugConsole(parent, manager)
-	if err != nil {
-		return fmt.Errorf("start debug console: %w", err)
-	}
-	defer func() {
-		result = errors.Join(result, console.stop(serviceTermGrace, serviceKillGrace))
-	}()
 	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
 	deps := lifecycleDeps{
 		services: services,
+		startConsole: func(ctx context.Context) (consoleControl, error) {
+			return startDebugConsole(ctx, manager)
+		},
 		oneShot: func(ctx context.Context, command supervisor.Command) error {
 			return runOneShot(ctx, manager, command, oneShotStopGrace)
 		},
@@ -163,6 +165,12 @@ func run(parent context.Context) (result error) {
 }
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
+	var console consoleControl
+	defer func() {
+		if console != nil {
+			result = errors.Join(result, console.stop(deps.term, deps.kill))
+		}
+	}()
 	bootCtx := parent
 	runtimeCtx, cancelRuntime := context.WithCancel(parent)
 	defer func() {
@@ -176,7 +184,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		}
 	}()
 	defer func() {
-		if result != nil && deps.debugFailure != nil {
+		if result != nil && console != nil && deps.debugFailure != nil {
 			deps.debugFailure(parent, result)
 		}
 	}()
@@ -184,6 +192,11 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	initLogf("starting CPU lifecycle")
 	if err := deps.setupFS(initLogf); err != nil {
 		return fmt.Errorf("runtime filesystems: %w", err)
+	}
+	var err error
+	console, err = deps.startConsole(parent)
+	if err != nil {
+		return fmt.Errorf("start debug console: %w", err)
 	}
 	if err := deps.sysctls(initLogf); err != nil {
 		return fmt.Errorf("runtime sysctls: %w", err)
@@ -398,18 +411,16 @@ func runNVIDIABootstrapSteps(
 	if err := control.PreparePersistencedRuntime(); err != nil {
 		return fmt.Errorf("prepare nvidia-persistenced runtime: %w", err)
 	}
-	persistencedCtx, cancelPersistenced := context.WithTimeout(ctx, nvidiaChildLimit)
-	err := oneShot(persistencedCtx, command(
-		"nvidia-persistenced",
+	persistenced := command(
+		persistencedName,
 		"/usr/bin/nvidia-persistenced",
 		"--user", "nvidia-persistenced", "--uvm-persistence-mode", "--verbose",
-	))
-	cancelPersistenced()
-	if err != nil {
+	)
+	if err := startService(ctx, supervisor.Service{
+		Name: persistenced.Name, Restart: true, Forking: true, Command: persistenced,
+		Ready: control.WaitForPersistenced,
+	}); err != nil {
 		return fmt.Errorf("start nvidia-persistenced: %w", err)
-	}
-	if err := control.WaitForPersistenced(ctx); err != nil {
-		return fmt.Errorf("wait for nvidia-persistenced: %w", err)
 	}
 	if err := control.LoadUVMKernelModules(); err != nil {
 		return fmt.Errorf("load NVIDIA UVM kernel modules: %w", err)
@@ -498,7 +509,7 @@ func waitForNVIDIADeviceNodes(
 
 func fabricManagerCommand() supervisor.Command {
 	cmd := command(
-		"nvidia-fabricmanager",
+		fabricManagerName,
 		"/usr/bin/nv-fabricmanager",
 		"-c", fabricConfigPath,
 	)
@@ -521,6 +532,7 @@ func shutdownGroups() [][]string {
 	return [][]string{
 		{egressName, shimName},
 		{containersName},
+		{fabricManagerName, persistencedName},
 		{dockerName},
 		{containerdName},
 	}

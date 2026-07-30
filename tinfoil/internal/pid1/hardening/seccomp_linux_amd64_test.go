@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"syscall"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 func TestServiceSocketDomains(t *testing.T) {
 	if os.Getenv("TINFOIL_SOCKET_DOMAIN_CHILD") == "1" {
+		runtime.LockOSThread()
 		service := Service(os.Getenv("TINFOIL_SOCKET_SERVICE"))
 		domain, err := strconv.Atoi(os.Getenv("TINFOIL_SOCKET_DOMAIN"))
 		if err != nil {
@@ -95,6 +97,7 @@ func TestServiceSocketDomains(t *testing.T) {
 
 func TestServiceDangerousSyscalls(t *testing.T) {
 	if os.Getenv("TINFOIL_DANGEROUS_SYSCALL_CHILD") == "1" {
+		runtime.LockOSThread()
 		service := Service(os.Getenv("TINFOIL_SYSCALL_SERVICE"))
 		operation := os.Getenv("TINFOIL_SYSCALL_OPERATION")
 		policy, ok := policyFor(service)

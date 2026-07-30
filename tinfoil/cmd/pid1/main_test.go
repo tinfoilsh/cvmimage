@@ -71,6 +71,10 @@ type lifecycleHarness struct {
 	existing  map[string]bool
 }
 
+type fakeConsole struct{}
+
+func (*fakeConsole) stop(time.Duration, time.Duration) error { return nil }
+
 func newLifecycleHarness() *lifecycleHarness {
 	harness := &lifecycleHarness{
 		services: newFakeServices(),
@@ -84,7 +88,10 @@ func newLifecycleHarness() *lifecycleHarness {
 	harness.services.observe = harness.readiness.Update
 	noSetup := func(pidruntime.LogFunc) error { return nil }
 	harness.deps = lifecycleDeps{
-		services:     harness.services,
+		services: harness.services,
+		startConsole: func(context.Context) (consoleControl, error) {
+			return &fakeConsole{}, nil
+		},
 		oneShot:      func(context.Context, supervisor.Command) error { return nil },
 		nvidia:       func(context.Context) error { return nil },
 		lockModules:  func() error { return nil },
@@ -227,22 +234,16 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 	control := newFakeNVIDIA(t, 8)
 	control.fabricMode = nvidia.FabricModeFabricManager
 	var commands []supervisor.Command
-	var persistencedLimit time.Duration
+	var services []supervisor.Service
 	oneShot := func(ctx context.Context, command supervisor.Command) error {
 		control.calls = append(control.calls, "exec:"+command.Name)
 		commands = append(commands, command)
-		if command.Name == "nvidia-persistenced" {
-			deadline, ok := ctx.Deadline()
-			if !ok {
-				t.Fatal("nvidia-persistenced context has no deadline")
-			}
-			persistencedLimit = time.Until(deadline)
-		}
 		return nil
 	}
 	startService := func(ctx context.Context, service supervisor.Service) error {
 		control.calls = append(control.calls, "exec:"+service.Command.Name)
 		commands = append(commands, service.Command)
+		services = append(services, service)
 		return startTestService(ctx, service)
 	}
 	var statuses []nvidia.BootstrapStatus
@@ -265,9 +266,6 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 	if !slices.Equal(control.calls, wantOrder) {
 		t.Fatalf("calls = %v, want %v", control.calls, wantOrder)
 	}
-	if persistencedLimit > nvidiaChildLimit || persistencedLimit < nvidiaChildLimit-time.Second {
-		t.Fatalf("persistenced child limit = %s, want %s", persistencedLimit, nvidiaChildLimit)
-	}
 	if len(statuses) != 1 || statuses[0] != nvidia.ReadyBootstrapStatus(8) {
 		t.Fatalf("statuses = %#v", statuses)
 	}
@@ -280,6 +278,9 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 		[]string{"-c", fabricConfigPath})
 	assertCommand(t, commands[2], "nvidia-ctk-cdi", "/usr/bin/nvidia-ctk",
 		[]string{"cdi", "generate", "--output=" + control.temporary})
+	if len(services) != 2 || !services[0].Forking || !services[0].Restart || services[1].Forking || !services[1].Restart {
+		t.Fatalf("NVIDIA services = %#v", services)
+	}
 	env := environmentMap(commands[1].Env)
 	if _, ok := env["FM_CONFIG_FILE"]; ok {
 		t.Fatalf("Fabric Manager inherited FM_CONFIG_FILE: %#v", env)
@@ -475,6 +476,14 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 		record(command.Name)
 		return nil
 	}
+	harness.deps.setupFS = func(pidruntime.LogFunc) error {
+		record("runtime-filesystems")
+		return nil
+	}
+	harness.deps.startConsole = func(context.Context) (consoleControl, error) {
+		record("debug-console")
+		return &fakeConsole{}, nil
+	}
 	harness.deps.nvidia = func(context.Context) error {
 		record("nvidia-bootstrap")
 		return nil
@@ -496,6 +505,8 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	filesystems := slices.Index(events, "runtime-filesystems")
+	console := slices.Index(events, "debug-console")
 	loopback := slices.Index(events, "loopback")
 	bootstrap := slices.Index(events, "nvidia-bootstrap")
 	lock := slices.Index(events, "module-lock")
@@ -505,7 +516,7 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	containers := slices.Index(events, containersName)
 	shim := slices.Index(events, shimName)
 	boot := slices.Index(events, string(hardening.ServiceBoot))
-	if loopback < 0 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || shim <= docker || boot <= shim || containers <= boot {
+	if filesystems < 0 || console != filesystems+1 || loopback != console+1 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || shim <= docker || boot <= shim || containers <= boot {
 		t.Fatalf("startup events = %v", events)
 	}
 }
@@ -538,8 +549,8 @@ func TestModuleLockFailureStopsBootBeforeServices(t *testing.T) {
 
 func TestLifecycleFailureParksBeforeServiceDrain(t *testing.T) {
 	harness := newLifecycleHarness()
-	setupErr := errors.New("filesystem setup failed")
-	harness.deps.setupFS = func(pidruntime.LogFunc) error { return setupErr }
+	setupErr := errors.New("sysctl setup failed")
+	harness.deps.sysctls = func(pidruntime.LogFunc) error { return setupErr }
 	parked := make(chan error, 1)
 	release := make(chan struct{})
 	harness.deps.debugFailure = func(_ context.Context, err error) {
@@ -564,6 +575,21 @@ func TestLifecycleFailureParksBeforeServiceDrain(t *testing.T) {
 		t.Fatalf("drain groups = %v, want %v", groups, shutdownGroups())
 	}
 	if err := receiveTest(t, result); !errors.Is(err, setupErr) {
+		t.Fatalf("runLifecycle error = %v, want %v", err, setupErr)
+	}
+}
+
+func TestFilesystemSetupFailureDoesNotStartConsole(t *testing.T) {
+	harness := newLifecycleHarness()
+	setupErr := errors.New("filesystem setup failed")
+	harness.deps.setupFS = func(pidruntime.LogFunc) error { return setupErr }
+	harness.deps.startConsole = func(context.Context) (consoleControl, error) {
+		t.Fatal("console started before filesystem setup completed")
+		return nil, nil
+	}
+
+	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
+	if !errors.Is(err, setupErr) {
 		t.Fatalf("runLifecycle error = %v, want %v", err, setupErr)
 	}
 }

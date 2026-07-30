@@ -94,9 +94,28 @@ func OpenControl() (*os.File, error) {
 	if err := EnsureControlNode(); err != nil {
 		return nil, err
 	}
-	control, err := os.OpenFile(ControlNode, os.O_RDWR, 0)
+	descriptor, err := unix.Open(ControlNode, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", ControlNode, err)
+	}
+	control := os.NewFile(uintptr(descriptor), ControlNode)
+	if control == nil {
+		unix.Close(descriptor)
+		return nil, errors.New("wrapping device-mapper control descriptor")
+	}
+	major, minor, err := readMajorMinor(controlDevicePath)
+	if err != nil {
+		control.Close()
+		return nil, err
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(descriptor, &stat); err != nil {
+		control.Close()
+		return nil, err
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFCHR || uint64(stat.Rdev) != unix.Mkdev(major, minor) {
+		control.Close()
+		return nil, fmt.Errorf("opened %s does not match device-mapper device %d:%d", ControlNode, major, minor)
 	}
 	return control, nil
 }

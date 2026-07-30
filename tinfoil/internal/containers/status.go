@@ -69,7 +69,7 @@ type containerHealth struct {
 }
 
 func RunStatusPublisher(ctx context.Context) error {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := newDockerClient()
 	if err != nil {
 		return fmt.Errorf("creating docker client: %w", err)
 	}
@@ -91,7 +91,7 @@ func RunStatusPublisher(ctx context.Context) error {
 }
 
 func PublishStatus(ctx context.Context) error {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := newDockerClient()
 	if err != nil {
 		return fmt.Errorf("creating docker client: %w", err)
 	}

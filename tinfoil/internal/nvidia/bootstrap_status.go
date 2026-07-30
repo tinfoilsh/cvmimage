@@ -63,14 +63,6 @@ func WriteBootstrapStatus(path string, status BootstrapStatus) error {
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return fmt.Errorf("create NVIDIA bootstrap status directory: %w", err)
 	}
-	info, err := os.Lstat(directory)
-	if err != nil {
-		return fmt.Errorf("inspect NVIDIA bootstrap status directory: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("NVIDIA bootstrap status directory %s is not a directory", directory)
-	}
-
 	temporary, err := os.CreateTemp(directory, ".nvidia-bootstrap-status.*")
 	if err != nil {
 		return fmt.Errorf("create NVIDIA bootstrap status temporary file: %w", err)

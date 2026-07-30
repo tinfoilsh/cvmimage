@@ -22,7 +22,7 @@ pkgs.runCommand "${basename}-image"
     ];
   }
   ''
-    set -o pipefail
+    set -euo pipefail
     root="$TMPDIR/root"
     mkdir -p "$root" "$out"
 

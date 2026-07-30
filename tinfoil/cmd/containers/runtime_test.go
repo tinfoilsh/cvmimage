@@ -16,21 +16,33 @@ func TestParseInvocation(t *testing.T) {
 	}
 }
 
-func TestReplacementPIDAvailable(t *testing.T) {
+func TestReplacementPIDAvailableUsesFileGeneration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service.pid")
-	if available, err := replacementPIDAvailable(path, 41); err != nil || available {
-		t.Fatalf("missing pid file: available=%v error=%v", available, err)
-	}
 	if err := os.WriteFile(path, []byte("41\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if available, err := replacementPIDAvailable(path, 41); err != nil || available {
-		t.Fatalf("old pid: available=%v error=%v", available, err)
-	}
-	if err := os.WriteFile(path, []byte("42\n"), 0o600); err != nil {
+	previous, err := openServiceInstance(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if available, err := replacementPIDAvailable(path, 41); err != nil || !available {
+	defer previous.close()
+	if available, err := replacementPIDAvailable(path, previous); err != nil || available {
+		t.Fatalf("old pid: available=%v error=%v", available, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if available, err := replacementPIDAvailable(path, previous); err != nil || available {
+		t.Fatalf("missing pid file: available=%v error=%v", available, err)
+	}
+	replacement := filepath.Join(filepath.Dir(path), "replacement.pid")
+	if err := os.WriteFile(replacement, []byte("41\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if available, err := replacementPIDAvailable(path, previous); err != nil || !available {
 		t.Fatalf("replacement pid: available=%v error=%v", available, err)
 	}
 }

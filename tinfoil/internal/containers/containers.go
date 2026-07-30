@@ -34,35 +34,43 @@ const (
 
 func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config, debug bool) error {
 	for name := range cfg.Networks {
-		if err := ensureNetwork(cli, name); err != nil {
+		if err := ensureNetwork(ctx, cli, name); err != nil {
 			return err
 		}
 	}
 	if runtimeconfig.ShimUpstreamSet(cfg) {
-		if err := ensureShimNetwork(cli, cfg.ShimCfg.UpstreamContainer); err != nil {
+		if err := ensureShimNetwork(ctx, cli, cfg.ShimCfg.UpstreamContainer); err != nil {
 			return err
 		}
 	}
 	return setupContainerNetworkFirewall(ctx, cfg, debug)
 }
 
-func ensureNetwork(cli *client.Client, name string) error {
-	_, err := cli.NetworkInspect(context.Background(), name, client.NetworkInspectOptions{})
+func PrepareNetworks(ctx context.Context, config *Config, debug bool) error {
+	cli, err := newDockerClient()
+	if err != nil {
+		return fmt.Errorf("creating docker client: %w", err)
+	}
+	defer cli.Close()
+	return setupContainerNetwork(ctx, cli, config, debug)
+}
+
+func ensureNetwork(ctx context.Context, cli *client.Client, name string) error {
+	_, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
 	if err == nil {
 		return nil
 	}
 	if !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("checking whether docker network %q exists: %w", name, err)
 	}
-	_, err = cli.NetworkCreate(context.Background(), name, networkCreateOptions(name))
+	_, err = cli.NetworkCreate(ctx, name, networkCreateOptions(name))
 	if err != nil {
 		return fmt.Errorf("creating docker network %q: %w", name, err)
 	}
 	return nil
 }
 
-func ensureShimNetwork(cli *client.Client, upstreamContainer string) error {
-	ctx := context.Background()
+func ensureShimNetwork(ctx context.Context, cli *client.Client, upstreamContainer string) error {
 	result, err := cli.NetworkInspect(ctx, containernet.ShimNetName, client.NetworkInspectOptions{})
 	if cerrdefs.IsNotFound(err) {
 		_, err = cli.NetworkCreate(ctx, containernet.ShimNetName, networkCreateOptions(containernet.ShimNetName))
@@ -124,15 +132,12 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 		return nil
 	}
 
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := newDockerClient()
 	if err != nil {
 		return fmt.Errorf("creating docker client: %w", err)
 	}
 	defer cli.Close()
 
-	if err := setupContainerNetwork(ctx, cli, config, debug); err != nil {
-		return fmt.Errorf("creating container network: %w", err)
-	}
 	launchContainers := containersToLaunch(config.Containers, preserved)
 	if len(launchContainers) == 0 {
 		log.Println("No containers to launch")
@@ -171,7 +176,7 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 		wg.Add(1)
 		go func(i int, c Container) {
 			defer wg.Done()
-			errs[i] = runContainer(cli, c, config, extConfig, &substages, &mu, flush, debug)
+			errs[i] = runContainer(ctx, cli, c, config, extConfig, &substages, &mu, flush, debug)
 		}(i, c)
 	}
 	wg.Wait()
@@ -209,7 +214,7 @@ func RemoveManagedExcept(ctx context.Context, config *Config, preserved map[stri
 	if config == nil {
 		return nil
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := newDockerClient()
 	if err != nil {
 		return fmt.Errorf("creating docker client: %w", err)
 	}
@@ -230,6 +235,7 @@ func RemoveManagedExcept(ctx context.Context, config *Config, preserved map[stri
 // runContainer handles the full lifecycle of a single container:
 // pull → create+start → wait-healthy. Substage updates are mutex-protected.
 func runContainer(
+	ctx context.Context,
 	cli *client.Client,
 	c Container,
 	cfg *Config,
@@ -257,7 +263,7 @@ func runContainer(
 	// Pull
 	pullStart := time.Now()
 	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
-	if err := pullImage(cli, c.Image); err != nil {
+	if err := pullImage(ctx, cli, c.Image); err != nil {
 		detail := fmt.Sprintf("pulling image: %v", err)
 		record("pull", boot.StatusFailed, time.Since(pullStart), detail)
 		finish(boot.StatusFailed, detail)
@@ -267,7 +273,7 @@ func runContainer(
 
 	// Create + start
 	startPhase := time.Now()
-	if err := createAndStartContainer(cli, c, cfg, extConfig, debug); err != nil {
+	if err := createAndStartContainer(ctx, cli, c, cfg, extConfig, debug); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
 		record("start", boot.StatusFailed, time.Since(startPhase), detail)
 		finish(boot.StatusFailed, detail)
@@ -282,9 +288,15 @@ func runContainer(
 
 	// Wait for Docker health verdict
 	healthStart := time.Now()
+	ticker := time.NewTicker(healthPollInterval)
+	defer ticker.Stop()
 	for {
-		time.Sleep(healthPollInterval)
-		result, err := cli.ContainerInspect(context.Background(), c.Name, client.ContainerInspectOptions{})
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		result, err := cli.ContainerInspect(ctx, c.Name, client.ContainerInspectOptions{})
 		info := result.Container
 		if err != nil || info.State == nil || info.State.Health == nil {
 			continue
@@ -377,7 +389,7 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 	return first, rest
 }
 
-func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
+func createAndStartContainer(ctx context.Context, cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
 	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, debug)
 	if err != nil {
 		return err
@@ -385,7 +397,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 
 	log.Printf("Creating container %s", c.Name)
 
-	resp, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+	resp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:           containerConfig,
 		HostConfig:       hostConfig,
 		NetworkingConfig: networkingConfig,
@@ -397,7 +409,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 
 	for _, n := range rest {
 		ep := endpointSettings(n, gatewayPriorityForNetwork(cfg, n))
-		if _, err := cli.NetworkConnect(context.Background(), n, client.NetworkConnectOptions{
+		if _, err := cli.NetworkConnect(ctx, n, client.NetworkConnectOptions{
 			Container:      resp.ID,
 			EndpointConfig: ep,
 		}); err != nil {
@@ -405,7 +417,7 @@ func createAndStartContainer(cli *client.Client, c Container, cfg *Config, extCo
 		}
 	}
 
-	if _, err := cli.ContainerStart(context.Background(), resp.ID, client.ContainerStartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("starting container: %w", err)
 	}
 
@@ -493,9 +505,14 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	if c.CPUs > 0 {
 		hostConfig.Resources.NanoCPUs = int64(c.CPUs * 1e9)
 	}
+	for _, device := range c.Devices {
+		hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
+			PathOnHost: device, PathInContainer: device, CgroupPermissions: "rwm",
+		})
+	}
 
 	// Volume mounts
-	reservedDebugRuntime := reservedDebugRuntimeEnabled(c.Name, debug)
+	reservedDebugRuntime := runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug)
 	for _, vol := range c.Volumes {
 		hostConfig.Binds = append(hostConfig.Binds, vol)
 	}
@@ -561,9 +578,7 @@ func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettin
 }
 
 // pullImage pulls an image using the Docker SDK with auth from Docker config
-func pullImage(cli *client.Client, imageName string) error {
-	ctx := context.Background()
-
+func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
 	opts := client.ImagePullOptions{}
 
 	// Extract registry host and get auth

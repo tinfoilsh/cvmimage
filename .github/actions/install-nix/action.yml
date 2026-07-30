@@ -56,3 +56,5 @@ runs:
         test "$(show_config sandbox)" = true
         test "$(show_config sandbox-fallback)" = false
         test "$(show_config restrict-eval)" = true
+        test "$(show_config allowed-uris)" = \
+          'https://github.com/NixOS/nixpkgs/archive/'

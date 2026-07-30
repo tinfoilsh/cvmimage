@@ -6,6 +6,21 @@ import (
 	"testing"
 )
 
+func TestDecodeRejectsUnknownHealthcheckField(t *testing.T) {
+	_, err := Decode([]byte(`
+shim: {}
+containers:
+  - name: app
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    healthcheck:
+      test: [CMD, ok]
+      retrise: 3
+`), false)
+	if err == nil || !strings.Contains(err.Error(), `unknown healthcheck field "retrise"`) {
+		t.Fatalf("Decode error = %v", err)
+	}
+}
+
 const validConfig = `
 cvm-version: 0.11.0
 shim:

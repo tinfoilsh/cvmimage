@@ -123,6 +123,10 @@ func (s *server) boot(w http.ResponseWriter, r *http.Request) {
 	}
 	preserved := map[string]bool{}
 	if previous != nil && debug && runtimeconfig.HasReservedDebugContainer(previous) {
+		if !runtimeconfig.HasReservedDebugContainer(config) {
+			writeError(w, http.StatusBadRequest, errors.New("debug config must retain tinfoil-debug-toolbox"))
+			return
+		}
 		preserved[runtimeconfig.ReservedDebugContainerName] = true
 	}
 	if err := containers.RemoveManagedExcept(s.ctx, previous, preserved); err != nil {

@@ -29,23 +29,18 @@ const (
 // RootPartitions returns the fixed data and verity partitions below the
 // measured root controller.
 func RootPartitions() (string, string, error) {
-	deadline := time.Now().Add(deviceWaitTimeout)
-	var lastErr error
-	for {
+	partitions, err := waitForDevice(func() ([2]string, error) {
 		disk, err := findDiskByPCIAddress(rootDiskPCIAddress)
-		if err == nil {
-			root, verity, partitionErr := findRootPartitions(disk)
-			if partitionErr == nil {
-				return root, verity, nil
-			}
-			err = partitionErr
+		if err != nil {
+			return [2]string{}, err
 		}
-		lastErr = err
-		if !time.Now().Before(deadline) {
-			return "", "", lastErr
-		}
-		time.Sleep(deviceWaitDelay)
+		root, verity, err := findRootPartitions(disk)
+		return [2]string{root, verity}, err
+	})
+	if err != nil {
+		return "", "", err
 	}
+	return partitions[0], partitions[1], nil
 }
 
 var (
@@ -106,17 +101,18 @@ func modelDiskPCIAddress(index int) (string, error) {
 	return fmt.Sprintf("0000:00:%02x.0", slot), nil
 }
 
-func waitForDevice(find func() (string, error)) (string, error) {
+func waitForDevice[T any](find func() (T, error)) (T, error) {
 	deadline := time.Now().Add(deviceWaitTimeout)
 	var lastErr error
 	for {
-		path, err := find()
+		device, err := find()
 		if err == nil {
-			return path, nil
+			return device, nil
 		}
 		lastErr = err
 		if time.Now().After(deadline) {
-			return "", lastErr
+			var zero T
+			return zero, lastErr
 		}
 		time.Sleep(deviceWaitDelay)
 	}

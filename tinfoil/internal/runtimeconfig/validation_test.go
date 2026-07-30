@@ -7,6 +7,7 @@ import (
 )
 
 const validConfig = `
+cvm-version: 0.11.0
 shim:
   upstream-port: 8080
 networks:

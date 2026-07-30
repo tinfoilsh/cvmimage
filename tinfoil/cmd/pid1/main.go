@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/nvidia"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
@@ -108,9 +109,14 @@ type lifecycleDeps struct {
 	exists       func(string) (bool, error)
 	term         time.Duration
 	kill         time.Duration
+	cmdline      kernelcmdline.Values
 }
 
 func run(parent context.Context) (result error) {
+	cmdline, err := kernelcmdline.Read()
+	if err != nil {
+		return err
+	}
 	readiness := newReadiness(requiredServiceNames(), setReady)
 	manager := supervisor.NewManager(initLogf)
 	console, err := startDebugConsole(parent, manager)
@@ -148,6 +154,7 @@ func run(parent context.Context) (result error) {
 		exists:       pathExists,
 		term:         serviceTermGrace,
 		kill:         serviceKillGrace,
+		cmdline:      cmdline,
 	}
 	return runLifecycle(parent, deps, readiness)
 }
@@ -225,13 +232,16 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}
 	if err := deps.oneShot(bootCtx, hardenedCommand(
 		hardening.ServiceBoot, boot.BootBinary,
+		"--config-hash="+deps.cmdline.ConfigHash,
+		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
 	)); err != nil {
 		return err
 	}
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containersName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary),
-		Ready:   fileReady(boot.ContainersReadyPath, containersReadyLimit),
+		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
+			fmt.Sprintf("--debug=%t", deps.cmdline.Debug)),
+		Ready: fileReady(boot.ContainersReadyPath, containersReadyLimit),
 	}); err != nil {
 		return err
 	}

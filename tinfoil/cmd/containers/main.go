@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -19,7 +20,6 @@ import (
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containers"
 	"tinfoil/internal/firewall"
-	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -37,19 +37,36 @@ type errorResponse struct {
 
 func main() {
 	log.SetFlags(0)
+	debug, err := parseInvocation(os.Args)
+	if err != nil {
+		log.Fatalf("tinfoil-containers: %v", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx, debug); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("tinfoil-containers: %v", err)
 	}
 }
 
-func run(ctx context.Context) error {
-	if err := os.MkdirAll("/run/tinfoil", 0o700); err != nil {
-		return err
+func parseInvocation(args []string) (bool, error) {
+	if len(args) == 0 {
+		return false, fmt.Errorf("missing argv[0]")
 	}
-	debug, err := kernelcmdline.DebugEnabled()
-	if err != nil {
+	var debug bool
+	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.BoolVar(&debug, "debug", false, "enable the debug boot API")
+	if err := flags.Parse(args[1:]); err != nil {
+		return false, err
+	}
+	if flags.NArg() != 0 {
+		return false, fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	return debug, nil
+}
+
+func run(ctx context.Context, debug bool) error {
+	if err := os.MkdirAll("/run/tinfoil", 0o700); err != nil {
 		return err
 	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
@@ -58,6 +75,7 @@ func run(ctx context.Context) error {
 
 	var listener net.Listener
 	if debug {
+		var err error
 		listener, err = listenDebugSocket()
 		if err != nil {
 			return err

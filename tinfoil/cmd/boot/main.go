@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -18,7 +20,8 @@ func init() {
 }
 
 func main() {
-	if err := validateInvocation(os.Args); err != nil {
+	invocation, err := parseInvocation(os.Args)
+	if err != nil {
 		log.Printf("Failed: %v", err)
 		os.Exit(1)
 	}
@@ -28,7 +31,7 @@ func main() {
 
 	log.Println("Tinfoil boot starting")
 
-	if err := run(ctx); err != nil {
+	if err := run(ctx, invocation); err != nil {
 		log.Printf("Boot failed: %v", err)
 		os.Exit(1)
 	}
@@ -36,25 +39,36 @@ func main() {
 	log.Println("Tinfoil boot complete")
 }
 
-func validateInvocation(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("tinfoil-boot does not accept arguments; reboot or redeploy to relaunch containers or remount models")
-	}
-	return nil
+type invocation struct {
+	configHash string
+	debug      bool
 }
 
-func run(ctx context.Context) error {
+func parseInvocation(args []string) (invocation, error) {
+	if len(args) == 0 {
+		return invocation{}, fmt.Errorf("missing argv[0]")
+	}
+	var parsed invocation
+	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&parsed.configHash, "config-hash", "", "verified config hash from the kernel command line")
+	flags.BoolVar(&parsed.debug, "debug", false, "enable the measured debug policy")
+	if err := flags.Parse(args[1:]); err != nil {
+		return invocation{}, err
+	}
+	if flags.NArg() != 0 {
+		return invocation{}, fmt.Errorf("tinfoil-boot does not accept maintenance commands")
+	}
+	return parsed, nil
+}
+
+func run(ctx context.Context, invocation invocation) error {
 	tracker := boot.NewTracker(boot.InitialStages)
 
 	// 1. Config
 	start := time.Now()
 	log.Println("Loading configuration")
-	cmdline, err := readKernelCmdline()
-	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
-		return fmt.Errorf("parsing kernel cmdline: %w", err)
-	}
-	config, err := loadAndVerifyConfig(cmdline)
+	config, err := loadAndVerifyConfig(invocation.configHash, invocation.debug)
 	if err != nil {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
 		return err

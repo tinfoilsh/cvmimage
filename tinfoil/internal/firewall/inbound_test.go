@@ -22,4 +22,9 @@ func TestInboundRulesTargetDedicatedChain(t *testing.T) {
 			t.Errorf("missing %q from:\n%s", fragment, script)
 		}
 	}
+	flush := strings.Index(script, "flush chain inet tinfoil inbound")
+	firstRule := strings.Index(script, "add rule inet tinfoil inbound")
+	if flush < 0 || firstRule < 0 || flush > firstRule {
+		t.Fatalf("inbound chain must be flushed before rules are added:\n%s", script)
+	}
 }

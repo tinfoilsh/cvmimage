@@ -18,8 +18,6 @@ import (
 )
 
 const (
-	shimPIDPath         = "/run/tinfoil/pids/tinfoil-shim.pid"
-	egressPIDPath       = "/run/tinfoil/pids/tinfoil-egress.pid"
 	restartWaitTimeout  = 15 * time.Second
 	restartPollInterval = 100 * time.Millisecond
 )
@@ -71,7 +69,7 @@ func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
 
 func restartRuntimeServices(ctx context.Context) error {
 	var errs []error
-	for _, path := range []string{shimPIDPath, egressPIDPath} {
+	for _, path := range []string{boot.ShimPIDPath} {
 		if err := restartFromPIDFile(ctx, path); err != nil {
 			errs = append(errs, err)
 		}
@@ -79,21 +77,60 @@ func restartRuntimeServices(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func restartFromPIDFile(ctx context.Context, path string) error {
+func freezeFromPIDFile(path string) (int, error) {
+	pid, err := readPIDFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("freezing pid %d: %w", pid, err)
+	}
+	return pid, nil
+}
+
+func restartFrozenFromPIDFile(ctx context.Context, path string, pid int) error {
+	if pid == 0 {
+		return nil
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("killing frozen pid %d: %w", pid, err)
+	}
+	return waitForReplacementPID(ctx, path, pid)
+}
+
+func readPIDFile(path string) (int, error) {
 	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 1 {
+		return 0, fmt.Errorf("invalid pid in %s", path)
+	}
+	return pid, nil
+}
+
+func restartFromPIDFile(ctx context.Context, path string) error {
+	oldPID, err := readPIDFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	oldPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || oldPID <= 1 {
-		return fmt.Errorf("invalid pid in %s", path)
-	}
 	if err := syscall.Kill(oldPID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("signaling pid %d: %w", oldPID, err)
 	}
+	return waitForReplacementPID(ctx, path, oldPID)
+}
+
+func waitForReplacementPID(ctx context.Context, path string, oldPID int) error {
 	deadline := time.NewTimer(restartWaitTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(restartPollInterval)

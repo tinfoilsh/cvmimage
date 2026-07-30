@@ -234,7 +234,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		Name: shimName, Required: true, Restart: true,
 		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
 		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile: "/run/tinfoil/pids/tinfoil-shim.pid",
+		PIDFile: boot.ShimPIDPath,
 	}); err != nil {
 		return err
 	}
@@ -256,7 +256,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: egressName, Restart: true,
 		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
-		PIDFile: "/run/tinfoil/pids/tinfoil-egress.pid",
+		PIDFile: boot.EgressPIDPath,
 	}); err != nil {
 		return err
 	}

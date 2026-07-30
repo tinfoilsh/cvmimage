@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	nonPublicIPv4Ranges = "{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4, 255.255.255.255/32 }"
+	nonPublicIPv4Ranges = "{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4, 255.255.255.255/32 }"
 	nonPublicIPv6Ranges = "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
 )
 
@@ -61,8 +61,10 @@ func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeco
 	fmt.Fprintf(script, "add rule inet tinfoil container_input iifname %q ct state new drop\n", bridge)
 	switch network.Egress {
 	case "open":
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr != %s accept\n", bridge, nonPublicIPv4Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr != %s accept\n", bridge, nonPublicIPv6Ranges)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr %s drop\n", bridge, nonPublicIPv4Ranges)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip accept\n", bridge)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr %s drop\n", bridge, nonPublicIPv6Ranges)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 accept\n", bridge)
 	case "allowlist":
 		setName := containernet.AllowSetPrefix + bridge
 		fmt.Fprintf(script, "destroy set inet tinfoil %s\n", setName)

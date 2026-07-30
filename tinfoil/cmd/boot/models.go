@@ -435,7 +435,6 @@ func verityTable(deviceNumber, rootHash string, hashOffset uint64, salt []byte) 
 	if err != nil || len(decodedRootHash) != 32 {
 		return 0, "", fmt.Errorf("invalid verity root hash")
 	}
-	zeroBytes(decodedRootHash)
 	if hashOffset > uint64(1<<63-modelwrap.VerityHashBlockSize) {
 		return 0, "", fmt.Errorf("verity hash offset %d exceeds supported maximum", hashOffset)
 	}

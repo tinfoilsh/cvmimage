@@ -106,10 +106,10 @@ func TestMemoryKBUsesKernelUnit(t *testing.T) {
 }
 
 func TestIsMountPointUsesKernelMountIDs(t *testing.T) {
-	if !isMountPoint("/proc") {
+	if mounted, err := isMountPoint("/proc"); err != nil || !mounted {
 		t.Fatal("/proc is not detected as a mount point")
 	}
-	if isMountPoint(t.TempDir()) {
+	if mounted, err := isMountPoint(t.TempDir()); err != nil || mounted {
 		t.Fatal("ordinary temporary directory detected as a mount point")
 	}
 }

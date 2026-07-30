@@ -116,7 +116,6 @@ func findDiskByPCIAddress(pciAddress string) (string, error) {
 		}
 	}
 	sort.Strings(matches)
-	matches = compactPaths(matches)
 	if len(matches) == 1 {
 		return matches[0], nil
 	}
@@ -124,19 +123,6 @@ func findDiskByPCIAddress(pciAddress string) (string, error) {
 		"expected one disk below PCI device %s, found %d",
 		pciAddress, len(matches),
 	)
-}
-
-func compactPaths(paths []string) []string {
-	if len(paths) < 2 {
-		return paths
-	}
-	out := paths[:1]
-	for _, path := range paths[1:] {
-		if path != out[len(out)-1] {
-			out = append(out, path)
-		}
-	}
-	return out
 }
 
 func findPartition(diskPath string, partition int) (string, error) {

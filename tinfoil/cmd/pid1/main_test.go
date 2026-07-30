@@ -214,6 +214,13 @@ func (f *fakeNVIDIA) PublishCDI(path string) error {
 	return f.call("publish-cdi")
 }
 
+func startTestService(ctx context.Context, service supervisor.Service) error {
+	if service.Ready != nil {
+		return service.Ready(ctx)
+	}
+	return nil
+}
+
 func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 	t.Setenv("FM_CONFIG_FILE", "poisoned")
 	t.Setenv("FM_PID_FILE", "poisoned")
@@ -233,8 +240,13 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 		}
 		return nil
 	}
+	startService := func(ctx context.Context, service supervisor.Service) error {
+		control.calls = append(control.calls, "exec:"+service.Command.Name)
+		commands = append(commands, service.Command)
+		return startTestService(ctx, service)
+	}
 	var statuses []nvidia.BootstrapStatus
-	err := runNVIDIABootstrap(context.Background(), control, oneShot, func(status nvidia.BootstrapStatus) error {
+	err := runNVIDIABootstrap(context.Background(), control, oneShot, startService, func(status nvidia.BootstrapStatus) error {
 		control.calls = append(control.calls, fmt.Sprintf("status:%d:%d", status.State, status.GPUCount))
 		statuses = append(statuses, status)
 		return nil
@@ -283,6 +295,9 @@ func TestNVIDIABootstrapWritesExplicitNoGPUStatus(t *testing.T) {
 	err := runNVIDIABootstrap(context.Background(), control, func(context.Context, supervisor.Command) error {
 		t.Fatal("no-GPU bootstrap ran a child")
 		return nil
+	}, func(context.Context, supervisor.Service) error {
+		t.Fatal("no-GPU bootstrap started a service")
+		return nil
 	}, func(status nvidia.BootstrapStatus) error {
 		got = status
 		control.calls = append(control.calls, "status")
@@ -305,6 +320,9 @@ func TestNVIDIABootstrapRejectsNVSwitchOnlyTopology(t *testing.T) {
 	var got nvidia.BootstrapStatus
 	err := runNVIDIABootstrap(context.Background(), control, func(context.Context, supervisor.Command) error {
 		t.Fatal("NVSwitch-only bootstrap ran a child")
+		return nil
+	}, func(context.Context, supervisor.Service) error {
+		t.Fatal("NVSwitch-only bootstrap started a service")
 		return nil
 	}, func(status nvidia.BootstrapStatus) error {
 		got = status
@@ -360,6 +378,7 @@ func TestNVIDIABootstrapFailuresPersistAndContinue(t *testing.T) {
 			var got nvidia.BootstrapStatus
 			err := runNVIDIABootstrap(context.Background(), control,
 				func(context.Context, supervisor.Command) error { return nil },
+				startTestService,
 				func(status nvidia.BootstrapStatus) error { got = status; return nil },
 			)
 			if err != nil {
@@ -386,6 +405,12 @@ func TestNVIDIABootstrapChildFailuresPersistAndStatusWriteFailureIsFatal(t *test
 					}
 					return nil
 				},
+				func(ctx context.Context, service supervisor.Service) error {
+					if service.Name == child {
+						return childFailure
+					}
+					return startTestService(ctx, service)
+				},
 				func(status nvidia.BootstrapStatus) error { got = status; return nil },
 			)
 			if err != nil || got != nvidia.FailedBootstrapStatus() {
@@ -398,6 +423,7 @@ func TestNVIDIABootstrapChildFailuresPersistAndStatusWriteFailureIsFatal(t *test
 	writeFailure := errors.New("disk failed")
 	err := runNVIDIABootstrap(context.Background(), control,
 		func(context.Context, supervisor.Command) error { return nil },
+		startTestService,
 		func(nvidia.BootstrapStatus) error { return writeFailure },
 	)
 	if err == nil || !errors.Is(err, writeFailure) {
@@ -407,6 +433,7 @@ func TestNVIDIABootstrapChildFailuresPersistAndStatusWriteFailureIsFatal(t *test
 		control := newFakeNVIDIA(t, gpuCount)
 		err := runNVIDIABootstrap(context.Background(), control,
 			func(context.Context, supervisor.Command) error { return nil },
+			startTestService,
 			func(nvidia.BootstrapStatus) error { return writeFailure },
 		)
 		if err == nil || !errors.Is(err, writeFailure) {
@@ -419,7 +446,7 @@ func TestNVIDIABootstrapRejectsNVL5WithTypedError(t *testing.T) {
 	control := newFakeNVIDIA(t, 8)
 	control.fabricErr = &nvidia.ErrNVL5RequiresNVLSM{}
 	err := runNVIDIABootstrapSteps(context.Background(), control,
-		func(context.Context, supervisor.Command) error { return nil }, 8)
+		func(context.Context, supervisor.Command) error { return nil }, startTestService, 8)
 	var typed *nvidia.ErrNVL5RequiresNVLSM
 	if !errors.As(err, &typed) {
 		t.Fatalf("error = %v, want ErrNVL5RequiresNVLSM", err)
@@ -430,7 +457,7 @@ func TestNVIDIABootstrapRejectsUnknownFabricMode(t *testing.T) {
 	control := newFakeNVIDIA(t, 8)
 	control.fabricMode = nvidia.FabricMode(255)
 	if err := runNVIDIABootstrapSteps(context.Background(), control,
-		func(context.Context, supervisor.Command) error { return nil }, 8); err == nil {
+		func(context.Context, supervisor.Command) error { return nil }, startTestService, 8); err == nil {
 		t.Fatal("unknown fabric mode succeeded")
 	}
 }

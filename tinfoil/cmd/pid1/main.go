@@ -139,14 +139,9 @@ func run(parent context.Context) (result error) {
 				ctx,
 				control,
 				func(childCtx context.Context, command supervisor.Command) error {
-					if command.Name == "nvidia-fabricmanager" {
-						return services.Start(childCtx, supervisor.Service{
-							Name: command.Name, Restart: true, Command: command,
-							Ready: control.WaitForFabricManager,
-						})
-					}
 					return runOneShot(childCtx, manager, command, oneShotStopGrace)
 				},
+				services.Start,
 				func(status nvidia.BootstrapStatus) error {
 					return nvidia.WriteBootstrapStatus(boot.NVIDIABootstrapStatusPath, status)
 				},
@@ -348,6 +343,7 @@ func runNVIDIABootstrap(
 	ctx context.Context,
 	control nvidiaBootstrapControl,
 	oneShot func(context.Context, supervisor.Command) error,
+	startService func(context.Context, supervisor.Service) error,
 	writeStatus func(nvidia.BootstrapStatus) error,
 ) error {
 	gpuCount, err := control.GPUCount()
@@ -362,7 +358,7 @@ func runNVIDIABootstrap(
 		}
 	}
 	if err == nil {
-		err = runNVIDIABootstrapSteps(ctx, control, oneShot, gpuCount)
+		err = runNVIDIABootstrapSteps(ctx, control, oneShot, startService, gpuCount)
 	}
 	if err != nil {
 		initLogf("NVIDIA bootstrap failed: %v", err)
@@ -381,6 +377,7 @@ func runNVIDIABootstrapSteps(
 	ctx context.Context,
 	control nvidiaBootstrapControl,
 	oneShot func(context.Context, supervisor.Command) error,
+	startService func(context.Context, supervisor.Service) error,
 	gpuCount int,
 ) error {
 	if gpuCount < 1 {
@@ -440,11 +437,12 @@ func runNVIDIABootstrapSteps(
 		if err := control.PrepareFabricManagerRuntime(); err != nil {
 			return fmt.Errorf("prepare NVIDIA Fabric Manager runtime: %w", err)
 		}
-		if err := oneShot(ctx, fabricManagerCommand()); err != nil {
+		command := fabricManagerCommand()
+		if err := startService(ctx, supervisor.Service{
+			Name: command.Name, Restart: true, Command: command,
+			Ready: control.WaitForFabricManager,
+		}); err != nil {
 			return fmt.Errorf("start NVIDIA Fabric Manager: %w", err)
-		}
-		if err := control.WaitForFabricManager(ctx); err != nil {
-			return fmt.Errorf("wait for NVIDIA Fabric Manager: %w", err)
 		}
 	default:
 		return fmt.Errorf("unsupported NVIDIA fabric mode %d", fabricMode)

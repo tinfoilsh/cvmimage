@@ -30,15 +30,19 @@ func run(ctx context.Context) error {
 	if err := os.MkdirAll("/run/tinfoil", 0o700); err != nil {
 		return err
 	}
-	if _, err := os.Stat(boot.ContainersReadyPath); errors.Is(err, os.ErrNotExist) {
+	_ = os.Remove(boot.ContainersReadyPath)
+	if _, err := os.Stat(boot.RuntimeBootedPath); errors.Is(err, os.ErrNotExist) {
 		if err := bootDefaultRuntime(ctx); err != nil {
 			return err
 		}
-		if err := atomicWrite(boot.ContainersReadyPath, []byte("ready\n"), 0o600); err != nil {
-			return fmt.Errorf("publishing readiness: %w", err)
+		if err := atomicWrite(boot.RuntimeBootedPath, []byte("booted\n"), 0o600); err != nil {
+			return fmt.Errorf("recording runtime boot: %w", err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("checking readiness: %w", err)
+		return fmt.Errorf("checking runtime boot marker: %w", err)
+	}
+	if err := atomicWrite(boot.ContainersReadyPath, []byte("ready\n"), 0o600); err != nil {
+		return fmt.Errorf("publishing readiness: %w", err)
 	}
 
 	return containers.RunStatusPublisher(ctx)

@@ -22,6 +22,7 @@ const (
 	EgressConfigPath   = PrivateDir + "/egress.yml"
 	ExternalConfigPath = PrivateDir + "/external-config.yml"
 	RuntimeConfigPath  = PrivateDir + "/runtime-config.yml"
+	RuntimeBootedPath  = PrivateDir + "/runtime-booted"
 	DockerConfigDir    = PrivateDir + "/docker-config"
 	DockerConfigPath   = DockerConfigDir + "/config.json"
 	GCloudKeyPath      = PrivateDir + "/gcloud_key.json"

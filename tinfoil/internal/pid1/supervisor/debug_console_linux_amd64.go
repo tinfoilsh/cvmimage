@@ -26,6 +26,17 @@ func (m *Manager) StartConsole(command Command, console *os.File) (*Process, err
 
 	reply := make(chan startResponse, 1)
 	m.ops <- func(children map[int]*Process) {
+		backend, ok := m.backend.(*osBackend)
+		if !ok {
+			reply <- startResponse{err: errors.New("debug console requires the OS process backend")}
+			return
+		}
+		cgroup, cgroupFD, err := backend.createCgroup()
+		if err != nil {
+			reply <- startResponse{err: fmt.Errorf("prepare cgroup for %s: %w", command.Name, err)}
+			return
+		}
+		defer cgroupFD.Close()
 		environment := command.Env
 		if environment == nil {
 			environment = os.Environ()
@@ -38,17 +49,20 @@ func (m *Manager) StartConsole(command Command, console *os.File) (*Process, err
 				Env:   environment,
 				Files: []*os.File{console, console, console},
 				Sys: &syscall.SysProcAttr{
-					Setsid:  true,
-					Setctty: true,
-					Ctty:    0,
+					Setsid:      true,
+					Setctty:     true,
+					Ctty:        0,
+					UseCgroupFD: true,
+					CgroupFD:    int(cgroupFD.Fd()),
 				},
 			},
 		)
 		if err != nil {
+			_ = os.Remove(cgroup.path)
 			reply <- startResponse{err: fmt.Errorf("start %s: %w", command.Name, err)}
 			return
 		}
-		managed := newConsoleProcess(process, command.Name)
+		managed := newConsoleProcess(process, command.Name, cgroup)
 		children[managed.PID()] = managed
 		reply <- startResponse{process: managed}
 	}
@@ -56,9 +70,9 @@ func (m *Manager) StartConsole(command Command, console *os.File) (*Process, err
 	return response.process, response.err
 }
 
-func newConsoleProcess(process *os.Process, name string) *Process {
+func newConsoleProcess(process *os.Process, name string, cgroup *processCgroup) *Process {
 	pid := process.Pid
-	child := osChild{process: process, processID: pid}
+	child := &osChild{process: process, processID: pid, cgroup: cgroup}
 	return &Process{pid: pid, name: name, child: child, done: make(chan struct{})}
 }
 

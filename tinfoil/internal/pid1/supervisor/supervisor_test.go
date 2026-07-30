@@ -19,26 +19,29 @@ type fakeWait struct {
 }
 
 type fakeBackend struct {
-	mu            sync.Mutex
-	nextPID       int
-	waits         []fakeWait
-	children      map[int]*fakeProcess
-	sigchld       chan os.Signal
-	started       chan int
-	signaled      chan string
-	startErrs     []error
-	beforeStart   func()
-	exitOnTERM    map[string]bool
-	groupSurvives map[string]bool
+	mu             sync.Mutex
+	nextPID        int
+	waits          []fakeWait
+	children       map[int]*fakeProcess
+	sigchld        chan os.Signal
+	started        chan int
+	signaled       chan string
+	startErrs      []error
+	beforeStart    func()
+	exitOnTERM     map[string]bool
+	groupSurvives  map[string]bool
+	cgroupSurvives map[string]bool
+	orphanPIDs     map[string][]int
 }
 
 type fakeProcess struct {
-	backend      *fakeBackend
-	id           int
-	pgid         int
-	name         string
-	exited       bool
-	groupRunning bool
+	backend       *fakeBackend
+	id            int
+	pgid          int
+	name          string
+	exited        bool
+	groupRunning  bool
+	cgroupRunning bool
 }
 
 func newFakeBackend(sigchld chan os.Signal) *fakeBackend {
@@ -46,6 +49,7 @@ func newFakeBackend(sigchld chan os.Signal) *fakeBackend {
 		nextPID: 100, children: map[int]*fakeProcess{}, sigchld: sigchld,
 		started: make(chan int, 32), signaled: make(chan string, 32),
 		exitOnTERM: map[string]bool{}, groupSurvives: map[string]bool{},
+		cgroupSurvives: map[string]bool{}, orphanPIDs: map[string][]int{},
 	}
 }
 
@@ -61,7 +65,10 @@ func (b *fakeBackend) start(command Command) (backendProcess, error) {
 		return nil, err
 	}
 	b.nextPID++
-	child := &fakeProcess{backend: b, id: b.nextPID, pgid: b.nextPID, name: command.Name, groupRunning: true}
+	child := &fakeProcess{
+		backend: b, id: b.nextPID, pgid: b.nextPID, name: command.Name,
+		groupRunning: true, cgroupRunning: true,
+	}
 	b.children[child.id] = child
 	b.started <- child.id
 	return child, nil
@@ -84,6 +91,9 @@ func (b *fakeBackend) exit(pid int, status syscall.WaitStatus) {
 		child.exited = true
 		if !b.groupSurvives[child.name] {
 			child.groupRunning = false
+		}
+		if !b.groupSurvives[child.name] && !b.cgroupSurvives[child.name] {
+			child.cgroupRunning = false
 		}
 	}
 	b.waits = append(b.waits, fakeWait{pid: pid, status: status})
@@ -120,6 +130,32 @@ func (p *fakeProcess) groupAlive() (bool, error) {
 	defer p.backend.mu.Unlock()
 	return p.groupRunning, nil
 }
+
+func (p *fakeProcess) cgroupPopulated() (bool, error) {
+	p.backend.mu.Lock()
+	defer p.backend.mu.Unlock()
+	return p.cgroupRunning, nil
+}
+
+func (p *fakeProcess) killCgroup() error {
+	p.backend.signaled <- fmt.Sprintf("%s:cgroup.kill", p.name)
+	p.backend.mu.Lock()
+	exited := p.exited
+	p.groupRunning = false
+	p.cgroupRunning = false
+	orphans := append([]int(nil), p.backend.orphanPIDs[p.name]...)
+	p.backend.orphanPIDs[p.name] = nil
+	p.backend.mu.Unlock()
+	if !exited {
+		p.backend.exit(p.pgid, syscall.WaitStatus(uint32(syscall.SIGKILL)&0x7f))
+	}
+	for _, pid := range orphans {
+		p.backend.exit(pid, syscall.WaitStatus(uint32(syscall.SIGKILL)&0x7f))
+	}
+	return nil
+}
+
+func (p *fakeProcess) removeCgroup() error { return nil }
 
 func TestManagerOwnsDirectWaitsAndReapsOrphans(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
@@ -217,7 +253,7 @@ func TestInitialStartFailureRetiresRegistrationAndPermitsRetry(t *testing.T) {
 	_ = receive(t, backend.started)
 }
 
-func TestInitialReadinessFailureKillsGroupWaitsAndPermitsRetry(t *testing.T) {
+func TestInitialReadinessFailureKillsCgroupWaitsAndPermitsRetry(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)
 	backend.groupSurvives["service"] = true
@@ -246,8 +282,8 @@ func TestInitialReadinessFailureKillsGroupWaitsAndPermitsRetry(t *testing.T) {
 	if err := supervisor.Start(context.Background(), service); err == nil {
 		t.Fatal("readiness failure was ignored")
 	}
-	if got := receive(t, backend.signaled); got != "service:killed" {
-		t.Fatalf("cleanup signal = %q, want service:killed", got)
+	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
+		t.Fatalf("cleanup signal = %q, want service:cgroup.kill", got)
 	}
 	if failedRecord == nil {
 		t.Fatal("failed readiness record was not captured")
@@ -448,7 +484,7 @@ func TestDrainOrdersGroupsAndEscalatesTermToKill(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"egress:terminated", "shim:terminated", "egress:killed",
+		"egress:terminated", "shim:terminated", "egress:cgroup.kill",
 		"dockerd:terminated", "containerd:terminated",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -461,7 +497,7 @@ func TestDrainOrdersGroupsAndEscalatesTermToKill(t *testing.T) {
 	}
 }
 
-func TestDrainKillsSurvivingGroupAfterDirectChildExit(t *testing.T) {
+func TestDrainKillsSurvivingCgroupAfterDirectChildExit(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)
 	backend.exitOnTERM["service"] = true
@@ -488,10 +524,126 @@ func TestDrainKillsSurvivingGroupAfterDirectChildExit(t *testing.T) {
 	}
 	receive(t, process.Done())
 	clock.fire(t, time.Second)
-	if got := receive(t, backend.signaled); got != "service:killed" {
-		t.Fatalf("KILL signal = %q", got)
+	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
+		t.Fatalf("cgroup kill = %q", got)
 	}
 	if err := receive(t, result); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestProcessCgroupReadsFixedPopulatedEvent(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		events    string
+		populated bool
+		wantErr   bool
+	}{
+		{name: "empty", events: "populated 0\nfrozen 0\n"},
+		{name: "populated", events: "populated 1\nfrozen 0\n", populated: true},
+		{name: "invalid value", events: "populated 2\n", wantErr: true},
+		{name: "missing", events: "frozen 0\n", wantErr: true},
+		{name: "unterminated", events: "populated 0", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			if err := os.WriteFile(filepath.Join(directory, "cgroup.events"), []byte(test.events), 0600); err != nil {
+				t.Fatal(err)
+			}
+			populated, err := (&processCgroup{path: directory}).populated()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("populated error = %v, wantErr %v", err, test.wantErr)
+			}
+			if populated != test.populated {
+				t.Fatalf("populated = %v, want %v", populated, test.populated)
+			}
+		})
+	}
+}
+
+func TestDrainKillsSetsidDescendantOutsideStableProcessGroup(t *testing.T) {
+	sigchld := make(chan os.Signal, 8)
+	backend := newFakeBackend(sigchld)
+	backend.exitOnTERM["service"] = true
+	backend.cgroupSurvives["service"] = true
+	manager := newManager(backend, sigchld, nil)
+	supervisor := New(context.Background(), manager, Config{Clock: newFakeClock()})
+	if err := supervisor.Start(context.Background(), Service{
+		Name: "service", Command: Command{Name: "service", Path: "/service"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pid := receive(t, backend.started)
+
+	result := make(chan error, 1)
+	go func() {
+		result <- supervisor.Drain([][]string{{"service"}}, time.Second, 2*time.Second)
+	}()
+	if got := receive(t, backend.signaled); got != "service:terminated" {
+		t.Fatalf("TERM signal = %q", got)
+	}
+	backend.mu.Lock()
+	process := backend.children[pid]
+	groupRunning := process.groupRunning
+	cgroupRunning := process.cgroupRunning
+	backend.mu.Unlock()
+	if groupRunning || !cgroupRunning {
+		t.Fatalf("after setsid escape: groupRunning=%v cgroupRunning=%v", groupRunning, cgroupRunning)
+	}
+	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
+		t.Fatalf("final cleanup = %q", got)
+	}
+	if err := receive(t, result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDrainKillsAndReapsOrphanedDescendant(t *testing.T) {
+	sigchld := make(chan os.Signal, 8)
+	backend := newFakeBackend(sigchld)
+	backend.cgroupSurvives["service"] = true
+	backend.orphanPIDs["service"] = []int{777}
+	var logsMu sync.Mutex
+	var logs []string
+	manager := newManager(backend, sigchld, func(format string, args ...any) {
+		logsMu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		logsMu.Unlock()
+	})
+	supervisor := New(context.Background(), manager, Config{Clock: newFakeClock()})
+	if err := supervisor.Start(context.Background(), Service{
+		Name: "service", Command: Command{Name: "service", Path: "/service"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pid := receive(t, backend.started)
+	supervisor.mu.Lock()
+	process := supervisor.services["service"].process
+	supervisor.mu.Unlock()
+	backend.exit(pid, 0)
+	receive(t, process.Done())
+
+	if err := supervisor.Drain([][]string{{"service"}}, time.Second, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := receive(t, backend.signaled); got != "service:terminated" {
+		t.Fatalf("TERM signal = %q", got)
+	}
+	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
+		t.Fatalf("orphan cleanup = %q", got)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		logsMu.Lock()
+		got := strings.Join(logs, "\n")
+		logsMu.Unlock()
+		if strings.Contains(got, "reaped adopted child pid=777") {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	logsMu.Lock()
+	defer logsMu.Unlock()
+	t.Fatalf("orphan was not reaped by manager:\n%s", strings.Join(logs, "\n"))
 }

@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 type fakeContainerClient struct {
@@ -19,14 +20,14 @@ type fakeContainerClient struct {
 	errs    map[string]error
 }
 
-func (f fakeContainerClient) ContainerInspect(_ context.Context, name string) (container.InspectResponse, error) {
+func (f fakeContainerClient) ContainerInspect(_ context.Context, name string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	if err := f.errs[name]; err != nil {
-		return container.InspectResponse{}, err
+		return client.ContainerInspectResult{}, err
 	}
 	if inspect, ok := f.inspect[name]; ok {
-		return inspect, nil
+		return client.ContainerInspectResult{Container: inspect}, nil
 	}
-	return container.InspectResponse{}, errdefs.ErrNotFound
+	return client.ContainerInspectResult{}, errdefs.ErrNotFound
 }
 
 func TestInspectDeclaredContainers_MissingContainer(t *testing.T) {
@@ -55,17 +56,15 @@ func TestInspectDeclaredContainers_MissingContainer(t *testing.T) {
 
 func TestContainerStatusFromInspect_RunningContainer(t *testing.T) {
 	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "declared:latest", Restart: "unless-stopped"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
-			Name:         "/model",
-			RestartCount: 2,
-			State: &container.State{
-				Status:    "running",
-				Running:   true,
-				StartedAt: "2026-01-02T03:04:05Z",
-			},
-			HostConfig: &container.HostConfig{RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}},
+		Name:         "/model",
+		RestartCount: 2,
+		State: &container.State{
+			Status:    "running",
+			Running:   true,
+			StartedAt: "2026-01-02T03:04:05Z",
 		},
-		Config: &container.Config{Image: "actual:latest"},
+		HostConfig: &container.HostConfig{RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}},
+		Config:     &container.Config{Image: "actual:latest"},
 	})
 
 	if got.Name != "model" || got.Image != "actual:latest" {
@@ -84,17 +83,15 @@ func TestContainerStatusFromInspect_RunningContainer(t *testing.T) {
 
 func TestContainerStatusFromInspect_RestartingContainer(t *testing.T) {
 	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
-			Name:         "/model",
-			RestartCount: 4,
-			State: &container.State{
-				Status:     "restarting",
-				Restarting: true,
-				ExitCode:   1,
-				Error:      "restart loop",
-			},
-			HostConfig: &container.HostConfig{RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyOnFailure, MaximumRetryCount: 10}},
+		Name:         "/model",
+		RestartCount: 4,
+		State: &container.State{
+			Status:     "restarting",
+			Restarting: true,
+			ExitCode:   1,
+			Error:      "restart loop",
 		},
+		HostConfig: &container.HostConfig{RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyOnFailure, MaximumRetryCount: 10}},
 	})
 
 	if got.Status != "restarting" || got.RestartCount != 4 {
@@ -110,13 +107,11 @@ func TestContainerStatusFromInspect_RestartingContainer(t *testing.T) {
 
 func TestContainerStatusFromInspect_OOMKilledExitedContainer(t *testing.T) {
 	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
-			State: &container.State{
-				Status:     "exited",
-				OOMKilled:  true,
-				ExitCode:   137,
-				FinishedAt: "2026-01-02T03:05:05Z",
-			},
+		State: &container.State{
+			Status:     "exited",
+			OOMKilled:  true,
+			ExitCode:   137,
+			FinishedAt: "2026-01-02T03:05:05Z",
 		},
 	})
 
@@ -132,16 +127,14 @@ func TestContainerStatusFromInspect_UnhealthyHealthcheck(t *testing.T) {
 	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	end := start.Add(time.Second)
 	got := containerStatusFromInspect(declaredContainer{Name: "model", Image: "model:latest"}, container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
-			State: &container.State{
-				Status: "running",
-				Health: &container.Health{
-					Status:        container.Unhealthy,
-					FailingStreak: 3,
-					Log: []*container.HealthcheckResult{
-						{Start: start.Add(-time.Minute), End: end.Add(-time.Minute), ExitCode: 0, Output: "old"},
-						{Start: start, End: end, ExitCode: 1, Output: "model still loading"},
-					},
+		State: &container.State{
+			Status: "running",
+			Health: &container.Health{
+				Status:        container.Unhealthy,
+				FailingStreak: 3,
+				Log: []*container.HealthcheckResult{
+					{Start: start.Add(-time.Minute), End: end.Add(-time.Minute), ExitCode: 0, Output: "old"},
+					{Start: start, End: end, ExitCode: 1, Output: "model still loading"},
 				},
 			},
 		},
@@ -150,7 +143,7 @@ func TestContainerStatusFromInspect_UnhealthyHealthcheck(t *testing.T) {
 	if got.Health == nil {
 		t.Fatal("expected health state")
 	}
-	if got.Health.Status != container.Unhealthy || got.Health.FailingStreak != 3 {
+	if got.Health.Status != string(container.Unhealthy) || got.Health.FailingStreak != 3 {
 		t.Fatalf("health status/streak = %q/%d", got.Health.Status, got.Health.FailingStreak)
 	}
 	if got.Health.LastCheckExitCode == nil || *got.Health.LastCheckExitCode != 1 {
@@ -186,10 +179,8 @@ func TestPublishContainerStatusWritesJSON(t *testing.T) {
 	err := publishContainerStatus(context.Background(), fakeContainerClient{
 		inspect: map[string]container.InspectResponse{
 			"model": {
-				ContainerJSONBase: &container.ContainerJSONBase{
-					Name:  "/model",
-					State: &container.State{Status: "running", Running: true},
-				},
+				Name:  "/model",
+				State: &container.State{Status: "running", Running: true},
 			},
 		},
 	}, configPath, outputPath)
@@ -222,10 +213,8 @@ func TestPublishContainerStatusCountsManualRestart(t *testing.T) {
 	}
 	client := fakeContainerClient{inspect: map[string]container.InspectResponse{
 		"model": {
-			ContainerJSONBase: &container.ContainerJSONBase{
-				ID:    "container-id",
-				State: &container.State{Status: "running", StartedAt: "2026-07-25T01:00:00Z"},
-			},
+			ID:    "container-id",
+			State: &container.State{Status: "running", StartedAt: "2026-07-25T01:00:00Z"},
 		},
 	}}
 	if err := publishContainerStatus(context.Background(), client, configPath, outputPath); err != nil {

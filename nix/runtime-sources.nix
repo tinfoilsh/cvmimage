@@ -13,9 +13,9 @@ in
   };
 
   docker = {
-    name = "docker-29.5.3-static";
-    url = "https://download.docker.com/linux/static/stable/x86_64/docker-29.5.3.tgz";
-    sha256 = "34eea64e9c3435f5af1b760827a56a561cd67fc2d6e9cd1813b8bb1e3ff7930b";
+    name = "docker-29.6.2-static";
+    url = "https://download.docker.com/linux/static/stable/x86_64/docker-29.6.2.tgz";
+    sha256 = "sha256-1iBK6pIjjiRT1URciFudLl64+CkVVo7FDt+dvhKjrHQ=";
   };
 
   nvidiaDebs = [

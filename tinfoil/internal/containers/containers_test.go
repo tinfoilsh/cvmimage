@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	dockernetwork "github.com/moby/moby/api/types/network"
 
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
@@ -144,10 +144,10 @@ func TestNetworkCreateOptionsStaticShimNet(t *testing.T) {
 	if opts.IPAM == nil || len(opts.IPAM.Config) != 1 {
 		t.Fatalf("expected static shim-net IPAM config, got %+v", opts.IPAM)
 	}
-	if got := opts.IPAM.Config[0].Subnet; got != containernet.ShimNetSubnetCIDR {
+	if got := opts.IPAM.Config[0].Subnet.String(); got != containernet.ShimNetSubnetCIDR {
 		t.Errorf("subnet: got %q, want %q", got, containernet.ShimNetSubnetCIDR)
 	}
-	if got := opts.IPAM.Config[0].Gateway; got != containernet.ShimNetGatewayIP {
+	if got := opts.IPAM.Config[0].Gateway.String(); got != containernet.ShimNetGatewayIP {
 		t.Errorf("gateway: got %q, want %q", got, containernet.ShimNetGatewayIP)
 	}
 }
@@ -157,7 +157,7 @@ func TestEndpointSettingsPinsShimUpstreamIP(t *testing.T) {
 	if ep.IPAMConfig == nil {
 		t.Fatal("expected shim-net endpoint IPAM config")
 	}
-	if got := ep.IPAMConfig.IPv4Address; got != containernet.ShimUpstreamIP {
+	if got := ep.IPAMConfig.IPv4Address.String(); got != containernet.ShimUpstreamIP {
 		t.Errorf("upstream IP: got %q, want %q", got, containernet.ShimUpstreamIP)
 	}
 
@@ -204,7 +204,7 @@ func TestBuildContainerCreateSpec_DebugInstallerGetsFixedRuntime(t *testing.T) {
 		t.Fatalf("Binds = %v, want exact docker socket bind", hostConfig.Binds)
 	}
 
-	port := nat.Port(reservedDebugPort)
+	port := dockernetwork.MustParsePort(reservedDebugPort)
 	if _, ok := containerConfig.ExposedPorts[port]; !ok {
 		t.Fatalf("ExposedPorts = %v, want %s", containerConfig.ExposedPorts, port)
 	}

@@ -17,13 +17,13 @@ func TestServicePoliciesAreExact(t *testing.T) {
 			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD},
 			deniedSyscalls:    kernelManagementSyscalls,
 		},
-		ServiceContainerStatus: {
+		ServiceContainers: {
 			noNewPrivileges:      true,
-			boundCapabilities:    []int{},
+			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
 			restrictFilesystems:  true,
 			deniedSyscalls:       restrictedServiceSyscalls,
 			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX},
+			allowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		},
 		ServiceEgress: {
 			noNewPrivileges:      true,

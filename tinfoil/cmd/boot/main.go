@@ -154,16 +154,7 @@ func run(ctx context.Context) error {
 	}
 	tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 
-	// 9. Firewall
-	start = time.Now()
-	log.Println("Configuring firewall")
-	if err := setupFirewall(config); err != nil {
-		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
-		return fmt.Errorf("firewall setup failed: %w", err)
-	}
-	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-
-	// 10. Models
+	// 9. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config, externalConfig); err != nil {
@@ -171,12 +162,6 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("model mount failed: %w", err)
 	}
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
-
-	// 11. Containers + health checks
-	log.Println("Launching containers")
-	if err := launchContainersAndWaitHealthy(ctx, tracker, config, externalConfig, cmdline.Debug); err != nil {
-		return err
-	}
 
 	return nil
 }

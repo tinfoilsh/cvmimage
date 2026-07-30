@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,7 +21,20 @@ import (
 const (
 	restartWaitTimeout  = 15 * time.Second
 	restartPollInterval = 100 * time.Millisecond
+	pidFileLimit        = 32
 )
+
+type serviceInstance struct {
+	pid  int
+	file *os.File
+	info os.FileInfo
+}
+
+func (instance *serviceInstance) close() {
+	if instance != nil {
+		_ = instance.file.Close()
+	}
+}
 
 func loadRuntimeConfig() (*runtimeconfig.Config, error) {
 	data, err := os.ReadFile(boot.RuntimeConfigPath)
@@ -77,60 +91,82 @@ func restartRuntimeServices(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func freezeFromPIDFile(path string) (int, error) {
-	pid, err := readPIDFile(path)
+func freezeFromPIDFile(path string) (*serviceInstance, error) {
+	instance, err := openServiceInstance(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return nil, nil
 	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+	if err := signalProcessGroup(instance.pid, syscall.SIGSTOP); err != nil {
 		if errors.Is(err, syscall.ESRCH) {
-			return 0, nil
+			instance.close()
+			return nil, nil
 		}
-		return 0, fmt.Errorf("freezing pid %d: %w", pid, err)
+		instance.close()
+		return nil, fmt.Errorf("freezing pid %d process group: %w", instance.pid, err)
 	}
-	return pid, nil
+	return instance, nil
 }
 
-func restartFrozenFromPIDFile(ctx context.Context, path string, pid int) error {
-	if pid == 0 {
+func restartFrozenFromPIDFile(ctx context.Context, path string, instance *serviceInstance) error {
+	if instance == nil {
 		return nil
 	}
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("killing frozen pid %d: %w", pid, err)
+	if err := signalProcessGroup(instance.pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("killing frozen pid %d process group: %w", instance.pid, err)
 	}
-	return waitForReplacementPID(ctx, path, pid)
+	return waitForReplacementPID(ctx, path, instance)
 }
 
-func readPIDFile(path string) (int, error) {
-	data, err := os.ReadFile(path)
+func openServiceInstance(path string) (*serviceInstance, error) {
+	file, err := os.Open(path)
 	if err != nil {
-		return 0, err
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, pidFileLimit+1))
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if len(data) > pidFileLimit {
+		file.Close()
+		return nil, fmt.Errorf("%s exceeds %d bytes", path, pidFileLimit)
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || pid <= 1 {
-		return 0, fmt.Errorf("invalid pid in %s", path)
+		file.Close()
+		return nil, fmt.Errorf("invalid pid in %s", path)
 	}
-	return pid, nil
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return &serviceInstance{pid: pid, file: file, info: info}, nil
 }
 
 func restartFromPIDFile(ctx context.Context, path string) error {
-	oldPID, err := readPIDFile(path)
+	instance, err := openServiceInstance(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if err := syscall.Kill(oldPID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("signaling pid %d: %w", oldPID, err)
+	defer instance.close()
+	if err := signalProcessGroup(instance.pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("signaling pid %d process group: %w", instance.pid, err)
 	}
-	return waitForReplacementPID(ctx, path, oldPID)
+	return waitForReplacementPID(ctx, path, instance)
 }
 
-func waitForReplacementPID(ctx context.Context, path string, oldPID int) error {
+func signalProcessGroup(pid int, signal syscall.Signal) error {
+	return syscall.Kill(-pid, signal)
+}
+
+func waitForReplacementPID(ctx context.Context, path string, previous *serviceInstance) error {
 	deadline := time.NewTimer(restartWaitTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(restartPollInterval)
@@ -142,7 +178,7 @@ func waitForReplacementPID(ctx context.Context, path string, oldPID int) error {
 		case <-deadline.C:
 			return fmt.Errorf("waiting for %s to restart", path)
 		case <-ticker.C:
-			restarted, err := replacementPIDAvailable(path, oldPID)
+			restarted, err := replacementPIDAvailable(path, previous)
 			if err != nil {
 				return err
 			}
@@ -153,16 +189,16 @@ func waitForReplacementPID(ctx context.Context, path string, oldPID int) error {
 	}
 }
 
-func replacementPIDAvailable(path string, oldPID int) (bool, error) {
-	current, err := os.ReadFile(path)
+func replacementPIDAvailable(path string, previous *serviceInstance) (bool, error) {
+	current, err := openServiceInstance(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	newPID, err := strconv.Atoi(strings.TrimSpace(string(current)))
-	return err == nil && newPID > 1 && newPID != oldPID, nil
+	defer current.close()
+	return !os.SameFile(previous.info, current.info), nil
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

@@ -154,7 +154,7 @@ func (m *manager) handleBoot(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (m *manager) boot(override []byte) error {
+func (m *manager) boot(override []byte) (result error) {
 	m.bootMu.Lock()
 	defer m.bootMu.Unlock()
 
@@ -189,13 +189,18 @@ func (m *manager) boot(override []byte) error {
 		}
 		preserved[runtimeconfig.ReservedDebugContainerName] = true
 	}
-	frozenEgressPID, err := freezeFromPIDFile(boot.EgressPIDPath)
+	frozenEgress, err := freezeFromPIDFile(boot.EgressPIDPath)
 	if err != nil {
 		return fmt.Errorf("freezing current egress policy: %w", err)
 	}
+	if frozenEgress != nil {
+		defer frozenEgress.close()
+	}
 	defer func() {
-		if frozenEgressPID != 0 {
-			_ = syscall.Kill(frozenEgressPID, syscall.SIGCONT)
+		if frozenEgress != nil {
+			if err := restartFrozenFromPIDFile(context.Background(), boot.EgressPIDPath, frozenEgress); err != nil {
+				result = errors.Join(result, fmt.Errorf("restoring egress policy service: %w", err))
+			}
 		}
 	}()
 	if err := containers.RemoveManagedExcept(m.ctx, previous, preserved); err != nil {
@@ -218,10 +223,10 @@ func (m *manager) boot(override []byte) error {
 		return fmt.Errorf("preparing container networks: %w", err)
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-	if err := restartFrozenFromPIDFile(m.ctx, boot.EgressPIDPath, frozenEgressPID); err != nil {
+	if err := restartFrozenFromPIDFile(m.ctx, boot.EgressPIDPath, frozenEgress); err != nil {
 		return fmt.Errorf("restarting egress policy: %w", err)
 	}
-	frozenEgressPID = 0
+	frozenEgress = nil
 	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, m.debug, preserved); err != nil {
 		return err
 	}

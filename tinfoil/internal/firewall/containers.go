@@ -62,9 +62,9 @@ func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeco
 	switch network.Egress {
 	case "open":
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr %s drop\n", bridge, nonPublicIPv4Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip accept\n", bridge)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q meta nfproto ipv4 accept\n", bridge)
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr %s drop\n", bridge, nonPublicIPv6Ranges)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 accept\n", bridge)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q meta nfproto ipv6 accept\n", bridge)
 	case "allowlist":
 		setName := containernet.AllowSetPrefix + bridge
 		fmt.Fprintf(script, "destroy set inet tinfoil %s\n", setName)

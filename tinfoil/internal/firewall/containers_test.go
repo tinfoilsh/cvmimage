@@ -20,7 +20,8 @@ func TestContainerNetworkPolicyModes(t *testing.T) {
 		"flush chain inet tinfoil container_forward",
 		`iifname "closed" oifname "closed" accept`,
 		`iifname "open" ip daddr { 0.0.0.0/8`,
-		`iifname "open" ip accept`,
+		`iifname "open" meta nfproto ipv4 accept`,
+		`iifname "open" meta nfproto ipv6 accept`,
 		"destroy set inet tinfoil allow-control",
 		"create set inet tinfoil allow-control",
 		`iifname "control" ip daddr @allow-control accept`,
@@ -47,7 +48,7 @@ func TestOpenEgressRejectsProtocolAssignments(t *testing.T) {
 	}}
 	script := renderContainerNetworkScript(config, false)
 	drop := strings.Index(script, `ip daddr { 0.0.0.0/8`)
-	accept := strings.Index(script, `iifname "open" ip accept`)
+	accept := strings.Index(script, `iifname "open" meta nfproto ipv4 accept`)
 	if drop < 0 || accept < 0 || drop > accept || strings.Contains(script, "192.0.0.9") || strings.Contains(script, "192.0.0.10") {
 		t.Fatalf("unexpected open IPv4 rule order:\n%s", script)
 	}

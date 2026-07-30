@@ -94,11 +94,10 @@ measured rootfs contains only its declared runtime payload. NVIDIA graphics,
 video, OpenCL, host diagnostics, CUDA debugger and MPS tools, distro boot
 integration, systemd units, Turing-only firmware, and legacy NVIDIA
 runtime-hook compatibility are likewise excluded. The CUDA compute, CDI
-container, attestation, firmware, and NVSwitch payloads remain; diagnostic
-commands belong inside debug or workload containers rather than the measured
-shipping rootfs. The separately measured debug image adds the pinned
-`nvidia-smi` client so CDI can expose it to GPU workload containers inspected
-through the SSH toolbox.
+container, attestation, firmware, and NVSwitch payloads remain. The measured
+rootfs retains the pinned `nvidia-smi` client solely so CDI can expose it inside
+GPU workload and diagnostic containers; other diagnostic commands belong in
+those containers rather than the measured shipping rootfs.
 
 The Nix expressions also reject store references in runtime binaries and use
 fixed ownership, modes, archive ordering, and timestamps. Reproducibility is a

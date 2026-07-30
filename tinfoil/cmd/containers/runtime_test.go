@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestReplacementPIDAvailableWaitsThroughSupervisorBackoff(t *testing.T) {
+func TestReplacementPIDAvailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service.pid")
 	if available, err := replacementPIDAvailable(path, 41); err != nil || available {
 		t.Fatalf("missing pid file: available=%v error=%v", available, err)

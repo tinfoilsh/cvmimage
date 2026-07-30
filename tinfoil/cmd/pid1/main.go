@@ -213,6 +213,8 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
+	// The shim intentionally starts in its ephemeral boot-status phase before
+	// provisioning, then upgrades in place as boot publishes private artifacts.
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: shimName, Required: true, Restart: true,
 		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),

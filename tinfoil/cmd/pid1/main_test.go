@@ -687,6 +687,22 @@ func TestRequiredServiceDeathFailsClosedDuringSupervision(t *testing.T) {
 	}
 }
 
+func TestReadinessPublicationAllowsTransientRecovery(t *testing.T) {
+	var states []bool
+	readiness := newReadiness([]string{"first", "second"}, func(ready bool) error {
+		states = append(states, ready)
+		return nil
+	})
+	readiness.Update(supervisor.State{Name: "first", Required: true, Ready: true})
+	if err := readiness.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	readiness.Update(supervisor.State{Name: "second", Required: true, Ready: true})
+	if got := fmt.Sprint(states); got != "[false true]" {
+		t.Fatalf("published readiness states = %s, want [false true]", got)
+	}
+}
+
 func TestHardeningWrapperAppliesPolicyBeforeExec(t *testing.T) {
 	var calls []string
 	err := execService(

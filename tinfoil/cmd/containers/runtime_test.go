@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+func TestParseInvocation(t *testing.T) {
+	debug, err := parseInvocation([]string{"tinfoil-containers", "--debug=true"})
+	if err != nil || !debug {
+		t.Fatalf("parseInvocation() = %t, %v", debug, err)
+	}
+	if _, err := parseInvocation([]string{"tinfoil-containers", "unexpected"}); err == nil {
+		t.Fatal("unexpected positional argument accepted")
+	}
+}
+
 func TestReplacementPIDAvailable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service.pid")
 	if available, err := replacementPIDAvailable(path, 41); err != nil || available {

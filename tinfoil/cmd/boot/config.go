@@ -13,138 +13,15 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/device"
+	"tinfoil/internal/runtimeconfig"
 )
 
-// Config represents the main configuration file
-type Config struct {
-	ShimRaw    yaml.Node               `yaml:"shim"`
-	ShimCfg    *shimconfig.Config      `yaml:"-"`
-	CVMNetwork CVMNetworkConfig        `yaml:"cvm-network"`
-	Networks   map[string]*NetworkSpec `yaml:"networks"`
-	CPUs       int                     `yaml:"cpus"`
-	Memory     int                     `yaml:"memory"`
-	GPUs       int                     `yaml:"gpus"`
-	Models     []ModelSpec             `yaml:"models"`
-	Containers []Container             `yaml:"containers"`
-	VaultURL   string                  `yaml:"vault-url,omitempty"`
-}
-
-// CVMNetworkConfig scopes host-firewall knobs that affect the CVM as a
-// whole, distinct from per-bridge `networks:`.
-type CVMNetworkConfig struct {
-	// InboundPorts is the TCP-port allowlist on the CVM's external
-	// interface beyond the shim's :443 (which is always open).
-	InboundPorts []int `yaml:"inbound-ports"`
-}
-
-// NetworkSpec is one entry in the top-level `networks:` map. Egress
-// defaults to "closed" via UnmarshalYAML so `name: {}` is a one-line
-// closed bridge.
-type NetworkSpec struct {
-	Egress string   `yaml:"egress"`
-	Allow  []string `yaml:"allow"`
-}
-
-func (n *NetworkSpec) UnmarshalYAML(node *yaml.Node) error {
-	// `name:` with a null scalar body decodes to a ScalarNode here.
-	if node.Kind == yaml.ScalarNode {
-		if node.Tag != "!!null" {
-			return fmt.Errorf("network entry must be a mapping or null")
-		}
-		n.Egress = "closed"
-		return nil
-	}
-	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("network entry must be a mapping")
-	}
-	seen := map[string]bool{}
-	for index := 0; index < len(node.Content); index += 2 {
-		field := node.Content[index].Value
-		if seen[field] {
-			return fmt.Errorf("duplicate network field %q", field)
-		}
-		seen[field] = true
-		switch field {
-		case "egress", "allow":
-		default:
-			return fmt.Errorf("unknown network field %q", field)
-		}
-	}
-	type alias NetworkSpec
-	var raw alias
-	if err := node.Decode(&raw); err != nil {
-		return err
-	}
-	*n = NetworkSpec(raw)
-	if n.Egress == "" {
-		n.Egress = "closed"
-	}
-	return nil
-}
-
-// ModelSpec represents a model pack specification.
-type ModelSpec struct {
-	Name      string `yaml:"name,omitempty"`
-	Repo      string `yaml:"repo,omitempty"`
-	MPK       string `yaml:"mpk,omitempty"`
-	MWP       string `yaml:"mwp,omitempty"`
-	EMWP      string `yaml:"emwp,omitempty"`
-	KeySecret string `yaml:"key-secret,omitempty"`
-}
-
-// Container represents a container to run (Docker Compose-compatible subset)
-type Container struct {
-	Name       string   `yaml:"name"`
-	Image      string   `yaml:"image"`
-	Command    []string `yaml:"command,omitempty"`
-	Entrypoint []string `yaml:"entrypoint,omitempty"`
-	WorkingDir string   `yaml:"working_dir,omitempty"`
-	User       string   `yaml:"user,omitempty"`
-
-	// Environment variables:
-	// - "VAR" (string) = lookup VAR from external-config.yml
-	// - "VAR: value" (map) = hardcoded value (attested)
-	Env []interface{} `yaml:"env,omitempty"`
-
-	// Secrets: list of keys to lookup from external-config.yml (sensitive)
-	Secrets []string `yaml:"secrets,omitempty"`
-
-	Volumes  []string    `yaml:"volumes,omitempty"` // "source:target[:opts]"
-	Devices  []string    `yaml:"devices,omitempty"`
-	CapAdd   []string    `yaml:"cap_add,omitempty"`
-	Runtime  string      `yaml:"runtime,omitempty"`  // e.g., "nvidia"
-	Networks []string    `yaml:"networks,omitempty"` // names of entries in top-level `networks:`
-	IPC      string      `yaml:"ipc,omitempty"`      // e.g., "host"
-	PidMode  string      `yaml:"pid,omitempty"`      // "host" for host PID namespace
-	GPUs     interface{} `yaml:"gpus,omitempty"`     // "all", "0,1,2,3", or count (int)
-
-	// Resource limits
-	ShmSize string            `yaml:"shm_size,omitempty"` // "2g"
-	Memory  string            `yaml:"memory,omitempty"`   // "512m", "2g"
-	CPUs    float64           `yaml:"cpus,omitempty"`     // 0.5, 2.0
-	Tmpfs   map[string]string `yaml:"tmpfs,omitempty"`    // {"/tmp": "size=100m"}
-	// ReadOnly and PidsLimit are pointers so we can tell "operator left it
-	// unset" (apply the hardened default) from "operator wrote false / 0".
-	ReadOnly  *bool  `yaml:"read_only,omitempty"`
-	PidsLimit *int64 `yaml:"pids_limit,omitempty"`
-
-	// Lifecycle
-	Restart     string       `yaml:"restart,omitempty"`      // "no", "always", "on-failure", "unless-stopped"
-	StopSignal  string       `yaml:"stop_signal,omitempty"`  // "SIGTERM", "SIGQUIT"
-	StopTimeout *int         `yaml:"stop_timeout,omitempty"` // seconds
-	Healthcheck *Healthcheck `yaml:"healthcheck,omitempty"`
-
-	inputFields containerInputFields
-}
-
-// Healthcheck defines container health monitoring
-type Healthcheck struct {
-	Test        []string `yaml:"test"`                   // ["CMD", "curl", "-f", "http://localhost/health"]
-	Interval    string   `yaml:"interval,omitempty"`     // "30s"
-	Timeout     string   `yaml:"timeout,omitempty"`      // "10s"
-	Retries     int      `yaml:"retries,omitempty"`      // 3
-	StartPeriod string   `yaml:"start_period,omitempty"` // "60s"
-}
+type Config = runtimeconfig.Config
+type CVMNetworkConfig = runtimeconfig.CVMNetworkConfig
+type NetworkSpec = runtimeconfig.NetworkSpec
+type ModelSpec = runtimeconfig.ModelSpec
+type Container = runtimeconfig.Container
+type Healthcheck = runtimeconfig.Healthcheck
 
 const maxGPUCount = 8
 const maxDiskPayloadBytes = 1 << 20
@@ -236,11 +113,8 @@ func loadAndVerifyConfig(cmdline kernelCmdline) (*Config, error) {
 		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
-	var config Config
-	if err := yaml.Unmarshal(configData, &config); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
-	if err := validateConfigShape(&config, cmdline.Debug); err != nil {
+	config, err := runtimeconfig.Decode(configData, cmdline.Debug)
+	if err != nil {
 		return nil, err
 	}
 
@@ -251,38 +125,11 @@ func loadAndVerifyConfig(cmdline kernelCmdline) (*Config, error) {
 		return nil, err
 	}
 
-	shimCfg, err := shimconfig.Decode(&config.ShimRaw)
-	if err != nil {
-		return nil, fmt.Errorf("parsing shim config: %w", err)
-	}
-	shimCfg.ExpectedGPUs = config.GPUs
-	config.ShimCfg = shimCfg
-
-	if shimCfg.UpstreamContainer == "" && len(config.Containers) > 0 {
-		shimCfg.UpstreamContainer = config.Containers[0].Name
-	}
-
-	if err := validateNetwork(&config); err != nil {
-		return nil, fmt.Errorf("network config: %w", err)
-	}
-
-	shimYAML, err := yaml.Marshal(shimCfg)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling shim config: %w", err)
-	}
-	if err := os.WriteFile(boot.ShimConfigPath, shimYAML, 0644); err != nil {
-		return nil, fmt.Errorf("writing shim config: %w", err)
-	}
-
-	if err := writeEgressConfig(&config); err != nil {
-		return nil, fmt.Errorf("writing egress config: %w", err)
-	}
-
 	if err := loadExternalConfig(); err != nil {
 		return nil, err
 	}
 
-	return &config, nil
+	return config, nil
 }
 
 // writeEgressConfig persists the per-allowlist-network FQDN map to the

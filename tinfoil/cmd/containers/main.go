@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -17,13 +18,14 @@ import (
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containers"
 	"tinfoil/internal/containersapi"
+	"tinfoil/internal/firewall"
+	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/runtimeconfig"
 )
 
 type server struct {
-	applyMu     sync.Mutex
-	ctx         context.Context
-	initialized bool
+	bootMu sync.Mutex
+	ctx    context.Context
 }
 
 func main() {
@@ -54,17 +56,11 @@ func run(ctx context.Context) error {
 	defer cancel()
 	handler := &server{ctx: runtimeCtx}
 	mux := http.NewServeMux()
-	mux.HandleFunc(containersapi.ApplyPath, handler.apply)
+	mux.HandleFunc(containersapi.BootPath, handler.boot)
 	httpServer := &http.Server{Handler: mux}
 	statusDone := make(chan error, 1)
-	go func() {
-		statusDone <- containers.RunStatusPublisher(runtimeCtx)
-		cancel()
-	}()
-	go func() {
-		<-runtimeCtx.Done()
-		_ = httpServer.Shutdown(context.Background())
-	}()
+	go func() { statusDone <- containers.RunStatusPublisher(runtimeCtx); cancel() }()
+	go func() { <-runtimeCtx.Done(); _ = httpServer.Shutdown(context.Background()) }()
 	log.Printf("tinfoil-containers: listening on %s", boot.ContainersSocket)
 	err = httpServer.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
@@ -74,45 +70,98 @@ func run(ctx context.Context) error {
 	return errors.Join(err, <-statusDone)
 }
 
-func (s *server) apply(w http.ResponseWriter, r *http.Request) {
+func (s *server) boot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.applyMu.Lock()
-	defer s.applyMu.Unlock()
-	if s.initialized {
-		writeError(w, http.StatusConflict, errors.New("runtime configuration is already initialized"))
-		return
-	}
+	s.bootMu.Lock()
+	defer s.bootMu.Unlock()
 
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
-	decoder.DisallowUnknownFields()
-	var request containersapi.ApplyRequest
-	if err := decoder.Decode(&request); err != nil {
+	override, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	var config runtimeconfig.Config
-	if err := json.Unmarshal(request.Config, &config); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("decoding config: %w", err))
+	debug, err := kernelcmdline.DebugEnabled()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	var external shimconfig.ExternalConfig
-	if err := json.Unmarshal(request.ExternalConfig, &external); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("decoding external config: %w", err))
+	if len(override) > 0 && !debug {
+		writeError(w, http.StatusForbidden, errors.New("config overrides require tinfoil-debug=on"))
 		return
+	}
+	source := override
+	if len(source) == 0 {
+		source, err = os.ReadFile(boot.ConfigPath)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("reading verified config: %w", err))
+			return
+		}
+	}
+	config, err := runtimeconfig.Decode(source, debug)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	externalData, err := os.ReadFile(boot.ExternalConfigPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("reading external config: %w", err))
+		return
+	}
+	external, err := shimconfig.DecodeExternal(externalData)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	previous, err := loadRuntimeConfig()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("reading installed config: %w", err))
+		return
+	}
+	preserved := map[string]bool{}
+	if previous != nil && debug && runtimeconfig.HasReservedDebugContainer(previous) {
+		preserved[runtimeconfig.ReservedDebugContainerName] = true
+	}
+	if err := containers.RemoveManagedExcept(s.ctx, previous, preserved); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := writeRuntimeArtifacts(config, source); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := firewall.ApplyInbound(config.CVMNetwork.InboundPorts); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	launchConfig := config
+	if preserved[runtimeconfig.ReservedDebugContainerName] {
+		copy := *config
+		copy.Containers = nil
+		for _, container := range config.Containers {
+			if container.Name != runtimeconfig.ReservedDebugContainerName {
+				copy.Containers = append(copy.Containers, container)
+			}
+		}
+		launchConfig = &copy
 	}
 	tracker, err := boot.ResumeTracker()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := containers.LaunchAndWaitHealthy(s.ctx, tracker, &config, &external, request.Debug); err != nil {
+	if err := containers.LaunchAndWaitHealthy(s.ctx, tracker, launchConfig, external, debug); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.initialized = true
+	if err := restartRuntimeServices(s.ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

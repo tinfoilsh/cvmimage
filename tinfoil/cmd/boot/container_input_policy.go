@@ -4,71 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"tinfoil/internal/runtimeconfig"
 )
 
-type containerInputFields struct {
-	privileged  bool
-	capDrop     bool
-	securityOpt bool
-}
-
-func (c *Container) UnmarshalYAML(node *yaml.Node) error {
-	var fields containerInputFields
-	if node.Kind == yaml.MappingNode {
-		for index := 0; index < len(node.Content); index += 2 {
-			switch node.Content[index].Value {
-			case "<<":
-				return fmt.Errorf("container YAML merge keys are unsupported")
-			case "privileged":
-				fields.privileged = true
-			case "cap_drop":
-				fields.capDrop = true
-			case "security_opt":
-				fields.securityOpt = true
-			}
-		}
-	}
-	type rawContainer Container
-	var raw rawContainer
-	if err := node.Decode(&raw); err != nil {
-		return err
-	}
-	*c = Container(raw)
-	c.inputFields = fields
-	return nil
-}
-
 func validateContainerInputPolicy(index int, container *Container, debug bool) error {
-	fields := container.inputFields
-	if fields.privileged {
-		return fmt.Errorf("containers[%d].privileged is unsupported", index)
-	}
-	if fields.capDrop {
-		return fmt.Errorf("containers[%d].cap_drop is unsupported", index)
-	}
-	if fields.securityOpt {
-		return fmt.Errorf("containers[%d].security_opt is unsupported", index)
-	}
-	if container.PidMode != "" {
-		return fmt.Errorf("containers[%d].pid is unsupported", index)
-	}
-	if len(container.Devices) != 0 {
-		return fmt.Errorf("containers[%d].devices is unsupported", index)
-	}
-	if container.IPC != "" && container.IPC != "private" && container.IPC != "host" {
-		return fmt.Errorf("containers[%d].ipc must be private or host", index)
-	}
-	allowDebugDockerSocket := reservedDebugRuntimeEnabled(container.Name, debug)
-	for volumeIndex, volume := range container.Volumes {
-		if _, err := canonicalizeContainerVolume(volume, allowDebugDockerSocket); err != nil {
-			return fmt.Errorf("containers[%d].volumes[%d] %w", index, volumeIndex, err)
-		}
-	}
-	for capabilityIndex, capability := range container.CapAdd {
-		if !allowedContainerCapability(capability) {
-			return fmt.Errorf("containers[%d].cap_add[%d] capability %q is unsupported", index, capabilityIndex, capability)
-		}
+	config := &runtimeconfig.Config{Containers: []runtimeconfig.Container{*container}}
+	if err := runtimeconfig.Validate(config, debug); err != nil {
+		return err
 	}
 	return nil
 }

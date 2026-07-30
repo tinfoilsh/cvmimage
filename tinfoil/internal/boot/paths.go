@@ -21,6 +21,7 @@ const (
 	ShimConfigPath     = PrivateDir + "/shim.yml"
 	EgressConfigPath   = PrivateDir + "/egress.yml"
 	ExternalConfigPath = PrivateDir + "/external-config.yml"
+	RuntimeConfigPath  = PrivateDir + "/runtime-config.yml"
 	DockerConfigDir    = PrivateDir + "/docker-config"
 	DockerConfigPath   = DockerConfigDir + "/config.json"
 	GCloudKeyPath      = PrivateDir + "/gcloud_key.json"

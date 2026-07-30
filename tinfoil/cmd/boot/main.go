@@ -11,7 +11,6 @@ import (
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/containersapi"
-	"tinfoil/internal/firewall"
 	"tinfoil/internal/nvidia"
 )
 
@@ -156,16 +155,7 @@ func run(ctx context.Context) error {
 	}
 	tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 
-	// 9. Firewall
-	start = time.Now()
-	log.Println("Configuring firewall")
-	if err := firewall.ApplyInbound(config.CVMNetwork.InboundPorts); err != nil {
-		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
-		return fmt.Errorf("firewall setup failed: %w", err)
-	}
-	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-
-	// 10. Models
+	// 9. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config, externalConfig); err != nil {
@@ -174,15 +164,10 @@ func run(ctx context.Context) error {
 	}
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
 
-	// 11. Containers + health checks
+	// 10. Install runtime configuration and launch containers
 	start = time.Now()
 	log.Println("Launching containers")
-	request, err := containersapi.NewApplyRequest(config, externalConfig, cmdline.Debug)
-	if err != nil {
-		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	if err := containersapi.Apply(ctx, request); err != nil {
+	if err := containersapi.Boot(ctx, nil); err != nil {
 		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}

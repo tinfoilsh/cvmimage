@@ -91,7 +91,7 @@ func RunStatusPublisher(ctx context.Context) error {
 }
 
 func publishAndLog(ctx context.Context, cli containerStatusClient) {
-	if err := publishContainerStatus(ctx, cli, boot.ConfigPath, boot.ContainerStatusPath); err != nil {
+	if err := publishContainerStatus(ctx, cli, boot.RuntimeConfigPath, boot.ContainerStatusPath); err != nil {
 		log.Printf("container status publish failed: %v", err)
 	}
 }

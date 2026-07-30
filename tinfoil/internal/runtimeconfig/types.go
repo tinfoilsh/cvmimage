@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	ReservedDebugContainerName = "tinfoil-ssh-installer"
+	ReservedDebugContainerName = "tinfoil-debug-toolbox"
 	ReservedDebugPort          = "2222/tcp"
 	ReservedDebugHostPort      = 2222
 	ReservedDebugSerialDevice  = "/dev/hvc1"

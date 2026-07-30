@@ -24,6 +24,7 @@ const (
 	maxHostnameLength         = 253
 	maxBridgeNameLen          = 15
 	debugDockerSocketBind     = "/run/docker.sock:/var/run/docker.sock"
+	debugManagerSocketBind    = "/run/tinfoil/containers.sock:/run/tinfoil/containers.sock"
 )
 
 var (
@@ -152,7 +153,7 @@ func validateContainerPolicy(index int, container *Container, debug bool) error 
 		return fmt.Errorf("containers[%d].ipc must be private or host", index)
 	}
 	for volumeIndex, volume := range container.Volumes {
-		if ReservedDebugRuntimeEnabled(container.Name, debug) && volume == debugDockerSocketBind {
+		if ReservedDebugRuntimeEnabled(container.Name, debug) && (volume == debugDockerSocketBind || volume == debugManagerSocketBind) {
 			continue
 		}
 		source, _, found := strings.Cut(volume, ":")

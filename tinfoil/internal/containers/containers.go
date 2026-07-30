@@ -114,6 +114,10 @@ func networkCreateOptions(name string) dockernetwork.CreateOptions {
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
 func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
+	return LaunchAndWaitHealthyExcept(ctx, tracker, config, extConfig, debug, nil)
+}
+
+func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool, preserved map[string]bool) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
@@ -129,12 +133,18 @@ func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Co
 	if err := setupContainerNetwork(ctx, cli, config, debug); err != nil {
 		return fmt.Errorf("creating container network: %w", err)
 	}
+	launchContainers := containersToLaunch(config.Containers, preserved)
+	if len(launchContainers) == 0 {
+		log.Println("No containers to launch")
+		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "all containers preserved")
+		return nil
+	}
 
 	start := time.Now()
 
 	// Initialize substages: one per container, each with phase sub-substages.
 	var substages []boot.Stage
-	for _, c := range config.Containers {
+	for _, c := range launchContainers {
 		phases := []boot.Stage{
 			{Name: "pull", Status: boot.StatusPending},
 			{Name: "start", Status: boot.StatusPending},
@@ -155,9 +165,9 @@ func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Co
 	var mu sync.Mutex
 	flush := func() { tracker.RecordSubstages(boot.StageContainers, substages) }
 
-	errs := make([]error, len(config.Containers))
+	errs := make([]error, len(launchContainers))
 	var wg sync.WaitGroup
-	for i, c := range config.Containers {
+	for i, c := range launchContainers {
 		wg.Add(1)
 		go func(i int, c Container) {
 			defer wg.Done()
@@ -180,6 +190,19 @@ func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Co
 
 	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
 	return nil
+}
+
+func containersToLaunch(configured []Container, preserved map[string]bool) []Container {
+	if len(preserved) == 0 {
+		return configured
+	}
+	launch := make([]Container, 0, len(configured))
+	for _, current := range configured {
+		if !preserved[current.Name] {
+			launch = append(launch, current)
+		}
+	}
+	return launch
 }
 
 func RemoveManagedExcept(ctx context.Context, config *Config, preserved map[string]bool) error {

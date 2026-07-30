@@ -46,6 +46,7 @@ const (
 	InitBinary       = "/usr/bin/tinfoil-pid1"
 	BootBinary       = "/usr/bin/tinfoil-boot"
 	ContainersBinary = "/usr/bin/tinfoil-containers"
+	ContainersSocket = "/run/tinfoil/containers.sock"
 	EgressBinary     = "/usr/bin/tinfoil-egress"
 	ShimBinary       = "/usr/bin/tinfoil-shim"
 

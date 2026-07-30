@@ -8,8 +8,6 @@ import (
 	"net/netip"
 	"os"
 
-	"gopkg.in/yaml.v3"
-
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/device"
@@ -130,34 +128,6 @@ func loadAndVerifyConfig(cmdline kernelCmdline) (*Config, error) {
 	}
 
 	return config, nil
-}
-
-// writeEgressConfig persists the per-allowlist-network FQDN map to the
-// private ramdisk so tinfoil-egress can load it once at startup. No-op
-// when no network has `egress: allowlist` (the daemon isn't started).
-func writeEgressConfig(cfg *Config) error {
-	out := egressFile{Networks: map[string]egressFileEntry{}}
-	for name, spec := range cfg.Networks {
-		if spec.Egress != "allowlist" {
-			continue
-		}
-		out.Networks[name] = egressFileEntry{Allow: spec.Allow}
-	}
-	if len(out.Networks) == 0 {
-		return nil
-	}
-	data, err := yaml.Marshal(out)
-	if err != nil {
-		return fmt.Errorf("marshaling: %w", err)
-	}
-	return os.WriteFile(boot.EgressConfigPath, data, 0600)
-}
-
-type egressFile struct {
-	Networks map[string]egressFileEntry `yaml:"networks"`
-}
-type egressFileEntry struct {
-	Allow []string `yaml:"allow"`
 }
 
 func loadExternalConfig() error {

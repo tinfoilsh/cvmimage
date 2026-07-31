@@ -172,9 +172,10 @@ On any x86_64 Linux host, check out the release commit and run
 verifies its checksum, installs it with the required sandbox and
 restricted-evaluation settings, and asserts the result — CI and release
 builders run the same script, so there is exactly one installation path.
-Then build:
+The installer does not modify shell profiles, so put it on `PATH` and build:
 
 ```sh
+export PATH="/nix/var/nix/profiles/default/bin:$PATH"
 nix-build -I . -A shipping-image -o result
 ```
 

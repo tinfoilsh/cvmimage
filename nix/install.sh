@@ -63,3 +63,5 @@ expect allowed-uris \
   "$(show allowed-uris)" 'https://github.com/NixOS/nixpkgs/archive/'
 
 echo "installed pinned Nix $version with sandboxed, restricted evaluation"
+echo "shell profiles were not modified; to use it, run:"
+echo '  export PATH="/nix/var/nix/profiles/default/bin:$PATH"'

@@ -10,6 +10,7 @@ On an x86_64 Linux host without Nix, first install the pinned Nix release:
 
 ```sh
 ./nix/install.sh
+export PATH="/nix/var/nix/profiles/default/bin:$PATH"
 ```
 
 Then build the CVM image:

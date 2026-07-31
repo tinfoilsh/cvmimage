@@ -37,7 +37,6 @@ flowchart TD
     G --> R["Additive rootfs.tar"]
     A --> R
     V --> R
-    C --> R
 
     R --> M["Pinned systemd-repart finalizer"]
     I --> X["Release artifact set"]
@@ -54,18 +53,20 @@ This is intentionally kept simple: everything is built end-to-end in isolation, 
 The top-level `default.nix` pins one Nixpkgs source and exposes the complete set
 of image inputs:
 
-| Output | Owner | Declaration |
-| --- | --- | --- |
-| Runtime and debug Go binaries | Nixpkgs `buildGoModule` | `nix/go.nix`, `tinfoil/go.mod`, `tinfoil/go.sum` |
-| Fixed initrd | Pinned GNU cpio and Zstandard | `nix/initrd.nix` |
-| Custom kernel | Nixpkgs `linuxManualConfig` | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
-| Three NVIDIA modules | Nixpkgs kernel-module build | `nix/nvidia-modules.nix` |
-| nvattest and libnvat | Nixpkgs CMake and Rust builders | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock` |
-| Ubuntu package payloads | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix` |
-| NVIDIA, Docker, and debug payloads | Fixed-output archive fetches | `nix/runtime-sources.nix` |
-| Repository configuration | Direct additive copy | `image/rootfs/` |
-| Rootfs and debug layer archives | Fixed tar materializer | `nix/rootfs.nix` |
-| Shipping and debug disk images | Nix-owned fakeroot and `systemd-repart` | `nix/image.nix`, `repart.d/` |
+
+| Output                             | Owner                                                  | Declaration                                                                                          |
+| ---------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Runtime and debug Go binaries      | Nixpkgs `buildGoModule`                                | `nix/go.nix`, `tinfoil/go.mod`, `tinfoil/go.sum`                                                     |
+| Fixed initrd                       | Pinned GNU cpio and Zstandard                          | `nix/initrd.nix`                                                                                     |
+| Custom kernel                      | Nixpkgs `linuxManualConfig`                            | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
+| Three NVIDIA modules               | Nixpkgs kernel-module build                            | `nix/nvidia-modules.nix`                                                                             |
+| nvattest and libnvat               | Nixpkgs CMake and Rust builders                        | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock`                                                   |
+| Ubuntu package payloads            | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix`                                          |
+| NVIDIA, Docker, and debug payloads | Fixed-output archive fetches                           | `nix/runtime-sources.nix`                                                                            |
+| Repository configuration           | Direct additive copy                                   | `image/rootfs/`                                                                                      |
+| Rootfs and debug layer archives    | Fixed tar materializer                                 | `nix/rootfs.nix`                                                                                     |
+| Shipping and debug disk images     | Nix-owned fakeroot and `systemd-repart`                | `nix/image.nix`, `repart.d/`                                                                         |
+
 
 Go binaries and Go validation use the same Nixpkgs Go 1.26 toolchain. The
 three NixOS-only patches that prepend Nix-store paths for timezone, MIME, and
@@ -73,10 +74,12 @@ IANA databases are omitted so measured guest binaries retain upstream Linux
 lookup paths and contain no Nix-store references. All other Nixpkgs Go patches
 and the upstream `buildGoModule` machinery remain unchanged.
 
-CI and release builders install the official Nix 2.35.1 binary release pinned
-by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the expected Nix store
-path. The installer refuses a pre-existing, unverified Nix installation. Independent builders,
-and release qualification builders must use the same official release
+All builders — CI, release, operators, and auditors — install Nix through one
+script, `nix/install.sh`, which lives beside the pin files it enforces. It
+installs the official Nix 2.35.1 binary
+release pinned by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the
+expected Nix store path, and refuses a pre-existing, unverified Nix
+installation. Every builder therefore uses the same official release
 for both the client and daemon, with `sandbox = true`,
 `sandbox-fallback = false`, `restrict-eval = true`, and
 `allowed-uris = https://github.com/NixOS/nixpkgs/archive/`. A sandbox setup
@@ -154,6 +157,8 @@ cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
 rm result-package-lock
 ```
 
+
+
 ## Auditing the build
 
 An audit answers three questions: what goes in, what comes out, and whether an
@@ -162,9 +167,12 @@ check.
 
 ### 1. Reproduce the artifacts
 
-On any x86_64 Linux host, install the pinned official Nix release with the
-settings described above (or run the repository's installer action), check out
-the release commit, and build:
+On any x86_64 Linux host, check out the release commit and run
+`nix/install.sh`. It downloads the pinned official Nix release,
+verifies its checksum, installs it with the required sandbox and
+restricted-evaluation settings, and asserts the result — CI and release
+builders run the same script, so there is exactly one installation path.
+Then build:
 
 ```sh
 nix-build -I . -A shipping-image -o result
@@ -204,11 +212,11 @@ The ownership table above maps every output to its declaration. Two files
 carry most of the security weight:
 
 - `nix/rootfs.nix` lists every path that enters the measured root filesystem.
-  Anything not declared there, in a Nix-built output, or in `image/rootfs/`
-  does not ship.
+Anything not declared there, in a Nix-built output, or in `image/rootfs/`
+does not ship.
 - `nix/image.nix` is the entire finalization step: it receives the rootfs
-  archive, kernel, initrd, and `repart.d/` definitions, and produces the
-  partitioned image and root hash with no network and no package installation.
+archive, kernel, initrd, and `repart.d/` definitions, and produces the
+partitioned image and root hash with no network and no package installation.
 
 To confirm the declarations match the output, list the built rootfs archive
 directly:

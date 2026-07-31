@@ -2,30 +2,22 @@
 
 Tinfoil CVM is a confidential virtual machine for secure inference and custom compute workloads on AMD SEV-SNP and Intel TDX.
 
+Every byte of the final image is explicitly declared and derived from pinned inputs, the hermetic build is byte-for-byte reproducible, and anyone can audit the complete source-to-measurement graph themselves.
+
 ## Building
 
-Every artifact builds from the top-level `default.nix` with pinned inputs.
-Build a target with:
+On an x86_64 Linux host without Nix, first install the pinned Nix release:
 
 ```sh
-nix-build -I . -A <target>
+./nix/install.sh
 ```
 
-| Target | Output |
-| --- | --- |
-| `shipping-image` | Measured release set: `tinfoilcvm.raw`, `tinfoilcvm.vmlinuz`, `tinfoilcvm.initrd`, `tinfoilcvm.roothash` |
-| `debug-image` | Shipping layout plus the debug rootfs layer |
-| `rootfs-archive` | Additive runtime rootfs archive |
-| `debug-rootfs-layer` | Debug overlay used only by `debug-image` |
-| `kernel-artifacts` | Custom kernel, modules, and `Module.symvers` |
-| `nvidia-modules` | Validated NVIDIA open kernel modules |
-| `initrd` | Reproducible GNU cpio and Zstandard initrd |
-| `runtime-go` | The five CGO runtime commands |
-| `debug-pid1` | Compile-time debug PID 1 |
-| `tinfoil-initrd` | Pure-Go initrd command |
-| `nvattest` | NVIDIA attestation CLI and `libnvat` |
-| `checks` | Go source tests |
-| `runtime-package-lock` | Regenerated Ubuntu package lock (only when changing package inputs) |
+Then build the CVM image:
 
-See `docs/build.md` for the complete source-to-measurement build graph, tool
-ownership boundaries, builder configuration, and release qualification model.
+```sh
+nix-build -I . -A shipping-image -o result
+```
+
+This will produce the measured release artifacts: `tinfoilcvm.raw`, `tinfoilcvm.vmlinuz`, `tinfoilcvm.initrd`, `tinfoilcvm.roothash`.
+
+See `docs/build.md` for more details.

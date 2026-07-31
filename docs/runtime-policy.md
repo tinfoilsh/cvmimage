@@ -19,9 +19,13 @@ The measured daemon policy includes these mode `0644` files:
   userland proxy, uses Docker's nftables backend, enables no-new-privileges and
   the containerd snapshotter, and registers only the pinned NVIDIA runtime by
   absolute path.
-- `/etc/nftables.conf` installs the fail-closed input and forward baseline that
-  `tinfoil-boot` augments after creating the fixed container bridge. The fixed
-  external address and gateway contract has no DHCP allowance.
+- `/etc/nftables.conf` installs the fail-closed input and forward baseline and
+  declares the fixed `http01`, `inbound`, `container_input`, and
+  `container_forward` chains. The measured baseline only jumps to them;
+  `tinfoil-boot` populates the HTTP-01 chain and `tinfoil-containers`
+  populates the inbound and container chains after creating the fixed
+  container bridge. The fixed external address and gateway contract has no
+  DHCP allowance.
 - `/etc/nvidia-container-runtime/config.toml` prevents runtime module loading,
   exposes only compute and utility capabilities, invokes only the pinned
   `runc` path, consumes only `/var/run/cdi` specifications, and rejects
@@ -29,8 +33,9 @@ The measured daemon policy includes these mode `0644` files:
   host-relative under the pinned toolkit contract and resolves to the
   `ldconfig` executable provided by Ubuntu's required `libc-bin` package.
 - `/usr/share/nvidia/nvswitch/fabricmanager.cfg` preserves the pinned package
-  configuration and sets the fixed command socket to
-  `/run/nvidia-fabricmanager/socket`. PID 1 invokes Fabric Manager directly and
+  configuration except for two deviations: it disables daemonization and sets
+  the fixed command socket to `/run/nvidia-fabricmanager/socket`. PID 1
+  invokes Fabric Manager directly as a supervised foreground process and
   requires both its live PID file and this Unix socket before continuing.
 
 The NVIDIA bootstrap publishes `/var/run/cdi/nvidia.yaml` atomically for the

@@ -47,10 +47,7 @@ type Config struct {
 	ExpectedGPUs int `yaml:"expected-gpus" default:"0"`
 }
 
-const (
-	SecretMetricsAPIKey = "METRICS_API_KEY"
-	SecretACPIAPIKey    = "ACPI_API_KEY"
-)
+const SecretMetricsAPIKey = "METRICS_API_KEY"
 
 type Metadata struct {
 	ID     string `yaml:"id"`
@@ -72,7 +69,6 @@ type ExternalNetworkConfig struct {
 
 type ExternalConfig struct {
 	MetricsAPIKey string                 `yaml:"-"`
-	ACPIAPIKey    string                 `yaml:"-"`
 	Env           map[string]string      `yaml:"env"`
 	Secrets       map[string]string      `yaml:"secrets"`
 	Metadata      Metadata               `yaml:"metadata"`
@@ -122,7 +118,6 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 	}
 
 	config.MetricsAPIKey = config.GetSecret(SecretMetricsAPIKey)
-	config.ACPIAPIKey = config.GetSecret(SecretACPIAPIKey)
 	return &config, nil
 }
 

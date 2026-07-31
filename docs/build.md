@@ -1,13 +1,23 @@
 # Image build
 
-The image build has one implementation boundary:
+Confidential virtual machine (CVM) means reduced trusted computing base (TCB).
 
-1. Nix builds every content input, runs source checks, and produces the final
-   partitioned image.
+Normally, when building a hardened image, the simplest approach is to start from something that works and remove all the crap. That is a subtractive approach. It is especially functional when making sure complex applications (like AI inference or training that leverage GPUs and complex drivers) can run at full speed.
+The issue with a subtractive approach is that it makes the final image harder to audit. You basically need to trust us not to have forgotten to remove anything, and, when packages evolve or change after an update, that nothing fishy made it in.
 
-The builder is trusted. Nix is used to make inputs, dependencies, and assembly
-explicit and reproducible, not to attest intermediate artifacts or to verify a
-second hidden construction of the same filesystem.
+We decided to try a different additive approach: we start from an empty image and declare everything that makes it in. That makes it trivial to audit our image and easier to later shrink the TCB even more.
+
+The image is not assembled by scripts; it is declared. The repository
+describes every input and every byte of the final image, and a single tool,
+pure Nix, hermetically realizes that description. Nothing enters the image
+implicitly: every outside input is pinned by hash, and the whole definition
+is small enough (1,400 lines) to actually read.
+
+Because the build is deterministic, the result is byte-for-byte reproducible:
+anyone can rebuild the image from source, on their own machine, and obtain
+exactly the artifacts we ship. That closes the loop that makes a confidential
+VM trustworthy: the measurement a running enclave attests to traces all the
+way back to public source code, not to our word or our build machines.
 
 ## Graph
 
@@ -37,8 +47,7 @@ flowchart TD
     X --> Q["Release-only repeated builds and hardware qualification"]
 ```
 
-There is no Docker builder, Bazel packaging layer, generated manifest
-language, artifact cache protocol, or digest handoff between these steps.
+This is intentionally kept simple: everything is built end-to-end in isolation, on a single builder.
 
 ## Nix ownership
 
@@ -58,7 +67,7 @@ of image inputs:
 | Rootfs and debug layer archives | Fixed tar materializer | `nix/rootfs.nix` |
 | Shipping and debug disk images | Nix-owned fakeroot and `systemd-repart` | `nix/image.nix`, `repart.d/` |
 
-Go binaries and Go validation use the same Nixpkgs Go 1.25 toolchain. The
+Go binaries and Go validation use the same Nixpkgs Go 1.26 toolchain. The
 three NixOS-only patches that prepend Nix-store paths for timezone, MIME, and
 IANA databases are omitted so measured guest binaries retain upstream Linux
 lookup paths and contain no Nix-store references. All other Nixpkgs Go patches
@@ -66,16 +75,14 @@ and the upstream `buildGoModule` machinery remain unchanged.
 
 CI and release builders install the official Nix 2.35.1 binary release pinned
 by `nix/nix-version`, `nix/nix-x86_64-linux.sha256`, and the expected Nix store
-path. The installer refuses a pre-existing, unverified Nix installation. Box3,
-INF14, and release qualification builders must use the same official release
+path. The installer refuses a pre-existing, unverified Nix installation. Independent builders,
+and release qualification builders must use the same official release
 for both the client and daemon, with `sandbox = true`,
 `sandbox-fallback = false`, `restrict-eval = true`, and
 `allowed-uris = https://github.com/NixOS/nixpkgs/archive/`. A sandbox setup
 failure therefore stops the build rather than changing its isolation boundary,
 and the only network input permitted at evaluation time is the hash-pinned
-Nixpkgs archive, so an unpinned evaluation-time fetch fails closed. Under
-restricted evaluation, invocations pass `-I .` from the repository root to
-allow reading the repository itself. The remaining host prerequisites
+Nixpkgs archive, so an unpinned evaluation-time fetch fails closed. The remaining host prerequisites
 are an x86_64 Linux host with systemd, `sudo`, `curl`, `tar`, `xz`, and the
 kernel features required by the Nix sandbox. GitHub runner images may float.
 Artifact construction runs inside the Nix sandbox.
@@ -94,10 +101,7 @@ measured rootfs contains only its declared runtime payload. NVIDIA graphics,
 video, OpenCL, host diagnostics, CUDA debugger and MPS tools, distro boot
 integration, systemd units, Turing-only firmware, and legacy NVIDIA
 runtime-hook compatibility are likewise excluded. The CUDA compute, CDI
-container, attestation, firmware, and NVSwitch payloads remain. The measured
-rootfs retains the pinned `nvidia-smi` client solely so CDI can expose it inside
-GPU workload and diagnostic containers; other diagnostic commands belong in
-those containers rather than the measured shipping rootfs.
+container, attestation, firmware, and NVSwitch payloads remain.
 
 The Nix expressions also reject store references in runtime binaries and use
 fixed ownership, modes, archive ordering, and timestamps. Reproducibility is a
@@ -141,6 +145,39 @@ Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
 no task-runner layer and deleting result symlinks or collecting the Nix store
 is a separate host operation.
 
+Regenerate the reviewed Ubuntu package lock only when changing package inputs
+or snapshot indexes:
+
+```sh
+nix-build --option sandbox true -I . -A runtime-package-lock -o result-package-lock
+cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
+rm result-package-lock
+```
+
+## Auditing the build
+
+An audit answers three questions: what goes in, what comes out, and whether an
+independent rebuild matches the published release. Each has a mechanical
+check.
+
+### 1. Reproduce the artifacts
+
+On any x86_64 Linux host, install the pinned official Nix release with the
+settings described above (or run the repository's installer action), check out
+the release commit, and build:
+
+```sh
+nix-build -I . -A shipping-image -o result
+```
+
+Compare `sha256sum result/*` and the dm-verity root hash in
+`result/tinfoilcvm.roothash` against the published release checksums and
+manifest. Matching hashes mean the published artifacts are exactly what this
+source tree produces; the root hash is also the value bound into runtime
+attestation.
+
+### 2. Enumerate every external input
+
 Every external input of a target is a fixed-output derivation in its closure:
 a fetch that declares its expected hash before the sandbox permits network
 access. Enumerate them all, with their hashes, from the instantiated
@@ -157,16 +194,33 @@ nix --extra-experimental-features nix-command derivation show -r "$drv" \
 ```
 
 An empty hash column cannot occur: a derivation without a declared output
-hash builds with no network access at all.
+hash builds with no network access at all. Together with the hash-pinned
+Nixpkgs source in `nixpkgs.lock.json`, this list is the complete set of bytes
+that enter the build from outside the repository.
 
-Regenerate the reviewed Ubuntu package lock only when changing package inputs
-or snapshot indexes:
+### 3. Review the declarations
+
+The ownership table above maps every output to its declaration. Two files
+carry most of the security weight:
+
+- `nix/rootfs.nix` lists every path that enters the measured root filesystem.
+  Anything not declared there, in a Nix-built output, or in `image/rootfs/`
+  does not ship.
+- `nix/image.nix` is the entire finalization step: it receives the rootfs
+  archive, kernel, initrd, and `repart.d/` definitions, and produces the
+  partitioned image and root hash with no network and no package installation.
+
+To confirm the declarations match the output, list the built rootfs archive
+directly:
 
 ```sh
-nix-build --option sandbox true -I . -A runtime-package-lock -o result-package-lock
-cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
-rm result-package-lock
+nix-build -I . -A rootfs-archive -o result-rootfs
+tar -tvf result-rootfs
 ```
+
+Every entry traces to a declared package path, a Nix-built binary, or a
+repository file. `nix-build -I . -A checks` runs the source checks, including
+the rejection of Nix-store references in runtime binaries.
 
 ## Continuous integration
 
@@ -183,13 +237,3 @@ kernel, NVIDIA modules, nvattest, initrd, runtime binaries, and rootfs without a
 second producer list. These workflows neither publish artifacts nor qualify a
 release. Derivation comparison only schedules CI work; it is not an integrity
 check or a release policy.
-
-## Release qualification
-
-Before promoting a release, build the exact candidate independently on the
-qualified builders and compare the kernel, initrd, rootfs, raw disk, and
-dm-verity root. Boot and exercise the same artifacts through the operator-run
-CPU and GPU qualification that is available for the release; hardware
-qualification is not a GitHub Actions job and unavailable hardware blocks the
-corresponding gate. Promote only the tested measurement. This is a release
-process, not another verifier embedded in the build graph.

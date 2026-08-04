@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/distribution/reference"
 	dockerconfig "github.com/docker/cli/cli/config"
 	"github.com/docker/go-units"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
@@ -353,9 +356,6 @@ func lastHealthLog(h *container.Health) string {
 		return ""
 	}
 	last := h.Log[len(h.Log)-1]
-	if last.Output != "" {
-		return last.Output
-	}
 	return fmt.Sprintf("exit %d", last.ExitCode)
 }
 
@@ -407,6 +407,15 @@ func createAndStartContainer(ctx context.Context, cli *client.Client, c Containe
 	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
 	}
+	inspect, err := cli.ContainerInspect(ctx, resp.ID, client.ContainerInspectOptions{})
+	if err != nil {
+		_ = removeRejectedContainer(ctx, cli, resp.ID)
+		return fmt.Errorf("inspecting created container: %w", err)
+	}
+	if err := verifyCreatedContainerPolicy(containerConfig, hostConfig, inspect.Container); err != nil {
+		cleanupErr := removeRejectedContainer(ctx, cli, resp.ID)
+		return fmt.Errorf("created container violates runtime policy: %w", errors.Join(err, cleanupErr))
+	}
 
 	for _, n := range rest {
 		ep := endpointSettings(n, gatewayPriorityForNetwork(cfg, n))
@@ -433,6 +442,8 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 
 	// Build environment variables
 	env := buildEnv(c.Env, c.Secrets, extConfig)
+	env = setEnvironmentValue(env, "NVIDIA_VISIBLE_DEVICES", "none")
+	env = setEnvironmentValue(env, "NVIDIA_DRIVER_CAPABILITIES", "compute,utility")
 
 	// Container configuration
 	containerConfig := &container.Config{
@@ -455,6 +466,8 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 			Retries:     c.Healthcheck.Retries,
 			StartPeriod: parseDuration(c.Healthcheck.StartPeriod),
 		}
+	} else {
+		containerConfig.Healthcheck = &container.HealthConfig{Test: []string{"NONE"}}
 	}
 
 	pidsLimit := c.PidsLimit
@@ -541,6 +554,53 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	return containerConfig, hostConfig, networkingConfig, rest, nil
 }
 
+func removeRejectedContainer(ctx context.Context, cli *client.Client, id string) error {
+	_, err := cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	return err
+}
+
+func verifyCreatedContainerPolicy(expectedConfig *container.Config, expectedHost *container.HostConfig, actual container.InspectResponse) error {
+	if actual.Config == nil || actual.HostConfig == nil {
+		return errors.New("Docker inspect omitted container configuration")
+	}
+	if !reflect.DeepEqual(actual.Config.Healthcheck, expectedConfig.Healthcheck) {
+		return fmt.Errorf("effective healthcheck differs from measured request")
+	}
+	if len(actual.Config.Volumes) != 0 {
+		return fmt.Errorf("effective configuration contains image-defined volumes")
+	}
+	for _, key := range []string{"NVIDIA_VISIBLE_DEVICES", "NVIDIA_DRIVER_CAPABILITIES"} {
+		if environmentValue(actual.Config.Env, key) != environmentValue(expectedConfig.Env, key) {
+			return fmt.Errorf("effective %s differs from measured request", key)
+		}
+	}
+	if actual.HostConfig.Privileged {
+		return errors.New("effective configuration is privileged")
+	}
+	if actual.HostConfig.ReadonlyRootfs != expectedHost.ReadonlyRootfs {
+		return errors.New("effective read-only rootfs policy differs from measured request")
+	}
+	if actual.HostConfig.IpcMode != expectedHost.IpcMode || actual.HostConfig.PidMode != expectedHost.PidMode {
+		return errors.New("effective namespace policy differs from measured request")
+	}
+	if actual.HostConfig.Runtime != expectedHost.Runtime {
+		return errors.New("effective runtime differs from measured request")
+	}
+	if !reflect.DeepEqual(actual.HostConfig.Devices, expectedHost.Devices) {
+		return errors.New("effective host device mappings differ from measured request")
+	}
+	if !reflect.DeepEqual(actual.HostConfig.DeviceRequests, expectedHost.DeviceRequests) {
+		return errors.New("effective device requests differ from measured request")
+	}
+	if len(actual.HostConfig.CapDrop) != 1 || actual.HostConfig.CapDrop[0] != "ALL" {
+		return errors.New("effective capability drop is not ALL")
+	}
+	if !slices.Contains(actual.HostConfig.SecurityOpt, "no-new-privileges:true") {
+		return errors.New("effective configuration lacks no-new-privileges")
+	}
+	return nil
+}
+
 func gatewayPriorityForNetwork(cfg *Config, name string) int {
 	if cfg != nil && cfg.Networks[name] != nil && cfg.Networks[name].Egress != "closed" {
 		return openEgressGwPriority
@@ -625,6 +685,28 @@ func pullImage(ctx context.Context, cli *client.Client, imageName string, debug 
 	if err := verifyPulledImagePolicy(imageName, inspect.RepoDigests, debug); err != nil {
 		return err
 	}
+	if err := validateImageMetadata(inspect.Config); err != nil {
+		return fmt.Errorf("image metadata violates runtime policy: %w", err)
+	}
+	return nil
+}
+
+func validateImageMetadata(config *dockerspec.DockerOCIImageConfig) error {
+	if config == nil {
+		return errors.New("image inspect omitted configuration")
+	}
+	if config.Healthcheck != nil {
+		return errors.New("image-defined healthchecks are unsupported")
+	}
+	if len(config.Volumes) != 0 {
+		return errors.New("image-defined volumes are unsupported")
+	}
+	for _, item := range config.Env {
+		key, _, _ := strings.Cut(item, "=")
+		if strings.HasPrefix(key, "NVIDIA_") {
+			return fmt.Errorf("image-defined NVIDIA environment variable %s is unsupported", key)
+		}
+	}
 	return nil
 }
 
@@ -667,6 +749,27 @@ func containerMemoryBytes(c *Container, cfg *Config) int64 {
 		return int64(cfg.Memory) * 1024 * 1024
 	}
 	return 0
+}
+
+func setEnvironmentValue(environment []string, key, value string) []string {
+	prefix := key + "="
+	filtered := environment[:0]
+	for _, item := range environment {
+		if !strings.HasPrefix(item, prefix) {
+			filtered = append(filtered, item)
+		}
+	}
+	return append(filtered, prefix+value)
+}
+
+func environmentValue(environment []string, key string) string {
+	prefix := key + "="
+	for index := len(environment) - 1; index >= 0; index-- {
+		if strings.HasPrefix(environment[index], prefix) {
+			return strings.TrimPrefix(environment[index], prefix)
+		}
+	}
+	return ""
 }
 
 // buildEnv parses env entries and secrets from external config

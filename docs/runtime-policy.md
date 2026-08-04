@@ -54,3 +54,13 @@ containing an immutable digest. The container manager pulls that exact
 reference and verifies Docker's inspected repository digests before creating
 the container; mutable tag-only references are rejected during configuration
 validation.
+
+Images used in production must not define Docker health checks, volumes, or
+NVIDIA control environment variables. The container manager disables inherited
+health checks when no measured health check is configured, overwrites NVIDIA
+visibility and capability variables with its measured values, and inspects each
+newly created container before start. Any effective privileged mode, namespace,
+runtime, device, capability, security-option, volume, health-check, or NVIDIA
+environment value that differs from the measured request causes the stopped
+container to be removed. Health-check output is not copied into boot status or
+the host console; only the exit status is reported.

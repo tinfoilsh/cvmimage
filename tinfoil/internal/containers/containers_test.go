@@ -84,6 +84,15 @@ func TestVerifyPulledImageDigest(t *testing.T) {
 	}
 }
 
+func TestVerifyPulledImagePolicyAllowsDebugTags(t *testing.T) {
+	if err := verifyPulledImagePolicy("example.com/team/app:latest", nil, true); err != nil {
+		t.Fatalf("debug tag rejected: %v", err)
+	}
+	if err := verifyPulledImagePolicy("example.com/team/app:latest", nil, false); err == nil {
+		t.Fatal("production tag accepted")
+	}
+}
+
 func TestBuildEnv(t *testing.T) {
 	ext := &shimconfig.ExternalConfig{
 		Env:     map[string]string{"DOMAIN": "test.example.com", "PORT": "8080"},

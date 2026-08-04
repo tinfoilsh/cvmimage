@@ -264,7 +264,7 @@ func runContainer(
 	// Pull
 	pullStart := time.Now()
 	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
-	if err := pullImage(ctx, cli, c.Image); err != nil {
+	if err := pullImage(ctx, cli, c.Image, debug); err != nil {
 		detail := fmt.Sprintf("pulling image: %v", err)
 		record("pull", boot.StatusFailed, time.Since(pullStart), detail)
 		finish(boot.StatusFailed, detail)
@@ -579,7 +579,7 @@ func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettin
 }
 
 // pullImage pulls an image using the Docker SDK with auth from Docker config
-func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
+func pullImage(ctx context.Context, cli *client.Client, imageName string, debug bool) error {
 	opts := client.ImagePullOptions{}
 
 	// Extract registry host and get auth
@@ -622,10 +622,17 @@ func pullImage(ctx context.Context, cli *client.Client, imageName string) error 
 	if err != nil {
 		return fmt.Errorf("inspect pulled image: %w", err)
 	}
-	if err := verifyPulledImageDigest(imageName, inspect.RepoDigests); err != nil {
+	if err := verifyPulledImagePolicy(imageName, inspect.RepoDigests, debug); err != nil {
 		return err
 	}
 	return nil
+}
+
+func verifyPulledImagePolicy(imageName string, repoDigests []string, debug bool) error {
+	if debug {
+		return nil
+	}
+	return verifyPulledImageDigest(imageName, repoDigests)
 }
 
 func verifyPulledImageDigest(imageName string, repoDigests []string) error {

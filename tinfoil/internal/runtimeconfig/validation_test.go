@@ -56,7 +56,7 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "implicit runtime alias", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    runtime: attacker.runc.v2", 1), want: "runtime"},
 		{name: "nvidia runtime without selection", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    runtime: nvidia", 1), want: "explicit gpus selection"},
 		{name: "gpu selection without runtime", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    gpus: all", 1), want: "declares no GPUs"},
-		{name: "negative gpu count", yaml: strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: 0.11.0\ngpus: 2", 1) + "\n", want: ""},
+		{name: "valid top-level gpu count", yaml: strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: 0.11.0\ngpus: 2", 1) + "\n", want: ""},
 		{name: "unsupported capability", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    cap_add: [SETUID]", 1), want: "capability"},
 		{name: "invalid allowlist", yaml: strings.Replace(validConfig, "egress: closed", "egress: allowlist\n    allow: ['*.example.com']", 1), want: "wildcards"},
 	} {

@@ -106,3 +106,9 @@ path-specific rules cannot be bypassed by a local fast path or omitted model
 field. Missing validators return 503 rather than enabling proxy access. Shim
 configuration rejects unknown fields, non-canonical paths, and wildcard syntax
 other than a single trailing `/*`.
+
+The shim is a request/response proxy, not a general tunnel. It rejects CONNECT,
+WebSocket and custom `Upgrade` requests, h2c negotiation, and HTTP2-Settings
+before EHBP processing or workload proxying. This prevents an upgraded stream
+from escaping the per-request path, authentication, rate-limit, and response
+handling policy.

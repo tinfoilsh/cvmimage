@@ -380,3 +380,40 @@ func TestRewriteUpstreamRequestStripsCallerIdentity(t *testing.T) {
 		t.Fatalf("ordinary header changed: %q", got)
 	}
 }
+
+func TestRequestsProtocolUpgrade(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		method  string
+		headers map[string]string
+		want    bool
+	}{
+		{name: "ordinary", method: http.MethodPost},
+		{name: "connect", method: http.MethodConnect, want: true},
+		{name: "websocket", method: http.MethodGet, headers: map[string]string{"Connection": "keep-alive, Upgrade", "Upgrade": "websocket"}, want: true},
+		{name: "h2c", method: http.MethodGet, headers: map[string]string{"Connection": "Upgrade, HTTP2-Settings", "Upgrade": "h2c", "HTTP2-Settings": "settings"}, want: true},
+		{name: "upgrade header alone", method: http.MethodGet, headers: map[string]string{"Upgrade": "custom"}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, "/v1/chat/completions", nil)
+			for header, value := range test.headers {
+				request.Header.Set(header, value)
+			}
+			if got := requestsProtocolUpgrade(request); got != test.want {
+				t.Fatalf("requestsProtocolUpgrade() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestShimRejectsUpgradeBeforeProxy(t *testing.T) {
+	handler := testServer(t, []string{"/v1/chat/completions"}, 9999)
+	request := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("upgrade status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+	}
+}

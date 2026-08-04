@@ -80,6 +80,18 @@ func extractBearerToken(header string) string {
 	return strings.TrimSpace(header[len(scheme):])
 }
 
+func requestsProtocolUpgrade(request *http.Request) bool {
+	if request.Method == http.MethodConnect || request.Header.Get("Upgrade") != "" || request.Header.Get("HTTP2-Settings") != "" {
+		return true
+	}
+	for _, token := range strings.Split(request.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "upgrade") || strings.EqualFold(strings.TrimSpace(token), "http2-settings") {
+			return true
+		}
+	}
+	return false
+}
+
 // OpenAI-compatible error type strings returned in API error responses.
 const (
 	errTypeInvalidRequest    = "invalid_request_error"
@@ -241,6 +253,10 @@ func NewShimServer(
 	}))
 
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestsProtocolUpgrade(r) {
+			writeJSONError(w, "Protocol upgrades are not supported.", errTypeInvalidRequest, http.StatusBadRequest)
+			return
+		}
 		if len(config.Paths) > 0 && !pathAllowed(config.Paths, r.URL.Path) {
 			writeJSONError(w, "Not found.", errTypeInvalidRequest, http.StatusNotFound)
 			return

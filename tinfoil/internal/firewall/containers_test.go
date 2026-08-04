@@ -18,7 +18,6 @@ func TestContainerNetworkPolicyModes(t *testing.T) {
 	for _, fragment := range []string{
 		"flush chain inet tinfoil container_input",
 		"flush chain inet tinfoil container_forward",
-		`iifname "closed" oifname "closed" accept`,
 		`iifname "open" ip daddr { 0.0.0.0/8`,
 		`iifname "open" meta nfproto ipv4 accept`,
 		`iifname "open" meta nfproto ipv6 accept`,
@@ -29,6 +28,9 @@ func TestContainerNetworkPolicyModes(t *testing.T) {
 		if !strings.Contains(script, fragment) {
 			t.Errorf("missing %q from:\n%s", fragment, script)
 		}
+	}
+	if strings.Contains(script, `iifname "closed" oifname "closed" accept`) || strings.Contains(script, `iifname "open" oifname "open" accept`) {
+		t.Fatalf("same-bridge traffic was accepted:\n%s", script)
 	}
 	destroy := strings.Index(script, "destroy set inet tinfoil allow-control")
 	create := strings.Index(script, "create set inet tinfoil allow-control")
@@ -60,7 +62,7 @@ func TestContainerNetworkPolicyKeepsShimClosed(t *testing.T) {
 		Networks: map[string]*runtimeconfig.NetworkSpec{},
 	}
 	script := renderContainerNetworkScript(config, false)
-	if !strings.Contains(script, `iifname "shim-net" oifname "shim-net" accept`) || strings.Contains(script, `iifname "shim-net" ip daddr !`) {
+	if strings.Contains(script, `iifname "shim-net" oifname "shim-net" accept`) || strings.Contains(script, `iifname "shim-net" ip daddr !`) {
 		t.Fatalf("unexpected shim policy:\n%s", script)
 	}
 }

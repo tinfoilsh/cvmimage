@@ -56,7 +56,6 @@ func writeReservedDebugForwardRules(script *strings.Builder) {
 }
 
 func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeconfig.NetworkSpec) {
-	fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q oifname %q accept\n", bridge, bridge)
 	fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct state established,related accept\n", bridge)
 	fmt.Fprintf(script, "add rule inet tinfoil container_input iifname %q ct state new drop\n", bridge)
 	switch network.Egress {

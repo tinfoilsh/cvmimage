@@ -61,9 +61,9 @@ func PrepareNetworks(ctx context.Context, config *Config, debug bool) error {
 }
 
 func ensureNetwork(ctx context.Context, cli *client.Client, name string) error {
-	_, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	result, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
 	if err == nil {
-		return nil
+		return validateBridgeNetwork(name, result.Network)
 	}
 	if !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("checking whether docker network %q exists: %w", name, err)
@@ -88,6 +88,9 @@ func ensureShimNetwork(ctx context.Context, cli *client.Client, upstreamContaine
 		return fmt.Errorf("checking whether docker network %q exists: %w", containernet.ShimNetName, err)
 	}
 	existing := result.Network
+	if err := validateBridgeNetwork(containernet.ShimNetName, existing); err != nil {
+		return err
+	}
 
 	if len(existing.IPAM.Config) != 1 ||
 		existing.IPAM.Config[0].Subnet.String() != containernet.ShimNetSubnetCIDR ||
@@ -109,7 +112,8 @@ func networkCreateOptions(name string) client.NetworkCreateOptions {
 	opts := client.NetworkCreateOptions{
 		Driver: "bridge",
 		Options: map[string]string{
-			"com.docker.network.bridge.name": name,
+			"com.docker.network.bridge.name":       name,
+			"com.docker.network.bridge.enable_icc": "false",
 		},
 	}
 	if name == containernet.ShimNetName {
@@ -121,6 +125,19 @@ func networkCreateOptions(name string) client.NetworkCreateOptions {
 		}
 	}
 	return opts
+}
+
+func validateBridgeNetwork(name string, network dockernetwork.Inspect) error {
+	if network.Driver != "bridge" {
+		return fmt.Errorf("docker network %q uses driver %q, want bridge", name, network.Driver)
+	}
+	if network.Options["com.docker.network.bridge.name"] != name {
+		return fmt.Errorf("docker network %q has unexpected bridge identity", name)
+	}
+	if network.Options["com.docker.network.bridge.enable_icc"] != "false" {
+		return fmt.Errorf("docker network %q permits inter-container communication", name)
+	}
+	return nil
 }
 
 // launchContainersAndWaitHealthy launches all containers in parallel with

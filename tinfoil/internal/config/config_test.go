@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -79,5 +80,54 @@ network:
 func TestDecodeExternalRejectsMultipleDocuments(t *testing.T) {
 	if _, err := DecodeExternal([]byte("{}\n---\n{}\n")); err == nil {
 		t.Fatal("DecodeExternal accepted multiple YAML documents")
+	}
+}
+
+func TestDecodeRejectsUnknownShimPolicyField(t *testing.T) {
+	node, err := decodeYAMLDocument([]byte(`
+upstream-port: 8080
+policy-typo: true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(node); err == nil || !strings.Contains(err.Error(), `unknown shim field "policy-typo"`) {
+		t.Fatalf("Decode error = %v", err)
+	}
+}
+
+func TestConfigValidateAuthenticatedPolicy(t *testing.T) {
+	endpoints := []string{"/v1/*"}
+	valid := Config{
+		UpstreamPort:           8080,
+		TLSMode:                "cert-proxy",
+		TLSEnv:                 "production",
+		TLSChallengeMode:       "dns",
+		ControlPlane:           "https://api.tinfoil.sh",
+		Authenticated:          true,
+		AuthenticatedEndpoints: &endpoints,
+		Model:                  "measured-model",
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid authenticated config rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "control plane", mutate: func(config *Config) { config.ControlPlane = "" }, want: "control plane"},
+		{name: "model", mutate: func(config *Config) { config.Model = "" }, want: "model identifier"},
+		{name: "empty endpoints", mutate: func(config *Config) { empty := []string{}; config.AuthenticatedEndpoints = &empty }, want: "at least one endpoint"},
+		{name: "wildcard", mutate: func(config *Config) { bad := []string{"/v1*"}; config.AuthenticatedEndpoints = &bad }, want: "wildcard syntax"},
+		{name: "noncanonical path", mutate: func(config *Config) { config.Paths = []string{"/v1/../admin"} }, want: "canonical"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }

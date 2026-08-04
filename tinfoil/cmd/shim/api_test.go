@@ -37,6 +37,8 @@ func testAuthServer(t *testing.T, validator key.Validator, authenticatedEndpoint
 
 	cfg := &config.Config{
 		UpstreamPort:           9999,
+		Authenticated:          true,
+		Model:                  "measured-model",
 		AuthenticatedEndpoints: &authenticatedEndpoints,
 	}
 	extCfg := &config.ExternalConfig{}
@@ -176,37 +178,9 @@ func TestRequiresAuth(t *testing.T) {
 	}
 }
 
-func TestMetricsValidation_JWTGoesOnline(t *testing.T) {
-	// The local JWT leg accepts any inference-scoped token; /metrics must not
-	// be satisfiable by it, so the online validator's verdict is final.
-	jwt := &fakeValidator{err: nil}
-	online := &fakeValidator{err: &key.ValidationError{StatusCode: http.StatusForbidden}}
-	validator := &metricsValidator{online: online, chain: key.NewChain(jwt, online)}
-
-	handler := testAuthServer(t, validator, []string{"/metrics", "/v1/chat/completions"})
-
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set("Authorization", "Bearer eyJhbGciOiJFZERTQSJ9.e30.sig")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 from online validator, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if len(jwt.calls) != 0 {
-		t.Fatalf("local JWT validator must not be consulted for /metrics, calls=%d", len(jwt.calls))
-	}
-	if len(online.calls) != 1 || online.calls[0].Path != "/metrics" {
-		t.Fatalf("online validator calls = %+v, want one call with path /metrics", online.calls)
-	}
-}
-
-func TestMetricsValidation_OpaqueKeyGoesOnline(t *testing.T) {
-	jwt := &fakeValidator{err: key.ErrUnsupportedToken}
+func TestAuthenticatedRequestUsesMeasuredModelPolicy(t *testing.T) {
 	online := &fakeValidator{err: nil}
-	validator := &metricsValidator{online: online, chain: key.NewChain(jwt, online)}
-
-	handler := testAuthServer(t, validator, []string{"/metrics"})
+	handler := testAuthServer(t, online, []string{"/metrics"})
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	req.Header.Set("Authorization", "Bearer tk-admin-key")
@@ -219,31 +193,19 @@ func TestMetricsValidation_OpaqueKeyGoesOnline(t *testing.T) {
 	if len(online.calls) != 1 {
 		t.Fatalf("online validator calls = %d, want 1", len(online.calls))
 	}
-	if got := online.calls[0]; got.APIKey != "tk-admin-key" || got.Path != "/metrics" {
+	if got := online.calls[0]; got.APIKey != "tk-admin-key" || got.Model != "measured-model" || got.Path != "/metrics" {
 		t.Fatalf("online validation request = %+v", got)
 	}
 }
 
-func TestMetricsValidation_OtherPathsKeepChain(t *testing.T) {
-	jwt := &fakeValidator{err: nil}
-	online := &fakeValidator{err: &key.ValidationError{StatusCode: http.StatusForbidden}}
-	validator := &metricsValidator{online: online, chain: key.NewChain(jwt, online)}
-
-	handler := testAuthServer(t, validator, []string{"/metrics", "/v1/chat/completions"})
-
+func TestAuthenticatedRequestFailsClosedWithoutValidator(t *testing.T) {
+	handler := testAuthServer(t, nil, []string{"/v1/chat/completions"})
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
-	req.Header.Set("Authorization", "Bearer eyJhbGciOiJFZERTQSJ9.e30.sig")
+	req.Header.Set("Authorization", "Bearer token")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-
-	if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
-		t.Fatalf("locally-validated JWT should pass on inference paths, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if len(jwt.calls) != 1 {
-		t.Fatalf("jwt validator calls = %d, want 1", len(jwt.calls))
-	}
-	if len(online.calls) != 0 {
-		t.Fatalf("online validator must not be consulted when JWT leg succeeds, calls=%d", len(online.calls))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing validator status = %d, want 503", rec.Code)
 	}
 }
 

@@ -70,22 +70,6 @@ func requiresAuth(authenticatedEndpoints *[]string, path string) bool {
 	return pathAllowed(*authenticatedEndpoints, path)
 }
 
-// metricsValidator validates /metrics online-only: the local JWT leg accepts
-// any inference-scoped token without consulting the control plane, which would
-// bypass its admin-key requirement for /metrics. All other paths use the full
-// chain.
-type metricsValidator struct {
-	online key.Validator
-	chain  key.Validator
-}
-
-func (v *metricsValidator) Validate(req key.Request) error {
-	if req.Path == "/metrics" {
-		return v.online.Validate(req)
-	}
-	return v.chain.Validate(req)
-}
-
 // extractBearerToken returns the token portion of an Authorization header,
 // accepting any capitalization of the "Bearer" scheme.
 func extractBearerToken(header string) string {
@@ -218,17 +202,20 @@ func NewShimServer(
 
 	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiKey := extractBearerToken(r.Header.Get("Authorization"))
-		if validator != nil && requiresAuth(config.AuthenticatedEndpoints, r.URL.Path) {
+		if config.Authenticated && requiresAuth(config.AuthenticatedEndpoints, r.URL.Path) {
+			if validator == nil {
+				writeJSONError(w, errMsgServerError, errTypeServer, http.StatusServiceUnavailable)
+				return
+			}
 			if len(apiKey) == 0 {
 				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
 				return
 			}
 
 			validationReq := key.Request{
-				APIKey:        apiKey,
-				Domain:        strings.ToLower(externalConfig.Env["DOMAIN"]),
-				RequestedHost: requestedHost(r),
-				Path:          r.URL.Path,
+				APIKey: apiKey,
+				Model:  config.Model,
+				Path:   r.URL.Path,
 			}
 
 			if err := validator.Validate(validationReq); err != nil {

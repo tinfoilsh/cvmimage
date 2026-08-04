@@ -26,7 +26,6 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
-	localjwt "tinfoil/internal/key/jwt"
 	"tinfoil/internal/key/online"
 	tlsutil "tinfoil/internal/tls"
 )
@@ -189,37 +188,14 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return fmt.Errorf("boot stage failed, not enabling proxy")
 		}
 
-		// API key validator
-		var validator key.Validator
-		if config.ControlPlane != "" {
-			controlPlaneURL, err := url.Parse(config.ControlPlane)
-			if err != nil {
-				return fmt.Errorf("parsing control plane URL: %w", err)
-			}
-
-			if config.Authenticated {
-				onlineValidator, err := online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate-key").String())
-				if err != nil {
-					return fmt.Errorf("initializing API key verifier: %w", err)
-				}
-
-				// Verify OAuth JWT access tokens locally against the control
-				// plane's JWKS so they need no per-request round trip; opaque
-				// keys still fall through to the online validator. The JWKS
-				// loads best-effort and self-heals via refresh, so a
-				// control-plane blip at boot never disables local verification.
-				jwksURL := controlPlaneURL.JoinPath(".well-known", "jwks.json").String()
-				jwtValidator := localjwt.NewValidator(jwksURL, config.ControlPlane, localjwt.AccessTokenAudience, localjwt.RequiredScope)
-				log.Println("Local JWT validation enabled (OAuth access tokens verified in-enclave)")
-				validator = &metricsValidator{
-					online: onlineValidator,
-					chain:  key.NewChain(jwtValidator, onlineValidator),
-				}
-			} else {
-				log.Println("Warning: API key verification disabled (unauthenticated endpoint)")
-			}
+		validator, err := buildAPIKeyValidator(config)
+		if err != nil {
+			return err
+		}
+		if validator == nil {
+			log.Println("Warning: API key verification disabled (unauthenticated endpoint)")
 		} else {
-			log.Println("Warning: API key verification disabled (no control plane)")
+			log.Println("Online API key and model policy validation enabled")
 		}
 
 		var rateLimiter *RateLimiter
@@ -300,4 +276,19 @@ func loadAttestation() (*verifier.Document, error) {
 		return nil, fmt.Errorf("parsing attestation document: %w", err)
 	}
 	return &att, nil
+}
+
+func buildAPIKeyValidator(config *shimconfig.Config) (key.Validator, error) {
+	if !config.Authenticated {
+		return nil, nil
+	}
+	controlPlaneURL, err := url.Parse(config.ControlPlane)
+	if err != nil {
+		return nil, fmt.Errorf("parsing control plane URL: %w", err)
+	}
+	validator, err := online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate-key").String())
+	if err != nil {
+		return nil, fmt.Errorf("initializing API key verifier: %w", err)
+	}
+	return validator, nil
 }

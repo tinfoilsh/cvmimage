@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
@@ -15,6 +16,9 @@ type Config struct {
 	// UpstreamContainer names the workload container the shim proxies to.
 	// Optional: tinfoil-boot defaults it to the first entry of containers[].
 	UpstreamContainer string `yaml:"upstream-container,omitempty"`
+	// Model is the attestation-bound deployment identifier sent to the control
+	// plane for per-model authorization policy.
+	Model string `yaml:"model,omitempty"`
 
 	Paths         []string `yaml:"paths"`
 	OriginDomains []string `yaml:"origins"`
@@ -45,6 +49,34 @@ type Config struct {
 	// ExpectedGPUs is copied from the attested top-level boot config so the
 	// shim does not need to probe hardware on its public request path.
 	ExpectedGPUs int `yaml:"expected-gpus" default:"0"`
+}
+
+var shimConfigFields = map[string]bool{
+	"upstream-port": true, "upstream-container": true, "model": true,
+	"paths": true, "origins": true, "tls-mode": true, "tls-env": true,
+	"tls-challenge": true, "tls-wildcard": true, "tls-own-san-domain": true,
+	"control-plane": true, "authenticated": true, "authenticated-endpoints": true,
+	"rate-limit": true, "rate-burst": true, "email": true,
+	"publish-attestation": true, "dummy-attestation": true, "expected-gpus": true,
+}
+
+func (c *Config) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("shim config must be a mapping")
+	}
+	for index := 0; index < len(node.Content); index += 2 {
+		field := node.Content[index].Value
+		if !shimConfigFields[field] {
+			return fmt.Errorf("unknown shim field %q", field)
+		}
+	}
+	type rawConfig Config
+	raw := rawConfig(*c)
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	*c = Config(raw)
+	return nil
 }
 
 const SecretMetricsAPIKey = "METRICS_API_KEY"
@@ -156,6 +188,37 @@ func (c *Config) Validate() error {
 	}
 	if c.TLSWildcard && c.TLSChallengeMode != "dns" {
 		return fmt.Errorf("tls-wildcard requires tls-challenge: dns (wildcard certs cannot use %s challenge)", c.TLSChallengeMode)
+	}
+	if c.Authenticated {
+		if c.ControlPlane == "" {
+			return fmt.Errorf("authenticated shim requires a control plane")
+		}
+		if c.Model == "" {
+			return fmt.Errorf("authenticated shim requires an attestation-bound model identifier")
+		}
+		if c.AuthenticatedEndpoints != nil && len(*c.AuthenticatedEndpoints) == 0 {
+			return fmt.Errorf("authenticated shim must protect at least one endpoint")
+		}
+	}
+	if err := validatePathPatterns("paths", c.Paths); err != nil {
+		return err
+	}
+	if c.AuthenticatedEndpoints != nil {
+		if err := validatePathPatterns("authenticated-endpoints", *c.AuthenticatedEndpoints); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePathPatterns(field string, patterns []string) error {
+	for index, pattern := range patterns {
+		if pattern == "" || pattern[0] != '/' || strings.ContainsAny(pattern, "?#") || strings.Contains(pattern, "..") {
+			return fmt.Errorf("%s[%d] %q is not a canonical absolute request path", field, index, pattern)
+		}
+		if strings.Contains(pattern, "*") && (!strings.HasSuffix(pattern, "/*") || strings.Count(pattern, "*") != 1) {
+			return fmt.Errorf("%s[%d] %q uses unsupported wildcard syntax; only a trailing /* is allowed", field, index, pattern)
+		}
 	}
 	return nil
 }

@@ -97,3 +97,12 @@ credentials, `Forwarded`, every `X-Forwarded-*` and `X-Real-IP` value, EHBP
 transport metadata, and reserved `Tinfoil-*` headers. It then emits only fixed
 local `localhost`/HTTPS forwarding metadata; workloads cannot mistake a client
 header or validated API key for a trusted internal identity assertion.
+
+Authenticated shim mode is fail closed. It requires a non-empty HTTPS control
+plane, a measured `shim.model` identifier, and at least one protected endpoint.
+Every credential type, including OAuth JWTs, is sent to the online validator
+with the exact `{api_key, model, path}` schema, so per-model blocklists and
+path-specific rules cannot be bypassed by a local fast path or omitted model
+field. Missing validators return 503 rather than enabling proxy access. Shim
+configuration rejects unknown fields, non-canonical paths, and wildcard syntax
+other than a single trailing `/*`.

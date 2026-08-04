@@ -41,13 +41,11 @@ func TestVerifyOnline(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Nil(t, v.Validate(key.Request{
-		APIKey:        "good-key",
-		Domain:        "model.example.com",
-		RequestedHost: "realtime-model.model.example.com",
-		Path:          "/v1/chat/completions",
+		APIKey: "good-key",
+		Model:  "blocked-model",
+		Path:   "/v1/chat/completions",
 	}))
-	assert.Equal(t, "model.example.com", lastReq.Domain)
-	assert.Equal(t, "realtime-model.model.example.com", lastReq.RequestedHost)
+	assert.Equal(t, "blocked-model", lastReq.Model)
 	assert.Equal(t, "/v1/chat/completions", lastReq.Path)
 
 	assert.NotNil(t, v.Validate(key.Request{APIKey: "bad-key"}))

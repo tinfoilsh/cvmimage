@@ -46,7 +46,7 @@ func Validate(config *Config, debug bool) error {
 	if err := validateShape(config, debug); err != nil {
 		return err
 	}
-	return validateNetwork(config)
+	return validateNetwork(config, debug)
 }
 
 func validateShape(config *Config, debug bool) error {
@@ -312,7 +312,7 @@ func validateGPUSelection(index int, selection interface{}, available int) error
 	}
 }
 
-func validateNetwork(config *Config) error {
+func validateNetwork(config *Config, debug bool) error {
 	for _, port := range config.CVMNetwork.InboundPorts {
 		if port < 1 || port > 65535 {
 			return fmt.Errorf("cvm-network.inbound-ports: %d is not in 1..65535", port)
@@ -321,6 +321,9 @@ func validateNetwork(config *Config) error {
 	for name, spec := range config.Networks {
 		if err := validateNetworkEntry(name, spec); err != nil {
 			return fmt.Errorf("networks.%s: %w", name, err)
+		}
+		if spec.Egress == "allowlist" && !debug {
+			return fmt.Errorf("networks.%s: egress allowlist is disabled until hostname identity can be enforced per connection", name)
 		}
 	}
 	for index, container := range config.Containers {

@@ -65,6 +65,8 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "valid top-level gpu count", yaml: strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: 0.11.0\ngpus: 2", 1) + "\n", want: ""},
 		{name: "unsupported capability", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    cap_add: [SETUID]", 1), want: "capability"},
 		{name: "invalid allowlist", yaml: strings.Replace(validConfig, "egress: closed", "egress: allowlist\n    allow: ['*.example.com']", 1), want: "wildcards"},
+		{name: "production allowlist disabled", yaml: strings.Replace(validConfig, "egress: closed", "egress: allowlist\n    allow: [api.example.com]", 1), want: "allowlist is disabled"},
+		{name: "debug allowlist", debug: true, yaml: strings.Replace(validConfig, "egress: closed", "egress: allowlist\n    allow: [api.example.com]", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := Decode([]byte(test.yaml), test.debug)

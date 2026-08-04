@@ -85,3 +85,8 @@ disabled, and an existing bridge is reused only when its driver, Linux bridge
 name, and ICC setting match the measured policy. The nftables policy does not
 add a same-bridge forwarding exception, so containers sharing a logical network
 do not gain lateral connectivity merely by joining that bridge.
+
+Hostname-based egress allowlists are rejected in production until enforcement
+can bind the authorized hostname to each outbound connection without relying on
+mutable DNS-to-IP cache state. Closed and open egress modes remain available;
+the legacy allowlist implementation is retained only for measured debug mode.

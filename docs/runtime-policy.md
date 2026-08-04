@@ -90,3 +90,10 @@ Hostname-based egress allowlists are rejected in production until enforcement
 can bind the authorized hostname to each outbound connection without relying on
 mutable DNS-to-IP cache state. Closed and open egress modes remain available;
 the legacy allowlist implementation is retained only for measured debug mode.
+
+The public shim treats all caller-supplied proxy identity and credential headers
+as untrusted. Before forwarding a decrypted request it removes bearer and proxy
+credentials, `Forwarded`, every `X-Forwarded-*` and `X-Real-IP` value, EHBP
+transport metadata, and reserved `Tinfoil-*` headers. It then emits only fixed
+local `localhost`/HTTPS forwarding metadata; workloads cannot mistake a client
+header or validated API key for a trusted internal identity assertion.

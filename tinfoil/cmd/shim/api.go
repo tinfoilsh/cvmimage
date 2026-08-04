@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -196,23 +196,11 @@ func NewShimServer(
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
 
+	upstreamURL := &url.URL{Scheme: "http", Host: upstreamAddr}
 	proxy := httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			originalHost := req.Host
-
-			req.URL.Scheme = "http"
-			req.URL.Host = upstreamAddr
-			req.Header.Set("Host", "localhost")
-			req.Host = "localhost"
-			req.Header.Del(ehbpProtocol.EncapsulatedKeyHeader)
-
-			// Forward original host and protocol to the upstream
-			req.Header.Del("Forwarded")
-			req.Header.Del("X-Forwarded-Host")
-			req.Header.Set("Forwarded", fmt.Sprintf("host=\"%s\"", originalHost))
-			req.Header.Set("X-Forwarded-Host", originalHost)
-
-			// proxied
+		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
+			proxyRequest.SetURL(upstreamURL)
+			rewriteUpstreamRequest(proxyRequest.Out)
 		},
 		Transport: &streamTransport{
 			base: http.DefaultTransport,
@@ -276,6 +264,19 @@ func NewShimServer(
 	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, externalConfig)
 
 	return wrapShimMux(config, att, mux)
+}
+
+func rewriteUpstreamRequest(request *http.Request) {
+	request.Host = "localhost"
+	for header := range request.Header {
+		lower := strings.ToLower(header)
+		if lower == "authorization" || lower == "proxy-authorization" || lower == "forwarded" || lower == "x-real-ip" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "ehbp-") || strings.HasPrefix(lower, "tinfoil-") {
+			request.Header.Del(header)
+		}
+	}
+	request.Header.Set("Forwarded", `host="localhost";proto=https`)
+	request.Header.Set("X-Forwarded-Host", "localhost")
+	request.Header.Set("X-Forwarded-Proto", "https")
 }
 
 func NewObservabilityServer(

@@ -376,3 +376,45 @@ func TestFullServer_WorkloadReachesProxyPath(t *testing.T) {
 		t.Fatalf("ready proxy gate should not block workload path: %s", rec.Body.String())
 	}
 }
+
+func TestRewriteUpstreamRequestStripsCallerIdentity(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "https://attacker.example/v1/chat/completions", nil)
+	request.Host = "attacker.example"
+	for header, value := range map[string]string{
+		"Authorization":         "Bearer workload-secret",
+		"Proxy-Authorization":   "Basic proxy-secret",
+		"Forwarded":             `for=192.0.2.1;host=attacker.example;proto=http`,
+		"X-Forwarded-For":       "192.0.2.1",
+		"X-Forwarded-Host":      "attacker.example",
+		"X-Forwarded-Proto":     "http",
+		"X-Real-IP":             "192.0.2.1",
+		"Ehbp-Encapsulated-Key": "ciphertext",
+		"Tinfoil-Authenticated": "true",
+		"Content-Type":          "application/json",
+	} {
+		request.Header.Set(header, value)
+	}
+
+	rewriteUpstreamRequest(request)
+
+	if request.Host != "localhost" {
+		t.Fatalf("Host = %q, want localhost", request.Host)
+	}
+	for _, header := range []string{"Authorization", "Proxy-Authorization", "X-Forwarded-For", "X-Real-IP", "Ehbp-Encapsulated-Key", "Tinfoil-Authenticated"} {
+		if value := request.Header.Get(header); value != "" {
+			t.Fatalf("%s survived with value %q", header, value)
+		}
+	}
+	if got := request.Header.Get("Forwarded"); got != `host="localhost";proto=https` {
+		t.Fatalf("Forwarded = %q", got)
+	}
+	if got := request.Header.Get("X-Forwarded-Host"); got != "localhost" {
+		t.Fatalf("X-Forwarded-Host = %q", got)
+	}
+	if got := request.Header.Get("X-Forwarded-Proto"); got != "https" {
+		t.Fatalf("X-Forwarded-Proto = %q", got)
+	}
+	if got := request.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("ordinary header changed: %q", got)
+	}
+}

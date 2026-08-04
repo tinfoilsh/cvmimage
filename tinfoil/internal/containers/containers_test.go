@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
@@ -268,4 +270,122 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 			t.Fatalf("Devices = %v, want no synthesized serial device in production", hostConfig.Devices)
 		}
 	}
+}
+
+func TestValidateImageMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *dockerspec.DockerOCIImageConfig
+		wantErr bool
+	}{
+		{name: "clean", config: &dockerspec.DockerOCIImageConfig{}},
+		{name: "nil", config: nil, wantErr: true},
+		{name: "healthcheck", config: &dockerspec.DockerOCIImageConfig{DockerOCIImageConfigExt: dockerspec.DockerOCIImageConfigExt{Healthcheck: &dockerspec.HealthcheckConfig{Test: []string{"CMD", "true"}}}}, wantErr: true},
+		{name: "volume", config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Volumes: map[string]struct{}{`/data`: {}}}}, wantErr: true},
+		{name: "nvidia environment", config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Env: []string{"NVIDIA_VISIBLE_DEVICES=all"}}}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateImageMetadata(test.config)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateImageMetadata() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestBuildContainerCreateSpecNeutralizesImageControls(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{}}
+	containerConfig, _, _, _, err := buildContainerCreateSpec(Container{
+		Name:  "app",
+		Image: "example.invalid/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Env: []interface{}{
+			"NVIDIA_VISIBLE_DEVICES=all",
+			"NVIDIA_DRIVER_CAPABILITIES=all",
+		},
+	}, cfg, &shimconfig.ExternalConfig{}, false)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	if got := containerConfig.Healthcheck.Test; !slices.Equal(got, []string{"NONE"}) {
+		t.Fatalf("Healthcheck.Test = %v, want [NONE]", got)
+	}
+	if got := environmentValue(containerConfig.Env, "NVIDIA_VISIBLE_DEVICES"); got != "none" {
+		t.Fatalf("NVIDIA_VISIBLE_DEVICES = %q, want none", got)
+	}
+	if got := environmentValue(containerConfig.Env, "NVIDIA_DRIVER_CAPABILITIES"); got != "compute,utility" {
+		t.Fatalf("NVIDIA_DRIVER_CAPABILITIES = %q, want compute,utility", got)
+	}
+}
+
+func TestVerifyCreatedContainerPolicy(t *testing.T) {
+	expectedConfig := &container.Config{
+		Env:         []string{"NVIDIA_VISIBLE_DEVICES=none", "NVIDIA_DRIVER_CAPABILITIES=compute,utility"},
+		Healthcheck: &container.HealthConfig{Test: []string{"NONE"}},
+	}
+	expectedHost := &container.HostConfig{
+		ReadonlyRootfs: true,
+		CapDrop:        []string{"ALL"},
+		SecurityOpt:    []string{"no-new-privileges:true"},
+	}
+	valid := func() container.InspectResponse {
+		return container.InspectResponse{
+			Config:     expectedConfig,
+			HostConfig: expectedHost,
+		}
+	}
+	if err := verifyCreatedContainerPolicy(expectedConfig, expectedHost, valid()); err != nil {
+		t.Fatalf("valid policy rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*container.InspectResponse)
+	}{
+		{name: "privileged", mutate: func(actual *container.InspectResponse) {
+			actual.HostConfig = cloneHostConfig(expectedHost)
+			actual.HostConfig.Privileged = true
+		}},
+		{name: "image volume", mutate: func(actual *container.InspectResponse) {
+			actual.Config = cloneContainerConfig(expectedConfig)
+			actual.Config.Volumes = map[string]struct{}{`/data`: {}}
+		}},
+		{name: "nvidia environment", mutate: func(actual *container.InspectResponse) {
+			actual.Config = cloneContainerConfig(expectedConfig)
+			actual.Config.Env[0] = "NVIDIA_VISIBLE_DEVICES=all"
+		}},
+		{name: "runtime", mutate: func(actual *container.InspectResponse) {
+			actual.HostConfig = cloneHostConfig(expectedHost)
+			actual.HostConfig.Runtime = "nvidia"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := valid()
+			test.mutate(&actual)
+			if err := verifyCreatedContainerPolicy(expectedConfig, expectedHost, actual); err == nil {
+				t.Fatal("policy mismatch accepted")
+			}
+		})
+	}
+}
+
+func TestLastHealthLogRedactsOutput(t *testing.T) {
+	health := &container.Health{Log: []*container.HealthcheckResult{{ExitCode: 17, Output: "secret material"}}}
+	if got := lastHealthLog(health); got != "exit 17" {
+		t.Fatalf("lastHealthLog() = %q, want exit status only", got)
+	}
+}
+
+func cloneContainerConfig(config *container.Config) *container.Config {
+	clone := *config
+	clone.Env = slices.Clone(config.Env)
+	return &clone
+}
+
+func cloneHostConfig(config *container.HostConfig) *container.HostConfig {
+	clone := *config
+	clone.CapDrop = slices.Clone(config.CapDrop)
+	clone.SecurityOpt = slices.Clone(config.SecurityOpt)
+	return &clone
 }

@@ -36,12 +36,12 @@ and avoids concurrent edits to the same policy code.
 | 2 | `codex/runtime-policy-fail-closed` | Reject dangerous or ambiguous runtime configuration | `tinfoil/internal/runtimeconfig/` |
 | 3 | `codex/immutable-container-images` | Require and verify digest-pinned images | `tinfoil/internal/runtimeconfig/`, `tinfoil/internal/containers/` |
 | 4 | `codex/effective-oci-policy` | Reject unsafe image metadata and verify effective container state | `tinfoil/internal/containers/` |
-| 5 | `codex/volume-model-isolation` | Constrain volume destinations and model visibility | runtime schema, container/model mount code |
-| 6 | `codex/container-network-isolation` | Disable unintended inter-container communication | container network and firewall code |
-| 7 | `codex/egress-allowlist-fail-closed` | Disable unauthenticated hostname allowlists until a proxy exists | runtime validation, egress, documentation |
+| 5 | `codex/volume-model-isolation` | Constrain volume destinations and model visibility | `tinfoil/internal/runtimeconfig/`, `tinfoil/internal/containers/`, `tinfoil/cmd/boot/` |
+| 6 | `codex/container-network-isolation` | Disable unintended inter-container communication | `tinfoil/internal/containers/`, `tinfoil/internal/firewall/` |
+| 7 | `codex/egress-allowlist-fail-closed` | Disable unauthenticated hostname allowlists until a proxy exists | `tinfoil/internal/runtimeconfig/`, `tinfoil/internal/egress/`, `tinfoil/cmd/egress/`, `docs/` |
 | 8 | `codex/shim-request-identity` | Canonicalize forwarding identity and credential handling | `tinfoil/cmd/shim/` |
-| 9 | `codex/shim-auth-fail-closed` | Strict policy parsing and unified authorization decisions | shim auth/config code |
-| 10 | `codex/shim-disable-upgrades` | Reject authorization-bypassing protocol upgrades | shim reverse proxy code |
+| 9 | `codex/shim-auth-fail-closed` | Strict policy parsing and unified authorization decisions | `tinfoil/cmd/shim/`, `tinfoil/internal/config/`, `tinfoil/internal/key/` |
+| 10 | `codex/shim-disable-upgrades` | Reject authorization-bypassing protocol upgrades | `tinfoil/cmd/shim/` |
 
 Later branches may add tests to an earlier package, but must not reformat or
 refactor unrelated code. If an earlier PR changes while under review, rebase

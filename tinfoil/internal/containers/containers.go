@@ -575,12 +575,9 @@ func selectedModelBinds(selected []string, models []ModelSpec) ([]string, error)
 		if !found {
 			return nil, fmt.Errorf("container references unknown model %q", name)
 		}
-		ref := model.MWP
-		if ref == "" {
-			ref = model.MPK
-		}
-		if ref == "" {
-			ref = model.EMWP
+		ref, err := runtimeconfig.ModelPackReference(model)
+		if err != nil {
+			return nil, err
 		}
 		parsed, err := modelwrap.ParseRef(ref)
 		if err != nil {

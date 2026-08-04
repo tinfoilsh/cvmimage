@@ -75,4 +75,7 @@ Production root filesystems remain read-only. Mutable storage uses Docker named
 volumes mounted only at `/data` or a clean path below it, with an explicit `ro`
 or `rw` mode when desired. A named volume can have at most one writable
 container owner; additional consumers must mount it read-only. Raw host bind
-sources remain reserved for the measured debug toolbox.
+sources supplied by workload configuration remain reserved for the measured
+debug toolbox; fixed public files and explicitly assigned verified models use
+first-party read-only binds. Configured tmpfs mounts are restricted to `/tmp`
+or a clean path below it.

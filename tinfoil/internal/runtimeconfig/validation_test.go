@@ -54,6 +54,7 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "volume outside data", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/etc]", 1), want: "below /data"},
 		{name: "volume invalid mode", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/data:shared]", 1), want: "ro or rw"},
 		{name: "writable rootfs", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    read_only: false", 1), want: "read-only root filesystem"},
+		{name: "tmpfs outside tmp", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    tmpfs: {/etc: size=1m}", 1), want: "below /tmp"},
 		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", ReservedDebugContainerName), 1)},
 		{name: "host ipc", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ipc: host", 1), want: "ipc must be private or none"},
 		{name: "host pid", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    pid: host", 1), want: "pid is unsupported"},
@@ -100,6 +101,12 @@ containers:
 	if _, err := Decode([]byte(strings.Replace(base, "models: [weights]", "models: [weights, weights]", 1)), false); err == nil || !strings.Contains(err.Error(), "duplicates model") {
 		t.Fatalf("duplicate model error = %v", err)
 	}
+	if _, err := Decode([]byte(strings.Replace(base, "    mwp: "+modelRef+"\n", "", 1)), false); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("missing model reference error = %v", err)
+	}
+	if _, err := Decode([]byte(strings.Replace(base, "    mwp: "+modelRef, "    mpk: "+modelRef+"\n    mwp: "+modelRef, 1)), false); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("multiple model references error = %v", err)
+	}
 }
 
 func TestDecodePermitsOnlyOneWritableVolumeOwner(t *testing.T) {
@@ -115,6 +122,13 @@ func TestDecodePermitsOnlyOneWritableVolumeOwner(t *testing.T) {
 	config = strings.Replace(config, "state:/data:ro", "state:/data:rw", 1)
 	if _, err := Decode([]byte(config), false); err == nil || !strings.Contains(err.Error(), "writable after") {
 		t.Fatalf("second writer error = %v", err)
+	}
+}
+
+func TestDecodeAllowsOneContainerToRemountItsWritableVolume(t *testing.T) {
+	config := strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/data/primary:rw, state:/data/secondary:rw]", 1)
+	if _, err := Decode([]byte(config), false); err != nil {
+		t.Fatalf("same-owner volume remount rejected: %v", err)
 	}
 }
 

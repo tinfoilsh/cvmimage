@@ -75,6 +75,9 @@ func validateShape(config *Config, debug bool) error {
 		if prior, found := modelNames[model.Name]; found {
 			return fmt.Errorf("models[%d].name %q duplicates models[%d].name", index, model.Name, prior)
 		}
+		if _, err := ModelPackReference(model); err != nil {
+			return fmt.Errorf("models[%d]: %w", index, err)
+		}
 		modelNames[model.Name] = index
 	}
 	seen := map[string]int{}
@@ -108,6 +111,11 @@ func validateContainer(index int, container *Container, availableGPUs int, model
 	}
 	if len(container.Tmpfs) > maxContainerTmpfsEntries {
 		return fmt.Errorf("containers[%d].tmpfs exceeds limit %d", index, maxContainerTmpfsEntries)
+	}
+	for destination := range container.Tmpfs {
+		if destination != path.Clean(destination) || destination != "/tmp" && !strings.HasPrefix(destination, "/tmp/") {
+			return fmt.Errorf("containers[%d].tmpfs destination %q must be /tmp or a clean path below /tmp", index, destination)
+		}
 	}
 	if container.Healthcheck != nil && len(container.Healthcheck.Test) > maxHealthcheckTestEntries {
 		return fmt.Errorf("containers[%d].healthcheck.test exceeds limit %d", index, maxHealthcheckTestEntries)
@@ -221,7 +229,9 @@ func validateContainerPolicy(index int, container *Container, availableGPUs int,
 		}
 		if writable {
 			if prior, found := volumeWriters[source]; found {
-				return fmt.Errorf("containers[%d].volumes[%d] makes named volume %q writable after containers[%d]", index, volumeIndex, source, prior)
+				if prior != index {
+					return fmt.Errorf("containers[%d].volumes[%d] makes named volume %q writable after containers[%d]", index, volumeIndex, source, prior)
+				}
 			}
 			volumeWriters[source] = index
 		}

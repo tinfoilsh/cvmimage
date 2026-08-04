@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/tinfoilsh/modelwrap"
 	"gopkg.in/yaml.v3"
 
 	shimconfig "tinfoil/internal/config"
@@ -82,6 +83,27 @@ type ModelSpec struct {
 	MWP       string `yaml:"mwp,omitempty"`
 	EMWP      string `yaml:"emwp,omitempty"`
 	KeySecret string `yaml:"key-secret,omitempty"`
+}
+
+func ModelPackReference(model ModelSpec) (string, error) {
+	references := []string{model.MPK, model.MWP, model.EMWP}
+	var selected string
+	for _, reference := range references {
+		if reference == "" {
+			continue
+		}
+		if selected != "" {
+			return "", fmt.Errorf("model %q must specify exactly one of mpk, mwp, or emwp", model.Name)
+		}
+		selected = reference
+	}
+	if selected == "" {
+		return "", fmt.Errorf("model %q must specify exactly one of mpk, mwp, or emwp", model.Name)
+	}
+	if _, err := modelwrap.ParseRef(selected); err != nil {
+		return "", fmt.Errorf("model %q has invalid pack reference: %w", model.Name, err)
+	}
+	return selected, nil
 }
 
 type Container struct {

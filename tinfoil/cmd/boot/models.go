@@ -16,6 +16,7 @@ import (
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
+	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -181,40 +182,18 @@ const (
 )
 
 func modelPackRefForModel(model ModelSpec) (*modelPackRef, modelKind, error) {
-	refs := 0
-	if model.MPK != "" {
-		refs++
+	reference, err := runtimeconfig.ModelPackReference(model)
+	if err != nil {
+		return nil, "", err
 	}
-	if model.MWP != "" {
-		refs++
+	spec, err := parseModelPackRef(reference)
+	if err != nil {
+		return nil, "", err
 	}
 	if model.EMWP != "" {
-		refs++
+		return spec, modelKindEncrypted, nil
 	}
-	if refs != 1 {
-		return nil, "", fmt.Errorf("model %q must specify exactly one of mpk, mwp, or emwp", model.Name)
-	}
-
-	if model.MPK != "" {
-		spec, err := parseModelPackRef(model.MPK)
-		if err != nil {
-			return nil, "", fmt.Errorf("invalid legacy MPK format: %s: %w", model.MPK, err)
-		}
-		return spec, modelKindPlaintext, nil
-	}
-	if model.MWP != "" {
-		spec, err := parseModelPackRef(model.MWP)
-		if err != nil {
-			return nil, "", fmt.Errorf("invalid MWP format: %s: %w", model.MWP, err)
-		}
-		return spec, modelKindPlaintext, nil
-	}
-
-	spec, err := parseModelPackRef(model.EMWP)
-	if err != nil {
-		return nil, "", fmt.Errorf("invalid EMWP format: %s: %w", model.EMWP, err)
-	}
-	return spec, modelKindEncrypted, nil
+	return spec, modelKindPlaintext, nil
 }
 
 // modelPackRef wraps the shared artifact reference with cvmimage mount

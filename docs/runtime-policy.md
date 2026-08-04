@@ -79,3 +79,9 @@ sources supplied by workload configuration remain reserved for the measured
 debug toolbox; fixed public files and explicitly assigned verified models use
 first-party read-only binds. Configured tmpfs mounts are restricted to `/tmp`
 or a clean path below it.
+
+Every managed Docker bridge is created with inter-container communication
+disabled, and an existing bridge is reused only when its driver, Linux bridge
+name, and ICC setting match the measured policy. The nftables policy does not
+add a same-bridge forwarding exception, so containers sharing a logical network
+do not gain lateral connectivity merely by joining that bridge.

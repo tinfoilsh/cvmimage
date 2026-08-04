@@ -1,10 +1,24 @@
 package key
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
+
+func TestRequestJSONAlwaysIncludesPolicyFields(t *testing.T) {
+	encoded, err := json.Marshal(Request{APIKey: "key", Model: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"api_key":"key"`, `"model":"model"`, `"path":""`} {
+		if !strings.Contains(string(encoded), field) {
+			t.Fatalf("encoded request %s is missing %s", encoded, field)
+		}
+	}
+}
 
 type stubValidator struct {
 	err    error

@@ -243,8 +243,8 @@ func TestWriteValidationFailureDoesNotLeakInternalError(t *testing.T) {
 
 	writeValidationFailure(rec, err)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), err.Error()) {
 		t.Fatalf("validation error leaked raw error: %q", rec.Body.String())

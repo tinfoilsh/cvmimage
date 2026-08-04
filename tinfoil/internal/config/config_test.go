@@ -121,6 +121,8 @@ func TestConfigValidateAuthenticatedPolicy(t *testing.T) {
 		{name: "empty endpoints", mutate: func(config *Config) { empty := []string{}; config.AuthenticatedEndpoints = &empty }, want: "at least one endpoint"},
 		{name: "wildcard", mutate: func(config *Config) { bad := []string{"/v1*"}; config.AuthenticatedEndpoints = &bad }, want: "wildcard syntax"},
 		{name: "noncanonical path", mutate: func(config *Config) { config.Paths = []string{"/v1/../admin"} }, want: "canonical"},
+		{name: "duplicate slash", mutate: func(config *Config) { config.Paths = []string{"/v1//models"} }, want: "canonical"},
+		{name: "control plane host", mutate: func(config *Config) { config.ControlPlane = "https://" }, want: "HTTPS control plane URL"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := valid

@@ -9,7 +9,7 @@ import (
 type Request struct {
 	APIKey string `json:"api_key"`
 	Model  string `json:"model"`
-	Path   string `json:"path,omitempty"`
+	Path   string `json:"path"`
 }
 
 type Validator interface {

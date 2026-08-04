@@ -112,7 +112,7 @@ func writeJSONError(w http.ResponseWriter, message string, errorType string, sta
 func writeValidationFailure(w http.ResponseWriter, err error) {
 	var validationErr *key.ValidationError
 	if !errors.As(err, &validationErr) {
-		writeJSONError(w, errMsgServerError, errTypeServer, http.StatusInternalServerError)
+		writeJSONError(w, errMsgServerError, errTypeServer, http.StatusServiceUnavailable)
 		return
 	}
 

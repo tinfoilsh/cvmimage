@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
+	"path"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -35,7 +38,8 @@ type Config struct {
 	Authenticated bool `yaml:"authenticated" default:"false"`
 	// AuthenticatedEndpoints is the list of endpoint patterns that require API key authentication.
 	// If absent (nil), defaults to ["/v1/chat/completions"] for backwards compatibility.
-	// If present but empty, no endpoints require authentication.
+	// If present but empty, no endpoints require authentication unless Authenticated is true,
+	// in which case validation rejects the configuration.
 	// Supports the same wildcard patterns as Paths (e.g. "/v1/*").
 	AuthenticatedEndpoints *[]string `yaml:"authenticated-endpoints"`
 
@@ -51,13 +55,18 @@ type Config struct {
 	ExpectedGPUs int `yaml:"expected-gpus" default:"0"`
 }
 
-var shimConfigFields = map[string]bool{
-	"upstream-port": true, "upstream-container": true, "model": true,
-	"paths": true, "origins": true, "tls-mode": true, "tls-env": true,
-	"tls-challenge": true, "tls-wildcard": true, "tls-own-san-domain": true,
-	"control-plane": true, "authenticated": true, "authenticated-endpoints": true,
-	"rate-limit": true, "rate-burst": true, "email": true,
-	"publish-attestation": true, "dummy-attestation": true, "expected-gpus": true,
+var shimConfigFields = configYAMLFields()
+
+func configYAMLFields() map[string]bool {
+	fields := make(map[string]bool)
+	typeOfConfig := reflect.TypeOf(Config{})
+	for index := range typeOfConfig.NumField() {
+		name, _, _ := strings.Cut(typeOfConfig.Field(index).Tag.Get("yaml"), ",")
+		if name != "" && name != "-" {
+			fields[name] = true
+		}
+	}
+	return fields
 }
 
 func (c *Config) UnmarshalYAML(node *yaml.Node) error {
@@ -190,8 +199,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("tls-wildcard requires tls-challenge: dns (wildcard certs cannot use %s challenge)", c.TLSChallengeMode)
 	}
 	if c.Authenticated {
-		if c.ControlPlane == "" {
-			return fmt.Errorf("authenticated shim requires a control plane")
+		controlPlane, err := url.Parse(c.ControlPlane)
+		if err != nil || controlPlane.Scheme != "https" || controlPlane.Host == "" || controlPlane.User != nil || controlPlane.RawQuery != "" || controlPlane.Fragment != "" {
+			return fmt.Errorf("authenticated shim requires a valid HTTPS control plane URL")
 		}
 		if c.Model == "" {
 			return fmt.Errorf("authenticated shim requires an attestation-bound model identifier")
@@ -213,7 +223,7 @@ func (c *Config) Validate() error {
 
 func validatePathPatterns(field string, patterns []string) error {
 	for index, pattern := range patterns {
-		if pattern == "" || pattern[0] != '/' || strings.ContainsAny(pattern, "?#") || strings.Contains(pattern, "..") {
+		if pattern == "" || pattern[0] != '/' || strings.ContainsAny(pattern, "?#\\%") || path.Clean(pattern) != pattern {
 			return fmt.Errorf("%s[%d] %q is not a canonical absolute request path", field, index, pattern)
 		}
 		if strings.Contains(pattern, "*") && (!strings.HasSuffix(pattern, "/*") || strings.Count(pattern, "*") != 1) {

@@ -3,6 +3,7 @@ package runtimeconfig
 import (
 	"fmt"
 	"net"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -66,27 +67,38 @@ func validateShape(config *Config, debug bool) error {
 			return fmt.Errorf("networks.%s.allow exceeds limit %d", name, maxNetworkAllowEntries)
 		}
 	}
+	modelNames := make(map[string]int, len(config.Models))
+	for index, model := range config.Models {
+		if model.Name == "" {
+			return fmt.Errorf("models[%d].name must not be empty", index)
+		}
+		if prior, found := modelNames[model.Name]; found {
+			return fmt.Errorf("models[%d].name %q duplicates models[%d].name", index, model.Name, prior)
+		}
+		modelNames[model.Name] = index
+	}
 	seen := map[string]int{}
+	volumeWriters := map[string]int{}
 	for index := range config.Containers {
 		container := &config.Containers[index]
 		if prior, found := seen[container.Name]; found {
 			return fmt.Errorf("containers[%d].name %q duplicates containers[%d].name", index, container.Name, prior)
 		}
 		seen[container.Name] = index
-		if err := validateContainer(index, container, config.GPUs, debug); err != nil {
+		if err := validateContainer(index, container, config.GPUs, modelNames, volumeWriters, debug); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateContainer(index int, container *Container, availableGPUs int, debug bool) error {
+func validateContainer(index int, container *Container, availableGPUs int, modelNames map[string]int, volumeWriters map[string]int, debug bool) error {
 	lists := []struct {
 		name  string
 		count int
 	}{
 		{"command", len(container.Command)}, {"entrypoint", len(container.Entrypoint)}, {"env", len(container.Env)},
-		{"secrets", len(container.Secrets)}, {"volumes", len(container.Volumes)}, {"devices", len(container.Devices)},
+		{"secrets", len(container.Secrets)}, {"models", len(container.Models)}, {"volumes", len(container.Volumes)}, {"devices", len(container.Devices)},
 		{"cap_add", len(container.CapAdd)}, {"networks", len(container.Networks)},
 	}
 	for _, list := range lists {
@@ -103,7 +115,7 @@ func validateContainer(index int, container *Container, availableGPUs int, debug
 	if err := validateContainerImage(index, container.Image, debug); err != nil {
 		return err
 	}
-	if err := validateContainerPolicy(index, container, availableGPUs, debug); err != nil {
+	if err := validateContainerPolicy(index, container, availableGPUs, volumeWriters, debug); err != nil {
 		return err
 	}
 	for envIndex, item := range container.Env {
@@ -135,6 +147,16 @@ func validateContainer(index int, container *Container, availableGPUs int, debug
 			return fmt.Errorf("containers[%d].secrets[%d] has invalid environment name %q", index, secretIndex, secret)
 		}
 	}
+	seenModels := map[string]bool{}
+	for modelIndex, model := range container.Models {
+		if _, found := modelNames[model]; !found {
+			return fmt.Errorf("containers[%d].models[%d] references unknown model %q", index, modelIndex, model)
+		}
+		if seenModels[model] {
+			return fmt.Errorf("containers[%d].models[%d] duplicates model %q", index, modelIndex, model)
+		}
+		seenModels[model] = true
+	}
 	return nil
 }
 
@@ -155,7 +177,7 @@ func validateContainerImage(index int, image string, debug bool) error {
 	return nil
 }
 
-func validateContainerPolicy(index int, container *Container, availableGPUs int, debug bool) error {
+func validateContainerPolicy(index int, container *Container, availableGPUs int, volumeWriters map[string]int, debug bool) error {
 	if container.inputFields.privileged {
 		return fmt.Errorf("containers[%d].privileged is unsupported", index)
 	}
@@ -164,6 +186,9 @@ func validateContainerPolicy(index int, container *Container, availableGPUs int,
 	}
 	if container.inputFields.securityOpt {
 		return fmt.Errorf("containers[%d].security_opt is unsupported", index)
+	}
+	if container.ReadOnly != nil && !*container.ReadOnly && !ReservedDebugRuntimeEnabled(container.Name, debug) {
+		return fmt.Errorf("containers[%d].read_only must not disable the read-only root filesystem", index)
 	}
 	if container.PidMode != "" {
 		return fmt.Errorf("containers[%d].pid is unsupported", index)
@@ -190,9 +215,21 @@ func validateContainerPolicy(index int, container *Container, availableGPUs int,
 		if ReservedDebugRuntimeEnabled(container.Name, debug) && (volume == debugDockerSocketBind || volume == debugManagerSocketBind) {
 			continue
 		}
-		source, _, found := strings.Cut(volume, ":")
-		if !found || !validNamedVolume(source) {
-			return fmt.Errorf("containers[%d].volumes[%d] must use a named volume source", index, volumeIndex)
+		source, destination, writable, err := parseNamedVolume(volume)
+		if err != nil {
+			return fmt.Errorf("containers[%d].volumes[%d]: %w", index, volumeIndex, err)
+		}
+		if writable {
+			if prior, found := volumeWriters[source]; found {
+				return fmt.Errorf("containers[%d].volumes[%d] makes named volume %q writable after containers[%d]", index, volumeIndex, source, prior)
+			}
+			volumeWriters[source] = index
+		}
+		for priorIndex, prior := range container.Volumes[:volumeIndex] {
+			_, priorDestination, _, priorErr := parseNamedVolume(prior)
+			if priorErr == nil && priorDestination == destination {
+				return fmt.Errorf("containers[%d].volumes[%d] duplicates destination %q from volumes[%d]", index, volumeIndex, destination, priorIndex)
+			}
 		}
 	}
 	for capabilityIndex, capability := range container.CapAdd {
@@ -201,6 +238,25 @@ func validateContainerPolicy(index int, container *Container, availableGPUs int,
 		}
 	}
 	return nil
+}
+
+func parseNamedVolume(volume string) (source, destination string, writable bool, err error) {
+	parts := strings.Split(volume, ":")
+	if len(parts) < 2 || len(parts) > 3 || !validNamedVolume(parts[0]) {
+		return "", "", false, fmt.Errorf("must use source:destination[:ro|rw] with a named volume source")
+	}
+	destination = parts[1]
+	if destination != path.Clean(destination) || destination != "/data" && !strings.HasPrefix(destination, "/data/") {
+		return "", "", false, fmt.Errorf("destination %q must be /data or a clean path below /data", destination)
+	}
+	mode := "rw"
+	if len(parts) == 3 {
+		mode = parts[2]
+	}
+	if mode != "ro" && mode != "rw" {
+		return "", "", false, fmt.Errorf("mode %q must be ro or rw", mode)
+	}
+	return parts[0], destination, mode == "rw", nil
 }
 
 func validateGPUSelection(index int, selection interface{}, available int) error {

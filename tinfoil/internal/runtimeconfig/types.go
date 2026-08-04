@@ -93,6 +93,7 @@ type Container struct {
 	User        string            `yaml:"user,omitempty"`
 	Env         []interface{}     `yaml:"env,omitempty"`
 	Secrets     []string          `yaml:"secrets,omitempty"`
+	Models      []string          `yaml:"models,omitempty"`
 	Volumes     []string          `yaml:"volumes,omitempty"`
 	Devices     []string          `yaml:"devices,omitempty"`
 	CapAdd      []string          `yaml:"cap_add,omitempty"`
@@ -122,7 +123,7 @@ type containerInputFields struct {
 
 var containerFields = map[string]bool{
 	"name": true, "image": true, "command": true, "entrypoint": true,
-	"working_dir": true, "user": true, "env": true, "secrets": true,
+	"working_dir": true, "user": true, "env": true, "secrets": true, "models": true,
 	"volumes": true, "devices": true, "cap_add": true, "runtime": true,
 	"networks": true, "ipc": true, "pid": true, "gpus": true,
 	"shm_size": true, "memory": true, "cpus": true, "tmpfs": true,

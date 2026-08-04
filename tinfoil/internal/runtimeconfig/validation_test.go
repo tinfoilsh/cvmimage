@@ -51,6 +51,9 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "debug mutable image", debug: true, yaml: strings.Replace(validConfig, "example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "example.com/app:latest", 1)},
 		{name: "undeclared network", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [missing]", 1), want: "not declared"},
 		{name: "production docker socket", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [/run/docker.sock:/var/run/docker.sock]", 1), want: "named volume"},
+		{name: "volume outside data", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/etc]", 1), want: "below /data"},
+		{name: "volume invalid mode", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/data:shared]", 1), want: "ro or rw"},
+		{name: "writable rootfs", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    read_only: false", 1), want: "read-only root filesystem"},
 		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", ReservedDebugContainerName), 1)},
 		{name: "host ipc", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ipc: host", 1), want: "ipc must be private or none"},
 		{name: "host pid", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    pid: host", 1), want: "pid is unsupported"},
@@ -71,6 +74,47 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDecodeRequiresExplicitModelAssignment(t *testing.T) {
+	const modelRef = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_4096_0eefa619-50b7-588f-a072-d405fb439d36"
+	base := fmt.Sprintf(`
+shim:
+  upstream-port: 8080
+models:
+  - name: weights
+    repo: org/weights@v1
+    mwp: %s
+containers:
+  - name: app
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    models: [weights]
+`, modelRef)
+	if _, err := Decode([]byte(base), false); err != nil {
+		t.Fatalf("valid model assignment rejected: %v", err)
+	}
+	if _, err := Decode([]byte(strings.Replace(base, "models: [weights]", "models: [missing]", 1)), false); err == nil || !strings.Contains(err.Error(), "unknown model") {
+		t.Fatalf("unknown model error = %v", err)
+	}
+	if _, err := Decode([]byte(strings.Replace(base, "models: [weights]", "models: [weights, weights]", 1)), false); err == nil || !strings.Contains(err.Error(), "duplicates model") {
+		t.Fatalf("duplicate model error = %v", err)
+	}
+}
+
+func TestDecodePermitsOnlyOneWritableVolumeOwner(t *testing.T) {
+	config := validConfig + `
+  - name: reader
+    image: example.com/reader@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    volumes: [state:/data:ro]
+`
+	config = strings.Replace(config, "networks: [app]", "networks: [app]\n    volumes: [state:/data:rw]", 1)
+	if _, err := Decode([]byte(config), false); err != nil {
+		t.Fatalf("single writer with reader rejected: %v", err)
+	}
+	config = strings.Replace(config, "state:/data:ro", "state:/data:rw", 1)
+	if _, err := Decode([]byte(config), false); err == nil || !strings.Contains(err.Error(), "writable after") {
+		t.Fatalf("second writer error = %v", err)
 	}
 }
 

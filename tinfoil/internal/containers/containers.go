@@ -23,6 +23,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	"github.com/tinfoilsh/modelwrap"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
@@ -488,7 +489,11 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		SecurityOpt:    []string{"no-new-privileges:true"},
 		ReadonlyRootfs: c.ReadOnly == nil || *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
-		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
+		Binds: []string{
+			boot.ConfigPath + ":/tinfoil/config.yml:ro",
+			boot.AttestationPath + ":/tinfoil/attestation.json:ro",
+			boot.ContainerStatusPath + ":/tinfoil/container-status.json:ro",
+		},
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit
 	if first == "" {
@@ -530,6 +535,11 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	for _, vol := range c.Volumes {
 		hostConfig.Binds = append(hostConfig.Binds, vol)
 	}
+	modelBinds, err := selectedModelBinds(c.Models, cfg.Models)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	hostConfig.Binds = append(hostConfig.Binds, modelBinds...)
 
 	if reservedDebugRuntime {
 		applyReservedDebugRuntime(containerConfig, hostConfig)
@@ -552,6 +562,37 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 
 	return containerConfig, hostConfig, networkingConfig, rest, nil
+}
+
+func selectedModelBinds(selected []string, models []ModelSpec) ([]string, error) {
+	byName := make(map[string]ModelSpec, len(models))
+	for _, model := range models {
+		byName[model.Name] = model
+	}
+	binds := make([]string, 0, len(selected)*2)
+	for _, name := range selected {
+		model, found := byName[name]
+		if !found {
+			return nil, fmt.Errorf("container references unknown model %q", name)
+		}
+		ref := model.MWP
+		if ref == "" {
+			ref = model.MPK
+		}
+		if ref == "" {
+			ref = model.EMWP
+		}
+		parsed, err := modelwrap.ParseRef(ref)
+		if err != nil {
+			return nil, fmt.Errorf("parsing model %q reference: %w", name, err)
+		}
+		hostPath := boot.MWPDir + "/mwp-" + parsed.RootHash
+		binds = append(binds,
+			hostPath+":/tinfoil/mwp/mwp-"+parsed.RootHash+":ro",
+			hostPath+":/tinfoil/mpk/mpk-"+parsed.RootHash+":ro",
+		)
+	}
+	return binds, nil
 }
 
 func removeRejectedContainer(ctx context.Context, cli *client.Client, id string) error {
@@ -591,6 +632,9 @@ func verifyCreatedContainerPolicy(expectedConfig *container.Config, expectedHost
 	}
 	if !reflect.DeepEqual(actual.HostConfig.DeviceRequests, expectedHost.DeviceRequests) {
 		return errors.New("effective device requests differ from measured request")
+	}
+	if !reflect.DeepEqual(actual.HostConfig.Binds, expectedHost.Binds) {
+		return errors.New("effective bind mounts differ from measured request")
 	}
 	if len(actual.HostConfig.CapDrop) != 1 || actual.HostConfig.CapDrop[0] != "ALL" {
 		return errors.New("effective capability drop is not ALL")

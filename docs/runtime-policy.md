@@ -64,3 +64,15 @@ runtime, device, capability, security-option, volume, health-check, or NVIDIA
 environment value that differs from the measured request causes the stopped
 container to be removed. Health-check output is not copied into boot status or
 the host console; only the exit status is reported.
+
+The public ramdisk is not mounted wholesale into workloads. Every container
+receives only the public configuration, attestation, and container-status files
+at their fixed `/tinfoil` paths. Model packs require an explicit container
+`models` assignment and only those verified model mount points are bound into
+that container, including the legacy `mpk` alias for the same selected pack.
+
+Production root filesystems remain read-only. Mutable storage uses Docker named
+volumes mounted only at `/data` or a clean path below it, with an explicit `ro`
+or `rw` mode when desired. A named volume can have at most one writable
+container owner; additional consumers must mount it read-only. Raw host bind
+sources remain reserved for the measured debug toolbox.

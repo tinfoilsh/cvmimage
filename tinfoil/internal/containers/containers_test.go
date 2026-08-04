@@ -2,6 +2,7 @@ package containers
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	dockernetwork "github.com/moby/moby/api/types/network"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
 )
@@ -397,4 +399,43 @@ func cloneHostConfig(config *container.HostConfig) *container.HostConfig {
 	clone.CapDrop = slices.Clone(config.CapDrop)
 	clone.SecurityOpt = slices.Clone(config.SecurityOpt)
 	return &clone
+}
+
+func TestBuildContainerCreateSpecMountsOnlyAssignedModels(t *testing.T) {
+	const rootHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const modelRef = rootHash + "_4096_0eefa619-50b7-588f-a072-d405fb439d36"
+	cfg := &Config{
+		Networks: map[string]*NetworkSpec{},
+		Models: []ModelSpec{
+			{Name: "assigned", Repo: "org/assigned@v1", MWP: modelRef},
+			{Name: "other", Repo: "org/other@v1", MWP: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb_4096_0eefa619-50b7-588f-a072-d405fb439d36"},
+		},
+	}
+	_, hostConfig, _, _, err := buildContainerCreateSpec(Container{
+		Name:   "app",
+		Image:  "example.invalid/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Models: []string{"assigned"},
+	}, cfg, &shimconfig.ExternalConfig{}, false)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	if slices.Contains(hostConfig.Binds, boot.PublicDir+":/tinfoil:ro") {
+		t.Fatalf("broad public ramdisk bind remains: %v", hostConfig.Binds)
+	}
+	for _, bind := range []string{
+		boot.ConfigPath + ":/tinfoil/config.yml:ro",
+		boot.AttestationPath + ":/tinfoil/attestation.json:ro",
+		boot.ContainerStatusPath + ":/tinfoil/container-status.json:ro",
+		boot.MWPDir + "/mwp-" + rootHash + ":/tinfoil/mwp/mwp-" + rootHash + ":ro",
+		boot.MWPDir + "/mwp-" + rootHash + ":/tinfoil/mpk/mpk-" + rootHash + ":ro",
+	} {
+		if !slices.Contains(hostConfig.Binds, bind) {
+			t.Fatalf("Binds = %v, missing %q", hostConfig.Binds, bind)
+		}
+	}
+	for _, bind := range hostConfig.Binds {
+		if strings.Contains(bind, strings.Repeat("b", 64)) {
+			t.Fatalf("unassigned model exposed through %q", bind)
+		}
+	}
 }

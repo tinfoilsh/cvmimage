@@ -30,7 +30,7 @@ networks:
     egress: closed
 containers:
   - name: app
-    image: example/app:latest
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     networks: [app]
 `
 
@@ -43,10 +43,12 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 	}{
 		{name: "valid", yaml: validConfig},
 		{name: "unknown field", yaml: validConfig + "unknown: true\n", want: "field unknown not found"},
-		{name: "unknown container field", yaml: strings.Replace(validConfig, "image: example/app:latest", "image: example/app:latest\n    typo: true", 1), want: "unknown container field"},
-		{name: "duplicate container field", yaml: strings.Replace(validConfig, "image: example/app:latest", "image: example/app:latest\n    image: duplicate", 1), want: "duplicate container field"},
-		{name: "container merge key", yaml: "defaults: &defaults\n  image: example/app:latest\n" + strings.Replace(validConfig, "image: example/app:latest", "<<: *defaults", 1), want: "merge keys are unsupported"},
-		{name: "duplicate container", yaml: strings.Replace(validConfig, "containers:\n", "containers:\n  - name: app\n    image: duplicate\n", 1), want: "duplicates"},
+		{name: "unknown container field", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    typo: true", 1), want: "unknown container field"},
+		{name: "duplicate container field", yaml: strings.Replace(validConfig, "networks: [app]", "image: duplicate\n    networks: [app]", 1), want: "duplicate container field"},
+		{name: "container merge key", yaml: "defaults: &defaults\n  image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" + strings.Replace(validConfig, "    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "    <<: *defaults", 1), want: "merge keys are unsupported"},
+		{name: "duplicate container", yaml: strings.Replace(validConfig, "containers:\n", "containers:\n  - name: app\n    image: example.com/duplicate@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", 1), want: "duplicates"},
+		{name: "mutable image", yaml: strings.Replace(validConfig, "example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "example.com/app:latest", 1), want: "immutable digest"},
+		{name: "debug mutable image", debug: true, yaml: strings.Replace(validConfig, "example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "example.com/app:latest", 1)},
 		{name: "undeclared network", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [missing]", 1), want: "not declared"},
 		{name: "production docker socket", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [/run/docker.sock:/var/run/docker.sock]", 1), want: "named volume"},
 		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", ReservedDebugContainerName), 1)},

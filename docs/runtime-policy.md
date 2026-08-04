@@ -48,3 +48,9 @@ aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
 `SYS_NICE`. The NVIDIA runtime requires an explicit GPU selection bounded by
 the attested top-level GPU count; boolean, zero, negative, duplicate, and
 out-of-range selections are rejected.
+
+Outside measured debug mode, every container image must be an OCI reference
+containing an immutable digest. The container manager pulls that exact
+reference and verifies Docker's inspected repository digests before creating
+the container; mutable tag-only references are rejected during configuration
+validation.

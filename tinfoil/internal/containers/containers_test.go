@@ -181,7 +181,7 @@ func TestParseDuration(t *testing.T) {
 
 func TestNetworkCreateOptionsStaticShimNet(t *testing.T) {
 	opts := networkCreateOptions(containernet.ShimNetName)
-	if got := opts.Options["com.docker.network.bridge.enable_icc"]; got != "false" {
+	if got := opts.Options[dockerBridgeICCOption]; got != "false" {
 		t.Fatalf("enable_icc = %q, want false", got)
 	}
 	if opts.IPAM == nil || len(opts.IPAM.Config) != 1 {
@@ -200,8 +200,8 @@ func TestValidateBridgeNetwork(t *testing.T) {
 		Network: dockernetwork.Network{
 			Driver: "bridge",
 			Options: map[string]string{
-				"com.docker.network.bridge.name":       "app",
-				"com.docker.network.bridge.enable_icc": "false",
+				dockerBridgeNameOption: "app",
+				dockerBridgeICCOption:  "false",
 			},
 		},
 	}
@@ -213,8 +213,8 @@ func TestValidateBridgeNetwork(t *testing.T) {
 		mutate func(*dockernetwork.Inspect)
 	}{
 		{name: "driver", mutate: func(network *dockernetwork.Inspect) { network.Driver = "macvlan" }},
-		{name: "identity", mutate: func(network *dockernetwork.Inspect) { network.Options["com.docker.network.bridge.name"] = "other" }},
-		{name: "icc", mutate: func(network *dockernetwork.Inspect) { network.Options["com.docker.network.bridge.enable_icc"] = "true" }},
+		{name: "identity", mutate: func(network *dockernetwork.Inspect) { network.Options[dockerBridgeNameOption] = "other" }},
+		{name: "icc", mutate: func(network *dockernetwork.Inspect) { network.Options[dockerBridgeICCOption] = "true" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := valid

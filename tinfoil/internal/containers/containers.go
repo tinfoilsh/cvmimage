@@ -32,9 +32,11 @@ import (
 )
 
 const (
-	healthPollInterval         = 5 * time.Second
-	defaultPidsLimit     int64 = 65536
-	openEgressGwPriority       = 100
+	healthPollInterval           = 5 * time.Second
+	defaultPidsLimit       int64 = 65536
+	openEgressGwPriority         = 100
+	dockerBridgeNameOption       = "com.docker.network.bridge.name"
+	dockerBridgeICCOption        = "com.docker.network.bridge.enable_icc"
 )
 
 func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config, debug bool) error {
@@ -112,8 +114,8 @@ func networkCreateOptions(name string) client.NetworkCreateOptions {
 	opts := client.NetworkCreateOptions{
 		Driver: "bridge",
 		Options: map[string]string{
-			"com.docker.network.bridge.name":       name,
-			"com.docker.network.bridge.enable_icc": "false",
+			dockerBridgeNameOption: name,
+			dockerBridgeICCOption:  "false",
 		},
 	}
 	if name == containernet.ShimNetName {
@@ -131,10 +133,10 @@ func validateBridgeNetwork(name string, network dockernetwork.Inspect) error {
 	if network.Driver != "bridge" {
 		return fmt.Errorf("docker network %q uses driver %q, want bridge", name, network.Driver)
 	}
-	if network.Options["com.docker.network.bridge.name"] != name {
+	if network.Options[dockerBridgeNameOption] != name {
 		return fmt.Errorf("docker network %q has unexpected bridge identity", name)
 	}
-	if network.Options["com.docker.network.bridge.enable_icc"] != "false" {
+	if network.Options[dockerBridgeICCOption] != "false" {
 		return fmt.Errorf("docker network %q permits inter-container communication", name)
 	}
 	return nil

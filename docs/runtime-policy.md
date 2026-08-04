@@ -41,3 +41,10 @@ The measured daemon policy includes these mode `0644` files:
 The NVIDIA bootstrap publishes `/var/run/cdi/nvidia.yaml` atomically for the
 runtime's fixed `nvidia.com/gpu` CDI kind. Legacy, CSV, hook compatibility, and
 alternate OCI runtimes are not configured.
+
+Production container configuration is fail closed. Workloads cannot request
+host IPC, host PID namespaces, raw host devices, arbitrary containerd runtime
+aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
+`SYS_NICE`. The NVIDIA runtime requires an explicit GPU selection bounded by
+the attested top-level GPU count; boolean, zero, negative, duplicate, and
+out-of-range selections are rejected.

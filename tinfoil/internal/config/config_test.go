@@ -123,6 +123,8 @@ func TestConfigValidateAuthenticatedPolicy(t *testing.T) {
 		{name: "noncanonical path", mutate: func(config *Config) { config.Paths = []string{"/v1/../admin"} }, want: "canonical"},
 		{name: "duplicate slash", mutate: func(config *Config) { config.Paths = []string{"/v1//models"} }, want: "canonical"},
 		{name: "control plane host", mutate: func(config *Config) { config.ControlPlane = "https://" }, want: "HTTPS control plane URL"},
+		{name: "control plane empty hostname", mutate: func(config *Config) { config.ControlPlane = "https://:443" }, want: "HTTPS control plane URL"},
+		{name: "control plane force query", mutate: func(config *Config) { config.ControlPlane = "https://api.tinfoil.sh?" }, want: "HTTPS control plane URL"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := valid

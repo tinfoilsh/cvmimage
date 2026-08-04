@@ -200,7 +200,7 @@ func (c *Config) Validate() error {
 	}
 	if c.Authenticated {
 		controlPlane, err := url.Parse(c.ControlPlane)
-		if err != nil || controlPlane.Scheme != "https" || controlPlane.Host == "" || controlPlane.User != nil || controlPlane.RawQuery != "" || controlPlane.Fragment != "" {
+		if err != nil || controlPlane.Scheme != "https" || controlPlane.Hostname() == "" || controlPlane.User != nil || controlPlane.ForceQuery || controlPlane.RawQuery != "" || controlPlane.Fragment != "" {
 			return fmt.Errorf("authenticated shim requires a valid HTTPS control plane URL")
 		}
 		if c.Model == "" {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/distribution/reference"
 	dockerconfig "github.com/docker/cli/cli/config"
 	"github.com/docker/go-units"
 	"github.com/moby/moby/api/types/container"
@@ -617,7 +618,36 @@ func pullImage(ctx context.Context, cli *client.Client, imageName string) error 
 			return fmt.Errorf("docker pull failed: %s", msg.Error)
 		}
 	}
+	inspect, err := cli.ImageInspect(ctx, imageName)
+	if err != nil {
+		return fmt.Errorf("inspect pulled image: %w", err)
+	}
+	if err := verifyPulledImageDigest(imageName, inspect.RepoDigests); err != nil {
+		return err
+	}
 	return nil
+}
+
+func verifyPulledImageDigest(imageName string, repoDigests []string) error {
+	named, err := reference.ParseNormalizedNamed(imageName)
+	if err != nil {
+		return fmt.Errorf("invalid image reference %q: %w", imageName, err)
+	}
+	expected, ok := named.(reference.Digested)
+	if !ok {
+		return fmt.Errorf("image reference %q does not contain a digest", imageName)
+	}
+	for _, repoDigest := range repoDigests {
+		actualNamed, err := reference.ParseNormalizedNamed(repoDigest)
+		if err != nil {
+			continue
+		}
+		actual, ok := actualNamed.(reference.Digested)
+		if ok && actual.Digest() == expected.Digest() {
+			return nil
+		}
+	}
+	return fmt.Errorf("pulled image does not advertise requested digest %s", expected.Digest())
 }
 
 func containerMemoryBytes(c *Container, cfg *Config) int64 {

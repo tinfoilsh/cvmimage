@@ -58,6 +58,32 @@ func TestParseGPUs(t *testing.T) {
 	}
 }
 
+func TestVerifyPulledImageDigest(t *testing.T) {
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, test := range []struct {
+		name        string
+		image       string
+		repoDigests []string
+		wantErr     bool
+	}{
+		{name: "matching repository", image: "example.com/team/app@" + digest, repoDigests: []string{"example.com/team/app@" + digest}},
+		{name: "matching canonical digest", image: "app@" + digest, repoDigests: []string{"docker.io/library/app@" + digest}},
+		{name: "missing digest", image: "example.com/team/app:latest", repoDigests: []string{"example.com/team/app@" + digest}, wantErr: true},
+		{name: "mismatch", image: "example.com/team/app@" + digest, repoDigests: []string{"example.com/team/app@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, wantErr: true},
+		{name: "empty inspect result", image: "example.com/team/app@" + digest, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := verifyPulledImageDigest(test.image, test.repoDigests)
+			if test.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestBuildEnv(t *testing.T) {
 	ext := &shimconfig.ExternalConfig{
 		Env:     map[string]string{"DOMAIN": "test.example.com", "PORT": "8080"},

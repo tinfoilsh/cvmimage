@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/distribution/reference"
+
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/device"
 )
@@ -98,6 +100,9 @@ func validateContainer(index int, container *Container, availableGPUs int, debug
 	if container.Healthcheck != nil && len(container.Healthcheck.Test) > maxHealthcheckTestEntries {
 		return fmt.Errorf("containers[%d].healthcheck.test exceeds limit %d", index, maxHealthcheckTestEntries)
 	}
+	if err := validateContainerImage(index, container.Image); err != nil {
+		return err
+	}
 	if err := validateContainerPolicy(index, container, availableGPUs, debug); err != nil {
 		return err
 	}
@@ -129,6 +134,20 @@ func validateContainer(index int, container *Container, availableGPUs int, debug
 		if !validEnvironmentName(secret) {
 			return fmt.Errorf("containers[%d].secrets[%d] has invalid environment name %q", index, secretIndex, secret)
 		}
+	}
+	return nil
+}
+
+func validateContainerImage(index int, image string) error {
+	if image == "" {
+		return fmt.Errorf("containers[%d].image is required", index)
+	}
+	named, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return fmt.Errorf("containers[%d].image %q is invalid: %w", index, image, err)
+	}
+	if _, ok := named.(reference.Digested); !ok {
+		return fmt.Errorf("containers[%d].image %q must include an immutable digest", index, image)
 	}
 	return nil
 }

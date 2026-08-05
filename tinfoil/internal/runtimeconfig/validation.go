@@ -71,14 +71,14 @@ func validateShape(config *Config, debug bool) error {
 			return fmt.Errorf("containers[%d].name %q duplicates containers[%d].name", index, container.Name, prior)
 		}
 		seen[container.Name] = index
-		if err := validateContainer(index, container, debug); err != nil {
+		if err := validateContainer(index, container, config.GPUs, debug); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateContainer(index int, container *Container, debug bool) error {
+func validateContainer(index int, container *Container, availableGPUs int, debug bool) error {
 	lists := []struct {
 		name  string
 		count int
@@ -98,7 +98,7 @@ func validateContainer(index int, container *Container, debug bool) error {
 	if container.Healthcheck != nil && len(container.Healthcheck.Test) > maxHealthcheckTestEntries {
 		return fmt.Errorf("containers[%d].healthcheck.test exceeds limit %d", index, maxHealthcheckTestEntries)
 	}
-	if err := validateContainerPolicy(index, container, debug); err != nil {
+	if err := validateContainerPolicy(index, container, availableGPUs, debug); err != nil {
 		return err
 	}
 	for envIndex, item := range container.Env {
@@ -133,7 +133,7 @@ func validateContainer(index int, container *Container, debug bool) error {
 	return nil
 }
 
-func validateContainerPolicy(index int, container *Container, debug bool) error {
+func validateContainerPolicy(index int, container *Container, availableGPUs int, debug bool) error {
 	if container.inputFields.privileged {
 		return fmt.Errorf("containers[%d].privileged is unsupported", index)
 	}
@@ -149,8 +149,20 @@ func validateContainerPolicy(index int, container *Container, debug bool) error 
 	if len(container.Devices) != 0 {
 		return fmt.Errorf("containers[%d].devices is unsupported", index)
 	}
-	if container.IPC != "" && container.IPC != "private" && container.IPC != "host" {
-		return fmt.Errorf("containers[%d].ipc must be private or host", index)
+	if container.IPC != "" && container.IPC != "private" && container.IPC != "none" {
+		return fmt.Errorf("containers[%d].ipc must be private or none", index)
+	}
+	if container.Runtime != "" && container.Runtime != "nvidia" {
+		return fmt.Errorf("containers[%d].runtime %q is unsupported", index, container.Runtime)
+	}
+	if err := validateGPUSelection(index, container.GPUs, availableGPUs); err != nil {
+		return err
+	}
+	if container.GPUs != nil && container.Runtime != "nvidia" {
+		return fmt.Errorf("containers[%d].gpus requires runtime: nvidia", index)
+	}
+	if container.Runtime == "nvidia" && container.GPUs == nil {
+		return fmt.Errorf("containers[%d].runtime nvidia requires an explicit gpus selection", index)
 	}
 	for volumeIndex, volume := range container.Volumes {
 		if ReservedDebugRuntimeEnabled(container.Name, debug) && (volume == debugDockerSocketBind || volume == debugManagerSocketBind) {
@@ -162,11 +174,54 @@ func validateContainerPolicy(index int, container *Container, debug bool) error 
 		}
 	}
 	for capabilityIndex, capability := range container.CapAdd {
-		if !slices.Contains([]string{"CHOWN", "DAC_OVERRIDE", "IPC_LOCK", "KILL", "NET_BIND_SERVICE", "SETGID", "SETUID", "SYS_NICE", "SYS_RESOURCE"}, capability) {
+		if !slices.Contains([]string{"IPC_LOCK", "NET_BIND_SERVICE", "SYS_NICE"}, capability) {
 			return fmt.Errorf("containers[%d].cap_add[%d] capability %q is unsupported", index, capabilityIndex, capability)
 		}
 	}
 	return nil
+}
+
+func validateGPUSelection(index int, selection interface{}, available int) error {
+	if selection == nil {
+		return nil
+	}
+	if available < 1 {
+		return fmt.Errorf("containers[%d].gpus is set but the configuration declares no GPUs", index)
+	}
+	switch value := selection.(type) {
+	case int:
+		if value < 1 || value > available {
+			return fmt.Errorf("containers[%d].gpus count must be between 1 and %d", index, available)
+		}
+		return nil
+	case string:
+		if value == "all" {
+			return nil
+		}
+		if value == "" {
+			return fmt.Errorf("containers[%d].gpus must not be empty", index)
+		}
+		seen := map[int]bool{}
+		for _, rawID := range strings.Split(value, ",") {
+			if rawID == "" || strings.TrimSpace(rawID) != rawID {
+				return fmt.Errorf("containers[%d].gpus contains an invalid device ID %q", index, rawID)
+			}
+			var id int
+			if _, err := fmt.Sscanf(rawID, "%d", &id); err != nil || fmt.Sprintf("%d", id) != rawID {
+				return fmt.Errorf("containers[%d].gpus contains an invalid device ID %q", index, rawID)
+			}
+			if id < 0 || id >= available {
+				return fmt.Errorf("containers[%d].gpus device ID %d is outside 0..%d", index, id, available-1)
+			}
+			if seen[id] {
+				return fmt.Errorf("containers[%d].gpus device ID %d is duplicated", index, id)
+			}
+			seen[id] = true
+		}
+		return nil
+	default:
+		return fmt.Errorf("containers[%d].gpus must be a positive count, all, or a comma-separated device list", index)
+	}
 }
 
 func validateNetwork(config *Config) error {

@@ -50,10 +50,50 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "undeclared network", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [missing]", 1), want: "not declared"},
 		{name: "production docker socket", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [/run/docker.sock:/var/run/docker.sock]", 1), want: "named volume"},
 		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", ReservedDebugContainerName), 1)},
+		{name: "debug toolbox capability", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    cap_add: [SETGID]\n    image", ReservedDebugContainerName), 1), want: "capability"},
+		{name: "host ipc", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ipc: host", 1), want: "ipc must be private or none"},
+		{name: "host pid", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    pid: host", 1), want: "pid is unsupported"},
+		{name: "raw device", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    devices: [/dev/kvm]", 1), want: "devices is unsupported"},
+		{name: "implicit runtime alias", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    runtime: attacker.runc.v2", 1), want: "runtime"},
+		{name: "nvidia runtime without selection", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    runtime: nvidia", 1), want: "explicit gpus selection"},
+		{name: "gpu selection without runtime", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    gpus: all", 1), want: "declares no GPUs"},
+		{name: "valid top-level gpu count", yaml: strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: 0.11.0\ngpus: 2", 1) + "\n", want: ""},
+		{name: "unsupported capability", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    cap_add: [SETUID]", 1), want: "capability"},
 		{name: "invalid allowlist", yaml: strings.Replace(validConfig, "egress: closed", "egress: allowlist\n    allow: ['*.example.com']", 1), want: "wildcards"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := Decode([]byte(test.yaml), test.debug)
+			if test.want == "" && err != nil {
+				t.Fatal(err)
+			}
+			if test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestDecodeValidatesGPUSelections(t *testing.T) {
+	base := strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: 0.11.0\ngpus: 2", 1)
+	for _, test := range []struct {
+		name      string
+		selection string
+		want      string
+	}{
+		{name: "count", selection: "2"},
+		{name: "all", selection: "all"},
+		{name: "ids", selection: "0,1"},
+		{name: "negative", selection: "-1", want: "between 1 and 2"},
+		{name: "zero", selection: "0", want: "between 1 and 2"},
+		{name: "too many", selection: "3", want: "between 1 and 2"},
+		{name: "out of range id", selection: "0,2", want: "outside 0..1"},
+		{name: "duplicate id", selection: "1,1", want: "duplicated"},
+		{name: "boolean", selection: "true", want: "positive count"},
+		{name: "empty id", selection: `"0,"`, want: "invalid device ID"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			yaml := strings.Replace(base, "networks: [app]", "networks: [app]\n    runtime: nvidia\n    gpus: "+test.selection, 1)
+			_, err := Decode([]byte(yaml), false)
 			if test.want == "" && err != nil {
 				t.Fatal(err)
 			}

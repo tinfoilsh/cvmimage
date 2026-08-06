@@ -18,6 +18,11 @@ const (
 	externalDiskPCIAddress = "0000:00:06.0"
 	firstModelDiskPCISlot  = 7
 	lastUsableDiskPCISlot  = 30 // Q35 reserves slot 31 for ISA/SATA/SMBus.
+	virtioPCIVendorID      = "0x1af4"
+	virtioBlkPCIDeviceID   = "0x1042"
+	rootDiskSerial         = "tinfoil-rootdisk"
+	configDiskSerial       = "tinfoil-config"
+	externalDiskSerial     = "tinfoil-ext-config"
 
 	rootDataPartition    = 1
 	rootVerityPartition  = 2
@@ -30,7 +35,7 @@ const (
 // measured root controller.
 func RootPartitions() (string, string, error) {
 	partitions, err := waitForDevice(func() ([2]string, error) {
-		disk, err := findDiskByPCIAddress(rootDiskPCIAddress)
+		disk, err := findDiskByPCIAddress(rootDiskPCIAddress, rootDiskSerial)
 		if err != nil {
 			return [2]string{}, err
 		}
@@ -55,7 +60,7 @@ var (
 // ConfigDisk returns the disk below the fixed config controller.
 func ConfigDisk() (string, error) {
 	return waitForDevice(func() (string, error) {
-		return findDiskByPCIAddress(configDiskPCIAddress)
+		return findDiskByPCIAddress(configDiskPCIAddress, configDiskSerial)
 	})
 }
 
@@ -63,7 +68,7 @@ func ConfigDisk() (string, error) {
 // controller.
 func ExternalConfigDisk() (string, error) {
 	return waitForDevice(func() (string, error) {
-		return findDiskByPCIAddress(externalDiskPCIAddress)
+		return findDiskByPCIAddress(externalDiskPCIAddress, externalDiskSerial)
 	})
 }
 
@@ -74,7 +79,7 @@ func ModelDisk(index int) (string, error) {
 		return "", err
 	}
 	return waitForDevice(func() (string, error) {
-		return findDiskByPCIAddress(pciAddress)
+		return findDiskByPCIAddress(pciAddress, modelDiskSerial(index))
 	})
 }
 
@@ -85,12 +90,16 @@ func ModelPartition(index, partition int) (string, error) {
 		return "", err
 	}
 	return waitForDevice(func() (string, error) {
-		disk, err := findDiskByPCIAddress(pciAddress)
+		disk, err := findDiskByPCIAddress(pciAddress, modelDiskSerial(index))
 		if err != nil {
 			return "", err
 		}
 		return findPartition(disk, partition)
 	})
+}
+
+func modelDiskSerial(index int) string {
+	return fmt.Sprintf("tinfoil-modelwrap%d", index+1)
 }
 
 func modelDiskPCIAddress(index int) (string, error) {
@@ -118,12 +127,23 @@ func waitForDevice[T any](find func() (T, error)) (T, error) {
 	}
 }
 
-// findDiskByPCIAddress follows kernel topology only. It deliberately does not
-// parse serial/VPD bytes or disk contents as identity.
-func findDiskByPCIAddress(pciAddress string) (string, error) {
+// findDiskByPCIAddress accepts only the fixed modern virtio-blk PCI contract.
+func findDiskByPCIAddress(pciAddress, expectedSerial string) (string, error) {
+	pciPath := filepath.Join(sysBusPCIDevices, pciAddress)
+	for name, expected := range map[string]string{
+		"vendor": virtioPCIVendorID,
+		"device": virtioBlkPCIDeviceID,
+	} {
+		value, err := os.ReadFile(filepath.Join(pciPath, name))
+		if err != nil {
+			return "", fmt.Errorf("reading %s for PCI device %s: %w", name, pciAddress, err)
+		}
+		if strings.TrimSpace(string(value)) != expected {
+			return "", fmt.Errorf("PCI device %s has unexpected %s %q", pciAddress, name, strings.TrimSpace(string(value)))
+		}
+	}
 	pattern := filepath.Join(
-		sysBusPCIDevices, pciAddress,
-		"virtio*", "host*", "target*", "*", "block", "*",
+		pciPath, "virtio*", "block", "*",
 	)
 	blockPaths, err := filepath.Glob(pattern)
 	if err != nil {
@@ -137,6 +157,13 @@ func findDiskByPCIAddress(pciAddress string) (string, error) {
 		)
 	}
 	path := filepath.Join(devDir, filepath.Base(blockPaths[0]))
+	serial, err := os.ReadFile(filepath.Join(sysBlockDir, filepath.Base(path), "serial"))
+	if err != nil {
+		return "", fmt.Errorf("reading serial for disk %s: %w", path, err)
+	}
+	if strings.TrimSpace(string(serial)) != expectedSerial {
+		return "", fmt.Errorf("disk below PCI device %s has unexpected serial %q", pciAddress, strings.TrimSpace(string(serial)))
+	}
 	if _, err := os.Stat(path); err != nil {
 		return "", fmt.Errorf("disk node %s not ready: %w", path, err)
 	}

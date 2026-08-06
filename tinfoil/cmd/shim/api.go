@@ -21,8 +21,6 @@ import (
 	"tinfoil/internal/legacy"
 	"tinfoil/internal/metrics"
 
-	"tinfoil/internal/legacy"
-
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/collaterals"

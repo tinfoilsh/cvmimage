@@ -20,9 +20,10 @@ const (
 	lastUsableDiskPCISlot  = 30 // Q35 reserves slot 31 for ISA/SATA/SMBus.
 	virtioPCIVendorID      = "0x1af4"
 	virtioBlkPCIDeviceID   = "0x1042"
-	rootDiskSerial         = "tinfoil-rootdisk"
-	configDiskSerial       = "tinfoil-config"
-	externalDiskSerial     = "tinfoil-ext-config"
+	// Disk serials are part of the fixed launcher/guest contract.
+	rootDiskSerial     = "tinfoil-rootdisk"
+	configDiskSerial   = "tinfoil-config"
+	externalDiskSerial = "tinfoil-ext-config"
 
 	rootDataPartition    = 1
 	rootVerityPartition  = 2
@@ -130,16 +131,20 @@ func waitForDevice[T any](find func() (T, error)) (T, error) {
 // findDiskByPCIAddress accepts only the fixed modern virtio-blk PCI contract.
 func findDiskByPCIAddress(pciAddress, expectedSerial string) (string, error) {
 	pciPath := filepath.Join(sysBusPCIDevices, pciAddress)
-	for name, expected := range map[string]string{
-		"vendor": virtioPCIVendorID,
-		"device": virtioBlkPCIDeviceID,
-	} {
-		value, err := os.ReadFile(filepath.Join(pciPath, name))
+	attributes := [...]struct {
+		name     string
+		expected string
+	}{
+		{name: "vendor", expected: virtioPCIVendorID},
+		{name: "device", expected: virtioBlkPCIDeviceID},
+	}
+	for _, attribute := range attributes {
+		value, err := os.ReadFile(filepath.Join(pciPath, attribute.name))
 		if err != nil {
-			return "", fmt.Errorf("reading %s for PCI device %s: %w", name, pciAddress, err)
+			return "", fmt.Errorf("reading %s for PCI device %s: %w", attribute.name, pciAddress, err)
 		}
-		if strings.TrimSpace(string(value)) != expected {
-			return "", fmt.Errorf("PCI device %s has unexpected %s %q", pciAddress, name, strings.TrimSpace(string(value)))
+		if strings.TrimSpace(string(value)) != attribute.expected {
+			return "", fmt.Errorf("PCI device %s has unexpected %s %q", pciAddress, attribute.name, strings.TrimSpace(string(value)))
 		}
 	}
 	pattern := filepath.Join(

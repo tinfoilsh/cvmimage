@@ -31,10 +31,16 @@ let
           --strip-components=1 -C "$out"
       '';
 
+  patchedSource = pkgs.applyPatches {
+    name = "linux-source-${version}-tinfoil";
+    src = source;
+    patches = [ ./patches/kernel-disable-virtio-pci-admin-legacy.patch ];
+  };
+
   configFile = pkgs.stdenv.mkDerivation {
     pname = "tinfoil-linux-config";
     inherit version;
-    src = source;
+    src = patchedSource;
     nativeBuildInputs = [
       pkgs.bash
       pkgs.bison
@@ -67,7 +73,7 @@ let
   uncheckedKernel = pkgs.linuxManualConfig {
     pname = "tinfoil-linux";
     inherit version;
-    src = source;
+    src = patchedSource;
     configfile = configFile;
     config = {
       CONFIG_MODULES = "y";

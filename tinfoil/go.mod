@@ -18,7 +18,7 @@ require (
 	github.com/moby/moby/client v0.5.1
 	github.com/prometheus/client_golang v1.24.1
 	github.com/stretchr/testify v1.11.1
-	github.com/tinfoilsh/encrypted-http-body-protocol v0.3.1
+	github.com/tinfoilsh/encrypted-http-body-protocol v0.3.2
 	github.com/tinfoilsh/modelwrap v0.2.1
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
@@ -53,7 +53,7 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/tinfoilsh/tinfoil-go v0.14.2-0.20260714232047-933174da8ff3
+	github.com/tinfoilsh/tinfoil-go v0.15.1-0.20260810234756-ff634ede9513
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect

@@ -110,7 +110,7 @@ func run() error {
 	if err := os.MkdirAll("/sysroot", 0755); err != nil {
 		return err
 	}
-	if err := unix.Mount(dmRootNode, "/sysroot", "ext4", unix.MS_RDONLY, ""); err != nil {
+	if err := unix.Mount(dmRootNode, "/sysroot", "erofs", unix.MS_RDONLY, ""); err != nil {
 		return fmt.Errorf("mounting measured root: %w", err)
 	}
 	return switchRoot("/sysroot", boot.InitBinary)

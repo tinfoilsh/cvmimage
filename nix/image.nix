@@ -14,7 +14,7 @@ pkgs.runCommand "${basename}-image"
     allowedReferences = [ ];
     nativeBuildInputs = [
       pkgs.coreutils
-      pkgs.e2fsprogs
+      pkgs.erofs-utils
       pkgs.fakeroot
       pkgs.gnutar
       pkgs.jq
@@ -33,6 +33,8 @@ pkgs.runCommand "${basename}-image"
       output="$4"
       definitions="$5"
       seed="$6"
+      generated_definitions="$TMPDIR/repart.d"
+      root_image="$TMPDIR/root.erofs"
 
       tar --extract --file="$rootfs" --directory="$root" \
         --numeric-owner --same-owner --same-permissions
@@ -40,6 +42,18 @@ pkgs.runCommand "${basename}-image"
         tar --extract --file="$debug_layer" --directory="$root" \
           --numeric-owner --same-owner --same-permissions
       fi
+
+      mkfs.erofs \
+        -L root \
+        -U cd206b70-d518-4c70-92b4-3089a60f886e \
+        "$root_image" \
+        "$root"
+      truncate --size=2G "$root_image"
+
+      cp --recursive "$definitions" "$generated_definitions"
+      chmod u+w "$generated_definitions/10-root.conf"
+      printf "CopyBlocks=%s\\n" "$root_image" \
+        >> "$generated_definitions/10-root.conf"
 
       export SOURCE_DATE_EPOCH=0
       systemd-repart \
@@ -49,7 +63,7 @@ pkgs.runCommand "${basename}-image"
         --offline=yes \
         --discard=no \
         --seed="$seed" \
-        --definitions="$definitions" \
+        --definitions="$generated_definitions" \
         --copy-source="$root" \
         --json=short \
         --pretty=no \

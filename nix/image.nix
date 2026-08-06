@@ -48,7 +48,16 @@ pkgs.runCommand "${basename}-image"
         -U cd206b70-d518-4c70-92b4-3089a60f886e \
         "$root_image" \
         "$root"
-      truncate --size=2G "$root_image"
+      root_partition_size_spec=$(sed -n "s/^SizeMaxBytes=//p" \
+        "$definitions/10-root.conf")
+      test -n "$root_partition_size_spec"
+      root_partition_size=$(numfmt --from=iec "$root_partition_size_spec")
+      root_image_size=$(stat --format=%s "$root_image")
+      if (( root_image_size > root_partition_size )); then
+        echo "EROFS root image exceeds the 2 GiB root partition" >&2
+        exit 1
+      fi
+      truncate --size="$root_partition_size" "$root_image"
 
       cp --recursive "$definitions" "$generated_definitions"
       chmod u+w "$generated_definitions/10-root.conf"

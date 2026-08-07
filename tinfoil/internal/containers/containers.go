@@ -561,11 +561,6 @@ func applyReservedDebugRuntime(containerConfig *container.Config, hostConfig *co
 	hostConfig.PortBindings[port] = []dockernetwork.PortBinding{{
 		HostPort: fmt.Sprintf("%d", reservedDebugHostPort),
 	}}
-	hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
-		PathOnHost:        reservedDebugSerialDevice,
-		PathInContainer:   reservedDebugSerialDevice,
-		CgroupPermissions: "rw",
-	})
 }
 
 func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettings {

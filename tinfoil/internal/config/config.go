@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	"github.com/creasty/defaults"
 	"gopkg.in/yaml.v3"
@@ -39,6 +40,12 @@ type Config struct {
 	RateBurst int     `yaml:"rate-burst"`
 	Email     string  `yaml:"email" default:"tls@tinfoil.sh"`
 
+	// ModelName is the authoritative served-model and billing reporter identity.
+	// A non-empty value makes direct billing mandatory: shim startup fails unless
+	// reporter credentials are available. Request-controlled model fields never
+	// override it.
+	ModelName string `yaml:"model-name"`
+
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
 	DummyAttestation   bool `yaml:"dummy-attestation" default:"false"`
 
@@ -47,7 +54,17 @@ type Config struct {
 	ExpectedGPUs int `yaml:"expected-gpus" default:"0"`
 }
 
-const SecretMetricsAPIKey = "METRICS_API_KEY"
+const (
+	SecretMetricsAPIKey = "METRICS_API_KEY"
+	SecretUsageReporter = "USAGE_REPORTER_SECRET"
+)
+
+// BillingRequired reports whether this shim is a model accounting boundary.
+// ModelName is also the reporter ID, preventing independent configuration from
+// drifting and attributing usage to the wrong model.
+func (c *Config) BillingRequired() bool {
+	return c != nil && c.ModelName != ""
+}
 
 type Metadata struct {
 	ID     string `yaml:"id"`
@@ -156,6 +173,9 @@ func (c *Config) Validate() error {
 	}
 	if c.TLSWildcard && c.TLSChallengeMode != "dns" {
 		return fmt.Errorf("tls-wildcard requires tls-challenge: dns (wildcard certs cannot use %s challenge)", c.TLSChallengeMode)
+	}
+	if c.ModelName != strings.TrimSpace(c.ModelName) {
+		return fmt.Errorf("model-name must not have leading or trailing whitespace")
 	}
 	return nil
 }

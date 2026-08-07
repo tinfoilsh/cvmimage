@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,15 @@ import (
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 )
+
+type repeatingByteReader struct{}
+
+func (repeatingByteReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
 
 type fakeValidator struct {
 	err   error
@@ -45,7 +55,7 @@ func testAuthServer(t *testing.T, validator key.Validator, authenticatedEndpoint
 		Body:   "deadbeef",
 	}
 
-	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, "127.0.0.1:9999")
+	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, "127.0.0.1:9999", nil)
 }
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
@@ -72,7 +82,7 @@ func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler
 	}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
 
-	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, upstreamAddr)
+	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, upstreamAddr, nil)
 }
 
 func testObservabilityServer(t *testing.T, paths []string) http.Handler {
@@ -113,6 +123,39 @@ func TestPathNotAllowed_Returns404(t *testing.T) {
 	}
 	if typ := body["error"]["type"]; typ != "invalid_request_error" {
 		t.Errorf("expected error type %q, got %q", "invalid_request_error", typ)
+	}
+}
+
+func TestOversizedRequestBodyKnownLengthReturns413(t *testing.T) {
+	handler := testServer(t, nil, 9999)
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", repeatingByteReader{})
+	req.ContentLength = maxRequestBodySize + 1
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+}
+
+func TestOversizedChunkedRequestBodyReturns413(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+	handler := testServer(t, nil, port)
+	body := io.NopCloser(io.LimitReader(repeatingByteReader{}, maxRequestBodySize+1))
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", body)
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
 	}
 }
 

@@ -42,6 +42,9 @@ func Validate(config *Config, debug bool) error {
 	if len(config.Models) > device.MaxModelDisks {
 		return fmt.Errorf("models must contain at most %d entries (got %d)", device.MaxModelDisks, len(config.Models))
 	}
+	if len(config.Models) > 0 && (config.ShimCfg == nil || config.ShimCfg.ModelName == "") {
+		return fmt.Errorf("shim.model-name is required when models are configured")
+	}
 	if err := validateShape(config, debug); err != nil {
 		return err
 	}

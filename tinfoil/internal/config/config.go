@@ -42,8 +42,8 @@ type Config struct {
 
 	// ModelName is the authoritative served-model and billing reporter identity.
 	// A non-empty value makes direct billing mandatory: shim startup fails unless
-	// reporter credentials are available. Request-controlled model fields never
-	// override it.
+	// both declared billing secrets are available. Request-controlled model
+	// fields never override it.
 	ModelName string `yaml:"model-name"`
 
 	PublishAttestation bool `yaml:"publish-attestation" default:"true"`
@@ -57,6 +57,7 @@ type Config struct {
 const (
 	SecretMetricsAPIKey = "METRICS_API_KEY"
 	SecretUsageReporter = "USAGE_REPORTER_SECRET"
+	SecretUsageContext  = "USAGE_CONTEXT_SECRET"
 )
 
 // BillingRequired reports whether this shim is a model accounting boundary.

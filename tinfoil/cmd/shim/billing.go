@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	usagereporting "github.com/tinfoilsh/usage-reporting-go"
+
 	"tinfoil/internal/billing"
 	"tinfoil/internal/tokencount"
 )
@@ -24,10 +27,34 @@ const (
 	// client explicitly asked for usage stats. The response extractor reads it
 	// to decide whether to keep or filter usage-only SSE chunks.
 	clientRequestedUsageHeader = "X-Tinfoil-Client-Requested-Usage"
+
+	// usageContextMaxSkew bounds how old a signed usage-context header may be
+	// before the shim rejects it as stale (and bills normally). Mirrors the
+	// router's tool-runtime skew window.
+	usageContextMaxSkew = time.Minute
 )
+
+// billingSuppressedKey carries the authenticated ingress decision through the
+// reverse proxy after the untrusted usage-context headers have been removed.
+type billingSuppressedKey struct{}
 
 type billingEventCollector interface {
 	AddEvent(billing.Event)
+}
+
+func billingSuppressedFromContext(ctx context.Context) bool {
+	suppressed, _ := ctx.Value(billingSuppressedKey{}).(bool)
+	return suppressed
+}
+
+// prepareBillingSuppression validates the router context while its one-minute
+// freshness window is still measured at request ingress, then strips both
+// headers so they are not exposed to the workload container.
+func prepareBillingSuppression(r *http.Request, apiKey, usageContextSecret string) {
+	suppressed := alreadyBilledByRouter(r.Header, apiKey, usageContextSecret)
+	r.Header.Del(usagereporting.HeaderContext)
+	r.Header.Del(usagereporting.HeaderUsageContextSignature)
+	*r = *r.WithContext(context.WithValue(r.Context(), billingSuppressedKey{}, suppressed))
 }
 
 // ensureStreamingUsageOptions forces upstream streaming requests to include
@@ -185,6 +212,53 @@ func (b *billingCloser) Close() error {
 	return err
 }
 
+// alreadyBilledByRouter reports whether the request carries a validly-signed
+// usage-context header from the confidential-model-router declaring that the
+// router has already counted this customer request (BillCustomerRequest ==
+// false). The shim suppresses its own billing event in that case to prevent
+// double-billing on the cloud path (teep → router → shim).
+//
+// Fail closed toward billing accuracy: a missing context (direct-path client
+// with no signing secret) returns false, and an invalid context (bad
+// signature, expired IssuedAt, missing half of the header pair, or API key
+// mismatch) also returns false with a warning log. The only path that
+// suppresses is a validly-signed, in-skew, BillCustomerRequest == false
+// context whose APIKeyHash matches the request's bearer token.
+func alreadyBilledByRouter(header http.Header, apiKey, usageContextSecret string) bool {
+	if usageContextSecret == "" || apiKey == "" {
+		return false
+	}
+	ctx, present, err := usagereporting.FromHeaders(header, usageContextSecret, time.Now(), usageContextMaxSkew)
+	switch {
+	case !present:
+		// Direct-path client (teep): no signed context. Bill normally.
+		return false
+	case err != nil:
+		// Bad signature, expired, or malformed: bill normally and warn.
+		log.Printf("warning: invalid usage-context signature from upstream: %v", err)
+		return false
+	case ctx.BillCustomerRequest:
+		// Downstream is explicitly told to bill its own line item
+		// (the tool-runtime semantics). Not the router→shim case; bill.
+		return false
+	}
+
+	// Suppression is only valid for the immediate router -> shim hop. Requiring
+	// all three fields prevents a correctly signed but semantically unrelated
+	// context (or an empty API-key hash) from becoming a billing wildcard.
+	if ctx.ParentService != usagereporting.ServiceRouter || ctx.Depth != 1 || strings.TrimSpace(ctx.APIKeyHash) == "" {
+		log.Printf("warning: refusing billing suppression for unexpected usage context (parent_service=%q depth=%d api_key_hash_present=%t)",
+			ctx.ParentService, ctx.Depth, strings.TrimSpace(ctx.APIKeyHash) != "")
+		return false
+	}
+	if !usagereporting.VerifyAPIKeyHash(apiKey, ctx.APIKeyHash) {
+		log.Printf("warning: refusing billing suppression because usage context does not match request API key")
+		return false
+	}
+
+	return true
+}
+
 // applyBillingToResponse wraps the proxied response body to extract token
 // usage and emits a billing event via the collector. It mirrors the
 // confidential-model-router proxy's ModifyResponse billing chokepoint:
@@ -215,8 +289,15 @@ func applyBillingToResponse(resp *http.Response, collector billingEventCollector
 		requestID = resp.Header.Get("X-Request-ID")
 	}
 
+	// Suppress this enclave's billing event when the router has already
+	// counted the request (cloud path). The response body still passes
+	// through the token extractor unchanged so streaming usage-only chunk
+	// filtering behaves identically for router-path and direct-path traffic
+	// — only the event emission is suppressed, never the body transformation.
+	alreadyBilled := billingSuppressedFromContext(req.Context())
+
 	emitZeroTokenEvent := func() {
-		if collector == nil || apiKey == "" {
+		if collector == nil || apiKey == "" || alreadyBilled {
 			return
 		}
 		collector.AddEvent(billing.Event{
@@ -246,7 +327,7 @@ func applyBillingToResponse(resp *http.Response, collector billingEventCollector
 		if usage == nil {
 			return
 		}
-		if collector == nil || apiKey == "" {
+		if collector == nil || apiKey == "" || alreadyBilled {
 			return
 		}
 		cachedPromptTokens := 0
@@ -282,7 +363,7 @@ func applyBillingToResponse(resp *http.Response, collector billingEventCollector
 	// (e.g. tokenize, metrics). The billingCloser only fires if the
 	// usageHandler was never called, preventing double-billing for models
 	// that do include usage.
-	if !streaming && collector != nil && apiKey != "" && resp.StatusCode == http.StatusOK {
+	if !streaming && collector != nil && apiKey != "" && !alreadyBilled && resp.StatusCode == http.StatusOK {
 		resp.Body = &billingCloser{
 			ReadCloser:    resp.Body,
 			handlerCalled: &handlerCalled,

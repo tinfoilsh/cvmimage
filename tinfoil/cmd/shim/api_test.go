@@ -55,7 +55,7 @@ func testAuthServer(t *testing.T, validator key.Validator, authenticatedEndpoint
 		Body:   "deadbeef",
 	}
 
-	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, "127.0.0.1:9999", nil)
+	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, "127.0.0.1:9999", nil, "")
 }
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
@@ -82,7 +82,7 @@ func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler
 	}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
 
-	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, upstreamAddr, nil)
+	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, cfg, extCfg, upstreamAddr, nil, "")
 }
 
 func testObservabilityServer(t *testing.T, paths []string) http.Handler {

@@ -262,7 +262,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		collector, err := newShimBilling(config, externalConfig)
+		collector, usageContextSecret, err := newShimBilling(config, externalConfig)
 		if err != nil {
 			return err
 		}
@@ -271,7 +271,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			log.Printf("Billing collector enabled (reporter=%s, control_plane=%s)", config.ModelName, config.ControlPlane)
 		}
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr, collector)
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr, collector, usageContextSecret)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")
@@ -290,30 +290,37 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 // newShimBilling initializes mandatory accounting for model-serving shims.
 // ModelName is the reporter identity, so deployment configuration cannot point
 // a model at another reporter by independently changing a duplicate field.
-func newShimBilling(config *shimconfig.Config, externalConfig *shimconfig.ExternalConfig) (*billing.Collector, error) {
+func newShimBilling(config *shimconfig.Config, externalConfig *shimconfig.ExternalConfig) (*billing.Collector, string, error) {
 	if !config.BillingRequired() {
-		return nil, nil
+		return nil, "", nil
 	}
 	reporterSecret := externalConfig.GetSecret(shimconfig.SecretUsageReporter)
 	if reporterSecret == "" {
-		return nil, fmt.Errorf("required shim billing secret %s is unavailable", shimconfig.SecretUsageReporter)
+		return nil, "", fmt.Errorf("required shim billing secret %s is unavailable", shimconfig.SecretUsageReporter)
+	}
+	usageContextSecret := externalConfig.GetSecret(shimconfig.SecretUsageContext)
+	if usageContextSecret == "" {
+		return nil, "", fmt.Errorf("required shim billing secret %s is unavailable", shimconfig.SecretUsageContext)
 	}
 	collector, err := billing.NewCollector(config.ControlPlane, config.ModelName, reporterSecret)
 	if err != nil {
-		return nil, fmt.Errorf("initialize billing collector for model %q: %w", config.ModelName, err)
+		return nil, "", fmt.Errorf("initialize billing collector for model %q: %w", config.ModelName, err)
 	}
-	return collector, nil
+	return collector, usageContextSecret, nil
 }
 
 // validateShimBillingInvariant makes billing optional only for non-model
 // shims. Reaching handler construction for a model shim without a usable
 // collector is an internal invariant violation: startup must have failed first.
-func validateShimBillingInvariant(config *shimconfig.Config, collector *billing.Collector) error {
+func validateShimBillingInvariant(config *shimconfig.Config, collector *billing.Collector, usageContextSecret string) error {
 	if !config.BillingRequired() {
 		return nil
 	}
 	if collector == nil || !collector.Enabled() {
 		return fmt.Errorf("model shim %q requires an initialized billing collector", config.ModelName)
+	}
+	if usageContextSecret == "" {
+		return fmt.Errorf("model shim %q requires %s", config.ModelName, shimconfig.SecretUsageContext)
 	}
 	return nil
 }

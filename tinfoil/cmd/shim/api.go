@@ -91,6 +91,14 @@ func (v *metricsValidator) Validate(req key.Request) error {
 
 // extractBearerToken returns the token portion of an Authorization header,
 // accepting any capitalization of the "Bearer" scheme.
+//
+// This must produce byte-identical output to the confidential-model-router's
+// manager.BearerToken: the router signs usage-context APIKeyHash with
+// HashAPIKey(BearerToken(...)) and the shim verifies with
+// VerifyAPIKeyHash(extractBearerToken(...), ctx.APIKeyHash). Any divergence
+// in parsing (scheme casing, trimming) silently breaks billing suppression
+// (fail-closed to double-billing). The two functions are intentionally
+// identical and must not drift.
 func extractBearerToken(header string) string {
 	const scheme = "bearer "
 	if len(header) < len(scheme) || !strings.EqualFold(header[:len(scheme)], scheme) {
@@ -196,9 +204,10 @@ func NewShimServer(
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
 	billingCollector *billing.Collector,
+	usageContextSecret string,
 ) http.Handler {
 	billingRequired := config.BillingRequired()
-	if err := validateShimBillingInvariant(config, billingCollector); err != nil {
+	if err := validateShimBillingInvariant(config, billingCollector, usageContextSecret); err != nil {
 		panic(err)
 	}
 	ehbpMiddleware := ehbpIdentity.Middleware()
@@ -285,6 +294,10 @@ func NewShimServer(
 				writeJSONError(w, errMsgRateLimited, errTypeInvalidRequest, http.StatusTooManyRequests)
 				return
 			}
+		}
+
+		if billingRequired {
+			prepareBillingSuppression(r, apiKey, usageContextSecret)
 		}
 
 		if r.Body != nil && r.Body != http.NoBody {

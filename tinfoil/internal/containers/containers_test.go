@@ -127,10 +127,12 @@ func TestBuildEnvNilConfig(t *testing.T) {
 func TestBuildEnvInjectsDeclaredBillingSecrets(t *testing.T) {
 	ext := &shimconfig.ExternalConfig{Secrets: map[string]string{
 		shimconfig.SecretUsageReporter: "reporter-secret",
+		shimconfig.SecretUsageContext:  "context-secret",
 	}}
-	env := buildEnv(nil, []string{shimconfig.SecretUsageReporter}, ext)
+	env := buildEnv(nil, []string{shimconfig.SecretUsageReporter, shimconfig.SecretUsageContext}, ext)
 	want := map[string]bool{
 		shimconfig.SecretUsageReporter + "=reporter-secret": true,
+		shimconfig.SecretUsageContext + "=context-secret":   true,
 	}
 	for _, entry := range env {
 		delete(want, entry)

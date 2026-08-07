@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"time"
+
+	usagereporting "github.com/tinfoilsh/usage-reporting-go"
 
 	"tinfoil/internal/billing"
 )
@@ -380,6 +383,231 @@ func TestBillingCloser_SkipsWhenHandlerCalled(t *testing.T) {
 	}
 }
 
+// --- alreadyBilledByRouter tests ---
+
+const testUsageContextSecret = "test-usage-context-secret-32-bytes!"
+
+const testAPIKey = "sk-test-key-1234567890"
+
+// TestExtractBearerToken_MatchesHashAPIKeyRoundTrip verifies that the
+// shim's extractBearerToken produces the exact string the router would
+// hash with usagereporting.HashAPIKey, so the VerifyAPIKeyHash check in
+// alreadyBilledByRouter succeeds. The router's manager.BearerToken and
+// the shim's extractBearerToken are intentionally identical duplicates in
+// separate modules; this test guards against drift in the shim's copy.
+func TestExtractBearerToken_MatchesHashAPIKeyRoundTrip(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"standard", "Bearer " + testAPIKey, testAPIKey},
+		{"lowercase scheme", "bearer " + testAPIKey, testAPIKey},
+		{"mixed case", "BeArEr " + testAPIKey, testAPIKey},
+		{"trailing whitespace", "Bearer " + testAPIKey + "  ", testAPIKey},
+		{"no space after scheme", "Bearer" + testAPIKey, ""},
+		{"empty", "", ""},
+		{"wrong scheme", "Basic " + testAPIKey, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractBearerToken(tc.header)
+			if got != tc.want {
+				t.Fatalf("extractBearerToken(%q) = %q, want %q", tc.header, got, tc.want)
+			}
+			// When extraction succeeds, the extracted key must verify
+			// against a hash of the same key — the exact round-trip the
+			// router→shim billing-suppression path depends on.
+			if got != "" {
+				hash := usagereporting.HashAPIKey(got)
+				if !usagereporting.VerifyAPIKeyHash(got, hash) {
+					t.Fatalf("VerifyAPIKeyHash mismatch: extracted token does not verify against its own hash")
+				}
+			}
+		})
+	}
+}
+
+// signUsageContext sets a validly-signed usage-context header on the
+// request for the given context fields.
+func signUsageContext(t *testing.T, header http.Header, apiKey string, billCustomerRequest bool) {
+	t.Helper()
+	ctx := usagereporting.Context{
+		ParentService:       usagereporting.ServiceRouter,
+		APIKeyHash:          usagereporting.HashAPIKey(apiKey),
+		BillCustomerRequest: billCustomerRequest,
+		Depth:               1,
+		IssuedAt:            time.Now().UTC(),
+	}
+	signExactUsageContext(t, header, ctx)
+}
+
+func signExactUsageContext(t *testing.T, header http.Header, ctx usagereporting.Context) {
+	t.Helper()
+	if err := usagereporting.SetHeaders(header, ctx, testUsageContextSecret); err != nil {
+		t.Fatalf("SetHeaders: %v", err)
+	}
+}
+
+func TestAlreadyBilledByRouter_NoContext_DirectPath(t *testing.T) {
+	header := http.Header{}
+	// No usage-context header set — direct-path client.
+	got := alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret)
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false for direct-path (no context)")
+	}
+}
+
+func TestAlreadyBilledByRouter_NoSecret(t *testing.T) {
+	header := http.Header{}
+	signUsageContext(t, header, testAPIKey, false)
+	// Shim booted without USAGE_CONTEXT_SECRET — cannot verify, must bill.
+	got := alreadyBilledByRouter(header, testAPIKey, "")
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false when secret is empty")
+	}
+}
+
+func TestAlreadyBilledByRouter_NoAPIKey(t *testing.T) {
+	header := http.Header{}
+	signUsageContext(t, header, testAPIKey, false)
+	// No API key on the request — cannot bind, must bill.
+	got := alreadyBilledByRouter(header, "", testUsageContextSecret)
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false when apiKey is empty")
+	}
+}
+
+func TestAlreadyBilledByRouter_ValidSuppression(t *testing.T) {
+	header := http.Header{}
+	signUsageContext(t, header, testAPIKey, false)
+	got := alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret)
+	if !got {
+		t.Errorf("alreadyBilledByRouter = false, want true for valid signed context with BillCustomerRequest=false and matching API key")
+	}
+}
+
+func TestAlreadyBilledByRouter_BillCustomerRequestTrue(t *testing.T) {
+	header := http.Header{}
+	// Tool-runtime semantics: BillCustomerRequest=true means the downstream
+	// should bill its own line item, not suppress.
+	signUsageContext(t, header, testAPIKey, true)
+	got := alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret)
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false when BillCustomerRequest=true")
+	}
+}
+
+func TestAlreadyBilledByRouter_BadSignature(t *testing.T) {
+	header := http.Header{}
+	signUsageContext(t, header, testAPIKey, false)
+	// Tamper with the signature.
+	header.Set(usagereporting.HeaderUsageContextSignature, "deadbeef")
+	got := alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret)
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false for bad signature")
+	}
+}
+
+func TestAlreadyBilledByRouter_ExpiredContext(t *testing.T) {
+	header := http.Header{}
+	// Sign with an IssuedAt well outside the skew window.
+	ctx := usagereporting.Context{
+		ParentService:       usagereporting.ServiceRouter,
+		APIKeyHash:          usagereporting.HashAPIKey(testAPIKey),
+		BillCustomerRequest: false,
+		Depth:               1,
+		IssuedAt:            time.Now().UTC().Add(-10 * time.Minute),
+	}
+	if err := usagereporting.SetHeaders(header, ctx, testUsageContextSecret); err != nil {
+		t.Fatalf("SetHeaders: %v", err)
+	}
+	got := alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret)
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false for expired context")
+	}
+}
+
+func TestAlreadyBilledByRouter_APIKeyMismatch(t *testing.T) {
+	header := http.Header{}
+	// Context signed for a different API key.
+	signUsageContext(t, header, "sk-other-key-9999999999", false)
+	got := alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret)
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false when API key does not match")
+	}
+}
+
+func TestAlreadyBilledByRouter_RejectsUnexpectedContextSemantics(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*usagereporting.Context)
+	}{
+		{
+			name: "empty API key hash",
+			mutate: func(ctx *usagereporting.Context) {
+				ctx.APIKeyHash = ""
+			},
+		},
+		{
+			name: "unexpected parent service",
+			mutate: func(ctx *usagereporting.Context) {
+				ctx.ParentService = "tool-runtime"
+			},
+		},
+		{
+			name: "unexpected depth",
+			mutate: func(ctx *usagereporting.Context) {
+				ctx.Depth = 2
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := usagereporting.Context{
+				ParentService:       usagereporting.ServiceRouter,
+				APIKeyHash:          usagereporting.HashAPIKey(testAPIKey),
+				BillCustomerRequest: false,
+				Depth:               1,
+				IssuedAt:            time.Now().UTC(),
+			}
+			tc.mutate(&ctx)
+			header := http.Header{}
+			signExactUsageContext(t, header, ctx)
+			if alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret) {
+				t.Fatal("alreadyBilledByRouter = true, want false")
+			}
+		})
+	}
+}
+
+func TestAlreadyBilledByRouter_HalfHeader(t *testing.T) {
+	header := http.Header{}
+	// Only the context header, no signature.
+	header.Set(usagereporting.HeaderContext, "eyJiaWxsX2N1c3RvbWVyX3JlcXVlc3QiOmZhbHNlfQ")
+	got := alreadyBilledByRouter(header, testAPIKey, testUsageContextSecret)
+	if got {
+		t.Errorf("alreadyBilledByRouter = true, want false when only one half of the header pair is present")
+	}
+}
+
+func TestPrepareBillingSuppressionValidatesAtIngressAndStripsHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	signUsageContext(t, req.Header, testAPIKey, false)
+
+	prepareBillingSuppression(req, testAPIKey, testUsageContextSecret)
+
+	if !billingSuppressedFromContext(req.Context()) {
+		t.Fatal("valid ingress context did not suppress downstream billing")
+	}
+	if req.Header.Get(usagereporting.HeaderContext) != "" || req.Header.Get(usagereporting.HeaderUsageContextSignature) != "" {
+		t.Fatal("usage-context credentials were forwarded toward the workload")
+	}
+}
+
+// --- applyBillingToResponse suppression integration tests ---
+
 type recordingBillingCollector struct {
 	events chan billing.Event
 }
@@ -393,17 +621,55 @@ func (c *recordingBillingCollector) AddEvent(event billing.Event) {
 	c.events <- event
 }
 
+func TestApplyBillingToResponse_SuppressesWhenAlreadyBilled(t *testing.T) {
+	// Non-streaming 200 with a usage field. With a valid suppression context,
+	// the billingCloser must NOT be wrapped (alreadyBilled gates it), and the
+	// body must still pass through the token extractor unchanged.
+	body := `{"id":"x","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader([]byte(body))),
+		Request:    httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+	}
+	resp.Request.Header.Set("Authorization", "Bearer "+testAPIKey)
+	signUsageContext(t, resp.Request.Header, testAPIKey, false)
+
+	collector, events := newRecordingBillingCollector()
+
+	prepareBillingSuppression(resp.Request, testAPIKey, testUsageContextSecret)
+	applyBillingToResponse(resp, collector, "test-model", "test-enclave")
+
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	resp.Body.Close()
+	if string(out) != body {
+		t.Errorf("body changed when billing suppressed: got %s", out)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("suppressed request emitted billing event: %+v", event)
+	default:
+	}
+}
+
 func TestApplyBillingToResponse_BillsDirectPath(t *testing.T) {
+	// Direct-path: no usage-context header. Exactly one event must be delivered.
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader([]byte(`{"id":"x","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`))),
 		Request:    httptest.NewRequest(http.MethodPost, "/tokenize", nil),
 	}
-	resp.Request.Header.Set("Authorization", "Bearer sk-test-key-1234567890")
+	resp.Request.Header.Set("Authorization", "Bearer "+testAPIKey)
+
 	collector, events := newRecordingBillingCollector()
 
+	prepareBillingSuppression(resp.Request, testAPIKey, testUsageContextSecret)
 	applyBillingToResponse(resp, collector, "test-model", "test-enclave")
+
 	if _, err := io.ReadAll(resp.Body); err != nil {
 		t.Fatalf("reading body: %v", err)
 	}
@@ -411,12 +677,43 @@ func TestApplyBillingToResponse_BillsDirectPath(t *testing.T) {
 		t.Fatalf("closing body: %v", err)
 	}
 
+	var event billing.Event
 	select {
-	case event := <-events:
-		if event.PromptTokens != 5 || event.CompletionTokens != 3 {
-			t.Fatalf("unexpected direct-path event: %+v", event)
-		}
+	case event = <-events:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for direct-path billing event")
+	}
+	if event.PromptTokens != 5 || event.CompletionTokens != 3 {
+		t.Fatalf("unexpected direct-path event: %+v", event)
+	}
+	select {
+	case extra := <-events:
+		t.Fatalf("direct request emitted a second event: %+v", extra)
 	default:
-		t.Fatal("direct-path billing event was not emitted")
+	}
+}
+
+func TestApplyBillingToResponse_DirectPathNoSecret(t *testing.T) {
+	// Shim booted without USAGE_CONTEXT_SECRET. Even if a context header
+	// were present (it shouldn't be on the direct path), suppression cannot
+	// occur. The billingCloser must be wrapped.
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader([]byte(`{"id":"x","choices":[]}`))),
+		Request:    httptest.NewRequest(http.MethodPost, "/tokenize", nil),
+	}
+	resp.Request.Header.Set("Authorization", "Bearer "+testAPIKey)
+
+	collector, events := newRecordingBillingCollector()
+
+	applyBillingToResponse(resp, collector, "test-model", "test-enclave")
+
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	select {
+	case <-events:
+	default:
+		t.Fatal("direct path without a context secret did not bill")
 	}
 }

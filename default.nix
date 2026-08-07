@@ -20,6 +20,10 @@ let
     tinfoilInitrd = go.packages."tinfoil-initrd";
   };
   kernel = import ./nix/kernel.nix { inherit pkgs; };
+  debugKernel = import ./nix/kernel.nix {
+    inherit pkgs;
+    debugConsole = true;
+  };
   nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
   nvattest = import ./nix/nvattest.nix { inherit pkgs; };
   runtimePackages = import ./nix/runtime-packages.nix { inherit pkgs; };
@@ -35,17 +39,17 @@ let
   repartSeedMatch = builtins.match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n" repartSeedText;
   repartSeed = assert repartSeedMatch != null; builtins.head repartSeedMatch;
   image = import ./nix/image.nix;
-  buildImage = extraArgs: image ({
+  buildImage = kernelArtifacts: extraArgs: image ({
     inherit pkgs repartSeed;
     rootfs = rootfs.rootfs;
-    kernel = "${kernel.artifacts}/tinfoil-custom.vmlinuz";
+    kernel = "${kernelArtifacts}/tinfoil-custom.vmlinuz";
     inherit initrd;
     repartDefinitions = ./repart.d;
   } // extraArgs);
-  shippingImage = buildImage {
+  shippingImage = buildImage kernel.artifacts {
     basename = "tinfoilcvm";
   };
-  debugImage = buildImage {
+  debugImage = buildImage debugKernel.artifacts {
     debugLayer = rootfs.debugLayer;
     basename = "tinfoilcvm-debug";
   };
@@ -55,6 +59,7 @@ go.packages
   inherit (go) checks;
   inherit initrd;
   "kernel-artifacts" = kernel.artifacts;
+  "debug-kernel-artifacts" = debugKernel.artifacts;
   "nvidia-modules" = nvidia.modules;
   inherit (nvattest) nvattest;
   "rootfs-archive" = rootfs.rootfs;

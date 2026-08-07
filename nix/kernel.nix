@@ -1,4 +1,7 @@
-{ pkgs }:
+{
+  pkgs,
+  debugConsole ? false,
+}:
 
 let
   inherit (pkgs) lib;
@@ -6,6 +9,16 @@ let
   version = "7.0.0";
   release = "7.0.0-28-generic";
   buildTimestamp = "Tue Jan  1 00:00:00 UTC 1980";
+  policyConfigs = [
+    ../kernel/config.d/10-tinfoil-cvm-policy.config
+    ../kernel/config.d/20-console-common.config
+  ] ++ [
+    (if debugConsole then
+      ../kernel/config.d/20-debug-console.config
+    else
+      ../kernel/config.d/20-production-console.config)
+  ];
+  policyConfigArgs = lib.concatMapStringsSep " " (path: "${path}") policyConfigs;
 
   sourceDeb = pkgs.fetchurl {
     url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/l/linux/linux-source-7.0.0_7.0.0-28.28_all.deb";
@@ -57,10 +70,10 @@ let
         arch/x86/configs/tinfoil_cvm_defconfig
       make KERNELVERSION=${version} tinfoil_cvm_defconfig
       scripts/kconfig/merge_config.sh -m \
-        .config ${../kernel/config.d/10-tinfoil-cvm-policy.config}
+        .config ${policyConfigArgs}
       make KERNELVERSION=${version} olddefconfig
       ${pkgs.bash}/bin/bash ${../kernel/check-config.sh} \
-        .config ${../kernel/config.d/10-tinfoil-cvm-policy.config}
+        .config ${policyConfigArgs}
       runHook postBuild
     '';
     installPhase = ''
@@ -114,7 +127,7 @@ let
     '';
     postConfigure = (old.postConfigure or "") + ''
       ${pkgs.bash}/bin/bash ${../kernel/check-config.sh} \
-        "$buildRoot/.config" ${../kernel/config.d/10-tinfoil-cvm-policy.config}
+        "$buildRoot/.config" ${policyConfigArgs}
     '';
   });
 

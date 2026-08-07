@@ -15,6 +15,9 @@ fi
 
 failures=0
 checks=0
+declare -A expected_settings=()
+declare -A expected_policies=()
+declare -A expected_lines=()
 
 valid_config_key() {
     [[ "$1" =~ ^CONFIG_[A-Za-z0-9_]+$ ]]
@@ -53,10 +56,9 @@ for policy in "$@"; do
                     fail_setting "$policy" "$line_number" "$line" "$key"
                     continue
                 fi
-                checks=$((checks + 1))
-                if ! grep -Fqx -- "$line" "$resolved_config"; then
-                    fail_setting "$policy" "$line_number" "$line" "$key"
-                fi
+                expected_settings["$key"]=$line
+                expected_policies["$key"]=$policy
+                expected_lines["$key"]=$line_number
                 ;;
             "# CONFIG_"*" is not set")
                 key=${line#\# }
@@ -65,10 +67,9 @@ for policy in "$@"; do
                     fail_setting "$policy" "$line_number" "$line" "$key"
                     continue
                 fi
-                checks=$((checks + 1))
-                if grep -Eq "^${key}=" "$resolved_config"; then
-                    fail_setting "$policy" "$line_number" "$line" "$key"
-                fi
+                expected_settings["$key"]=$line
+                expected_policies["$key"]=$policy
+                expected_lines["$key"]=$line_number
                 ;;
             "# CONFIG_"*)
                 printf 'FAIL: malformed disabled-symbol policy at %s:%d: %s\n' \
@@ -84,6 +85,25 @@ for policy in "$@"; do
                 ;;
         esac
     done < "$policy"
+done
+
+for key in "${!expected_settings[@]}"; do
+    expected=${expected_settings["$key"]}
+    policy=${expected_policies["$key"]}
+    line_number=${expected_lines["$key"]}
+    checks=$((checks + 1))
+    case "$expected" in
+        CONFIG_*=*)
+            if ! grep -Fqx -- "$expected" "$resolved_config"; then
+                fail_setting "$policy" "$line_number" "$expected" "$key"
+            fi
+            ;;
+        "# CONFIG_"*" is not set")
+            if grep -Eq "^${key}=" "$resolved_config"; then
+                fail_setting "$policy" "$line_number" "$expected" "$key"
+            fi
+            ;;
+    esac
 done
 
 modules="$(grep -E '^CONFIG_[A-Za-z0-9_]+=m$' "$resolved_config" || true)"

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -140,6 +141,27 @@ func TestConfigDiskRejectsWrongOrAmbiguousTopology(t *testing.T) {
 	})
 }
 
+func TestConfigDiskRejectsLegacySCSITopologyAndWrongSerial(t *testing.T) {
+	t.Run("legacy SCSI shape", func(t *testing.T) {
+		fixture := withFixture(t)
+		mustMkdir(t, filepath.Join(fixture.pci, configDiskPCIAddress))
+		mustWrite(t, filepath.Join(fixture.pci, configDiskPCIAddress, "vendor"), virtioPCIVendorID+"\n")
+		mustWrite(t, filepath.Join(fixture.pci, configDiskPCIAddress, "device"), virtioBlkPCIDeviceID+"\n")
+		mustMkdir(t, filepath.Join(fixture.pci, configDiskPCIAddress, "virtio0", "host0", "target0:0:0", "0:0:0:0", "block", "sda"))
+		if _, err := ConfigDisk(); err == nil {
+			t.Fatal("legacy SCSI topology was accepted")
+		}
+	})
+	t.Run("wrong serial", func(t *testing.T) {
+		fixture := withFixture(t)
+		addPCIDisk(t, fixture, configDiskPCIAddress, "vda")
+		mustWrite(t, filepath.Join(fixture.sys, "vda", "serial"), "wrong\n")
+		if _, err := ConfigDisk(); err == nil {
+			t.Fatal("wrong virtio-blk serial was accepted")
+		}
+	})
+}
+
 func TestModelDiskAndPartitionUseConfigOrder(t *testing.T) {
 	fixture := withFixture(t)
 	addPCIDisk(t, fixture, "0000:00:07.0", "sdc")
@@ -188,10 +210,25 @@ func addPCIDisk(t *testing.T, fixture deviceFixture, controller, name string) {
 	t.Helper()
 	blockDir := filepath.Join(
 		fixture.pci, controller,
-		"virtio0", "host0", "target0:0:0", "0:0:0:0", "block", name,
+		"virtio0", "block", name,
 	)
 	mustMkdir(t, blockDir)
-	mustMkdir(t, filepath.Join(fixture.sys, name))
+	mustWrite(t, filepath.Join(fixture.pci, controller, "vendor"), virtioPCIVendorID+"\n")
+	mustWrite(t, filepath.Join(fixture.pci, controller, "device"), virtioBlkPCIDeviceID+"\n")
+	mustMkdir(t, filepath.Join(fixture.sys, name, "device"))
+	serial := rootDiskSerial
+	switch controller {
+	case configDiskPCIAddress:
+		serial = configDiskSerial
+	case externalDiskPCIAddress:
+		serial = externalDiskSerial
+	default:
+		if controller != rootDiskPCIAddress {
+			slot, _ := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(controller, "0000:00:"), ".0"), 16, 32)
+			serial = modelDiskSerial(int(slot) - firstModelDiskPCISlot)
+		}
+	}
+	mustWrite(t, filepath.Join(fixture.sys, name, "serial"), serial+"\n")
 	mustWrite(t, filepath.Join(fixture.dev, name), "")
 }
 

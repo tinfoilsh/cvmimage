@@ -15,7 +15,6 @@ const (
 	ReservedDebugContainerName = "tinfoil-debug-toolbox"
 	ReservedDebugPort          = "2222/tcp"
 	ReservedDebugHostPort      = 2222
-	ReservedDebugSerialDevice  = "/dev/hvc1"
 )
 
 type Config struct {

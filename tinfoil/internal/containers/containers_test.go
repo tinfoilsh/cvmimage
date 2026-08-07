@@ -238,11 +238,8 @@ func TestBuildContainerCreateSpec_DebugInstallerGetsFixedRuntime(t *testing.T) {
 	if len(bindings) != 1 || bindings[0].HostPort != "2222" {
 		t.Fatalf("PortBindings[%s] = %v, want host port 2222", port, bindings)
 	}
-	if len(hostConfig.Devices) != 1 {
-		t.Fatalf("Devices = %v, want one synthesized serial mapping", hostConfig.Devices)
-	}
-	if got := hostConfig.Devices[0]; got.PathOnHost != reservedDebugSerialDevice || got.PathInContainer != reservedDebugSerialDevice || got.CgroupPermissions != "rw" {
-		t.Fatalf("Devices[0] = %+v, want exact /dev/hvc1 rw mapping", got)
+	if len(hostConfig.Devices) != 0 {
+		t.Fatalf("Devices = %v, want no synthesized device mappings", hostConfig.Devices)
 	}
 }
 
@@ -263,9 +260,7 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 	if len(hostConfig.PortBindings) != 0 {
 		t.Fatalf("PortBindings = %v, want none in production", hostConfig.PortBindings)
 	}
-	for _, dev := range hostConfig.Devices {
-		if dev.PathOnHost == reservedDebugSerialDevice || dev.PathInContainer == reservedDebugSerialDevice {
-			t.Fatalf("Devices = %v, want no synthesized serial device in production", hostConfig.Devices)
-		}
+	if len(hostConfig.Devices) != 0 {
+		t.Fatalf("Devices = %v, want no synthesized device mappings", hostConfig.Devices)
 	}
 }

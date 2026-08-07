@@ -806,16 +806,9 @@ func initLogf(format string, args ...any) {
 	consoleMu.Lock()
 	defer consoleMu.Unlock()
 	log.Print("tinfoil-pid1: " + message)
-	for _, path := range []string{"/dev/kmsg", "/dev/ttyS0", "/dev/console"} {
-		file, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
-		if err != nil {
-			continue
-		}
-		if path == "/dev/kmsg" {
-			_, _ = fmt.Fprintf(file, kmsgInfoPrefix+"tinfoil-pid1: %s\n", message)
-		} else {
-			_, _ = fmt.Fprintf(file, "tinfoil-pid1: %s\n", message)
-		}
+	file, err := os.OpenFile("/dev/kmsg", os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	if err == nil {
+		_, _ = fmt.Fprintf(file, kmsgInfoPrefix+"tinfoil-pid1: %s\n", message)
 		_ = file.Close()
 	}
 }

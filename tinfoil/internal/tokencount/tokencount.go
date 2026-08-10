@@ -180,9 +180,8 @@ func ExtractTokensFromResponseWithHandler(resp *http.Response, usageHandler func
 		return resp.Body, nil
 	}
 
-	// For JSON responses, tee the body to the client while accumulating a copy
-	// for usage extraction on Close(). This retains the full response in memory,
-	// matching the router extractor's existing behavior.
+	// For JSON responses, tee the body to the client while accumulating a
+	// bounded prefix for usage extraction on Close().
 	extractor := &JSONTokenExtractor{}
 
 	// TeeReader copies data to the extractor while passing it through to

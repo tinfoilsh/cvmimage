@@ -42,6 +42,8 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		want  string
 	}{
 		{name: "valid", yaml: validConfig},
+		{name: "model missing model-name", yaml: validConfig + "models:\n  - repo: example/model\n", want: "shim.model-name is required"},
+		{name: "model with model-name", yaml: strings.Replace(validConfig, "shim:\n", "shim:\n  model-name: app-model\n", 1) + "models:\n  - repo: example/model\n"},
 		{name: "unknown field", yaml: validConfig + "unknown: true\n", want: "field unknown not found"},
 		{name: "unknown container field", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    typo: true", 1), want: "unknown container field"},
 		{name: "duplicate container field", yaml: strings.Replace(validConfig, "networks: [app]", "image: duplicate\n    networks: [app]", 1), want: "duplicate container field"},

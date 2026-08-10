@@ -1,8 +1,31 @@
 package config
 
-import (
-	"testing"
-)
+import "testing"
+
+func TestBillingRequiredUsesModelName(t *testing.T) {
+	var nilConfig *Config
+	if nilConfig.BillingRequired() {
+		t.Fatal("nil config unexpectedly requires billing")
+	}
+
+	config := &Config{ModelName: "glm-5-2"}
+	if !config.BillingRequired() {
+		t.Fatal("model-name did not activate billing")
+	}
+}
+
+func TestValidateRejectsModelNameWhitespace(t *testing.T) {
+	config := &Config{
+		UpstreamPort:     8001,
+		TLSMode:          "self-signed",
+		TLSEnv:           "production",
+		TLSChallengeMode: "tls",
+		ModelName:        " glm-5-2",
+	}
+	if err := config.Validate(); err == nil {
+		t.Fatal("Validate accepted model-name with leading whitespace")
+	}
+}
 
 func TestGetSecret(t *testing.T) {
 	tests := []struct {

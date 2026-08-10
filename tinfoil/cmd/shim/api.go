@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/billing"
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
@@ -24,6 +25,8 @@ import (
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 )
+
+const maxRequestBodySize int64 = 64 * 1024 * 1024
 
 // pathMatchesPattern checks if a request path matches a pattern.
 // Patterns can be exact matches or use a trailing * for segment-boundary prefix matching.
@@ -88,6 +91,14 @@ func (v *metricsValidator) Validate(req key.Request) error {
 
 // extractBearerToken returns the token portion of an Authorization header,
 // accepting any capitalization of the "Bearer" scheme.
+//
+// This must produce byte-identical output to the confidential-model-router's
+// manager.BearerToken: the router signs usage-context APIKeyHash with
+// HashAPIKey(BearerToken(...)) and the shim verifies with
+// VerifyAPIKeyHash(extractBearerToken(...), ctx.APIKeyHash). Any divergence
+// in parsing (scheme casing, trimming) silently breaks billing suppression
+// (fail-closed to double-billing). The two functions are intentionally
+// identical and must not drift.
 func extractBearerToken(header string) string {
 	const scheme = "bearer "
 	if len(header) < len(scheme) || !strings.EqualFold(header[:len(scheme)], scheme) {
@@ -192,9 +203,23 @@ func NewShimServer(
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
+	billingCollector *billing.Collector,
+	usageContextSecret string,
 ) http.Handler {
+	billingRequired := config.BillingRequired()
+	if err := validateShimBillingInvariant(config, billingCollector, usageContextSecret); err != nil {
+		panic(err)
+	}
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
+
+	// The enclave host identifies which enclave served the request in billing
+	// events. DOMAIN is the enclave's public domain, provisioned in the
+	// external config env alongside other shim secrets.
+	enclaveHost := externalConfig.Env["DOMAIN"]
+	if enclaveHost == "" {
+		enclaveHost = externalConfig.Metadata.Domain
+	}
 
 	proxy := httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -205,6 +230,11 @@ func NewShimServer(
 			req.Header.Set("Host", "localhost")
 			req.Host = "localhost"
 			req.Header.Del(ehbpProtocol.EncapsulatedKeyHeader)
+			if billingRequired {
+				// Token extraction must see the upstream representation, so do not
+				// negotiate a content coding that would hide JSON or SSE framing.
+				req.Header.Set("Accept-Encoding", "identity")
+			}
 
 			// Forward original host and protocol to the upstream
 			req.Header.Del("Forwarded")
@@ -220,9 +250,18 @@ func NewShimServer(
 		ModifyResponse: func(res *http.Response) error {
 			res.Header.Del("Access-Control-Allow-Origin")
 			res.Header.Del(ehbpProtocol.ResponseNonceHeader)
+
+			if billingRequired {
+				applyBillingToResponse(res, billingCollector, config.ModelName, enclaveHost)
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				writeJSONError(w, "Request body is too large.", errTypeInvalidRequest, http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Printf("proxy error: %v", err)
 			writeJSONError(w, errMsgServerError, errTypeServer, http.StatusBadGateway)
 		},
@@ -258,6 +297,34 @@ func NewShimServer(
 			limiter := rateLimiter.Limit(apiKey)
 			if !limiter.Allow() {
 				writeJSONError(w, errMsgRateLimited, errTypeInvalidRequest, http.StatusTooManyRequests)
+				return
+			}
+		}
+
+		if billingRequired {
+			prepareBillingSuppression(r, apiKey, usageContextSecret)
+		}
+
+		if r.Body != nil && r.Body != http.NoBody {
+			if r.ContentLength > maxRequestBodySize {
+				writeJSONError(w, "Request body is too large.", errTypeInvalidRequest, http.StatusRequestEntityTooLarge)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+		}
+
+		if billingRequired {
+			// The configured model is authoritative. JSON inspection only forces
+			// streaming usage emission needed by the billing token extractor.
+			_, err := prepareBillingRequest(r)
+			if err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					writeJSONError(w, "Request body is too large.", errTypeInvalidRequest, http.StatusRequestEntityTooLarge)
+					return
+				}
+				log.Printf("Warning: rejecting invalid billing request metadata: %v", err)
+				writeJSONError(w, "Invalid request body: "+err.Error()+".", errTypeInvalidRequest, http.StatusBadRequest)
 				return
 			}
 		}

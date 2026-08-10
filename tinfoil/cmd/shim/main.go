@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,7 +14,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"log"
@@ -23,6 +26,7 @@ import (
 	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/billing"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
@@ -39,6 +43,7 @@ var (
 const (
 	shimReadHeaderTimeout = 10 * time.Second
 	shimIdleTimeout       = 2 * time.Minute
+	shimShutdownTimeout   = 10 * time.Second
 )
 
 func main() {
@@ -47,6 +52,7 @@ func main() {
 
 	var handler atomic.Value
 	var cert atomic.Pointer[tls.Certificate]
+	var billingCollector atomic.Pointer[billing.Collector]
 
 	// Start with an ephemeral self-signed cert and a minimal handler that
 	// serves only boot-stages. This lets the backend poll boot progress before
@@ -80,10 +86,35 @@ func main() {
 	}
 
 	// Wait for boot to provision artifacts, then upgrade to the full handler.
-	go upgradeWhenReady(&handler, &cert)
+	go upgradeWhenReady(&handler, &cert, &billingCollector)
+
+	// Stop accepting requests and drain active handlers before flushing pending
+	// billing events. Flushing first can lose events produced by handlers that
+	// complete during shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-sigCh
+		ctx, cancel := context.WithTimeout(context.Background(), shimShutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("warning: graceful shim shutdown failed: %v", err)
+			if closeErr := srv.Close(); closeErr != nil {
+				log.Printf("warning: forced shim shutdown failed: %v", closeErr)
+			}
+		}
+		if c := billingCollector.Load(); c != nil {
+			c.StopContext(ctx)
+		}
+	}()
 
 	log.Printf("Starting tinfoil shim (waiting for boot)")
-	log.Fatal(srv.ListenAndServeTLS("", ""))
+	if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Server failed: %v", err)
+	}
+	<-shutdownDone
 }
 
 // bootStagesHandler returns a minimal handler that only serves the
@@ -109,7 +140,7 @@ const artifactPollInterval = 1 * time.Second
 
 // upgradeWhenReady advances the public handler through three explicit phases:
 // boot stages only, observability only, and finally workload proxying.
-func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) {
+func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate], billingCollector *atomic.Pointer[billing.Collector]) {
 	start := time.Now()
 
 	err := func() error {
@@ -231,7 +262,16 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr)
+		collector, usageContextSecret, err := newShimBilling(config, externalConfig)
+		if err != nil {
+			return err
+		}
+		if collector != nil {
+			billingCollector.Store(collector)
+			log.Printf("Billing collector enabled (reporter=%s, control_plane=%s)", config.ModelName, config.ControlPlane)
+		}
+
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr, collector, usageContextSecret)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")
@@ -245,6 +285,44 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		boot.RecordStage(boot.StageShim, boot.StatusOK, time.Since(start), "")
 	}
 	boot.Complete()
+}
+
+// newShimBilling initializes mandatory accounting for model-serving shims.
+// ModelName is the reporter identity, so deployment configuration cannot point
+// a model at another reporter by independently changing a duplicate field.
+func newShimBilling(config *shimconfig.Config, externalConfig *shimconfig.ExternalConfig) (*billing.Collector, string, error) {
+	if !config.BillingRequired() {
+		return nil, "", nil
+	}
+	reporterSecret := externalConfig.GetSecret(shimconfig.SecretUsageReporter)
+	if reporterSecret == "" {
+		return nil, "", fmt.Errorf("required shim billing secret %s is unavailable", shimconfig.SecretUsageReporter)
+	}
+	usageContextSecret := externalConfig.GetSecret(shimconfig.SecretUsageContext)
+	if usageContextSecret == "" {
+		return nil, "", fmt.Errorf("required shim billing secret %s is unavailable", shimconfig.SecretUsageContext)
+	}
+	collector, err := billing.NewCollector(config.ControlPlane, config.ModelName, reporterSecret)
+	if err != nil {
+		return nil, "", fmt.Errorf("initialize billing collector for model %q: %w", config.ModelName, err)
+	}
+	return collector, usageContextSecret, nil
+}
+
+// validateShimBillingInvariant makes billing optional only for non-model
+// shims. Reaching handler construction for a model shim without a usable
+// collector is an internal invariant violation: startup must have failed first.
+func validateShimBillingInvariant(config *shimconfig.Config, collector *billing.Collector, usageContextSecret string) error {
+	if !config.BillingRequired() {
+		return nil
+	}
+	if collector == nil || !collector.Enabled() {
+		return fmt.Errorf("model shim %q requires an initialized billing collector", config.ModelName)
+	}
+	if usageContextSecret == "" {
+		return fmt.Errorf("model shim %q requires %s", config.ModelName, shimconfig.SecretUsageContext)
+	}
+	return nil
 }
 
 // waitForArtifact polls load until it succeeds or boot fails.

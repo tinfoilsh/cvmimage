@@ -44,14 +44,19 @@ type Collector struct {
 	stopOnce sync.Once
 }
 
-// maskAPIKey masks an API key for safe logging
-// Shows first 3 and last 4 characters, masking the rest
+const (
+	apiKeyVisiblePrefix = 3
+	apiKeyVisibleSuffix = 4
+	apiKeyMinimumLength = apiKeyVisiblePrefix + apiKeyVisibleSuffix + 4
+)
+
 func maskAPIKey(apiKey string) string {
-	if len(apiKey) <= 10 {
-		// Too short to mask safely
+	if len(apiKey) < apiKeyMinimumLength {
 		return "***"
 	}
-	return apiKey[:3] + strings.Repeat("*", len(apiKey)-7) + apiKey[len(apiKey)-4:]
+	return apiKey[:apiKeyVisiblePrefix] +
+		strings.Repeat("*", len(apiKey)-apiKeyVisiblePrefix-apiKeyVisibleSuffix) +
+		apiKey[len(apiKey)-apiKeyVisibleSuffix:]
 }
 
 // NewCollector creates a billing event collector. Callers that are not
@@ -72,8 +77,11 @@ func newCollector(controlPlaneURL, reporterID, reporterSecret string, httpClient
 	if reporterID != strings.TrimSpace(reporterID) {
 		return nil, fmt.Errorf("usage reporter ID must not have leading or trailing whitespace")
 	}
-	if reporterSecret == "" {
+	if strings.TrimSpace(reporterSecret) == "" {
 		return nil, fmt.Errorf("usage reporter secret is required")
+	}
+	if reporterSecret != strings.TrimSpace(reporterSecret) {
+		return nil, fmt.Errorf("usage reporter secret must not have leading or trailing whitespace")
 	}
 
 	c := &Collector{
@@ -91,11 +99,14 @@ func newCollector(controlPlaneURL, reporterID, reporterSecret string, httpClient
 }
 
 func ingestionEndpoint(controlPlaneURL string) (string, error) {
+	if strings.TrimSpace(controlPlaneURL) == "" {
+		return "", fmt.Errorf("control plane URL is required")
+	}
 	u, err := url.Parse(controlPlaneURL)
 	if err != nil {
 		return "", fmt.Errorf("parse control plane URL: %w", err)
 	}
-	if u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.ForceQuery || u.RawQuery != "" || strings.Contains(controlPlaneURL, "#") {
 		return "", fmt.Errorf("control plane URL must be an absolute https URL without credentials, query, or fragment")
 	}
 	return strings.TrimRight(controlPlaneURL, "/") + usagereporting.IngestionPath, nil
@@ -106,14 +117,12 @@ func (c *Collector) Enabled() bool {
 	return c != nil && c.reporter != nil && c.reporter.Enabled()
 }
 
-// AddEvent forwards a billing event to the usage reporter and writes a masked
-// log line for local observability.
+// AddEvent converts the normalized token fields into canonical usage meters.
 func (c *Collector) AddEvent(event Event) {
 	if !c.Enabled() {
 		panic("billing: AddEvent called on an uninitialized collector")
 	}
 
-	// Create a safe version for logging with masked API key
 	safeEvent := event
 	safeEvent.APIKey = maskAPIKey(event.APIKey)
 
@@ -172,10 +181,15 @@ func (c *Collector) AddEvent(event Event) {
 // Stop gracefully shuts down the collector, flushing pending events with a
 // bounded timeout so a network stall cannot block shim shutdown indefinitely.
 func (c *Collector) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c.StopContext(ctx)
+}
+
+// StopContext flushes pending events within the caller's shutdown budget.
+func (c *Collector) StopContext(ctx context.Context) {
 	c.stopOnce.Do(func() {
 		if c.reporter != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
 			c.reporter.Stop(ctx)
 		}
 	})

@@ -101,7 +101,10 @@ func TestExtractTokensFromResponse(t *testing.T) {
 			}
 
 			// Extract tokens with handler
-			newBody := ExtractTokensFromResponseWithHandler(resp, usageHandler, false)
+			newBody, err := ExtractTokensFromResponseWithHandler(resp, usageHandler, false)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			// Verify we can still read the response body
 			bodyBytes, err := io.ReadAll(newBody)
@@ -137,7 +140,10 @@ func TestNonStreamingExtractionIsBounded(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 	called := false
-	wrapped := ExtractTokensFromResponseWithHandler(resp, func(*Usage) { called = true }, false)
+	wrapped, err := ExtractTokensFromResponseWithHandler(resp, func(*Usage) { called = true }, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := io.ReadAll(wrapped)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +181,10 @@ func TestClosingStreamingBodyClosesUpstream(t *testing.T) {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       upstream,
 	}
-	body := ExtractTokensFromResponse(resp)
+	body, err := ExtractTokensFromResponse(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := body.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +192,12 @@ func TestClosingStreamingBodyClosesUpstream(t *testing.T) {
 	case <-upstream.closed:
 	case <-time.After(time.Second):
 		t.Fatal("closing downstream body did not close upstream")
+	}
+}
+
+func TestExtractTokensRejectsNilResponseBody(t *testing.T) {
+	if _, err := ExtractTokensFromResponseWithHandler(&http.Response{}, nil, false); err == nil {
+		t.Fatal("nil response body accepted")
 	}
 }
 
@@ -264,7 +279,10 @@ data: [DONE]
 			}
 
 			// Extract tokens
-			newBody := ExtractTokensFromResponseWithHandler(resp, usageHandler, false)
+			newBody, err := ExtractTokensFromResponseWithHandler(resp, usageHandler, false)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			// Read the entire response to trigger processing. io.Copy blocks
 			// until the pipe writer closes (EOF), which only happens after
@@ -327,7 +345,10 @@ data: [DONE]
 			}
 
 			// Should handle errors gracefully
-			newBody := ExtractTokensFromResponse(resp)
+			newBody, err := ExtractTokensFromResponse(resp)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			// Should still pass through the entire stream
 			output := &bytes.Buffer{}
@@ -386,7 +407,10 @@ data: [DONE]
 				Body:       io.NopCloser(strings.NewReader(streamWithUsageOnlyChunk)),
 			}
 
-			newBody := ExtractTokensFromResponseWithHandler(resp, nil, tt.clientRequestedUsage)
+			newBody, err := ExtractTokensFromResponseWithHandler(resp, nil, tt.clientRequestedUsage)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			output := &bytes.Buffer{}
 			io.Copy(output, newBody)
@@ -425,7 +449,10 @@ data: [DONE]
 		callbackCalled = true
 	}
 
-	newBody := ExtractTokensFromResponseWithHandler(resp, usageHandler, true)
+	newBody, err := ExtractTokensFromResponseWithHandler(resp, usageHandler, true)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	io.Copy(io.Discard, newBody)
 	newBody.Close()

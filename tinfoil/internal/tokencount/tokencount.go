@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -148,7 +149,7 @@ func (t *teeReaderCloser) Close() error {
 // receives bytes without delay; usage is extracted on Close() or, for
 // streaming, as the stream is processed. Usage is delivered via the
 // usageHandler callback, not a return value.
-func ExtractTokensFromResponse(resp *http.Response) io.ReadCloser {
+func ExtractTokensFromResponse(resp *http.Response) (io.ReadCloser, error) {
 	return ExtractTokensFromResponseWithHandler(resp, nil, false)
 }
 
@@ -158,7 +159,10 @@ func ExtractTokensFromResponse(resp *http.Response) io.ReadCloser {
 // responses it is invoked on Close(). clientRequestedUsage indicates if the
 // client explicitly requested usage stats in their request (controls
 // usage-only SSE chunk filtering).
-func ExtractTokensFromResponseWithHandler(resp *http.Response, usageHandler func(*Usage), clientRequestedUsage bool) io.ReadCloser {
+func ExtractTokensFromResponseWithHandler(resp *http.Response, usageHandler func(*Usage), clientRequestedUsage bool) (io.ReadCloser, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, fmt.Errorf("tokencount: response and response body are required")
+	}
 	contentType := resp.Header.Get("Content-Type")
 
 	// For streaming responses, use the streaming extractor
@@ -168,12 +172,12 @@ func ExtractTokensFromResponseWithHandler(resp *http.Response, usageHandler func
 		extractor.usageHandler = usageHandler
 		extractor.clientRequestedUsage = clientRequestedUsage
 		go extractor.processStream()
-		return &streamReadCloser{PipeReader: pr, upstream: resp.Body}
+		return &streamReadCloser{PipeReader: pr, upstream: resp.Body}, nil
 	}
 
 	// For non-JSON or non-200 responses, pass through unchanged
 	if resp.StatusCode != http.StatusOK || !hasJSONMediaType(contentType) {
-		return resp.Body
+		return resp.Body, nil
 	}
 
 	// For JSON responses, tee the body to the client while accumulating a copy
@@ -191,7 +195,7 @@ func ExtractTokensFromResponseWithHandler(resp *http.Response, usageHandler func
 		origBody:     resp.Body,
 		extractor:    extractor,
 		usageHandler: usageHandler,
-	}
+	}, nil
 }
 
 type streamReadCloser struct {

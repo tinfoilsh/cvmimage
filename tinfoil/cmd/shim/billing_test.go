@@ -260,6 +260,13 @@ func TestEnsureStreamingUsageOptions_RejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestPrepareStreamingRequestRejectsInvalidStream(t *testing.T) {
+	headers := make(http.Header)
+	if _, err := prepareStreamingRequest(map[string]any{"stream": "true"}, headers); err == nil {
+		t.Fatal("prepareStreamingRequest() accepted non-boolean stream")
+	}
+}
+
 func TestEnsureStreamingUsageOptions_ClearsSpoofedHeader(t *testing.T) {
 	headers := http.Header{}
 	headers.Set(clientRequestedUsageHeader, "true")
@@ -340,6 +347,63 @@ func TestApplyBillingToResponse_ZeroTokenFallbackNonStreaming(t *testing.T) {
 		}
 	default:
 		t.Fatal("zero-token fallback did not emit an event")
+	}
+}
+
+func TestApplyBillingToResponse_OversizedResponseFallback(t *testing.T) {
+	collector, events := newRecordingBillingCollector()
+	body := strings.Repeat("x", (10<<20)+1)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+	}
+	resp.Request.Header.Set("Authorization", "Bearer sk-test-key-1234567890")
+	applyBillingToResponse(resp, collector, "test-model", "test-enclave")
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(body) {
+		t.Fatalf("pass-through body length = %d, want %d", len(got), len(body))
+	}
+	select {
+	case event := <-events:
+		if event.TotalTokens != 0 {
+			t.Fatalf("fallback event = %+v", event)
+		}
+	default:
+		t.Fatal("oversized response did not emit fallback event")
+	}
+}
+
+func TestApplyBillingToResponse_NonSSEMediaTypePassesThrough(t *testing.T) {
+	collector, events := newRecordingBillingCollector()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":   []string{"text/event-streaming"},
+			"Content-Length": []string{"4"},
+		},
+		Body:    io.NopCloser(strings.NewReader("data")),
+		Request: httptest.NewRequest(http.MethodPost, "/custom", nil),
+	}
+	resp.Request.Header.Set("Authorization", "Bearer sk-test-key-1234567890")
+	applyBillingToResponse(resp, collector, "test-model", "test-enclave")
+	if got := resp.Header.Get("Content-Length"); got != "4" {
+		t.Fatalf("Content-Length = %q, want pass-through", got)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-events:
+	default:
+		t.Fatal("non-SSE response did not emit fallback event")
 	}
 }
 

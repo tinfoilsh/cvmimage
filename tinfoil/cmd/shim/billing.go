@@ -107,6 +107,24 @@ func ensureStreamingUsageOptions(body map[string]any, headers http.Header) error
 	return nil
 }
 
+func prepareStreamingRequest(body map[string]any, headers http.Header) (bool, error) {
+	raw, present := body["stream"]
+	if !present {
+		return false, nil
+	}
+	stream, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("'stream' must be a boolean")
+	}
+	if !stream {
+		return false, nil
+	}
+	if err := ensureStreamingUsageOptions(body, headers); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func hasJSONContentType(header string) bool {
 	mediaType, _, err := mime.ParseMediaType(header)
 	if err != nil {
@@ -175,11 +193,9 @@ func prepareBillingRequest(r *http.Request) (streaming bool, err error) {
 		return false, fmt.Errorf("decode request JSON: body must be an object")
 	}
 
-	if stream, ok := body["stream"].(bool); ok && stream {
-		streaming = true
-		if err := ensureStreamingUsageOptions(body, r.Header); err != nil {
-			return false, err
-		}
+	streaming, err = prepareStreamingRequest(body, r.Header)
+	if err != nil {
+		return false, err
 	}
 
 	// Only re-marshal when the body was mutated (streaming requests may have
@@ -407,7 +423,13 @@ func applyBillingToResponse(resp *http.Response, collector billingEventCollector
 		})
 	}
 
-	resp.Body = tokencount.ExtractTokensFromResponseWithHandler(resp, usageHandler, clientRequestedUsage)
+	newBody, err := tokencount.ExtractTokensFromResponseWithHandler(resp, usageHandler, clientRequestedUsage)
+	if err != nil {
+		log.Printf("billing token extraction failed: %v", err)
+		emitZeroTokenEvent()
+		return
+	}
+	resp.Body = newBody
 
 	// For non-streaming successful responses, wrap the body so a billing
 	// event is emitted on Close() even when the response has no usage field

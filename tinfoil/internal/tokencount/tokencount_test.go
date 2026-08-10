@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestExtractTokensFromResponse(t *testing.T) {
@@ -15,7 +17,6 @@ func TestExtractTokensFromResponse(t *testing.T) {
 		contentType  string
 		statusCode   int
 		wantUsage    *Usage
-		wantErr      bool
 	}{
 		{
 			name: "valid OpenAI response",
@@ -40,6 +41,17 @@ func TestExtractTokensFromResponse(t *testing.T) {
 				PromptTokens:     10,
 				CompletionTokens: 20,
 				TotalTokens:      30,
+			},
+		},
+		{
+			name:         "vendor JSON response",
+			responseBody: `{"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`,
+			contentType:  "application/vnd.openai+json; charset=utf-8",
+			statusCode:   http.StatusOK,
+			wantUsage: &Usage{
+				PromptTokens:     3,
+				CompletionTokens: 4,
+				TotalTokens:      7,
 			},
 		},
 		{
@@ -89,11 +101,7 @@ func TestExtractTokensFromResponse(t *testing.T) {
 			}
 
 			// Extract tokens with handler
-			newBody, err := ExtractTokensFromResponseWithHandler(resp, "test-model", usageHandler, false)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ExtractTokensFromResponseWithHandler() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			newBody := ExtractTokensFromResponseWithHandler(resp, usageHandler, false)
 
 			// Verify we can still read the response body
 			bodyBytes, err := io.ReadAll(newBody)
@@ -114,8 +122,67 @@ func TestExtractTokensFromResponse(t *testing.T) {
 				} else if *capturedUsage != *tt.wantUsage {
 					t.Errorf("Usage mismatch: got %+v, want %+v", capturedUsage, tt.wantUsage)
 				}
+			} else if capturedUsage != nil {
+				t.Errorf("Expected no usage to be captured, got %+v", capturedUsage)
 			}
 		})
+	}
+}
+
+func TestNonStreamingExtractionIsBounded(t *testing.T) {
+	body := strings.Repeat("x", maxJSONResponseBytes+1)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	called := false
+	wrapped := ExtractTokensFromResponseWithHandler(resp, func(*Usage) { called = true }, false)
+	got, err := io.ReadAll(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wrapped.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(body) {
+		t.Fatalf("pass-through body length = %d, want %d", len(got), len(body))
+	}
+	if called {
+		t.Fatal("usage handler called for oversized response")
+	}
+}
+
+type blockingReadCloser struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (b *blockingReadCloser) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *blockingReadCloser) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestClosingStreamingBodyClosesUpstream(t *testing.T) {
+	upstream := &blockingReadCloser{closed: make(chan struct{})}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       upstream,
+	}
+	body := ExtractTokensFromResponse(resp)
+	if err := body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-upstream.closed:
+	case <-time.After(time.Second):
+		t.Fatal("closing downstream body did not close upstream")
 	}
 }
 
@@ -197,11 +264,7 @@ data: [DONE]
 			}
 
 			// Extract tokens
-			newBody, err := ExtractTokensFromResponseWithHandler(resp, "test-model", usageHandler, false)
-			if err != nil {
-				t.Errorf("ExtractTokensFromResponseWithHandler() error = %v", err)
-				return
-			}
+			newBody := ExtractTokensFromResponseWithHandler(resp, usageHandler, false)
 
 			// Read the entire response to trigger processing. io.Copy blocks
 			// until the pipe writer closes (EOF), which only happens after
@@ -264,11 +327,7 @@ data: [DONE]
 			}
 
 			// Should handle errors gracefully
-			newBody, err := ExtractTokensFromResponse(resp, "test-model")
-			if err != nil {
-				t.Errorf("ExtractTokensFromResponse() unexpected error = %v", err)
-				return
-			}
+			newBody := ExtractTokensFromResponse(resp)
 
 			// Should still pass through the entire stream
 			output := &bytes.Buffer{}
@@ -327,10 +386,7 @@ data: [DONE]
 				Body:       io.NopCloser(strings.NewReader(streamWithUsageOnlyChunk)),
 			}
 
-			newBody, err := ExtractTokensFromResponseWithHandler(resp, "test-model", nil, tt.clientRequestedUsage)
-			if err != nil {
-				t.Fatalf("ExtractTokensFromResponseWithHandler() error = %v", err)
-			}
+			newBody := ExtractTokensFromResponseWithHandler(resp, nil, tt.clientRequestedUsage)
 
 			output := &bytes.Buffer{}
 			io.Copy(output, newBody)
@@ -369,10 +425,7 @@ data: [DONE]
 		callbackCalled = true
 	}
 
-	newBody, err := ExtractTokensFromResponseWithHandler(resp, "test-model", usageHandler, true)
-	if err != nil {
-		t.Fatalf("error = %v", err)
-	}
+	newBody := ExtractTokensFromResponseWithHandler(resp, usageHandler, true)
 
 	io.Copy(io.Discard, newBody)
 	newBody.Close()

@@ -215,10 +215,29 @@ func TestPrepareBillingRequest_FullJSONAPICoverage(t *testing.T) {
 	}
 }
 
+func TestPrepareBillingRequest_PreservesValidNonObjectJSON(t *testing.T) {
+	for _, body := range []string{`null`, `[]`, `"value"`, `42`} {
+		req := httptest.NewRequest(http.MethodPost, "/custom/model/api", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		streaming, err := prepareBillingRequest(req)
+		if err != nil {
+			t.Fatalf("prepareBillingRequest(%q) error = %v", body, err)
+		}
+		if streaming {
+			t.Fatalf("prepareBillingRequest(%q) reported streaming", body)
+		}
+		got, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read preserved body: %v", err)
+		}
+		if string(got) != body {
+			t.Fatalf("preserved body = %q, want %q", got, body)
+		}
+	}
+}
+
 func TestPrepareBillingRequest_RejectsMalformedOrTrailingJSON(t *testing.T) {
 	for _, body := range []string{
-		`null`,
-		`[]`,
 		`{"model":"m","stream":true`,
 		`{"model":"m","stream":true}{"second":true}`,
 		`{"model":"m","stream":true} trailing`,
@@ -286,7 +305,7 @@ func TestEnsureStreamingUsageOptions_ClearsSpoofedHeader(t *testing.T) {
 
 func TestEnsureStreamingUsageOptions_SetsHeaderWhenRequested(t *testing.T) {
 	headers := http.Header{}
-	headers.Set(clientRequestedUsageHeader, "true") // spoofed
+	headers.Set(clientRequestedUsageHeader, "false") // spoofed
 
 	body := map[string]any{
 		"stream":         true,

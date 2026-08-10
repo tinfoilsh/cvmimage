@@ -152,9 +152,10 @@ func hasMediaType(header, want string) bool {
 // would lose. Key order may change (alphabetical) but this does not affect
 // the upstream's JSON parsing.
 //
-// Non-JSON bodies pass through unchanged. Read errors, malformed JSON,
-// trailing JSON values, and invalid stream_options are rejected rather than
-// forwarding a partial or destructively rewritten request.
+// Non-JSON bodies and valid non-object JSON values pass through unchanged.
+// Read errors, malformed JSON, trailing JSON values, and invalid streaming
+// options are rejected rather than forwarding a partial or destructively
+// rewritten request.
 func prepareBillingRequest(r *http.Request) (streaming bool, err error) {
 	r.Header.Del(clientRequestedUsageHeader)
 	if r.Method != http.MethodPost || r.Body == nil || r.Body == http.NoBody || !hasJSONContentType(r.Header.Get("Content-Type")) {
@@ -178,8 +179,8 @@ func prepareBillingRequest(r *http.Request) (streaming bool, err error) {
 	// upstream inference behavior on re-marshal.
 	dec := json.NewDecoder(bytes.NewReader(bodyBytes))
 	dec.UseNumber()
-	var body map[string]any
-	if err := dec.Decode(&body); err != nil {
+	var decoded any
+	if err := dec.Decode(&decoded); err != nil {
 		return false, fmt.Errorf("decode request JSON: %w", err)
 	}
 	var trailing any
@@ -189,8 +190,13 @@ func prepareBillingRequest(r *http.Request) (streaming bool, err error) {
 		}
 		return false, fmt.Errorf("decode request JSON: trailing data: %w", err)
 	}
-	if body == nil {
-		return false, fmt.Errorf("decode request JSON: body must be an object")
+	body, isObject := decoded.(map[string]any)
+	if !isObject {
+		// The generic shim may proxy valid non-OpenAI JSON endpoints. There is
+		// no top-level stream flag to modify outside a JSON object, so preserve
+		// valid non-object bodies exactly as received.
+		setRequestBody(r, originalBody)
+		return false, nil
 	}
 
 	streaming, err = prepareStreamingRequest(body, r.Header)

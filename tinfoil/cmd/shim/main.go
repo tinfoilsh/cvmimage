@@ -106,7 +106,7 @@ func main() {
 			}
 		}
 		if c := billingCollector.Load(); c != nil {
-			c.Stop()
+			c.StopContext(ctx)
 		}
 	}()
 

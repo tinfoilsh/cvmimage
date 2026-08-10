@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -115,6 +116,11 @@ func hasJSONContentType(header string) bool {
 	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
 }
 
+func hasMediaType(header, want string) bool {
+	mediaType, _, err := mime.ParseMediaType(header)
+	return err == nil && strings.EqualFold(mediaType, want)
+}
+
 // prepareBillingRequest inspects every JSON POST body, independent of path, so
 // the generic shim supports the same OpenAI-compatible API surface as the
 // router. It forces streaming usage options when requested. Billing attribution
@@ -137,12 +143,16 @@ func prepareBillingRequest(r *http.Request) (streaming bool, err error) {
 		return false, nil
 	}
 
-	bodyBytes, err := io.ReadAll(r.Body)
+	originalBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		_ = r.Body.Close()
 		return false, fmt.Errorf("read request body: %w", err)
 	}
 	_ = r.Body.Close()
+	bodyBytes, contentEncoding, err := decodeBillingRequestBody(originalBody, r.Header.Get("Content-Encoding"))
+	if err != nil {
+		return false, err
+	}
 
 	// Use json.Decoder with UseNumber to preserve integer precision.
 	// json.Unmarshal into map[string]any coerces all numbers to float64,
@@ -175,20 +185,67 @@ func prepareBillingRequest(r *http.Request) (streaming bool, err error) {
 	// Only re-marshal when the body was mutated (streaming requests may have
 	// had stream_options injected). For non-streaming requests, restore the
 	// original bytes to avoid changing whitespace and key order.
+	payload := originalBody
 	if streaming {
-		remarshalled, err := json.Marshal(body)
+		payload, err = json.Marshal(body)
 		if err != nil {
 			return false, fmt.Errorf("encode request JSON: %w", err)
 		}
-		r.Body = io.NopCloser(bytes.NewReader(remarshalled))
-		r.Header.Set("Content-Length", strconv.Itoa(len(remarshalled)))
-		r.ContentLength = int64(len(remarshalled))
-	} else {
-		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		r.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
-		r.ContentLength = int64(len(bodyBytes))
+		payload, err = encodeBillingRequestBody(payload, contentEncoding)
+		if err != nil {
+			return false, err
+		}
 	}
+	setRequestBody(r, payload)
 	return streaming, nil
+}
+
+func decodeBillingRequestBody(encoded []byte, contentEncoding string) ([]byte, string, error) {
+	encoding := strings.ToLower(strings.TrimSpace(contentEncoding))
+	switch encoding {
+	case "":
+		return encoded, "", nil
+	case "gzip":
+		zr, err := gzip.NewReader(bytes.NewReader(encoded))
+		if err != nil {
+			return nil, "", fmt.Errorf("decode gzip request body: %w", err)
+		}
+		decompressed, readErr := io.ReadAll(io.LimitReader(zr, maxRequestBodySize+1))
+		closeErr := zr.Close()
+		if readErr != nil {
+			return nil, "", fmt.Errorf("read gzip request body: %w", readErr)
+		}
+		if closeErr != nil {
+			return nil, "", fmt.Errorf("close gzip request body: %w", closeErr)
+		}
+		if int64(len(decompressed)) > maxRequestBodySize {
+			return nil, "", &http.MaxBytesError{Limit: maxRequestBodySize}
+		}
+		return decompressed, encoding, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported content encoding %q", contentEncoding)
+	}
+}
+
+func encodeBillingRequestBody(plain []byte, contentEncoding string) ([]byte, error) {
+	if contentEncoding == "" {
+		return plain, nil
+	}
+	var encoded bytes.Buffer
+	zw := gzip.NewWriter(&encoded)
+	if _, err := zw.Write(plain); err != nil {
+		return nil, fmt.Errorf("encode gzip request body: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("close gzip request body: %w", err)
+	}
+	return encoded.Bytes(), nil
+}
+
+func setRequestBody(r *http.Request, payload []byte) {
+	r.Body = io.NopCloser(bytes.NewReader(payload))
+	r.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+	r.ContentLength = int64(len(payload))
 }
 
 // billingCloser wraps a response body and emits a zero-token billing event
@@ -282,7 +339,7 @@ func applyBillingToResponse(resp *http.Response, collector billingEventCollector
 	apiKey := extractBearerToken(req.Header.Get("Authorization"))
 	clientRequestedUsage := req.Header.Get(clientRequestedUsageHeader) == "true"
 	requestPath := req.URL.Path
-	streaming := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+	streaming := hasMediaType(resp.Header.Get("Content-Type"), "text/event-stream")
 
 	requestID := resp.Header.Get("X-Request-Id")
 	if requestID == "" {
@@ -350,13 +407,7 @@ func applyBillingToResponse(resp *http.Response, collector billingEventCollector
 		})
 	}
 
-	newBody, err := tokencount.ExtractTokensFromResponseWithHandler(resp, modelName, usageHandler, clientRequestedUsage)
-	if err != nil {
-		// Don't fail the request; leave the body untouched.
-		log.Printf("billing token extraction failed: %v", err)
-		return
-	}
-	resp.Body = newBody
+	resp.Body = tokencount.ExtractTokensFromResponseWithHandler(resp, usageHandler, clientRequestedUsage)
 
 	// For non-streaming successful responses, wrap the body so a billing
 	// event is emitted on Close() even when the response has no usage field

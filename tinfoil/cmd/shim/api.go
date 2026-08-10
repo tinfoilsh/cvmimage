@@ -230,6 +230,11 @@ func NewShimServer(
 			req.Header.Set("Host", "localhost")
 			req.Host = "localhost"
 			req.Header.Del(ehbpProtocol.EncapsulatedKeyHeader)
+			if billingRequired {
+				// Token extraction must see the upstream representation, so do not
+				// negotiate a content coding that would hide JSON or SSE framing.
+				req.Header.Set("Accept-Encoding", "identity")
+			}
 
 			// Forward original host and protocol to the upstream
 			req.Header.Del("Forwarded")

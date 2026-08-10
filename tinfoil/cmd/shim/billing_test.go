@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"errors"
 	"io"
 	"net/http"
@@ -104,6 +105,40 @@ func TestPrepareBillingRequest_PreservesIntegerPrecision(t *testing.T) {
 	// float64 approximation (e.g. 12345678901234568000).
 	if !strings.Contains(string(bodyBytes), `"seed":12345678901234567890`) {
 		t.Errorf("integer precision lost in re-marshalled body: %s", bodyBytes)
+	}
+}
+
+func TestPrepareBillingRequest_GzipStreaming(t *testing.T) {
+	plain := []byte(`{"model":"gpt-4","stream":true,"messages":[]}`)
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(compressed.Bytes()))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+
+	streaming, err := prepareBillingRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !streaming {
+		t.Fatal("streaming = false, want true")
+	}
+	zr, err := gzip.NewReader(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got, []byte(`"include_usage":true`)) {
+		t.Fatalf("gzip body did not request usage: %s", got)
 	}
 }
 

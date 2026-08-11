@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,22 @@ type fakeFetcher struct {
 	response wire.Response
 	err      error
 	called   chan struct{}
+}
+
+type scriptedFetcher struct {
+	responses []wire.Response
+	errors    []error
+	calls     chan int
+	index     int
+}
+
+func (f *scriptedFetcher) Fetch(context.Context, wire.Request) (wire.Response, error) {
+	index := f.index
+	f.index++
+	if f.calls != nil {
+		f.calls <- f.index
+	}
+	return f.responses[index], f.errors[index]
 }
 
 func (f *fakeFetcher) Fetch(context.Context, wire.Request) (wire.Response, error) {
@@ -63,12 +80,16 @@ func TestManagerCurrentReturnsCopy(t *testing.T) {
 		t.Fatalf("Current: %v", err)
 	}
 	first[0].ID = "mutated"
+	first[0].Data[0] = '['
 	second, err := manager.Current()
 	if err != nil {
 		t.Fatalf("Current: %v", err)
 	}
 	if second[0].ID != "current" {
 		t.Fatalf("stored collateral was mutated: %q", second[0].ID)
+	}
+	if string(second[0].Data) != `{}` {
+		t.Fatalf("stored collateral data was mutated: %s", second[0].Data)
 	}
 }
 
@@ -179,5 +200,42 @@ func TestManagerRunRefreshesAutomatically(t *testing.T) {
 	case <-called:
 	case <-time.After(time.Second):
 		t.Fatal("manager did not refresh")
+	}
+}
+
+func TestManagerRunRetriesWithoutReschedulingFromExpiry(t *testing.T) {
+	base := time.Now()
+	initialExpiry := base.Add(10 * time.Hour)
+	calls := make(chan int, 2)
+	fetcher := &scriptedFetcher{
+		responses: []wire.Response{{}, responseWith(base.Add(24*time.Hour), "new")},
+		errors:    []error{errors.New("ATC unavailable"), nil},
+		calls:     calls,
+	}
+	manager := NewManager(responseWith(initialExpiry, "old"), managedRequest(), fetcher, "")
+	manager.retryMin = 5 * time.Millisecond
+	manager.retryMax = 10 * time.Millisecond
+	manager.jitter = func(time.Duration) time.Duration { return 0 }
+	var clockCalls atomic.Int32
+	manager.now = func() time.Time {
+		if clockCalls.Add(1) == 1 {
+			return initialExpiry
+		}
+		return base
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.Run(ctx)
+
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-calls:
+			if got != want {
+				t.Fatalf("call = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for fetch call %d", want)
+		}
 	}
 }

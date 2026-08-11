@@ -20,10 +20,6 @@ func WriteJSON(path string, value any) error {
 	tempName := temp.Name()
 	defer os.Remove(tempName)
 
-	if err := temp.Chmod(0o600); err != nil {
-		temp.Close()
-		return fmt.Errorf("setting permissions on %s: %w", tempName, err)
-	}
 	if _, err := temp.Write(data); err != nil {
 		temp.Close()
 		return fmt.Errorf("writing %s: %w", tempName, err)

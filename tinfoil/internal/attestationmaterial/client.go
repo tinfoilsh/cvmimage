@@ -28,7 +28,7 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	if base.Scheme != "http" && base.Scheme != "https" {
 		return nil, fmt.Errorf("ATC URL must use http or https")
 	}
-	if base.Host == "" {
+	if base.Hostname() == "" {
 		return nil, fmt.Errorf("ATC URL is missing a host")
 	}
 	if httpClient == nil {

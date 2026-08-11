@@ -1,12 +1,12 @@
 package attestationmaterial
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"slices"
 	"sync"
 	"time"
 
@@ -62,19 +62,18 @@ func (m *Manager) Current() ([]envelope.CollateralEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if !m.managed() {
-		return slices.Clone(m.response.Collateral), nil
+		return cloneCollateral(m.response.Collateral), nil
 	}
 	if m.response.ExpiresAt.IsZero() || !m.now().Before(m.response.ExpiresAt) {
 		return nil, fmt.Errorf("%w: cache expired at %s", ErrUnavailable, m.response.ExpiresAt.Format(time.RFC3339))
 	}
-	return slices.Clone(m.response.Collateral), nil
+	return cloneCollateral(m.response.Collateral), nil
 }
 
 func (m *Manager) Run(ctx context.Context) {
 	if !m.managed() {
 		return
 	}
-	retry := m.retryMin
 	for {
 		delay := m.nextRefreshDelay()
 		timer := time.NewTimer(delay)
@@ -85,15 +84,18 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-timer.C:
 		}
 
-		if err := m.Refresh(ctx); err != nil {
-			log.Printf("Attestation collateral refresh failed: %v; retrying in %s", err, retry)
+		retry := m.retryMin
+		for {
+			if err := m.Refresh(ctx); err == nil {
+				break
+			} else {
+				log.Printf("Attestation collateral refresh failed: %v; retrying in %s", err, retry)
+			}
 			if !sleep(ctx, retry) {
 				return
 			}
 			retry = min(retry*2, m.retryMax)
-			continue
 		}
-		retry = m.retryMin
 	}
 }
 
@@ -147,6 +149,15 @@ func randomDuration(limit time.Duration) time.Duration {
 		return 0
 	}
 	return time.Duration(rand.Int64N(int64(limit)))
+}
+
+func cloneCollateral(entries []envelope.CollateralEntry) []envelope.CollateralEntry {
+	cloned := make([]envelope.CollateralEntry, len(entries))
+	for index, entry := range entries {
+		cloned[index] = entry
+		cloned[index].Data = bytes.Clone(entry.Data)
+	}
+	return cloned
 }
 
 func sleep(ctx context.Context, duration time.Duration) bool {

@@ -61,4 +61,7 @@ func TestNewClientRejectsInvalidURL(t *testing.T) {
 	if _, err := NewClient("unix:///run/atc.sock", nil); err == nil {
 		t.Fatal("NewClient accepted non-HTTP URL")
 	}
+	if _, err := NewClient("http://:8085", nil); err == nil {
+		t.Fatal("NewClient accepted URL without a hostname")
+	}
 }

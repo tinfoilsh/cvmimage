@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	refreshBefore = 24 * time.Hour
-	retryAfter    = time.Minute
+	refreshBefore  = 24 * time.Hour
+	retryAfter     = time.Minute
+	refreshTimeout = 35 * time.Second
 )
 
 var ErrUnavailable = errors.New("attestation collateral unavailable")
@@ -87,7 +88,9 @@ func (c *Cache) startRefresh() chan struct{} {
 	done := make(chan struct{})
 	c.refreshing = done
 	go func() {
-		if err := c.refresh(context.Background(), done); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+		defer cancel()
+		if err := c.refresh(ctx, done); err != nil {
 			log.Printf("Attestation collateral refresh failed: %v", err)
 		}
 	}()
@@ -120,6 +123,7 @@ func cloneCollateral(entries []envelope.CollateralEntry) []envelope.CollateralEn
 	for index, entry := range entries {
 		cloned[index] = entry
 		cloned[index].Data = bytes.Clone(entry.Data)
+		cloned[index].Subjects = append([]string(nil), entry.Subjects...)
 	}
 	return cloned
 }

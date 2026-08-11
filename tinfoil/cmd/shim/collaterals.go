@@ -49,13 +49,10 @@ func collateralRequest(att *legacy.Document, external *shimconfig.ExternalConfig
 	if err != nil {
 		return wire.Request{}, false, fmt.Errorf("opening attestation report: %w", err)
 	}
+	defer reader.Close()
 	quote, err := io.ReadAll(reader)
-	closeErr := reader.Close()
 	if err != nil {
 		return wire.Request{}, false, fmt.Errorf("reading attestation report: %w", err)
-	}
-	if closeErr != nil {
-		return wire.Request{}, false, fmt.Errorf("closing attestation report: %w", closeErr)
 	}
 	return wire.Request{
 		Repo:        external.Metadata.Repo,

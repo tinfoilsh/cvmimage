@@ -34,11 +34,12 @@ func TestCacheFetchesLazily(t *testing.T) {
 		t.Fatalf("calls=%d collateral=%v", calls, got)
 	}
 	got[0].Data[0] = 'X'
+	got[0].Subjects[0] = "changed"
 	got, err = cache.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || string(got[0].Data) != `{"value":true}` {
+	if calls != 1 || string(got[0].Data) != `{"value":true}` || got[0].Subjects[0] != "subject" {
 		t.Fatalf("cache was not reused safely: calls=%d collateral=%s", calls, got[0].Data)
 	}
 }
@@ -73,14 +74,14 @@ func TestCacheRefreshesOnceWhenDue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	<-started
+	waitForSignal(t, started)
 	mu.Lock()
 	if calls != 2 {
 		t.Fatalf("fetch calls = %d, want 2", calls)
 	}
 	mu.Unlock()
 	close(release)
-	<-completed
+	waitForSignal(t, completed)
 }
 
 func TestCacheFailsClosedAfterExpiry(t *testing.T) {
@@ -115,8 +116,18 @@ func response(expiresAt time.Time, id string) wire.Response {
 		Format:    wire.FormatV2,
 		ExpiresAt: expiresAt,
 		Collateral: []envelope.CollateralEntry{{
-			ID:   id,
-			Data: []byte(`{"value":true}`),
+			ID:       id,
+			Subjects: []string{"subject"},
+			Data:     []byte(`{"value":true}`),
 		}},
+	}
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for cache refresh")
 	}
 }

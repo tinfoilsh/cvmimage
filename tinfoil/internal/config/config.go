@@ -26,8 +26,7 @@ type Config struct {
 	TLSOwnSANDomain  bool   `yaml:"tls-own-san-domain" default:"false"` // use own domain for encoded SANs instead of tinfoil.sh
 
 	ControlPlane string `yaml:"control-plane" default:"https://api.tinfoil.sh"`
-	// ATC is the attestation collaterals service the enclave fetches its v3
-	// collateral bundle from at boot.
+	// ATC is the attestation collaterals service the shim fetches v3 collateral from.
 	ATC string `yaml:"atc" default:"https://atc.tinfoil.sh"`
 	// Authenticated enables API key validation against the control plane.
 	// When false, no API key checks are performed regardless of AuthenticatedEndpoints.

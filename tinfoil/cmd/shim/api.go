@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -23,9 +24,12 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
-	"github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 )
+
+type collateralSource interface {
+	Current(context.Context) ([]envelope.CollateralEntry, error)
+}
 
 // pathMatchesPattern checks if a request path matches a pattern.
 // Patterns can be exact matches or use a trailing * for segment-boundary prefix matching.
@@ -191,7 +195,7 @@ func NewShimServer(
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
-	attestationMaterial json.RawMessage,
+	collateralSource collateralSource,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
@@ -276,7 +280,7 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, attestationMaterial, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 
 	return wrapShimMux(config, att, mux)
 }
@@ -287,13 +291,13 @@ func NewObservabilityServer(
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
-	attestationMaterial json.RawMessage,
+	collateralSource collateralSource,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, attestationMaterial, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
@@ -318,22 +322,9 @@ func registerObservabilityHandlers(
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
-	attestationMaterial json.RawMessage,
+	collateralSource collateralSource,
 	externalConfig *config.ExternalConfig,
 ) {
-	// The v3 collateral entries are static for the CVM's lifetime; parse the
-	// boot-fetched material once. If it is missing or malformed, v3
-	// documents are still served, just with no collateral.
-	var material collaterals.Response
-	collateralErr := json.Unmarshal(attestationMaterial, &material)
-	if collateralErr == nil && material.Format != collaterals.FormatV2 {
-		collateralErr = fmt.Errorf("unexpected attestation material format %q", material.Format)
-	}
-	if collateralErr != nil {
-		log.Printf("Attestation collateral unavailable; serving v3 documents without collateral: %v", collateralErr)
-		material.Collateral = nil
-	}
-
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -347,6 +338,15 @@ func registerObservabilityHandlers(
 			var deviceEvidence []envelope.DeviceEvidenceItem
 			var nonce32 [32]byte
 			copy(nonce32[:], nonce)
+			var collateral []envelope.CollateralEntry
+			if collateralSource != nil {
+				collateral, err = collateralSource.Current(r.Context())
+				if err != nil {
+					log.Printf("Attestation collateral unavailable: %v", err)
+					writeJSONError(w, "Attestation collateral unavailable", errTypeServer, http.StatusServiceUnavailable)
+					return
+				}
+			}
 			if expectedGPUs > 0 {
 				gpuEvidence, err := tinfoilattestation.CollectGPUEvidence(nonce32)
 				if err != nil {
@@ -388,7 +388,7 @@ func registerObservabilityHandlers(
 				identityBody.HPKEKey,
 				nonce,
 				deviceEvidence,
-				material.Collateral,
+				collateral,
 			)
 			if err != nil {
 				log.Printf("Fresh attestation failed: %v", err)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,12 +12,25 @@ import (
 	"testing"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
 )
+
+type staticCollateralSource []envelope.CollateralEntry
+
+func (s staticCollateralSource) Current(context.Context) ([]envelope.CollateralEntry, error) {
+	return s, nil
+}
+
+type errorCollateralSource struct{}
+
+func (errorCollateralSource) Current(context.Context) ([]envelope.CollateralEntry, error) {
+	return nil, errors.New("expired")
+}
 
 type fakeValidator struct {
 	err   error
@@ -72,9 +86,7 @@ func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler
 		Body:   "deadbeef",
 	}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
-	material := json.RawMessage(`{"format":"https://tinfoil.sh/predicate/attestation-collaterals/v2","expires_at":"2026-01-01T00:00:00Z","collateral":[]}`)
-
-	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, material, cfg, extCfg, upstreamAddr)
+	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg, upstreamAddr)
 }
 
 func testObservabilityServer(t *testing.T, paths []string) http.Handler {
@@ -91,9 +103,32 @@ func testObservabilityServer(t *testing.T, paths []string) http.Handler {
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
-	material := json.RawMessage(`{"format":"https://tinfoil.sh/predicate/attestation-collaterals/v2","expires_at":"2026-01-01T00:00:00Z","collateral":[]}`)
+	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg)
+}
 
-	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, material, cfg, extCfg)
+func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
+	id, err := identity.NewIdentity()
+	if err != nil {
+		t.Fatalf("creating identity: %v", err)
+	}
+	handler := NewObservabilityServer(
+		&legacy.Document{Format: legacy.DummyV2, Body: "deadbeef"},
+		tinfoilattestation.BodyV2{},
+		0,
+		id,
+		nil,
+		errorCollateralSource{},
+		&config.Config{},
+		&config.ExternalConfig{},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/tinfoil-attestation?nonce="+strings.Repeat("00", 32), nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
 }
 
 func TestPathNotAllowed_Returns404(t *testing.T) {

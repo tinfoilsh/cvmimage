@@ -19,8 +19,8 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	verifier "tinfoil/internal/legacy"
 	"golang.org/x/time/rate"
+	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/boot"
@@ -150,9 +150,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 
-		attestationMaterial, err := waitForArtifact("Attestation material", func() (json.RawMessage, error) {
-			return os.ReadFile(boot.AttestationMaterialPath)
-		})
+		collateralCache, err := newCollateralSource(att, config, externalConfig)
 		if err != nil {
 			return err
 		}
@@ -171,7 +169,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
 
-		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, attestationMaterial, config, externalConfig)
+		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig)
 		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
 
 		log.Println("Shim observability ready")
@@ -238,7 +236,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, attestationMaterial, config, externalConfig, upstreamAddr)
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

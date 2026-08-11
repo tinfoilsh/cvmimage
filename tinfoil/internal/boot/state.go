@@ -39,25 +39,24 @@ const (
 )
 
 const (
-	StageConfig              = "config"
-	StageNetwork             = "network"
-	StageIdentity            = "identity"
-	StageCPUAttestation      = "cpu-attestation"
-	StageAttestationMaterial = "attestation-material"
-	StageGPUAttestation      = "gpu-attestation"
-	StageVaultSecrets        = "vault-secrets"
-	StageCertificate         = "certificate"
-	StageRegistryAuth        = "registry-auth"
-	StageModels              = "models"
-	StageFirewall            = "firewall"
-	StageContainers          = "containers"
-	StageShim                = "shim"
+	StageConfig         = "config"
+	StageNetwork        = "network"
+	StageIdentity       = "identity"
+	StageCPUAttestation = "cpu-attestation"
+	StageGPUAttestation = "gpu-attestation"
+	StageVaultSecrets   = "vault-secrets"
+	StageCertificate    = "certificate"
+	StageRegistryAuth   = "registry-auth"
+	StageModels         = "models"
+	StageFirewall       = "firewall"
+	StageContainers     = "containers"
+	StageShim           = "shim"
 )
 
 // InitialStages is the ordered list of stages known at boot time.
 // Both boot and shim use this as the starting point.
 var InitialStages = []string{
-	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageAttestationMaterial, StageGPUAttestation, StageCertificate,
+	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
 	StageVaultSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -753,6 +754,44 @@ func TestReadinessPublicationAllowsTransientRecovery(t *testing.T) {
 	readiness.Update(supervisor.State{Name: "second", Required: true, Ready: true})
 	if got := fmt.Sprint(states); got != "[false true]" {
 		t.Fatalf("published readiness states = %s, want [false true]", got)
+	}
+}
+
+func TestFileReadyWaitsForTheServiceLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "containers.ready")
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- fileReady(path)(ctx)
+	}()
+
+	select {
+	case err := <-result:
+		t.Fatalf("fileReady returned before readiness or cancellation: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("fileReady cancellation error = %v, want context canceled", err)
+	}
+}
+
+func TestFileReadyReturnsWhenReadinessIsPublished(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "containers.ready")
+	writeResult := make(chan error, 1)
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		writeResult <- os.WriteFile(path, nil, 0o600)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := fileReady(path)(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeResult; err != nil {
+		t.Fatal(err)
 	}
 }
 

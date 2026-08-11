@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -20,12 +19,10 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
-	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
@@ -153,41 +150,10 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 
-		attestationMaterial, err := waitForArtifact("Attestation material", func() (wire.Response, error) {
-			data, err := os.ReadFile(boot.AttestationMaterialPath)
-			if err != nil {
-				return wire.Response{}, err
-			}
-			return attestationmaterial.ParseResponse(data)
-		})
+		collateralCache, err := newCollateralSource(att, config, externalConfig)
 		if err != nil {
 			return err
 		}
-		attestationRequest, err := waitForArtifact("Attestation material request", func() (wire.Request, error) {
-			data, err := os.ReadFile(boot.AttestationMaterialRequestPath)
-			if err != nil {
-				return wire.Request{}, err
-			}
-			var request wire.Request
-			if err := json.Unmarshal(data, &request); err != nil {
-				return wire.Request{}, fmt.Errorf("parsing attestation material request: %w", err)
-			}
-			return request, nil
-		})
-		if err != nil {
-			return err
-		}
-
-		var collateralFetcher attestationmaterial.Fetcher
-		if attestationRequest.Repo != "" && attestationRequest.Platform != "" && attestationRequest.Platform != "dummy" {
-			client, err := attestationmaterial.NewClient(config.ATC, nil)
-			if err != nil {
-				return err
-			}
-			collateralFetcher = client
-		}
-		collateralManager := attestationmaterial.NewManager(attestationMaterial, attestationRequest, collateralFetcher, boot.AttestationMaterialPath)
-		go collateralManager.Run(context.Background())
 
 		// Build identity body for fresh attestation (binds TLS key + HPKE key to hardware)
 		realCertParsed := cert.Load()
@@ -203,7 +169,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
 
-		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralManager, config, externalConfig)
+		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig)
 		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
 
 		log.Println("Shim observability ready")
@@ -270,7 +236,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralManager, config, externalConfig, upstreamAddr)
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

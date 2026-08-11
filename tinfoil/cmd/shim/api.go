@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -27,7 +28,7 @@ import (
 )
 
 type collateralSource interface {
-	Current() ([]envelope.CollateralEntry, error)
+	Current(context.Context) ([]envelope.CollateralEntry, error)
 }
 
 // pathMatchesPattern checks if a request path matches a pattern.
@@ -339,7 +340,7 @@ func registerObservabilityHandlers(
 			copy(nonce32[:], nonce)
 			var collateral []envelope.CollateralEntry
 			if collateralSource != nil {
-				collateral, err = collateralSource.Current()
+				collateral, err = collateralSource.Current(r.Context())
 				if err != nil {
 					log.Printf("Attestation collateral unavailable: %v", err)
 					writeJSONError(w, "Attestation collateral unavailable", errTypeServer, http.StatusServiceUnavailable)

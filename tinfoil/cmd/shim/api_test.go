@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,13 +22,13 @@ import (
 
 type staticCollateralSource []envelope.CollateralEntry
 
-func (s staticCollateralSource) Current() ([]envelope.CollateralEntry, error) {
+func (s staticCollateralSource) Current(context.Context) ([]envelope.CollateralEntry, error) {
 	return s, nil
 }
 
 type errorCollateralSource struct{}
 
-func (errorCollateralSource) Current() ([]envelope.CollateralEntry, error) {
+func (errorCollateralSource) Current(context.Context) ([]envelope.CollateralEntry, error) {
 	return nil, errors.New("expired")
 }
 

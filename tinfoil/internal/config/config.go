@@ -27,7 +27,7 @@ type Config struct {
 
 	ControlPlane string `yaml:"control-plane" default:"https://api.tinfoil.sh"`
 	// ATC is the attestation collaterals service the enclave fetches its v3
-	// collateral bundle from at boot.
+	// collateral bundle from at boot and refreshes while running.
 	ATC string `yaml:"atc" default:"https://atc.tinfoil.sh"`
 	// Authenticated enables API key validation against the control plane.
 	// When false, no API key checks are performed regardless of AuthenticatedEndpoints.

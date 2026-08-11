@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"

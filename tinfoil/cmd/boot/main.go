@@ -110,7 +110,16 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
-	// 5. GPU attestation
+	// 5. Attestation material
+	start = time.Now()
+	log.Println("Fetching attestation material")
+	if err := fetchAttestationMaterial(cpuAtt, config.ShimCfg, externalConfig); err != nil {
+		tracker.Record(boot.StageAttestationMaterial, boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	tracker.Record(boot.StageAttestationMaterial, boot.StatusOK, time.Since(start), "")
+
+	// 6. GPU attestation
 	start = time.Now()
 	gpuCount := config.GPUs
 	if err := validateGPUAttestationBootstrap(boot.NVIDIABootstrapStatusPath, config); err != nil {
@@ -137,7 +146,7 @@ func run(ctx context.Context, invocation invocation) error {
 		tracker.Record("gpu-attestation", boot.StatusSkipped, time.Since(start), "no GPUs")
 	}
 
-	// 6. Certificate
+	// 7. Certificate
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
 	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
@@ -146,7 +155,7 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 7. Fetch any external vault secrets.
+	// 8. Fetch any external vault secrets.
 	start = time.Now()
 	if config.VaultURL == "" {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
@@ -159,7 +168,7 @@ func run(ctx context.Context, invocation invocation) error {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
 	}
 
-	// 8. Registry auth
+	// 9. Registry auth
 	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(externalConfig); err != nil {
@@ -168,7 +177,7 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 
-	// 9. Models
+	// 10. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config, externalConfig); err != nil {

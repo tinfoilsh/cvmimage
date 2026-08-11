@@ -19,7 +19,7 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	verifier "tinfoil/internal/legacy"
 	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"
@@ -150,6 +150,13 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 
+		attestationMaterial, err := waitForArtifact("Attestation material", func() (json.RawMessage, error) {
+			return os.ReadFile(boot.AttestationMaterialPath)
+		})
+		if err != nil {
+			return err
+		}
+
 		// Build identity body for fresh attestation (binds TLS key + HPKE key to hardware)
 		realCertParsed := cert.Load()
 		tlsPub, ok := realCertParsed.PrivateKey.(*ecdsa.PrivateKey)
@@ -164,7 +171,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
 
-		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig)
+		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, attestationMaterial, config, externalConfig)
 		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
 
 		log.Println("Shim observability ready")
@@ -231,7 +238,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, config, externalConfig, upstreamAddr)
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, attestationMaterial, config, externalConfig, upstreamAddr)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

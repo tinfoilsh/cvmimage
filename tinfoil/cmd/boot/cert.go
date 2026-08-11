@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
-	verifier "github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	verifier "tinfoil/internal/legacy"
 	"golang.org/x/net/publicsuffix"
 
 	"tinfoil/internal/boot"

@@ -106,10 +106,13 @@ func TestRestrictServiceFilesystemsFailsClosedAtEveryStep(t *testing.T) {
 }
 
 func TestRestrictShimFilesystemsFailsClosedAtEveryStep(t *testing.T) {
-	kinds := map[string]devicePathKind{
-		tdxReportSource: devicePathDirectory,
-		filepath.Join(attestationDeviceSource, "nvidia0"):     devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia-caps"): devicePathDirectory,
+	kinds := map[string]devicePathKind{tdxReportSource: devicePathDirectory}
+	for _, relative := range attestationDevicePaths() {
+		kind := devicePathNode
+		if relative == "nvidia-caps" {
+			kind = devicePathDirectory
+		}
+		kinds[filepath.Join(attestationDeviceSource, relative)] = kind
 	}
 	baseline := &fakeFilesystemKernel{kinds: kinds}
 	if err := restrictServiceFilesystems(baseline, true); err != nil {

@@ -24,6 +24,7 @@ type fakeFilesystemKernel struct {
 	err    error
 	calls  []mountCall
 	kinds  map[string]devicePathKind
+	paths  []string
 }
 
 func (kernel *fakeFilesystemKernel) unshare(flags int) error {
@@ -52,8 +53,14 @@ func (kernel *fakeFilesystemKernel) unmount(target string, flags int) error { re
 func (kernel *fakeFilesystemKernel) pathKind(path string) (devicePathKind, error) {
 	return kernel.kinds[path], nil
 }
-func (kernel *fakeFilesystemKernel) makeTarget(string, devicePathKind) error { return nil }
-func (kernel *fakeFilesystemKernel) remove(string) error                     { return nil }
+func (kernel *fakeFilesystemKernel) makeTarget(path string, _ devicePathKind) error {
+	kernel.paths = append(kernel.paths, "create:"+path)
+	return nil
+}
+func (kernel *fakeFilesystemKernel) remove(path string) error {
+	kernel.paths = append(kernel.paths, "remove:"+path)
+	return nil
+}
 
 func TestRestrictServiceFilesystemsUsesFixedPrivateReadOnlyLayout(t *testing.T) {
 	kernel := &fakeFilesystemKernel{}
@@ -135,5 +142,34 @@ func TestRestrictShimFilesystemsBindsOnlyAttestationDevices(t *testing.T) {
 	}
 	if !foundTDXReport {
 		t.Fatalf("TDX report interface was not bound: %#v", kernel.calls)
+	}
+}
+
+func TestRestrictShimFilesystemsResetsReservedStagingDirectories(t *testing.T) {
+	kernel := &fakeFilesystemKernel{kinds: map[string]devicePathKind{
+		tdxReportSource: devicePathDirectory,
+	}}
+	if err := restrictServiceFilesystems(kernel, true); err != nil {
+		t.Fatalf("restrictServiceFilesystems: %v", err)
+	}
+
+	for _, path := range []string{attestationDeviceSource, attestationSysSource} {
+		remove := -1
+		create := -1
+		for index, operation := range kernel.paths {
+			switch operation {
+			case "remove:" + path:
+				if remove == -1 {
+					remove = index
+				}
+			case "create:" + path:
+				if create == -1 {
+					create = index
+				}
+			}
+		}
+		if remove == -1 || create == -1 || remove > create {
+			t.Fatalf("staging operations for %s = %v, want remove before create", path, kernel.paths)
+		}
 	}
 }

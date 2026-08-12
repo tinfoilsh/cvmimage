@@ -124,8 +124,8 @@ func mountAttestationSysView(kernel filesystemKernel) (result error) {
 	if kind != devicePathDirectory {
 		return fmt.Errorf("TDX report interface is not a directory")
 	}
-	if err := kernel.makeTarget(attestationSysSource, devicePathDirectory); err != nil {
-		return fmt.Errorf("create attestation sys source: %w", err)
+	if err := resetStagingDirectory(kernel, attestationSysSource); err != nil {
+		return fmt.Errorf("reset attestation sys source: %w", err)
 	}
 	defer func() {
 		result = errors.Join(result, kernel.remove(attestationSysSource))
@@ -156,8 +156,8 @@ func mountAttestationSysView(kernel filesystemKernel) (result error) {
 }
 
 func mountAttestationDeviceView(kernel filesystemKernel) (result error) {
-	if err := kernel.makeTarget(attestationDeviceSource, devicePathDirectory); err != nil {
-		return fmt.Errorf("create attestation device source: %w", err)
+	if err := resetStagingDirectory(kernel, attestationDeviceSource); err != nil {
+		return fmt.Errorf("reset attestation device source: %w", err)
 	}
 	defer func() {
 		result = errors.Join(result, kernel.remove(attestationDeviceSource))
@@ -198,6 +198,16 @@ func mountAttestationDeviceView(kernel filesystemKernel) (result error) {
 	}
 	if err := kernel.mount("", "/dev", "", flags|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
 		return fmt.Errorf("remount restricted attestation /dev read-only: %w", err)
+	}
+	return nil
+}
+
+func resetStagingDirectory(kernel filesystemKernel, path string) error {
+	if err := kernel.remove(path); err != nil {
+		return fmt.Errorf("remove stale path: %w", err)
+	}
+	if err := kernel.makeTarget(path, devicePathDirectory); err != nil {
+		return fmt.Errorf("create clean directory: %w", err)
 	}
 	return nil
 }

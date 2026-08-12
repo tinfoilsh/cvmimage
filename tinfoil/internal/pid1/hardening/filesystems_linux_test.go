@@ -22,17 +22,23 @@ type mountCall struct {
 type fakeFilesystemKernel struct {
 	failAt int
 	err    error
+	steps  int
 	calls  []mountCall
 	kinds  map[string]devicePathKind
 	paths  []string
 }
 
-func (kernel *fakeFilesystemKernel) unshare(flags int) error {
-	kernel.calls = append(kernel.calls, mountCall{source: "unshare", flags: uintptr(flags)})
-	if kernel.failAt == len(kernel.calls) {
+func (kernel *fakeFilesystemKernel) step() error {
+	kernel.steps++
+	if kernel.failAt == kernel.steps {
 		return kernel.err
 	}
 	return nil
+}
+
+func (kernel *fakeFilesystemKernel) unshare(flags int) error {
+	kernel.calls = append(kernel.calls, mountCall{source: "unshare", flags: uintptr(flags)})
+	return kernel.step()
 }
 
 func (kernel *fakeFilesystemKernel) mount(source, target, filesystemType string, flags uintptr, data string) error {
@@ -43,23 +49,22 @@ func (kernel *fakeFilesystemKernel) mount(source, target, filesystemType string,
 		flags:          flags,
 		data:           data,
 	})
-	if kernel.failAt == len(kernel.calls) {
-		return kernel.err
-	}
-	return nil
+	return kernel.step()
 }
 
-func (kernel *fakeFilesystemKernel) unmount(target string, flags int) error { return nil }
+func (kernel *fakeFilesystemKernel) unmount(target string, flags int) error {
+	return kernel.step()
+}
 func (kernel *fakeFilesystemKernel) pathKind(path string) (devicePathKind, error) {
-	return kernel.kinds[path], nil
+	return kernel.kinds[path], kernel.step()
 }
 func (kernel *fakeFilesystemKernel) makeTarget(path string, _ devicePathKind) error {
 	kernel.paths = append(kernel.paths, "create:"+path)
-	return nil
+	return kernel.step()
 }
 func (kernel *fakeFilesystemKernel) remove(path string) error {
 	kernel.paths = append(kernel.paths, "remove:"+path)
-	return nil
+	return kernel.step()
 }
 
 func TestRestrictServiceFilesystemsUsesFixedPrivateReadOnlyLayout(t *testing.T) {
@@ -95,6 +100,29 @@ func TestRestrictServiceFilesystemsFailsClosedAtEveryStep(t *testing.T) {
 			}
 			if len(kernel.calls) != failAt {
 				t.Fatalf("calls = %d, want %d", len(kernel.calls), failAt)
+			}
+		})
+	}
+}
+
+func TestRestrictShimFilesystemsFailsClosedAtEveryStep(t *testing.T) {
+	kinds := map[string]devicePathKind{
+		tdxReportSource: devicePathDirectory,
+		filepath.Join(attestationDeviceSource, "nvidia0"):     devicePathNode,
+		filepath.Join(attestationDeviceSource, "nvidia-caps"): devicePathDirectory,
+	}
+	baseline := &fakeFilesystemKernel{kinds: kinds}
+	if err := restrictServiceFilesystems(baseline, true); err != nil {
+		t.Fatalf("baseline restrictServiceFilesystems: %v", err)
+	}
+
+	for failAt := 1; failAt <= baseline.steps; failAt++ {
+		t.Run(fmt.Sprint(failAt), func(t *testing.T) {
+			stepErr := errors.New("step failed")
+			kernel := &fakeFilesystemKernel{failAt: failAt, err: stepErr, kinds: kinds}
+			err := restrictServiceFilesystems(kernel, true)
+			if !errors.Is(err, stepErr) {
+				t.Fatalf("error = %v, want %v", err, stepErr)
 			}
 		})
 	}

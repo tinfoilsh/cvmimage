@@ -150,23 +150,26 @@ func (s *Services) waitForService(ctx context.Context, name, pidPath, socketPath
 
 	var lastErr error
 	for {
-		if pidPath != "" {
-			if err := validateLivePID(pidPath); err != nil {
-				lastErr = fmt.Errorf("validate %s PID: %w", name, err)
-			} else if err := validateUnixSocket(socketPath); err != nil {
-				lastErr = fmt.Errorf("validate %s socket: %w", name, err)
-			} else {
-				return nil
-			}
-		} else if err := validateUnixSocket(socketPath); err != nil {
-			lastErr = fmt.Errorf("validate %s socket: %w", name, err)
-		} else {
+		lastErr = validateServiceReadiness(name, pidPath, socketPath)
+		if lastErr == nil {
 			return nil
 		}
 		if err := waitPoll(waitCtx, s.pollInterval); err != nil {
 			return fmt.Errorf("%s readiness failed (%v): %w", name, lastErr, err)
 		}
 	}
+}
+
+func validateServiceReadiness(name, pidPath, socketPath string) error {
+	if pidPath != "" {
+		if err := validateLivePID(pidPath); err != nil {
+			return fmt.Errorf("validate %s PID: %w", name, err)
+		}
+	}
+	if err := validateUnixSocket(socketPath); err != nil {
+		return fmt.Errorf("validate %s socket: %w", name, err)
+	}
+	return nil
 }
 
 // WaitForNVML polls go-nvml directly until it reports exactly expected GPUs.

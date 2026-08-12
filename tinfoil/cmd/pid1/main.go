@@ -27,7 +27,6 @@ import (
 const (
 	containerdReadyLimit = 30 * time.Second
 	dockerReadyLimit     = 60 * time.Second
-	containersReadyLimit = 30 * time.Minute
 	shimReadyLimit       = 30 * time.Second
 	oneShotStopGrace     = 2 * time.Second
 	serviceTermGrace     = 10 * time.Second
@@ -257,7 +256,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		Name: containersName, Required: true, Restart: true,
 		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
 			fmt.Sprintf("--debug=%t", deps.cmdline.Debug)),
-		Ready: fileReady(boot.ContainersReadyPath, containersReadyLimit),
+		Ready: fileReady(boot.ContainersReadyPath),
 	}); err != nil {
 		return err
 	}
@@ -613,7 +612,9 @@ func annotateOneShotFailure(
 
 func endpointReady(network, address string, limit time.Duration) func(context.Context) error {
 	return func(parent context.Context) error {
-		return waitForEndpoint(parent, limit, func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(parent, limit)
+		defer cancel()
+		return waitForReadiness(ctx, func(ctx context.Context) error {
 			connection, err := (&net.Dialer{}).DialContext(ctx, network, address)
 			if err == nil {
 				_ = connection.Close()
@@ -623,18 +624,16 @@ func endpointReady(network, address string, limit time.Duration) func(context.Co
 	}
 }
 
-func fileReady(path string, limit time.Duration) func(context.Context) error {
+func fileReady(path string) func(context.Context) error {
 	return func(parent context.Context) error {
-		return waitForEndpoint(parent, limit, func(context.Context) error {
+		return waitForReadiness(parent, func(context.Context) error {
 			_, err := os.Stat(path)
 			return err
 		})
 	}
 }
 
-func waitForEndpoint(parent context.Context, limit time.Duration, probe func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(parent, limit)
-	defer cancel()
+func waitForReadiness(ctx context.Context, probe func(context.Context) error) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	var lastErr error

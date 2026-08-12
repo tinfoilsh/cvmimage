@@ -27,12 +27,13 @@ const (
 )
 
 type servicePolicy struct {
-	noNewPrivileges      bool
-	boundCapabilities    []int
-	restrictFilesystems  bool
-	deniedSyscalls       []uint32
-	restrictNamespaceOps bool
-	allowedSocketDomains []uint32
+	noNewPrivileges          bool
+	boundCapabilities        []int
+	restrictFilesystems      bool
+	exposeAttestationDevices bool
+	deniedSyscalls           []uint32
+	restrictNamespaceOps     bool
+	allowedSocketDomains     []uint32
 }
 
 // kernelManagementSyscalls are denied for every hardened service, including
@@ -119,10 +120,12 @@ func policyFor(service Service) (servicePolicy, bool) {
 			[]uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		), true
 	case ServiceShim:
-		return restrictedServicePolicy(
+		policy := restrictedServicePolicy(
 			[]int{unix.CAP_NET_BIND_SERVICE},
 			[]uint32{unix.AF_INET, unix.AF_INET6},
-		), true
+		)
+		policy.exposeAttestationDevices = true
+		return policy, true
 	default:
 		return servicePolicy{}, false
 	}
@@ -147,7 +150,7 @@ func ApplyService(service Service) error {
 }
 
 type serviceKernel interface {
-	restrictFilesystems() error
+	restrictFilesystems(bool) error
 	dropBoundingCapability(int) error
 	setCapabilities([2]unix.CapUserData) error
 	setNoNewPrivileges() error
@@ -161,7 +164,7 @@ func applyService(kernel serviceKernel, service Service) error {
 	}
 
 	if policy.restrictFilesystems {
-		if err := kernel.restrictFilesystems(); err != nil {
+		if err := kernel.restrictFilesystems(policy.exposeAttestationDevices); err != nil {
 			return fmt.Errorf("restrict filesystems for %s: %w", service, err)
 		}
 	}

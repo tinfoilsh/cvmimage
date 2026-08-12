@@ -19,7 +19,7 @@ import (
 const (
 	persistencedUID     = 143
 	persistencedGID     = 143
-	serviceReadyWait    = 15 * time.Second
+	serviceReadyWait    = 30 * time.Second
 	servicePollInterval = 500 * time.Millisecond
 	maxPIDFileSize      = 32
 )
@@ -137,10 +137,11 @@ func (s *Services) WaitForPersistenced(ctx context.Context) error {
 	return s.waitForService(ctx, "nvidia-persistenced", s.paths.persistencedPID, s.paths.persistencedSock)
 }
 
-// WaitForFabricManager waits for a regular, nonempty bounded PID file and the
-// fixed Fabric Manager Unix socket.
+// WaitForFabricManager waits for the fixed Fabric Manager Unix socket. Fabric
+// Manager runs in the foreground under the PID1 supervisor, so it does not
+// publish a PID file.
 func (s *Services) WaitForFabricManager(ctx context.Context) error {
-	return s.waitForService(ctx, "NVIDIA Fabric Manager", s.paths.fabricPID, s.paths.fabricSock)
+	return s.waitForService(ctx, "NVIDIA Fabric Manager", "", s.paths.fabricSock)
 }
 
 func (s *Services) waitForService(ctx context.Context, name, pidPath, socketPath string) error {
@@ -149,17 +150,26 @@ func (s *Services) waitForService(ctx context.Context, name, pidPath, socketPath
 
 	var lastErr error
 	for {
-		if err := validateLivePID(pidPath); err != nil {
-			lastErr = fmt.Errorf("validate %s PID: %w", name, err)
-		} else if err := validateUnixSocket(socketPath); err != nil {
-			lastErr = fmt.Errorf("validate %s socket: %w", name, err)
-		} else {
+		lastErr = validateServiceReadiness(name, pidPath, socketPath)
+		if lastErr == nil {
 			return nil
 		}
 		if err := waitPoll(waitCtx, s.pollInterval); err != nil {
 			return fmt.Errorf("%s readiness failed (%v): %w", name, lastErr, err)
 		}
 	}
+}
+
+func validateServiceReadiness(name, pidPath, socketPath string) error {
+	if pidPath != "" {
+		if err := validateLivePID(pidPath); err != nil {
+			return fmt.Errorf("validate %s PID: %w", name, err)
+		}
+	}
+	if err := validateUnixSocket(socketPath); err != nil {
+		return fmt.Errorf("validate %s socket: %w", name, err)
+	}
+	return nil
 }
 
 // WaitForNVML polls go-nvml directly until it reports exactly expected GPUs.

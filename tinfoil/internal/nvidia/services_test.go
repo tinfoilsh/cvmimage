@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +72,12 @@ func testServices(t *testing.T, api nvmlAPI) *Services {
 	services.readyWait = 100 * time.Millisecond
 	services.pollInterval = time.Millisecond
 	return services
+}
+
+func TestProductionReadinessWindowCoversMultiGPUInitialization(t *testing.T) {
+	if serviceReadyWait < 30*time.Second {
+		t.Fatalf("serviceReadyWait = %s, want at least 30s for multi-GPU initialization", serviceReadyWait)
+	}
 }
 
 func writeServiceFile(t *testing.T, path, contents string) {
@@ -258,42 +263,30 @@ func TestWaitForPersistencedRequiresUnixSocket(t *testing.T) {
 	}
 }
 
-func TestWaitForFabricManagerRequiresPIDAndSocket(t *testing.T) {
+func TestWaitForFabricManagerRequiresSocketOnly(t *testing.T) {
 	services := testServices(t, nil)
-	writeServiceFile(t, services.paths.fabricPID, "")
-	listenUnix(t, services.paths.fabricSock)
+	writeServiceFile(t, services.paths.fabricSock, "not a socket")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
 	if err := services.WaitForFabricManager(ctx); err == nil {
-		t.Fatal("WaitForFabricManager accepted empty PID file")
+		t.Fatal("WaitForFabricManager accepted regular file")
 	}
 
-	writeServiceFile(t, services.paths.fabricPID, strconv.Itoa(os.Getpid())+"\n")
+	if err := os.Remove(services.paths.fabricSock); err != nil {
+		t.Fatal(err)
+	}
+	listenUnix(t, services.paths.fabricSock)
 	if err := services.WaitForFabricManager(context.Background()); err != nil {
 		t.Fatalf("WaitForFabricManager: %v", err)
 	}
 }
 
-func TestWaitForFabricManagerRejectsPIDLinksAndOversize(t *testing.T) {
+func TestWaitForFabricManagerIgnoresStalePIDState(t *testing.T) {
 	services := testServices(t, nil)
-	writeServiceFile(t, services.paths.fabricPID+".target", strconv.Itoa(os.Getpid())+"\n")
-	if err := os.Symlink(services.paths.fabricPID+".target", services.paths.fabricPID); err != nil {
-		t.Fatal(err)
-	}
+	writeServiceFile(t, services.paths.fabricPID, "stale")
 	listenUnix(t, services.paths.fabricSock)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-	defer cancel()
-	if err := services.WaitForFabricManager(ctx); err == nil {
-		t.Fatal("WaitForFabricManager followed PID symlink")
-	}
-	if err := os.Remove(services.paths.fabricPID); err != nil {
-		t.Fatal(err)
-	}
-	writeServiceFile(t, services.paths.fabricPID, strings.Repeat("1", maxPIDFileSize+1))
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Millisecond)
-	defer cancel()
-	if err := services.WaitForFabricManager(ctx); err == nil {
-		t.Fatal("WaitForFabricManager accepted oversized PID file")
+	if err := services.WaitForFabricManager(context.Background()); err != nil {
+		t.Fatalf("WaitForFabricManager: %v", err)
 	}
 }
 

@@ -34,12 +34,13 @@ func TestServicePoliciesAreExact(t *testing.T) {
 			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		},
 		ServiceShim: {
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_BIND_SERVICE},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6},
+			noNewPrivileges:          true,
+			boundCapabilities:        []int{unix.CAP_NET_BIND_SERVICE},
+			restrictFilesystems:      true,
+			exposeAttestationDevices: true,
+			deniedSyscalls:           restrictedServiceSyscalls,
+			restrictNamespaceOps:     true,
+			allowedSocketDomains:     []uint32{unix.AF_INET, unix.AF_INET6},
 		},
 	}
 	for service, wantPolicy := range want {
@@ -316,8 +317,11 @@ type fakeServiceKernel struct {
 	socketDomains        []uint32
 }
 
-func (kernel *fakeServiceKernel) restrictFilesystems() error {
+func (kernel *fakeServiceKernel) restrictFilesystems(exposeAttestation bool) error {
 	kernel.calls = append(kernel.calls, "restrict-filesystems")
+	if exposeAttestation {
+		kernel.calls = append(kernel.calls, "expose-attestation-devices")
+	}
 	return kernel.restrictFilesystemsErr
 }
 

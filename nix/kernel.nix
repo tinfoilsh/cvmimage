@@ -47,7 +47,10 @@ let
   patchedSource = pkgs.applyPatches {
     name = "linux-source-${version}-tinfoil";
     src = source;
-    patches = [ ./patches/kernel-disable-virtio-pci-admin-legacy.patch ];
+    patches = [
+      ./patches/kernel-disable-virtio-pci-admin-legacy.patch
+      ./patches/kernel-tdx-fast-quote-polling.patch
+    ];
   };
 
   configFile = pkgs.stdenv.mkDerivation {

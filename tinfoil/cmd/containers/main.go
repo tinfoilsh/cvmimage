@@ -21,6 +21,7 @@ import (
 	"tinfoil/internal/containers"
 	"tinfoil/internal/firewall"
 	"tinfoil/internal/runtimeconfig"
+	"tinfoil/internal/vault"
 )
 
 const bootPath = "/v1/boot"
@@ -189,6 +190,24 @@ func (m *manager) boot(override []byte) (result error) {
 		}
 		preserved[runtimeconfig.ReservedDebugContainerName] = true
 	}
+	tracker, err := boot.ResumeTracker()
+	if err != nil {
+		return err
+	}
+	// Fetch vault secrets here, in the process that builds container
+	// environments, so released values stay in memory and are never persisted.
+	// Runs before any teardown so a vault failure leaves running containers up.
+	start := time.Now()
+	if config.VaultURL == "" {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
+	} else {
+		log.Println("Fetching vault secrets")
+		if err := vault.FetchSecrets(config, external); err != nil {
+			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+			return fmt.Errorf("vault secret fetch failed: %w", err)
+		}
+		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
+	}
 	frozenEgress, err := freezeFromPIDFile(boot.EgressPIDPath)
 	if err != nil {
 		return fmt.Errorf("freezing current egress policy: %w", err)
@@ -209,11 +228,7 @@ func (m *manager) boot(override []byte) (result error) {
 	if err := writeRuntimeArtifacts(config, source); err != nil {
 		return err
 	}
-	tracker, err := boot.ResumeTracker()
-	if err != nil {
-		return err
-	}
-	start := time.Now()
+	start = time.Now()
 	if err := firewall.ApplyInbound(config.CVMNetwork.InboundPorts); err != nil {
 		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
 		return err

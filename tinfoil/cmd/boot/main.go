@@ -146,20 +146,7 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 7. Fetch any external vault secrets.
-	start = time.Now()
-	if config.VaultURL == "" {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
-	} else {
-		log.Println("Fetching vault secrets")
-		if err := fetchVaultSecrets(config, externalConfig); err != nil {
-			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-			return fmt.Errorf("vault secret fetch failed: %w", err)
-		}
-		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
-	}
-
-	// 8. Registry auth
+	// 7. Registry auth
 	start = time.Now()
 	log.Println("Setting up registry authentication")
 	if err := setupRegistryAuth(externalConfig); err != nil {
@@ -168,7 +155,7 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("registry-auth", boot.StatusOK, time.Since(start), "")
 
-	// 9. Models
+	// 8. Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(config, externalConfig); err != nil {

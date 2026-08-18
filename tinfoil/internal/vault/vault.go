@@ -1,4 +1,7 @@
-package main
+// Package vault fetches declared container secrets from the customer's
+// attested-release vault. It runs in tinfoil-containers so released values
+// reach container environments without ever being persisted to disk.
+package vault
 
 import (
 	"bytes"
@@ -17,20 +20,21 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/runtimeconfig"
 )
 
-const vaultFetchTimeout = 60 * time.Second
+const fetchTimeout = 60 * time.Second
 
-type vaultFetchRequest struct {
+type fetchRequest struct {
 	Repo       string           `json:"repo"`
 	SecretRefs []string         `json:"secret_refs"`
 	Bundle     *verifier.Bundle `json:"bundle"`
 	Token      string           `json:"token"`
 }
 
-// fetchVaultSecrets asks the vault for the declared secrets the external
-// config did not populate.
-func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
+// FetchSecrets asks the vault for the declared secrets the external config
+// did not populate, merging released values into ext.
+func FetchSecrets(config *runtimeconfig.Config, ext *shimconfig.ExternalConfig) error {
 	names := missingSecretValues(config, ext)
 	if len(names) == 0 {
 		log.Println("All declared secrets populated by external config, nothing to fetch")
@@ -53,7 +57,7 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 		return fmt.Errorf("loading boot attestation document: %w", err)
 	}
 
-	req := vaultFetchRequest{
+	req := fetchRequest{
 		Repo:       ext.Metadata.Repo,
 		SecretRefs: names,
 		Bundle: &verifier.Bundle{
@@ -63,7 +67,7 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 		Token: ext.VaultToken,
 	}
 
-	secrets, err := vaultFetch(vaultClient(cert), config.VaultURL, req)
+	secrets, err := fetch(client(cert), config.VaultURL, req)
 	if err != nil {
 		return err
 	}
@@ -80,7 +84,7 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 
 // missingSecretValues returns the deduplicated, sorted names of the
 // containers' secrets whose values the external config did not populate
-func missingSecretValues(config *Config, ext *shimconfig.ExternalConfig) []string {
+func missingSecretValues(config *runtimeconfig.Config, ext *shimconfig.ExternalConfig) []string {
 	seen := map[string]struct{}{}
 	var names []string
 	for _, c := range config.Containers {
@@ -99,14 +103,14 @@ func missingSecretValues(config *Config, ext *shimconfig.ExternalConfig) []strin
 	return names
 }
 
-// vaultClient returns an HTTP client that presents the enclave's TLS
-// certificate for mutual TLS. The vault authenticates the connection by
-// pinning the certificate's key fingerprint to the attested REPORTDATA, so no
-// separate client credential is needed. The vault's own server certificate is
-// verified against the system roots (its host is fixed in the measured config).
-func vaultClient(cert tls.Certificate) *http.Client {
+// client returns an HTTP client that presents the enclave's TLS certificate
+// for mutual TLS. The vault authenticates the connection by pinning the
+// certificate's key fingerprint to the attested REPORTDATA, so no separate
+// client credential is needed. The vault's own server certificate is verified
+// against the system roots (its host is fixed in the measured config).
+func client(cert tls.Certificate) *http.Client {
 	return &http.Client{
-		Timeout: vaultFetchTimeout,
+		Timeout: fetchTimeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
@@ -116,8 +120,8 @@ func vaultClient(cert tls.Certificate) *http.Client {
 	}
 }
 
-// vaultFetch POSTs to /fetch and decodes the released secrets. Fails fast.
-func vaultFetch(client *http.Client, base string, req vaultFetchRequest) (map[string]string, error) {
+// fetch POSTs to /fetch and decodes the released secrets. Fails fast.
+func fetch(client *http.Client, base string, req fetchRequest) (map[string]string, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err

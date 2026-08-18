@@ -57,7 +57,7 @@ const (
 // Both boot and shim use this as the starting point.
 var InitialStages = []string{
 	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
-	StageVaultSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
+	StageRegistryAuth, StageModels, StageVaultSecrets, StageFirewall, StageContainers, StageShim,
 }
 
 // Tracker records boot stages as they complete.

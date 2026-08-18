@@ -46,6 +46,12 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 		}
 		seen[ref.mapperName()] = struct{}{}
 		mountPoint, legacyAlias := modelMountTarget(config, model, ref)
+		if !legacyAlias {
+			containerMountPoint := boot.PublicModelsDir + "/" + model.Name
+			if err := os.MkdirAll(containerMountPoint, 0755); err != nil {
+				return fmt.Errorf("creating container mount point for model %q: %w", model.Name, err)
+			}
+		}
 
 		switch kind {
 		case modelKindPlaintext:

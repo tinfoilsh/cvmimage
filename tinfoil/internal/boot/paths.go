@@ -14,8 +14,8 @@ const (
 	MPKDir              = PublicDir + "/mpk" // Legacy alias directory for MWP mounts.
 	ContainerModelsDir  = "/tinfoil/models"
 
-	// Private — only accessible to boot, egress, and shim processes (mode 0700).
-	// Holds CVM-level secrets and material that must never reach a container.
+	// Private — not globally mounted into containers (mode 0700). Explicitly
+	// granted model directories are the only read-only container exception.
 	TLSDir             = PrivateDir + "/tls"
 	TLSCertPath        = TLSDir + "/cert.pem"
 	TLSKeyPath         = TLSDir + "/key.pem"

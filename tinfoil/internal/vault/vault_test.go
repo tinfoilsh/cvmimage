@@ -38,9 +38,18 @@ func TestMissingSecretValues(t *testing.T) {
 
 func TestFetchSecretsAllPopulated(t *testing.T) {
 	config := configWithSecrets([]string{"API_KEY"})
+	config.VaultURL = ""
 	ext := &shimconfig.ExternalConfig{Secrets: map[string]string{"API_KEY": "populated"}}
 	if err := FetchSecrets(config, ext); err != nil {
 		t.Fatalf("FetchSecrets with populated secrets: %v", err)
+	}
+}
+
+func TestFetchSecretsUnresolvedWithoutVault(t *testing.T) {
+	config := configWithSecrets([]string{"API_KEY"})
+	config.VaultURL = ""
+	if err := FetchSecrets(config, &shimconfig.ExternalConfig{}); err == nil {
+		t.Fatal("FetchSecrets with unresolved secret and no vault succeeded")
 	}
 }
 

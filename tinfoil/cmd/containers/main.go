@@ -194,18 +194,18 @@ func (m *manager) boot(override []byte) (result error) {
 	if err != nil {
 		return err
 	}
-	// Fetch vault secrets here, in the process that builds container
-	// environments, so released values stay in memory and are never persisted.
-	// Runs before any teardown so a vault failure leaves running containers up.
+	// Resolve declared container secrets here, in the process that builds
+	// container environments, so released values stay in memory and are never
+	// persisted. Runs before any teardown so a failure leaves running
+	// containers up, and fails closed on secrets nothing can resolve.
 	start := time.Now()
+	if err := vault.FetchSecrets(config, external); err != nil {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("resolving container secrets: %w", err)
+	}
 	if config.VaultURL == "" {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
 	} else {
-		log.Println("Fetching vault secrets")
-		if err := vault.FetchSecrets(config, external); err != nil {
-			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-			return fmt.Errorf("vault secret fetch failed: %w", err)
-		}
 		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
 	}
 	frozenEgress, err := freezeFromPIDFile(boot.EgressPIDPath)

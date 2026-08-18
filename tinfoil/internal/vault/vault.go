@@ -33,12 +33,17 @@ type fetchRequest struct {
 }
 
 // FetchSecrets asks the vault for the declared secrets the external config
-// did not populate, merging released values into ext.
+// did not populate, merging released values into ext. Declared secrets that
+// nothing can resolve are an error, so misconfigured containers never launch
+// with a variable silently missing.
 func FetchSecrets(config *runtimeconfig.Config, ext *shimconfig.ExternalConfig) error {
 	names := missingSecretValues(config, ext)
 	if len(names) == 0 {
 		log.Println("All declared secrets populated by external config, nothing to fetch")
 		return nil
+	}
+	if config.VaultURL == "" {
+		return fmt.Errorf("%d declared secret(s) missing from external config and no vault-url configured", len(names))
 	}
 	if ext.VaultToken == "" {
 		return fmt.Errorf("%d secret(s) need the vault but external config has no vault-token", len(names))

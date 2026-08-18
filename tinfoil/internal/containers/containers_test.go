@@ -99,13 +99,13 @@ func TestBuildEnv(t *testing.T) {
 		},
 		[]string{"API_KEY", "MISSING_SECRET"},
 		ext,
-		secretstore.Store{"API_KEY": "sk-123"},
+		secretstore.Store{"API_KEY": "from-handoff"},
 	)
 
 	want := map[string]bool{
 		"DOMAIN=test.example.com": true,
 		"STATIC=value":            true,
-		"API_KEY=sk-123":          true,
+		"API_KEY=from-handoff":    true,
 	}
 	for _, e := range env {
 		if !want[e] {

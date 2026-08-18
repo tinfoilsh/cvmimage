@@ -147,6 +147,20 @@ func (p *fakeProcess) killCgroup() error {
 
 func (p *fakeProcess) removeCgroup() error { return nil }
 
+func TestCommandAddExtraFileUsesChildPosition(t *testing.T) {
+	first, second := &os.File{}, &os.File{}
+	command := Command{}
+	if fd := command.AddExtraFile(first); fd != 3 {
+		t.Fatalf("first child fd = %d, want 3", fd)
+	}
+	if fd := command.AddExtraFile(second); fd != 4 {
+		t.Fatalf("second child fd = %d, want 4", fd)
+	}
+	if len(command.ExtraFiles) != 2 || command.ExtraFiles[0] != first || command.ExtraFiles[1] != second {
+		t.Fatalf("extra files = %v", command.ExtraFiles)
+	}
+}
+
 func TestManagerOwnsDirectWaitsAndReapsOrphans(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)

@@ -27,10 +27,11 @@ import (
 const bootPath = "/v1/boot"
 
 type manager struct {
-	bootMu  sync.Mutex
-	ctx     context.Context
-	debug   bool
-	secrets secretstore.Store
+	bootMu         sync.Mutex
+	ctx            context.Context
+	debug          bool
+	verifiedConfig []byte
+	secrets        secretstore.Store
 }
 
 type invocation struct {
@@ -86,9 +87,6 @@ func run(ctx context.Context, invocation invocation) error {
 		return err
 	}
 	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-container-secrets")
-	if secretHandoff == nil {
-		return fmt.Errorf("opening container-secret handoff descriptor")
-	}
 	secrets, err := secretstore.ReadHandoff(
 		secretHandoff,
 		secretstore.ConfigDigest(verifiedConfig),
@@ -106,7 +104,12 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	manager := &manager{ctx: runtimeCtx, debug: invocation.debug, secrets: secrets}
+	manager := &manager{
+		ctx:            runtimeCtx,
+		debug:          invocation.debug,
+		verifiedConfig: verifiedConfig,
+		secrets:        secrets,
+	}
 
 	var listener net.Listener
 	if invocation.debug {
@@ -195,11 +198,7 @@ func (m *manager) boot(override []byte) (result error) {
 
 	source := override
 	if len(source) == 0 {
-		var err error
-		source, err = os.ReadFile(boot.ConfigPath)
-		if err != nil {
-			return fmt.Errorf("reading verified config: %w", err)
-		}
+		source = m.verifiedConfig
 	}
 	config, err := runtimeconfig.Decode(source, m.debug)
 	if err != nil {

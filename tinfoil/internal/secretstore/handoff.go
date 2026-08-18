@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	HandoffFD       = 3
 	handoffVersion  = 1
 	maxHandoffBytes = 1 << 20
 	requiredSeals   = unix.F_SEAL_SEAL | unix.F_SEAL_SHRINK | unix.F_SEAL_GROW | unix.F_SEAL_WRITE

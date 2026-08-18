@@ -70,9 +70,6 @@ func run(ctx context.Context, invocation invocation) error {
 		return fmt.Errorf("container-secret handoff descriptor is required")
 	}
 	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-container-secrets")
-	if secretHandoff == nil {
-		return fmt.Errorf("opening container-secret handoff descriptor")
-	}
 	defer secretHandoff.Close()
 
 	tracker := boot.NewTracker(boot.InitialStages)

@@ -255,16 +255,14 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		hardening.ServiceBoot, boot.BootBinary,
 		"--config-hash="+deps.cmdline.ConfigHash,
 		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
-		fmt.Sprintf("--secrets-fd=%d", secretstore.HandoffFD),
 	)
-	bootCommand.ExtraFiles = []*os.File{secretHandoff}
+	bootCommand = withSecretHandoff(bootCommand, secretHandoff)
 	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
 		return err
 	}
 	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
-		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
-		fmt.Sprintf("--secrets-fd=%d", secretstore.HandoffFD))
-	containersCommand.ExtraFiles = []*os.File{secretHandoff}
+		fmt.Sprintf("--debug=%t", deps.cmdline.Debug))
+	containersCommand = withSecretHandoff(containersCommand, secretHandoff)
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containersName, Required: true, Restart: true,
 		Command: containersCommand,
@@ -287,6 +285,12 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	<-parent.Done()
 	initLogf("shutdown requested")
 	return nil
+}
+
+func withSecretHandoff(command supervisor.Command, handoff *os.File) supervisor.Command {
+	childFD := command.AddExtraFile(handoff)
+	command.Args = append(command.Args, fmt.Sprintf("--secrets-fd=%d", childFD))
+	return command
 }
 
 type nvidiaBootstrapControl interface {

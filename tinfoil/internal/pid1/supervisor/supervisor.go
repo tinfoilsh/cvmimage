@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	childCgroupRoot     = "/sys/fs/cgroup/tinfoil-pid1"
-	cgroupEventsLimit   = 4096
-	cgroupPollInterval  = 10 * time.Millisecond
-	initialCleanupGrace = 5 * time.Second
+	childStandardFileCount = 3
+	childCgroupRoot        = "/sys/fs/cgroup/tinfoil-pid1"
+	cgroupEventsLimit      = 4096
+	cgroupPollInterval     = 10 * time.Millisecond
+	initialCleanupGrace    = 5 * time.Second
 )
 
 // Command describes a direct child of PID 1.
@@ -33,6 +34,12 @@ type Command struct {
 	Env        []string
 	Dir        string
 	ExtraFiles []*os.File
+}
+
+func (c *Command) AddExtraFile(file *os.File) int {
+	childFD := childStandardFileCount + len(c.ExtraFiles)
+	c.ExtraFiles = append(c.ExtraFiles, file)
+	return childFD
 }
 
 // Exit is the wait status collected for a child.
@@ -267,7 +274,8 @@ func (b *osBackend) start(command Command, scope string, options startOptions) (
 	defer cgroupFD.Close()
 	files := options.files
 	if files == nil {
-		files = append([]*os.File{os.Stdin, os.Stdout, os.Stderr}, command.ExtraFiles...)
+		standardFiles := [childStandardFileCount]*os.File{os.Stdin, os.Stdout, os.Stderr}
+		files = append(standardFiles[:], command.ExtraFiles...)
 	}
 	system := &syscall.SysProcAttr{
 		UseCgroupFD: true,

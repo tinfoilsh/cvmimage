@@ -2,12 +2,14 @@ package containers
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
 
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/secretstore"
@@ -264,5 +266,36 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 	}
 	if len(hostConfig.Devices) != 0 {
 		t.Fatalf("Devices = %v, want no synthesized device mappings", hostConfig.Devices)
+	}
+}
+
+func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{}}
+	c := Container{
+		Name:   "inference",
+		Image:  "example.invalid/inference",
+		Models: []string{"private-model"},
+	}
+
+	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, false)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	want := boot.PrivateModelsDir + "/private-model:" + boot.ContainerModelsDir + "/private-model:ro"
+	if !slices.Contains(hostConfig.Binds, want) {
+		t.Fatalf("Binds = %v, want %q", hostConfig.Binds, want)
+	}
+
+	_, ungrantedHostConfig, _, _, err := buildContainerCreateSpec(Container{
+		Name:  "sidecar",
+		Image: "example.invalid/sidecar",
+	}, cfg, &shimconfig.ExternalConfig{}, false)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	for _, bind := range ungrantedHostConfig.Binds {
+		if strings.HasPrefix(bind, boot.PrivateModelsDir+"/") {
+			t.Fatalf("ungranted Binds = %v", ungrantedHostConfig.Binds)
+		}
 	}
 }

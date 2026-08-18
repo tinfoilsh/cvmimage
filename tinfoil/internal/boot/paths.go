@@ -9,11 +9,13 @@ const (
 	ConfigPath          = PublicDir + "/config.yml"
 	AttestationPath     = PublicDir + "/attestation.json"
 	ContainerStatusPath = PublicDir + "/container-status.json"
+	PublicModelsDir     = PublicDir + "/models"
 	MWPDir              = PublicDir + "/mwp"
 	MPKDir              = PublicDir + "/mpk" // Legacy alias directory for MWP mounts.
+	ContainerModelsDir  = "/tinfoil/models"
 
-	// Private — only accessible to boot, egress, and shim processes (mode 0700).
-	// Holds CVM-level secrets and material that must never reach a container.
+	// Private — not globally mounted into containers (mode 0700). Explicitly
+	// granted model directories are the only read-only container exception.
 	TLSDir                = PrivateDir + "/tls"
 	TLSCertPath           = TLSDir + "/cert.pem"
 	TLSKeyPath            = TLSDir + "/key.pem"
@@ -22,6 +24,7 @@ const (
 	ShimConfigPath        = PrivateDir + "/shim.yml"
 	EgressConfigPath      = PrivateDir + "/egress.yml"
 	ExternalConfigPath    = PrivateDir + "/external-config.yml"
+	PrivateModelsDir      = PrivateDir + "/models"
 	RuntimeConfigPath     = PrivateDir + "/runtime-config.yml"
 	RuntimeBootedPath     = PrivateDir + "/runtime-booted"
 	DockerConfigDir       = PrivateDir + "/docker-config"

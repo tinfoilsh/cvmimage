@@ -479,6 +479,11 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
+	for _, model := range c.Models {
+		hostConfig.Binds = append(hostConfig.Binds,
+			boot.PrivateModelsDir+"/"+model+":"+boot.ContainerModelsDir+"/"+model+":ro",
+		)
+	}
 	hostConfig.Resources.PidsLimit = pidsLimit
 	if first == "" {
 		hostConfig.NetworkMode = "none"

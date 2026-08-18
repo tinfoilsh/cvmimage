@@ -22,6 +22,7 @@ import (
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
+	"tinfoil/internal/secretstore"
 )
 
 const (
@@ -206,6 +207,11 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.limits(); err != nil {
 		return fmt.Errorf("runtime limits: %w", err)
 	}
+	secretHandoff, err := secretstore.NewHandoffFile()
+	if err != nil {
+		return err
+	}
+	defer secretHandoff.Close()
 	if err := deps.oneShot(bootCtx, command("loopback", "/usr/sbin/ip", "link", "set", "dev", "lo", "up")); err != nil {
 		return err
 	}
@@ -245,18 +251,24 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
-	if err := deps.oneShot(bootCtx, hardenedCommand(
+	bootCommand := hardenedCommand(
 		hardening.ServiceBoot, boot.BootBinary,
 		"--config-hash="+deps.cmdline.ConfigHash,
 		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
-	)); err != nil {
+		fmt.Sprintf("--secrets-fd=%d", secretstore.HandoffFD),
+	)
+	bootCommand.ExtraFiles = []*os.File{secretHandoff}
+	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
 		return err
 	}
+	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
+		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
+		fmt.Sprintf("--secrets-fd=%d", secretstore.HandoffFD))
+	containersCommand.ExtraFiles = []*os.File{secretHandoff}
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containersName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
-			fmt.Sprintf("--debug=%t", deps.cmdline.Debug)),
-		Ready: fileReady(boot.ContainersReadyPath),
+		Command: containersCommand,
+		Ready:   fileReady(boot.ContainersReadyPath),
 	}); err != nil {
 		return err
 	}

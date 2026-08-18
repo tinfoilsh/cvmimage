@@ -13,6 +13,7 @@ import (
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/nvidia"
+	"tinfoil/internal/secretstore"
 )
 
 func init() {
@@ -42,6 +43,7 @@ func main() {
 type invocation struct {
 	configHash string
 	debug      bool
+	secretsFD  int
 }
 
 func parseInvocation(args []string) (invocation, error) {
@@ -53,6 +55,7 @@ func parseInvocation(args []string) (invocation, error) {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&parsed.configHash, "config-hash", "", "verified config hash from the kernel command line")
 	flags.BoolVar(&parsed.debug, "debug", false, "enable the measured debug policy")
+	flags.IntVar(&parsed.secretsFD, "secrets-fd", -1, "sealed container-secret handoff descriptor")
 	if err := flags.Parse(args[1:]); err != nil {
 		return invocation{}, err
 	}
@@ -63,6 +66,15 @@ func parseInvocation(args []string) (invocation, error) {
 }
 
 func run(ctx context.Context, invocation invocation) error {
+	if invocation.secretsFD < 0 {
+		return fmt.Errorf("container-secret handoff descriptor is required")
+	}
+	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-container-secrets")
+	if secretHandoff == nil {
+		return fmt.Errorf("opening container-secret handoff descriptor")
+	}
+	defer secretHandoff.Close()
+
 	tracker := boot.NewTracker(boot.InitialStages)
 
 	// 1. Config
@@ -146,17 +158,39 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 7. Fetch any external vault secrets.
+	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	if config.VaultURL == "" {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
-	} else {
+	fetched := 0
+	if config.VaultURL != "" {
 		log.Println("Fetching vault secrets")
-		if err := fetchVaultSecrets(config, externalConfig); err != nil {
+		fetched, err = fetchVaultSecrets(config, externalConfig)
+		if err != nil {
 			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
 			return fmt.Errorf("vault secret fetch failed: %w", err)
 		}
-		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
+	}
+	if missing := secretstore.MissingReferences(config, externalConfig); len(missing) != 0 {
+		err := fmt.Errorf("%d declared secret(s) remain unresolved", len(missing))
+		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	workloadSecrets, err := secretstore.WorkloadStore(config, externalConfig)
+	if err != nil {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	if err := secretstore.WriteHandoff(secretHandoff, invocation.configHash, workloadSecrets); err != nil {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	if fetched == 0 {
+		detail := "no vault configured"
+		if config.VaultURL != "" {
+			detail = "all declared secrets already populated"
+		}
+		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), detail)
+	} else {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), fmt.Sprintf("fetched %d secret(s)", fetched))
 	}
 
 	// 8. Registry auth

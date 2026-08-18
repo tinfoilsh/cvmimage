@@ -27,11 +27,12 @@ const (
 
 // Command describes a direct child of PID 1.
 type Command struct {
-	Name string
-	Path string
-	Args []string
-	Env  []string
-	Dir  string
+	Name       string
+	Path       string
+	Args       []string
+	Env        []string
+	Dir        string
+	ExtraFiles []*os.File
 }
 
 // Exit is the wait status collected for a child.
@@ -266,7 +267,7 @@ func (b *osBackend) start(command Command, scope string, options startOptions) (
 	defer cgroupFD.Close()
 	files := options.files
 	if files == nil {
-		files = []*os.File{os.Stdin, os.Stdout, os.Stderr}
+		files = append([]*os.File{os.Stdin, os.Stdout, os.Stderr}, command.ExtraFiles...)
 	}
 	system := &syscall.SysProcAttr{
 		UseCgroupFD: true,

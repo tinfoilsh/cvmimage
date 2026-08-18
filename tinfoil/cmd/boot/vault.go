@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/secretstore"
 )
 
 const vaultFetchTimeout = 60 * time.Second
@@ -30,27 +30,27 @@ type vaultFetchRequest struct {
 
 // fetchVaultSecrets asks the vault for the declared secrets the external
 // config did not populate.
-func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
-	names := missingSecretValues(config, ext)
+func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) (int, error) {
+	names := secretstore.MissingReferences(config, ext)
 	if len(names) == 0 {
 		log.Println("All declared secrets populated by external config, nothing to fetch")
-		return nil
+		return 0, nil
 	}
 	if ext.VaultToken == "" {
-		return fmt.Errorf("%d secret(s) need the vault but external config has no vault-token", len(names))
+		return 0, fmt.Errorf("%d secret(s) need the vault but external config has no vault-token", len(names))
 	}
 	// TLS required
 	if u, err := url.Parse(config.VaultURL); err != nil || u.Scheme != "https" || u.Host == "" {
-		return fmt.Errorf("vault-url must be an https URL, got %q", config.VaultURL)
+		return 0, fmt.Errorf("vault-url must be an https URL, got %q", config.VaultURL)
 	}
 
 	cert, err := tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
 	if err != nil {
-		return fmt.Errorf("loading enclave TLS certificate: %w", err)
+		return 0, fmt.Errorf("loading enclave TLS certificate: %w", err)
 	}
 	attDoc, err := verifier.FromFile(boot.AttestationPath)
 	if err != nil {
-		return fmt.Errorf("loading boot attestation document: %w", err)
+		return 0, fmt.Errorf("loading boot attestation document: %w", err)
 	}
 
 	req := vaultFetchRequest{
@@ -65,7 +65,24 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 
 	secrets, err := vaultFetch(vaultClient(cert), config.VaultURL, req)
 	if err != nil {
-		return err
+		return 0, err
+	}
+	if err := mergeVaultSecrets(names, secrets, ext); err != nil {
+		return 0, err
+	}
+	log.Printf("Vault released %d secret(s) for %s", len(secrets), ext.Metadata.Repo)
+	return len(secrets), nil
+}
+
+func mergeVaultSecrets(names []string, secrets map[string]string, ext *shimconfig.ExternalConfig) error {
+	if len(secrets) != len(names) {
+		return fmt.Errorf("vault returned %d secret(s), expected %d", len(secrets), len(names))
+	}
+	for _, name := range names {
+		value, ok := secrets[name]
+		if !ok || value == "" || value == "null" {
+			return fmt.Errorf("vault did not return declared secret %q", name)
+		}
 	}
 
 	if ext.Secrets == nil {
@@ -74,29 +91,7 @@ func fetchVaultSecrets(config *Config, ext *shimconfig.ExternalConfig) error {
 	for name, value := range secrets {
 		ext.Secrets[name] = value
 	}
-	log.Printf("Vault released %d secret(s) for %s", len(secrets), ext.Metadata.Repo)
 	return nil
-}
-
-// missingSecretValues returns the deduplicated, sorted names of the
-// containers' secrets whose values the external config did not populate
-func missingSecretValues(config *Config, ext *shimconfig.ExternalConfig) []string {
-	seen := map[string]struct{}{}
-	var names []string
-	for _, c := range config.Containers {
-		for _, n := range c.Secrets {
-			if _, ok := seen[n]; ok {
-				continue
-			}
-			seen[n] = struct{}{}
-			if ext.GetSecret(n) != "" {
-				continue
-			}
-			names = append(names, n)
-		}
-	}
-	slices.Sort(names)
-	return names
 }
 
 // vaultClient returns an HTTP client that presents the enclave's TLS

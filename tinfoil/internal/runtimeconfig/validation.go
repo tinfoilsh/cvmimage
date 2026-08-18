@@ -67,6 +67,16 @@ func validateShape(config *Config, debug bool) error {
 		}
 	}
 	seen := map[string]int{}
+	modelKeys := map[string]int{}
+	for index, model := range config.Models {
+		if model.KeySecret == "" {
+			continue
+		}
+		if !validEnvironmentName(model.KeySecret) {
+			return fmt.Errorf("models[%d].key-secret has invalid secret name %q", index, model.KeySecret)
+		}
+		modelKeys[model.KeySecret] = index
+	}
 	for index := range config.Containers {
 		container := &config.Containers[index]
 		if prior, found := seen[container.Name]; found {
@@ -75,6 +85,11 @@ func validateShape(config *Config, debug bool) error {
 		seen[container.Name] = index
 		if err := validateContainer(index, container, config.GPUs, debug); err != nil {
 			return err
+		}
+		for secretIndex, secret := range container.Secrets {
+			if modelIndex, found := modelKeys[secret]; found {
+				return fmt.Errorf("containers[%d].secrets[%d] %q exposes models[%d].key-secret", index, secretIndex, secret, modelIndex)
+			}
 		}
 	}
 	return nil

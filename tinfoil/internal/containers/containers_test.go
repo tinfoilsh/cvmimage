@@ -10,6 +10,7 @@ import (
 
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/secretstore"
 )
 
 func TestParseGPUs(t *testing.T) {
@@ -98,6 +99,7 @@ func TestBuildEnv(t *testing.T) {
 		},
 		[]string{"API_KEY", "MISSING_SECRET"},
 		ext,
+		secretstore.Store{"API_KEY": "sk-123"},
 	)
 
 	want := map[string]bool{
@@ -118,7 +120,7 @@ func TestBuildEnv(t *testing.T) {
 
 func TestBuildEnvNilConfig(t *testing.T) {
 	ext := &shimconfig.ExternalConfig{}
-	env := buildEnv([]interface{}{"FOO"}, []string{"BAR"}, ext)
+	env := buildEnv([]interface{}{"FOO"}, []string{"BAR"}, ext, nil)
 	if len(env) != 0 {
 		t.Errorf("expected empty env with nil maps, got %v", env)
 	}
@@ -204,7 +206,7 @@ func TestBuildContainerCreateSpec_DebugInstallerGetsFixedRuntime(t *testing.T) {
 		Volumes: []string{debugDockerSocketBind},
 	}
 
-	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, true)
+	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, true)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
@@ -250,7 +252,7 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 		Image: "example.invalid/installer",
 	}
 
-	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, false)
+	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}

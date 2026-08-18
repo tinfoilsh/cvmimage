@@ -21,14 +21,21 @@ import (
 	"tinfoil/internal/containers"
 	"tinfoil/internal/firewall"
 	"tinfoil/internal/runtimeconfig"
+	"tinfoil/internal/secretstore"
 )
 
 const bootPath = "/v1/boot"
 
 type manager struct {
-	bootMu sync.Mutex
-	ctx    context.Context
-	debug  bool
+	bootMu  sync.Mutex
+	ctx     context.Context
+	debug   bool
+	secrets secretstore.Store
+}
+
+type invocation struct {
+	debug     bool
+	secretsFD int
 }
 
 type errorResponse struct {
@@ -37,44 +44,72 @@ type errorResponse struct {
 
 func main() {
 	log.SetFlags(0)
-	debug, err := parseInvocation(os.Args)
+	invocation, err := parseInvocation(os.Args)
 	if err != nil {
 		log.Fatalf("tinfoil-containers: %v", err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, debug); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx, invocation); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("tinfoil-containers: %v", err)
 	}
 }
 
-func parseInvocation(args []string) (bool, error) {
+func parseInvocation(args []string) (invocation, error) {
 	if len(args) == 0 {
-		return false, fmt.Errorf("missing argv[0]")
+		return invocation{}, fmt.Errorf("missing argv[0]")
 	}
-	var debug bool
+	var parsed invocation
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.BoolVar(&debug, "debug", false, "enable the debug boot API")
+	flags.BoolVar(&parsed.debug, "debug", false, "enable the debug boot API")
+	flags.IntVar(&parsed.secretsFD, "secrets-fd", -1, "sealed container-secret handoff descriptor")
 	if err := flags.Parse(args[1:]); err != nil {
-		return false, err
+		return invocation{}, err
 	}
 	if flags.NArg() != 0 {
-		return false, fmt.Errorf("unexpected arguments: %v", flags.Args())
+		return invocation{}, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
-	return debug, nil
+	return parsed, nil
 }
 
-func run(ctx context.Context, debug bool) error {
+func run(ctx context.Context, invocation invocation) error {
+	if invocation.secretsFD < 0 {
+		return fmt.Errorf("container-secret handoff descriptor is required")
+	}
+	verifiedConfig, err := os.ReadFile(boot.ConfigPath)
+	if err != nil {
+		return fmt.Errorf("reading verified config: %w", err)
+	}
+	config, err := runtimeconfig.Decode(verifiedConfig, invocation.debug)
+	if err != nil {
+		return err
+	}
+	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-container-secrets")
+	if secretHandoff == nil {
+		return fmt.Errorf("opening container-secret handoff descriptor")
+	}
+	secrets, err := secretstore.ReadHandoff(
+		secretHandoff,
+		secretstore.ConfigDigest(verifiedConfig),
+		secretstore.WorkloadReferences(config),
+	)
+	closeErr := secretHandoff.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing container-secret handoff: %w", closeErr)
+	}
 	if err := os.MkdirAll("/run/tinfoil", 0o700); err != nil {
 		return err
 	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	manager := &manager{ctx: runtimeCtx, debug: debug}
+	manager := &manager{ctx: runtimeCtx, debug: invocation.debug, secrets: secrets}
 
 	var listener net.Listener
-	if debug {
+	if invocation.debug {
 		var err error
 		listener, err = listenDebugSocket()
 		if err != nil {
@@ -101,7 +136,7 @@ func run(ctx context.Context, debug bool) error {
 
 	statusDone := make(chan error, 1)
 	go func() { statusDone <- containers.RunStatusPublisher(runtimeCtx) }()
-	if !debug {
+	if !invocation.debug {
 		return <-statusDone
 	}
 
@@ -170,6 +205,9 @@ func (m *manager) boot(override []byte) (result error) {
 	if err != nil {
 		return err
 	}
+	if err := secretstore.RequireWorkloadSecrets(config, m.secrets); err != nil {
+		return err
+	}
 	externalData, err := os.ReadFile(boot.ExternalConfigPath)
 	if err != nil {
 		return fmt.Errorf("reading external config: %w", err)
@@ -227,7 +265,7 @@ func (m *manager) boot(override []byte) (result error) {
 		return fmt.Errorf("restarting egress policy: %w", err)
 	}
 	frozenEgress = nil
-	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, m.debug, preserved); err != nil {
+	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, m.secrets, m.debug, preserved); err != nil {
 		return err
 	}
 	return restartRuntimeServices(m.ctx)

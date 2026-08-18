@@ -33,6 +33,7 @@ var (
 	validEgressModes       = []string{"closed", "allowlist", "open"}
 	networkNamePattern     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	rfc1123HostnamePattern = regexp.MustCompile(`^(?i)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	modelNamePattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
 func Validate(config *Config, debug bool) error {
@@ -92,7 +93,7 @@ func validateShape(config *Config, debug bool) error {
 			}
 		}
 	}
-	return nil
+	return validateModelAccess(config)
 }
 
 func validateContainer(index int, container *Container, availableGPUs int, debug bool) error {
@@ -101,7 +102,7 @@ func validateContainer(index int, container *Container, availableGPUs int, debug
 		count int
 	}{
 		{"command", len(container.Command)}, {"entrypoint", len(container.Entrypoint)}, {"env", len(container.Env)},
-		{"secrets", len(container.Secrets)}, {"volumes", len(container.Volumes)}, {"devices", len(container.Devices)},
+		{"secrets", len(container.Secrets)}, {"models", len(container.Models)}, {"volumes", len(container.Volumes)}, {"devices", len(container.Devices)},
 		{"cap_add", len(container.CapAdd)}, {"networks", len(container.Networks)},
 	}
 	for _, list := range lists {
@@ -151,6 +152,48 @@ func validateContainer(index int, container *Container, availableGPUs int, debug
 		}
 	}
 	return nil
+}
+
+func validateModelAccess(config *Config) error {
+	models := make(map[string]int, len(config.Models))
+	grants := make(map[string]int, len(config.Models))
+	for index, model := range config.Models {
+		if !modelNamePattern.MatchString(model.Name) {
+			return fmt.Errorf("models[%d].name %q is invalid", index, model.Name)
+		}
+		if prior, found := models[model.Name]; found {
+			return fmt.Errorf("models[%d].name %q duplicates models[%d].name", index, model.Name, prior)
+		}
+		models[model.Name] = index
+	}
+	for containerIndex, container := range config.Containers {
+		seen := map[string]bool{}
+		for modelIndex, name := range container.Models {
+			if seen[name] {
+				return fmt.Errorf("containers[%d].models[%d] %q is duplicated", containerIndex, modelIndex, name)
+			}
+			seen[name] = true
+			if _, found := models[name]; !found {
+				return fmt.Errorf("containers[%d].models[%d] %q is not declared", containerIndex, modelIndex, name)
+			}
+			grants[name]++
+		}
+	}
+	for index, model := range config.Models {
+		if model.EMWP != "" && grants[model.Name] == 0 {
+			return fmt.Errorf("models[%d] %q is encrypted and requires an explicit container grant", index, model.Name)
+		}
+	}
+	return nil
+}
+
+func ModelIsIsolated(config *Config, name string) bool {
+	for _, container := range config.Containers {
+		if slices.Contains(container.Models, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateContainerImage(index int, image string) error {

@@ -13,7 +13,6 @@ import (
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/nvidia"
-	"tinfoil/internal/secretstore"
 )
 
 func init() {
@@ -157,38 +156,12 @@ func run(ctx context.Context, invocation invocation) error {
 
 	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	fetched := 0
-	if config.VaultURL != "" {
-		log.Println("Fetching vault secrets")
-		fetched, err = fetchVaultSecrets(config, externalConfig)
-		if err != nil {
-			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-			return fmt.Errorf("vault secret fetch failed: %w", err)
-		}
-	}
-	if missing := secretstore.MissingReferences(config, externalConfig); len(missing) != 0 {
-		err := fmt.Errorf("%d declared secret(s) remain unresolved", len(missing))
-		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	workloadSecrets, err := secretstore.WorkloadStore(config, externalConfig)
+	secretDetail, err := prepareSecretHandoff(config, externalConfig, secretHandoff, invocation.configHash)
 	if err != nil {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	if err := secretstore.WriteHandoff(secretHandoff, invocation.configHash, workloadSecrets); err != nil {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	if fetched == 0 {
-		detail := "no vault configured"
-		if config.VaultURL != "" {
-			detail = "all declared secrets already populated"
-		}
-		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), detail)
-	} else {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), fmt.Sprintf("fetched %d secret(s)", fetched))
-	}
+	tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), secretDetail)
 
 	// 8. Registry auth
 	start = time.Now()

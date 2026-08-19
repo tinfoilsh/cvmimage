@@ -18,15 +18,7 @@ func TestLoadCollateralRequest(t *testing.T) {
 		Platform:    "tdx",
 		QuoteBase64: "cXVvdGU=",
 	}
-	data, err := json.Marshal(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := t.TempDir() + "/collateral-request.json"
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := loadCollateralRequest(path)
+	got, err := loadCollateralRequest(writeCollateralRequestArtifact(t, want))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,17 +44,22 @@ func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
 		"missing repo":  {Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
 	} {
 		t.Run(name, func(t *testing.T) {
-			data, err := json.Marshal(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := t.TempDir() + "/collateral-request.json"
-			if err := os.WriteFile(path, data, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := loadCollateralRequest(path); err == nil {
+			if _, err := loadCollateralRequest(writeCollateralRequestArtifact(t, request)); err == nil {
 				t.Fatal("incomplete collateral request accepted")
 			}
 		})
 	}
+}
+
+func writeCollateralRequestArtifact(t *testing.T, request wire.Request) string {
+	t.Helper()
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := t.TempDir() + "/collateral-request.json"
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

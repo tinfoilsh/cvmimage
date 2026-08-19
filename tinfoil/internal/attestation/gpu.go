@@ -164,14 +164,17 @@ func CollectNVSwitchEvidence(nonce [32]byte) (json.RawMessage, error) {
 
 func validateNVSwitchEvidence(raw []byte) error {
 	var result struct {
-		ResultCode    int    `json:"result_code"`
+		ResultCode    *int   `json:"result_code"`
 		ResultMessage string `json:"result_message"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return fmt.Errorf("parsing NVSwitch evidence status: %w", err)
 	}
-	if result.ResultCode != 0 {
-		return fmt.Errorf("NVSwitch evidence collection failed: %s (code %d)", result.ResultMessage, result.ResultCode)
+	if result.ResultCode == nil {
+		return fmt.Errorf("NVSwitch evidence response is missing result_code")
+	}
+	if *result.ResultCode != 0 {
+		return fmt.Errorf("NVSwitch evidence collection failed: %s (code %d)", result.ResultMessage, *result.ResultCode)
 	}
 	return nil
 }

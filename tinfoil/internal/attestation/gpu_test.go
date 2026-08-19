@@ -45,10 +45,24 @@ func TestGPUEvidenceCollectionArch(t *testing.T) {
 }
 
 func TestValidateNVSwitchEvidence(t *testing.T) {
-	if err := validateNVSwitchEvidence([]byte(`{"result_code":0,"evidences":[]}`)); err != nil {
-		t.Fatalf("valid evidence rejected: %v", err)
+	tests := []struct {
+		name    string
+		payload string
+		wantErr bool
+	}{
+		{"success", `{"result_code":0,"evidences":[]}`, false},
+		{"failure", `{"result_code":7,"result_message":"failed"}`, true},
+		{"missing status", `{}`, true},
+		{"null status", `{"result_code":null}`, true},
+		{"null response", `null`, true},
+		{"non-object response", `[]`, true},
 	}
-	if err := validateNVSwitchEvidence([]byte(`{"result_code":7,"result_message":"failed"}`)); err == nil {
-		t.Fatal("failed evidence accepted")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateNVSwitchEvidence([]byte(test.payload))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateNVSwitchEvidence() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
 	}
 }

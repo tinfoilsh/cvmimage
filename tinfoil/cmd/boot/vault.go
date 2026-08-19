@@ -127,7 +127,7 @@ func prefetchVaultCollateral(
 	config *Config,
 	request wire.Request,
 ) ([]envelope.CollateralEntry, error) {
-	if request.Repo == "" || request.Platform == "" || request.Platform == "dummy" || request.QuoteBase64 == "" {
+	if request.Repo == "" || request.Platform == "" || request.Platform == attestation.PlatformDummy || request.QuoteBase64 == "" {
 		return nil, fmt.Errorf("vault secret fetch requires raw CPU attestation")
 	}
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)

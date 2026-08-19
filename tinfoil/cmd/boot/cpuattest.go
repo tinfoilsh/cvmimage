@@ -37,7 +37,7 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 		}
 		return &CPUAttestation{
 			RawReport: userData[:],
-			Platform:  "dummy",
+			Platform:  attestation.PlatformDummy,
 			V2Doc:     doc,
 		}, nil
 	}

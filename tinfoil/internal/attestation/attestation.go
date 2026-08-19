@@ -25,6 +25,7 @@ import (
 )
 
 const (
+	PlatformDummy  = "dummy"
 	PlatformSEVSNP = "sev-snp"
 	PlatformTDX    = "tdx"
 )

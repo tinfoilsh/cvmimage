@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -29,9 +30,10 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing EMWP ref: %v", err)
 	}
-	cleanupEMWPIntegration(spec)
+	mountPoint := boot.PrivateModelsDir + "/emwp-integration"
+	cleanupEMWPIntegration(spec, mountPoint)
 	t.Cleanup(func() {
-		cleanupEMWPIntegration(spec)
+		cleanupEMWPIntegration(spec, mountPoint)
 	})
 
 	err = mountEncryptedModelPack(ModelSpec{
@@ -41,23 +43,19 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 		KeySecret: "PRIVATE_MODEL_KEY",
 	}, &shimconfig.ExternalConfig{
 		Secrets: map[string]string{"PRIVATE_MODEL_KEY": key},
-	}, device)
+	}, device, mountPoint)
 	if err != nil {
 		t.Fatalf("mounting EMWP: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(spec.mountPoint(), "config.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(mountPoint, "config.json")); err != nil {
 		t.Fatalf("checking mounted file: %v", err)
-	}
-	if _, err := os.Lstat(spec.legacyMountPoint()); err != nil {
-		t.Fatalf("checking legacy mount alias: %v", err)
 	}
 }
 
-func cleanupEMWPIntegration(spec *modelPackRef) {
-	_ = unix.Unmount(spec.mountPoint(), 0)
+func cleanupEMWPIntegration(spec *modelPackRef, mountPoint string) {
+	_ = unix.Unmount(mountPoint, 0)
 	ops := directModelVolumeOps{}
 	_ = ops.remove(spec.mapperName())
 	_ = ops.remove("emwp-" + spec.RootHash + "-crypt")
-	removeLegacyModelPackAlias(spec)
 }

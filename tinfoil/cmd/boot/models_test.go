@@ -10,7 +10,6 @@ import (
 
 	"github.com/tinfoilsh/modelwrap"
 
-	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -27,12 +26,6 @@ func TestModelPackRefLayout(t *testing.T) {
 	}
 	if got.mapperName() != "mwp-"+strings.Repeat("a", 64) {
 		t.Fatalf("mapper name mismatch: %s", got.mapperName())
-	}
-	if got.mountPoint() != boot.MWPDir+"/mwp-"+strings.Repeat("a", 64) {
-		t.Fatalf("mount point mismatch: %s", got.mountPoint())
-	}
-	if got.legacyMountPoint() != boot.MPKDir+"/mpk-"+strings.Repeat("a", 64) {
-		t.Fatalf("legacy mount point mismatch: %s", got.legacyMountPoint())
 	}
 	if got.ArtifactID() != strings.Repeat("a", 64)+"_0eefa619-50b7-588f-a072-d405fb439d36" {
 		t.Fatalf("artifact ID mismatch: %s", got.ArtifactID())

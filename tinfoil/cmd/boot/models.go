@@ -16,7 +16,6 @@ import (
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
-	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -45,12 +44,10 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 			return fmt.Errorf("duplicate model pack root hash: %s", ref.RootHash)
 		}
 		seen[ref.mapperName()] = struct{}{}
-		mountPoint, legacyAlias := modelMountTarget(config, model, ref)
-		if !legacyAlias {
-			containerMountPoint := boot.PublicModelsDir + "/" + model.Name
-			if err := os.MkdirAll(containerMountPoint, 0755); err != nil {
-				return fmt.Errorf("creating container mount point for model %q: %w", model.Name, err)
-			}
+		mountPoint := boot.PrivateModelsDir + "/" + model.Name
+		containerMountPoint := boot.PublicModelsDir + "/" + model.Name
+		if err := os.MkdirAll(containerMountPoint, 0755); err != nil {
+			return fmt.Errorf("creating container mount point for model %q: %w", model.Name, err)
 		}
 
 		switch kind {
@@ -63,7 +60,7 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 			if err != nil {
 				return fmt.Errorf("finding model disk %d: %w", index, err)
 			}
-			if err := mountModelPack(ref, salt, sourceDevice, mountPoint, legacyAlias); err != nil {
+			if err := mountModelPack(ref, salt, sourceDevice, mountPoint); err != nil {
 				return fmt.Errorf("mounting model pack %s: %w", ref.raw, err)
 			}
 		case modelKindEncrypted:
@@ -92,19 +89,11 @@ func modelSalt(model ModelSpec) ([]byte, error) {
 }
 
 // mountModelPack mounts a plaintext model wrap using dm-verity.
-func mountModelPack(spec *modelPackRef, salt []byte, sourceDevice, mountPoint string, legacyAlias bool) error {
+func mountModelPack(spec *modelPackRef, salt []byte, sourceDevice, mountPoint string) error {
 	deviceName := spec.mapperName()
 
 	log.Printf("Opening verity device %s (uuid=%s)", deviceName, spec.UUID)
-	if legacyAlias {
-		if err := createLegacyModelPackAlias(spec); err != nil {
-			return err
-		}
-	}
 	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, salt, mountPoint); err != nil {
-		if legacyAlias {
-			removeLegacyModelPackAlias(spec)
-		}
 		return err
 	}
 
@@ -154,38 +143,6 @@ func mountEncryptedModelPack(
 
 	log.Printf("Mounted encrypted model pack %s at %s", modelLogName(model.Name, spec.RootHash), mountPoint)
 	return nil
-}
-
-func modelMountTarget(config *Config, model ModelSpec, spec *modelPackRef) (string, bool) {
-	if runtimeconfig.ModelIsIsolated(config, model.Name) {
-		return boot.PrivateModelsDir + "/" + model.Name, false
-	}
-	return spec.mountPoint(), true
-}
-
-func createLegacyModelPackAlias(spec *modelPackRef) error {
-	if err := os.MkdirAll(boot.MPKDir, 0755); err != nil {
-		return fmt.Errorf("creating legacy model pack alias directory: %w", err)
-	}
-	aliasPath := spec.legacyMountPoint()
-	if fi, err := os.Lstat(aliasPath); err == nil {
-		if fi.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("legacy model pack alias path exists and is not a symlink: %s", aliasPath)
-		}
-		if err := os.Remove(aliasPath); err != nil {
-			return fmt.Errorf("removing stale legacy model pack alias: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("checking legacy model pack alias: %w", err)
-	}
-	if err := os.Symlink("../mwp/"+spec.mapperName(), aliasPath); err != nil {
-		return fmt.Errorf("creating legacy model pack alias: %w", err)
-	}
-	return nil
-}
-
-func removeLegacyModelPackAlias(spec *modelPackRef) {
-	_ = os.Remove(spec.legacyMountPoint())
 }
 
 type modelKind string
@@ -241,14 +198,6 @@ type modelPackRef struct {
 
 func (r *modelPackRef) mapperName() string {
 	return "mwp-" + r.RootHash
-}
-
-func (r *modelPackRef) mountPoint() string {
-	return boot.MWPDir + "/" + r.mapperName()
-}
-
-func (r *modelPackRef) legacyMountPoint() string {
-	return boot.MPKDir + "/mpk-" + r.RootHash
 }
 
 func parseModelPackRef(ref string) (*modelPackRef, error) {

@@ -155,7 +155,18 @@ func validateContainer(index int, container *Container, availableGPUs int, debug
 }
 
 func validateModelAccess(config *Config) error {
-	grants := make(map[string]int, len(config.Models))
+	models := make(map[string]int, len(config.Models))
+	for index, model := range config.Models {
+		if !modelNamePattern.MatchString(model.Name) {
+			return fmt.Errorf("models[%d].name %q is invalid", index, model.Name)
+		}
+		if prior, found := models[model.Name]; found {
+			return fmt.Errorf("models[%d].name %q duplicates models[%d].name", index, model.Name, prior)
+		}
+		models[model.Name] = index
+	}
+
+	grants := make(map[string]bool, len(config.Models))
 	for containerIndex, container := range config.Containers {
 		seen := map[string]bool{}
 		for modelIndex, name := range container.Models {
@@ -165,53 +176,19 @@ func validateModelAccess(config *Config) error {
 			if seen[name] {
 				return fmt.Errorf("containers[%d].models[%d] %q is duplicated", containerIndex, modelIndex, name)
 			}
-			seen[name] = true
-			grants[name]++
-		}
-	}
-	models := make(map[string]int, len(config.Models))
-	requiredNames := make(map[string]bool, len(config.Models))
-	for index, model := range config.Models {
-		requiresName := model.EMWP != "" || grants[model.Name] != 0
-		if requiresName && !modelNamePattern.MatchString(model.Name) {
-			return fmt.Errorf("models[%d].name %q is invalid", index, model.Name)
-		}
-		if model.Name == "" {
-			continue
-		}
-		if prior, found := models[model.Name]; found {
-			if requiresName || requiredNames[model.Name] {
-				return fmt.Errorf("models[%d].name %q duplicates models[%d].name", index, model.Name, prior)
-			}
-		} else {
-			models[model.Name] = index
-		}
-		if requiresName {
-			requiredNames[model.Name] = true
-		}
-	}
-	for containerIndex, container := range config.Containers {
-		for modelIndex, name := range container.Models {
 			if _, found := models[name]; !found {
 				return fmt.Errorf("containers[%d].models[%d] %q is not declared", containerIndex, modelIndex, name)
 			}
+			seen[name] = true
+			grants[name] = true
 		}
 	}
 	for index, model := range config.Models {
-		if model.EMWP != "" && grants[model.Name] == 0 {
-			return fmt.Errorf("models[%d] %q is encrypted and requires an explicit container grant", index, model.Name)
+		if !grants[model.Name] {
+			return fmt.Errorf("models[%d] %q requires an explicit container grant", index, model.Name)
 		}
 	}
 	return nil
-}
-
-func ModelIsIsolated(config *Config, name string) bool {
-	for _, container := range config.Containers {
-		if slices.Contains(container.Models, name) {
-			return true
-		}
-	}
-	return false
 }
 
 func validateContainerImage(index int, image string) error {

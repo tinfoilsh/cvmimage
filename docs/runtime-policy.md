@@ -54,9 +54,3 @@ including in measured debug mode. The container manager pulls that exact
 reference and verifies Docker's inspected repository digests before creating
 the container; mutable tag-only references are always rejected during
 configuration validation.
-
-Encrypted models require an explicit `containers[].models` grant. Boot mounts
-granted models outside the shared public ramdisk and the container manager
-binds each model read-only at `/tinfoil/models/<name>` only in the named
-containers. Ungranted plaintext model packs retain the legacy shared layout
-for compatibility; adding a grant moves them to the isolated layout.

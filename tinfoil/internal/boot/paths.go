@@ -10,8 +10,6 @@ const (
 	AttestationPath     = PublicDir + "/attestation.json"
 	ContainerStatusPath = PublicDir + "/container-status.json"
 	PublicModelsDir     = PublicDir + "/models"
-	MWPDir              = PublicDir + "/mwp"
-	MPKDir              = PublicDir + "/mpk" // Legacy alias directory for MWP mounts.
 	ContainerModelsDir  = "/tinfoil/models"
 
 	// Private — not globally mounted into containers (mode 0700). Explicitly

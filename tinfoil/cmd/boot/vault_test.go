@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -142,7 +143,23 @@ func TestPrefetchVaultCollateral(t *testing.T) {
 	config := &Config{ShimCfg: &shimconfig.Config{ATC: server.URL}}
 	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{Repo: "tinfoilsh/workload", Tag: "v1.2.3"}}
 	cpu := &CPUAttestation{RawReport: []byte("raw quote"), Platform: "sev-snp"}
-	collateral, err := prefetchVaultCollateral(context.Background(), config, external, cpu)
+	path := t.TempDir() + "/collateral-request.json"
+	collateralRequest, err := writeCollateralRequest(path, cpu, external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted wire.Request
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != collateralRequest {
+		t.Fatalf("persisted request = %#v, want %#v", persisted, collateralRequest)
+	}
+	collateral, err := prefetchVaultCollateral(context.Background(), config, collateralRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

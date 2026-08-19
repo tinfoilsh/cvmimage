@@ -14,21 +14,22 @@ const (
 
 	// Private — only accessible to boot, egress, and shim processes (mode 0700).
 	// Holds CVM-level secrets and material that must never reach a container.
-	TLSDir             = PrivateDir + "/tls"
-	TLSCertPath        = TLSDir + "/cert.pem"
-	TLSKeyPath         = TLSDir + "/key.pem"
-	HPKEKeyPath        = PrivateDir + "/hpke_key.json"
-	ShimConfigPath     = PrivateDir + "/shim.yml"
-	EgressConfigPath   = PrivateDir + "/egress.yml"
-	ExternalConfigPath = PrivateDir + "/external-config.yml"
-	RuntimeConfigPath  = PrivateDir + "/runtime-config.yml"
-	RuntimeBootedPath  = PrivateDir + "/runtime-booted"
-	DockerConfigDir    = PrivateDir + "/docker-config"
-	DockerConfigPath   = DockerConfigDir + "/config.json"
-	GCloudKeyPath      = PrivateDir + "/gcloud_key.json"
-	CacheDir           = PrivateDir + "/tfshim-cache"
-	StatePath          = PrivateDir + "/boot-state.json"
-	EgressStatePath    = PrivateDir + "/egress-prev"
+	TLSDir                = PrivateDir + "/tls"
+	TLSCertPath           = TLSDir + "/cert.pem"
+	TLSKeyPath            = TLSDir + "/key.pem"
+	HPKEKeyPath           = PrivateDir + "/hpke_key.json"
+	CollateralRequestPath = PrivateDir + "/collateral-request.json"
+	ShimConfigPath        = PrivateDir + "/shim.yml"
+	EgressConfigPath      = PrivateDir + "/egress.yml"
+	ExternalConfigPath    = PrivateDir + "/external-config.yml"
+	RuntimeConfigPath     = PrivateDir + "/runtime-config.yml"
+	RuntimeBootedPath     = PrivateDir + "/runtime-booted"
+	DockerConfigDir       = PrivateDir + "/docker-config"
+	DockerConfigPath      = DockerConfigDir + "/config.json"
+	GCloudKeyPath         = PrivateDir + "/gcloud_key.json"
+	CacheDir              = PrivateDir + "/tfshim-cache"
+	StatePath             = PrivateDir + "/boot-state.json"
+	EgressStatePath       = PrivateDir + "/egress-prev"
 
 	// NVIDIABootstrapStatusPath is the fixed PID 1 to tinfoil-boot handoff
 	// for NVIDIA bring-up readiness.

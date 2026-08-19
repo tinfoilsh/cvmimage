@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -50,7 +49,7 @@ func fetchVaultSecrets(
 	config *Config,
 	ext *shimconfig.ExternalConfig,
 	nodeID *NodeIdentity,
-	cpuAtt *CPUAttestation,
+	collateralRequest wire.Request,
 ) (int, error) {
 	names := secretstore.MissingReferences(config, ext)
 	if len(names) == 0 {
@@ -60,8 +59,8 @@ func fetchVaultSecrets(
 	if ext == nil || ext.Metadata.Repo == "" {
 		return 0, fmt.Errorf("vault secret fetch requires repository metadata")
 	}
-	if nodeID == nil || cpuAtt == nil {
-		return 0, fmt.Errorf("vault secret fetch requires boot identity and CPU attestation")
+	if nodeID == nil {
+		return 0, fmt.Errorf("vault secret fetch requires boot identity")
 	}
 	if _, err := vaultBaseURL(config.VaultURL); err != nil {
 		return 0, err
@@ -74,7 +73,7 @@ func fetchVaultSecrets(
 
 	// Fetch collateral before obtaining the short-lived challenge nonce. The
 	// final document carries this untrusted transport for offline verification.
-	collateral, err := prefetchVaultCollateral(ctx, config, ext, cpuAtt)
+	collateral, err := prefetchVaultCollateral(ctx, config, collateralRequest)
 	if err != nil {
 		return 0, err
 	}
@@ -126,17 +125,10 @@ func fetchVaultSecrets(
 func prefetchVaultCollateral(
 	ctx context.Context,
 	config *Config,
-	ext *shimconfig.ExternalConfig,
-	cpuAtt *CPUAttestation,
+	request wire.Request,
 ) ([]envelope.CollateralEntry, error) {
-	if len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
+	if request.Repo == "" || request.Platform == "" || request.Platform == "dummy" || request.QuoteBase64 == "" {
 		return nil, fmt.Errorf("vault secret fetch requires raw CPU attestation")
-	}
-	request := wire.Request{
-		Repo:        ext.Metadata.Repo,
-		Tag:         ext.Metadata.Tag,
-		Platform:    cpuAtt.Platform,
-		QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
 	}
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)
 	if err != nil {

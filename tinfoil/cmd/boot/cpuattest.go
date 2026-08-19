@@ -2,10 +2,13 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+
+	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 
 	verifier "tinfoil/internal/legacy"
 
@@ -80,4 +83,26 @@ func writeAttestationDoc(att *verifier.Document) error {
 	}
 	log.Println("V2 attestation document written to ramdisk")
 	return nil
+}
+
+func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig) (wire.Request, error) {
+	if cpuAtt == nil || len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
+		return wire.Request{}, fmt.Errorf("raw CPU attestation is required")
+	}
+	request := wire.Request{
+		Platform:    cpuAtt.Platform,
+		QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
+	}
+	if external != nil {
+		request.Repo = external.Metadata.Repo
+		request.Tag = external.Metadata.Tag
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		return wire.Request{}, fmt.Errorf("marshaling collateral request: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return wire.Request{}, fmt.Errorf("writing collateral request: %w", err)
+	}
+	return request, nil
 }

@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 
+	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/secretstore"
 )
@@ -17,13 +19,13 @@ func prepareSecretHandoff(
 	handoff *os.File,
 	configDigest string,
 	nodeID *NodeIdentity,
-	cpuAtt *CPUAttestation,
+	collateralRequest wire.Request,
 ) (string, error) {
 	fetched := 0
 	if config.VaultURL != "" {
 		log.Println("Fetching vault secrets")
 		var err error
-		fetched, err = fetchVaultSecrets(ctx, config, externalConfig, nodeID, cpuAtt)
+		fetched, err = fetchVaultSecrets(ctx, config, externalConfig, nodeID, collateralRequest)
 		if err != nil {
 			return "", fmt.Errorf("vault secret fetch failed: %w", err)
 		}

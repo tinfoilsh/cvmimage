@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/secretstore"
 )
@@ -22,7 +24,7 @@ func TestPrepareSecretHandoff(t *testing.T) {
 	}
 	defer handoff.Close()
 
-	detail, err := prepareSecretHandoff(context.Background(), config, externalConfig, handoff, "config-digest", nil, nil)
+	detail, err := prepareSecretHandoff(context.Background(), config, externalConfig, handoff, "config-digest", nil, wire.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,14 +50,14 @@ func TestPrepareSecretHandoffRejectsUnresolvedSecrets(t *testing.T) {
 	}
 	defer handoff.Close()
 
-	_, err = prepareSecretHandoff(context.Background(), config, &shimconfig.ExternalConfig{}, handoff, "config-digest", nil, nil)
+	_, err = prepareSecretHandoff(context.Background(), config, &shimconfig.ExternalConfig{}, handoff, "config-digest", nil, wire.Request{})
 	if err == nil || !strings.Contains(err.Error(), "1 declared secret(s) remain unresolved") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestPrepareSecretHandoffReportsHandoffFailure(t *testing.T) {
-	_, err := prepareSecretHandoff(context.Background(), &Config{}, &shimconfig.ExternalConfig{}, nil, "config-digest", nil, nil)
+	_, err := prepareSecretHandoff(context.Background(), &Config{}, &shimconfig.ExternalConfig{}, nil, "config-digest", nil, wire.Request{})
 	if err == nil || !strings.Contains(err.Error(), "creating sealed secret handoff") {
 		t.Fatalf("error = %v", err)
 	}

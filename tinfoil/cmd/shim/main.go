@@ -19,6 +19,7 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 
@@ -142,6 +143,12 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		if err != nil {
 			return err
 		}
+		collateralRequest, err := waitForArtifact("Collateral request", func() (wire.Request, error) {
+			return loadCollateralRequest(boot.CollateralRequestPath)
+		})
+		if err != nil {
+			return err
+		}
 
 		serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
 			return identity.FromFile(boot.HPKEKeyPath)
@@ -150,7 +157,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 
-		collateralCache, err := newCollateralSource(att, config, externalConfig)
+		collateralCache, err := newCollateralSource(collateralRequest, config)
 		if err != nil {
 			return err
 		}

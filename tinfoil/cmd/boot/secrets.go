@@ -25,10 +25,10 @@ func prepareSecretHandoff(config *Config, externalConfig *shimconfig.ExternalCon
 	}
 	workloadSecrets, err := secretstore.WorkloadStore(config, externalConfig)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolving workload secrets: %w", err)
 	}
 	if err := secretstore.WriteHandoff(handoff, configDigest, workloadSecrets); err != nil {
-		return "", err
+		return "", fmt.Errorf("creating sealed secret handoff: %w", err)
 	}
 
 	detail := fmt.Sprintf("handed off %d workload secret(s)", len(workloadSecrets))

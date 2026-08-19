@@ -52,3 +52,10 @@ func TestPrepareSecretHandoffRejectsUnresolvedSecrets(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestPrepareSecretHandoffReportsHandoffFailure(t *testing.T) {
+	_, err := prepareSecretHandoff(&Config{}, &shimconfig.ExternalConfig{}, nil, "config-digest")
+	if err == nil || !strings.Contains(err.Error(), "creating sealed secret handoff") {
+		t.Fatalf("error = %v", err)
+	}
+}

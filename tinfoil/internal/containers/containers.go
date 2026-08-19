@@ -659,7 +659,7 @@ func containerMemoryBytes(c *Container, cfg *Config) int64 {
 	return 0
 }
 
-// buildEnv parses env entries and secrets from external config
+// buildEnv combines external-config environment entries with resolved secret values.
 func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.ExternalConfig, secretValues secretstore.Store) []string {
 	var env []string
 

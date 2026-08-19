@@ -214,7 +214,12 @@ func (m *manager) boot(override []byte) (result error) {
 	secretValues := m.secrets
 	if m.debug {
 		// Debug users may request any customer-supplied external secret.
-		secretValues = secretstore.Store(external.Secrets)
+		secretValues = make(secretstore.Store, len(external.Secrets))
+		for name := range external.Secrets {
+			if value := external.GetSecret(name); value != "" {
+				secretValues[name] = value
+			}
+		}
 	}
 	previous, err := loadRuntimeConfig()
 	if err != nil {

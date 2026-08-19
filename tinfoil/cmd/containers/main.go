@@ -92,12 +92,11 @@ func run(ctx context.Context, invocation invocation) error {
 		secretstore.ConfigDigest(verifiedConfig),
 		secretstore.WorkloadReferences(config),
 	)
-	closeErr := secretHandoff.Close()
 	if err != nil {
 		return err
 	}
-	if closeErr != nil {
-		return fmt.Errorf("closing container-secret handoff: %w", closeErr)
+	if err := secretHandoff.Close(); err != nil {
+		return fmt.Errorf("closing container-secret handoff: %w", err)
 	}
 	if err := os.MkdirAll("/run/tinfoil", 0o700); err != nil {
 		return err

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,12 +10,20 @@ import (
 	"tinfoil/internal/secretstore"
 )
 
-func prepareSecretHandoff(config *Config, externalConfig *shimconfig.ExternalConfig, handoff *os.File, configDigest string) (string, error) {
+func prepareSecretHandoff(
+	ctx context.Context,
+	config *Config,
+	externalConfig *shimconfig.ExternalConfig,
+	handoff *os.File,
+	configDigest string,
+	nodeID *NodeIdentity,
+	cpuAtt *CPUAttestation,
+) (string, error) {
 	fetched := 0
 	if config.VaultURL != "" {
 		log.Println("Fetching vault secrets")
 		var err error
-		fetched, err = fetchVaultSecrets(config, externalConfig)
+		fetched, err = fetchVaultSecrets(ctx, config, externalConfig, nodeID, cpuAtt)
 		if err != nil {
 			return "", fmt.Errorf("vault secret fetch failed: %w", err)
 		}

@@ -351,9 +351,6 @@ func (config *ExternalConfig) validateBounds() error {
 			return fmt.Errorf("%s exceeds safe value limits", field)
 		}
 	}
-	if len(config.VaultToken) > maxExternalValueBytes || strings.IndexByte(config.VaultToken, 0) >= 0 {
-		return fmt.Errorf("vault-token exceeds safe value limits")
-	}
 	if err := validateOperatorMap("metadata", config.Metadata.Extra); err != nil {
 		return err
 	}

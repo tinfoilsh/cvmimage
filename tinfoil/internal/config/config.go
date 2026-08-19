@@ -75,7 +75,6 @@ type ExternalConfig struct {
 	Env           map[string]string      `yaml:"env"`
 	Secrets       map[string]string      `yaml:"secrets"`
 	Metadata      Metadata               `yaml:"metadata"`
-	VaultToken    string                 `yaml:"vault-token,omitempty"`
 	Network       *ExternalNetworkConfig `yaml:"network"`
 
 	// tinfoild preserves operator-owned top-level external data. Keep accepting

@@ -22,13 +22,7 @@ type CPUAttestation struct {
 }
 
 func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAttestation, error) {
-	var hpkeKey [32]byte
-	copy(hpkeKey[:], id.HPKEKeyBytes)
-
-	aBody := attestation.BodyV2{
-		TLSKeyFP: tlsutil.KeyFPBytes(id.TLSKey.Public().(*ecdsa.PublicKey)),
-		HPKEKey:  hpkeKey,
-	}
+	aBody := id.attestationBody()
 	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
 	userData := aBody.Marshal()
 
@@ -65,6 +59,15 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 		Platform:  platform,
 		V2Doc:     v2Doc,
 	}, nil
+}
+
+func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
+	var hpkeKey [32]byte
+	copy(hpkeKey[:], id.HPKEKeyBytes)
+	return attestation.BodyV2{
+		TLSKeyFP: tlsutil.KeyFPBytes(id.TLSKey.Public().(*ecdsa.PublicKey)),
+		HPKEKey:  hpkeKey,
+	}
 }
 
 func writeAttestationDoc(att *verifier.Document) error {

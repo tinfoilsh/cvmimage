@@ -335,7 +335,6 @@ func registerObservabilityHandlers(
 				writeJSONError(w, "Invalid nonce: must be exactly 32 bytes (64 hex chars)", errTypeInvalidRequest, http.StatusBadRequest)
 				return
 			}
-			var deviceEvidence []envelope.DeviceEvidenceItem
 			var nonce32 [32]byte
 			copy(nonce32[:], nonce)
 			var collateral []envelope.CollateralEntry
@@ -347,40 +346,11 @@ func registerObservabilityHandlers(
 					return
 				}
 			}
-			if expectedGPUs > 0 {
-				gpuEvidence, err := tinfoilattestation.CollectGPUEvidence(nonce32)
-				if err != nil {
-					log.Printf("GPU evidence collection failed for %d expected GPU(s): %v", expectedGPUs, err)
-					writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
-					return
-				}
-				if got := len(gpuEvidence.Evidences); got != expectedGPUs {
-					log.Printf("GPU evidence count mismatch: expected %d, got %d", expectedGPUs, got)
-					writeJSONError(w, "GPU attestation evidence incomplete", errTypeServer, http.StatusInternalServerError)
-					return
-				}
-				gpuItems, err := tinfoilattestation.DeviceEvidenceFromGPUCollection(gpuEvidence)
-				if err != nil {
-					log.Printf("GPU evidence encoding failed: %v", err)
-					writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
-					return
-				}
-				deviceEvidence = append(deviceEvidence, gpuItems...)
-				needSwitch, err := tinfoilattestation.RequiresNVSwitchEvidence(gpuEvidence.Arch(), expectedGPUs)
-				if err != nil {
-					log.Printf("GPU shape validation failed: %v", err)
-					writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
-					return
-				}
-				if needSwitch {
-					nvswitchJSON, err := tinfoilattestation.CollectNVSwitchEvidence(nonce32)
-					if err != nil {
-						log.Printf("NVSwitch evidence collection failed: %v", err)
-						writeJSONError(w, "NVSwitch attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
-						return
-					}
-					deviceEvidence = append(deviceEvidence, tinfoilattestation.DeviceEvidenceFromNVSwitch(nvswitchJSON)...)
-				}
+			deviceEvidence, err := tinfoilattestation.CollectDeviceEvidence(nonce32, expectedGPUs)
+			if err != nil {
+				log.Printf("Device evidence collection failed for %d expected GPU(s): %v", expectedGPUs, err)
+				writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+				return
 			}
 
 			fresh, err := tinfoilattestation.BuildAttestation(

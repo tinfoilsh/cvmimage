@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestPrepareSecretHandoff(t *testing.T) {
 	}
 	defer handoff.Close()
 
-	detail, err := prepareSecretHandoff(config, externalConfig, handoff, "config-digest")
+	detail, err := prepareSecretHandoff(context.Background(), config, externalConfig, handoff, "config-digest", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,14 +48,14 @@ func TestPrepareSecretHandoffRejectsUnresolvedSecrets(t *testing.T) {
 	}
 	defer handoff.Close()
 
-	_, err = prepareSecretHandoff(config, &shimconfig.ExternalConfig{}, handoff, "config-digest")
+	_, err = prepareSecretHandoff(context.Background(), config, &shimconfig.ExternalConfig{}, handoff, "config-digest", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "1 declared secret(s) remain unresolved") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestPrepareSecretHandoffReportsHandoffFailure(t *testing.T) {
-	_, err := prepareSecretHandoff(&Config{}, &shimconfig.ExternalConfig{}, nil, "config-digest")
+	_, err := prepareSecretHandoff(context.Background(), &Config{}, &shimconfig.ExternalConfig{}, nil, "config-digest", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "creating sealed secret handoff") {
 		t.Fatalf("error = %v", err)
 	}

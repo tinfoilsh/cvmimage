@@ -202,3 +202,38 @@ func DeviceEvidenceFromNVSwitch(raw json.RawMessage) []envelope.DeviceEvidenceIt
 		Evidence: raw,
 	}}
 }
+
+// CollectDeviceEvidence collects the complete nonce-bound device evidence for
+// a measured GPU shape. CPU-only shapes return an empty evidence set.
+func CollectDeviceEvidence(nonce [32]byte, expectedGPUs int) ([]envelope.DeviceEvidenceItem, error) {
+	if expectedGPUs < 0 {
+		return nil, fmt.Errorf("expected GPU count must not be negative")
+	}
+	if expectedGPUs == 0 {
+		return nil, nil
+	}
+
+	gpuEvidence, err := CollectGPUEvidence(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("collecting GPU evidence: %w", err)
+	}
+	if got := len(gpuEvidence.Evidences); got != expectedGPUs {
+		return nil, fmt.Errorf("GPU evidence count mismatch: expected %d, got %d", expectedGPUs, got)
+	}
+	deviceEvidence, err := DeviceEvidenceFromGPUCollection(gpuEvidence)
+	if err != nil {
+		return nil, fmt.Errorf("encoding GPU evidence: %w", err)
+	}
+	requiresSwitch, err := RequiresNVSwitchEvidence(gpuEvidence.Arch(), expectedGPUs)
+	if err != nil {
+		return nil, fmt.Errorf("validating GPU shape: %w", err)
+	}
+	if !requiresSwitch {
+		return deviceEvidence, nil
+	}
+	nvswitchEvidence, err := CollectNVSwitchEvidence(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("collecting NVSwitch evidence: %w", err)
+	}
+	return append(deviceEvidence, DeviceEvidenceFromNVSwitch(nvswitchEvidence)...), nil
+}

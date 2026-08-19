@@ -156,7 +156,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	secretDetail, err := prepareSecretHandoff(config, externalConfig, secretHandoff, invocation.configHash)
+	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, invocation.configHash, nodeID, cpuAtt)
 	if err != nil {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
 		return err

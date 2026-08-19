@@ -1,24 +1,20 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
-	"io"
+	"os"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/legacy"
 )
 
-func newCollateralSource(att *legacy.Document, config *shimconfig.Config, external *shimconfig.ExternalConfig) (collateralSource, error) {
-	request, ok, err := collateralRequest(att, external)
-	if err != nil || !ok {
-		return nil, err
+func newCollateralSource(request wire.Request, config *shimconfig.Config) (collateralSource, error) {
+	if request.Platform == attestation.PlatformDummy {
+		return nil, nil
 	}
 	client, err := attestationmaterial.NewClient(config.ATC, nil)
 	if err != nil {
@@ -27,37 +23,23 @@ func newCollateralSource(att *legacy.Document, config *shimconfig.Config, extern
 	return attestationmaterial.NewCache(request, client), nil
 }
 
-func collateralRequest(att *legacy.Document, external *shimconfig.ExternalConfig) (wire.Request, bool, error) {
-	if att.Format == legacy.DummyV2 || external == nil || external.Metadata.Repo == "" {
-		return wire.Request{}, false, nil
-	}
-
-	var platform string
-	switch att.Format {
-	case legacy.SevGuestV2:
-		platform = attestation.PlatformSEVSNP
-	case legacy.TdxGuestV2:
-		platform = attestation.PlatformTDX
-	default:
-		return wire.Request{}, false, fmt.Errorf("unsupported attestation format %q", att.Format)
-	}
-	compressed, err := base64.StdEncoding.DecodeString(att.Body)
+func loadCollateralRequest(path string) (wire.Request, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return wire.Request{}, false, fmt.Errorf("decoding attestation report: %w", err)
+		return wire.Request{}, fmt.Errorf("reading %s: %w", path, err)
 	}
-	reader, err := gzip.NewReader(bytes.NewReader(compressed))
-	if err != nil {
-		return wire.Request{}, false, fmt.Errorf("opening attestation report: %w", err)
+	var request wire.Request
+	if err := json.Unmarshal(data, &request); err != nil {
+		return wire.Request{}, fmt.Errorf("parsing collateral request: %w", err)
 	}
-	defer reader.Close()
-	quote, err := io.ReadAll(reader)
-	if err != nil {
-		return wire.Request{}, false, fmt.Errorf("reading attestation report: %w", err)
+	if request.Platform == "" {
+		return wire.Request{}, fmt.Errorf("collateral request is missing platform")
 	}
-	return wire.Request{
-		Repo:        external.Metadata.Repo,
-		Tag:         external.Metadata.Tag,
-		Platform:    platform,
-		QuoteBase64: base64.StdEncoding.EncodeToString(quote),
-	}, true, nil
+	if request.QuoteBase64 == "" {
+		return wire.Request{}, fmt.Errorf("collateral request is missing quote_base64")
+	}
+	if request.Platform != attestation.PlatformDummy && request.Repo == "" {
+		return wire.Request{}, fmt.Errorf("collateral request is missing repo")
+	}
+	return request, nil
 }

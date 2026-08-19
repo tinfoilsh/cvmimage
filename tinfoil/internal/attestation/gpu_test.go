@@ -43,3 +43,26 @@ func TestGPUEvidenceCollectionArch(t *testing.T) {
 		t.Fatalf("arch = %q, want %q", got, GPUArchHopper)
 	}
 }
+
+func TestValidateNVSwitchEvidence(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr bool
+	}{
+		{"success", `{"result_code":0,"evidences":[]}`, false},
+		{"failure", `{"result_code":7,"result_message":"failed"}`, true},
+		{"missing status", `{}`, true},
+		{"null status", `{"result_code":null}`, true},
+		{"null response", `null`, true},
+		{"non-object response", `[]`, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateNVSwitchEvidence([]byte(test.payload))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateNVSwitchEvidence() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}

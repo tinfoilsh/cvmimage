@@ -116,6 +116,11 @@ func run(ctx context.Context, invocation invocation) error {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
+	collateralRequest, err := writeCollateralRequest(boot.CollateralRequestPath, cpuAtt, externalConfig)
+	if err != nil {
+		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
 	// 5. GPU attestation
@@ -156,7 +161,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	secretDetail, err := prepareSecretHandoff(config, externalConfig, secretHandoff, invocation.configHash)
+	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, invocation.configHash, nodeID, collateralRequest)
 	if err != nil {
 		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
 		return err

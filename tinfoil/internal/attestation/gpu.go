@@ -155,8 +155,28 @@ func CollectNVSwitchEvidence(nonce [32]byte) (json.RawMessage, error) {
 	if !json.Valid(out) {
 		return nil, fmt.Errorf("nvattest returned invalid JSON")
 	}
+	if err := validateNVSwitchEvidence(out); err != nil {
+		return nil, err
+	}
 
 	return json.RawMessage(out), nil
+}
+
+func validateNVSwitchEvidence(raw []byte) error {
+	var result struct {
+		ResultCode    *int   `json:"result_code"`
+		ResultMessage string `json:"result_message"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("parsing NVSwitch evidence status: %w", err)
+	}
+	if result.ResultCode == nil {
+		return fmt.Errorf("NVSwitch evidence response is missing result_code")
+	}
+	if *result.ResultCode != 0 {
+		return fmt.Errorf("NVSwitch evidence collection failed: %s (code %d)", result.ResultMessage, *result.ResultCode)
+	}
+	return nil
 }
 
 // nvswitchEvidenceV1Format identifies the raw nvattest NVSwitch evidence
@@ -201,4 +221,39 @@ func DeviceEvidenceFromNVSwitch(raw json.RawMessage) []envelope.DeviceEvidenceIt
 		Format:   nvswitchEvidenceV1Format,
 		Evidence: raw,
 	}}
+}
+
+// CollectDeviceEvidence collects the complete nonce-bound device evidence for
+// a measured GPU shape. CPU-only shapes return an empty evidence set.
+func CollectDeviceEvidence(nonce [32]byte, expectedGPUs int) ([]envelope.DeviceEvidenceItem, error) {
+	if expectedGPUs < 0 {
+		return nil, fmt.Errorf("expected GPU count must not be negative")
+	}
+	if expectedGPUs == 0 {
+		return nil, nil
+	}
+
+	gpuEvidence, err := CollectGPUEvidence(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("collecting GPU evidence: %w", err)
+	}
+	if got := len(gpuEvidence.Evidences); got != expectedGPUs {
+		return nil, fmt.Errorf("GPU evidence count mismatch: expected %d, got %d", expectedGPUs, got)
+	}
+	deviceEvidence, err := DeviceEvidenceFromGPUCollection(gpuEvidence)
+	if err != nil {
+		return nil, fmt.Errorf("encoding GPU evidence: %w", err)
+	}
+	requiresSwitch, err := RequiresNVSwitchEvidence(gpuEvidence.Arch(), expectedGPUs)
+	if err != nil {
+		return nil, fmt.Errorf("validating GPU shape: %w", err)
+	}
+	if !requiresSwitch {
+		return deviceEvidence, nil
+	}
+	nvswitchEvidence, err := CollectNVSwitchEvidence(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("collecting NVSwitch evidence: %w", err)
+	}
+	return append(deviceEvidence, DeviceEvidenceFromNVSwitch(nvswitchEvidence)...), nil
 }

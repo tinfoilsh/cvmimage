@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"tinfoil/internal/attestation"
-	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/config"
 )
 
@@ -17,7 +16,7 @@ func TestCollateralRequestFromAttestation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, ok, err := attestationmaterial.Request(doc, &config.ExternalConfig{Metadata: config.Metadata{Repo: "repo", Tag: "v1"}})
+			request, ok, err := collateralRequest(doc, &config.ExternalConfig{Metadata: config.Metadata{Repo: "repo", Tag: "v1"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -32,5 +31,15 @@ func TestCollateralRequestFromAttestation(t *testing.T) {
 				t.Fatalf("quote = %q, want %q", got, quote)
 			}
 		})
+	}
+}
+
+func TestCollateralRequestRejectsOversizedQuote(t *testing.T) {
+	doc, err := attestation.V2Document(make([]byte, maxCPUQuoteBytes+1), attestation.PlatformSEVSNP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := collateralRequest(doc, &config.ExternalConfig{Metadata: config.Metadata{Repo: "repo"}}); err == nil {
+		t.Fatal("oversized quote accepted")
 	}
 }

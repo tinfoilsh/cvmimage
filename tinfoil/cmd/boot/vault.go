@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 
 	"tinfoil/internal/attestation"
@@ -127,12 +129,14 @@ func prefetchVaultCollateral(
 	ext *shimconfig.ExternalConfig,
 	cpuAtt *CPUAttestation,
 ) ([]envelope.CollateralEntry, error) {
-	request, ok, err := attestationmaterial.Request(cpuAtt.V2Doc, ext)
-	if err != nil {
-		return nil, fmt.Errorf("building vault collateral request: %w", err)
+	if len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
+		return nil, fmt.Errorf("vault secret fetch requires raw CPU attestation")
 	}
-	if !ok {
-		return nil, fmt.Errorf("vault secret fetch requires a non-dummy attestation and repository metadata")
+	request := wire.Request{
+		Repo:        ext.Metadata.Repo,
+		Tag:         ext.Metadata.Tag,
+		Platform:    cpuAtt.Platform,
+		QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
 	}
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)
 	if err != nil {

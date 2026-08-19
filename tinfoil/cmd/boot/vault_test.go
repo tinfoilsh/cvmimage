@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -17,7 +15,6 @@ import (
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/legacy"
 )
 
 func TestMergeVaultSecretsRequiresExactResponse(t *testing.T) {
@@ -131,6 +128,10 @@ func TestPrefetchVaultCollateral(t *testing.T) {
 		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Platform != "sev-snp" {
 			t.Fatalf("request = %#v", collateralRequest)
 		}
+		quote, err := base64.StdEncoding.DecodeString(collateralRequest.QuoteBase64)
+		if err != nil || string(quote) != "raw quote" {
+			t.Fatalf("quote = %q, err = %v", quote, err)
+		}
 		_ = json.NewEncoder(w).Encode(wire.Response{
 			Format:    wire.FormatV2,
 			ExpiresAt: time.Now().Add(time.Hour),
@@ -138,20 +139,9 @@ func TestPrefetchVaultCollateral(t *testing.T) {
 	}))
 	defer server.Close()
 
-	var compressed bytes.Buffer
-	writer := gzip.NewWriter(&compressed)
-	if _, err := writer.Write([]byte("raw quote")); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
 	config := &Config{ShimCfg: &shimconfig.Config{ATC: server.URL}}
 	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{Repo: "tinfoilsh/workload", Tag: "v1.2.3"}}
-	cpu := &CPUAttestation{V2Doc: &legacy.Document{
-		Format: legacy.SevGuestV2,
-		Body:   base64.StdEncoding.EncodeToString(compressed.Bytes()),
-	}}
+	cpu := &CPUAttestation{RawReport: []byte("raw quote"), Platform: "sev-snp"}
 	collateral, err := prefetchVaultCollateral(context.Background(), config, external, cpu)
 	if err != nil {
 		t.Fatal(err)

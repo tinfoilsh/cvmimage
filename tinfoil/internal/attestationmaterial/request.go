@@ -14,6 +14,8 @@ import (
 	"tinfoil/internal/legacy"
 )
 
+const maxCPUQuoteBytes = 1 << 20
+
 // Request extracts the raw CPU quote and authenticated artifact selectors ATC
 // needs to assemble v3 collateral. Dummy reports have no collateral source.
 func Request(att *legacy.Document, external *shimconfig.ExternalConfig) (wire.Request, bool, error) {
@@ -42,9 +44,12 @@ func Request(att *legacy.Document, external *shimconfig.ExternalConfig) (wire.Re
 		return wire.Request{}, false, fmt.Errorf("opening attestation report: %w", err)
 	}
 	defer reader.Close()
-	quote, err := io.ReadAll(reader)
+	quote, err := io.ReadAll(io.LimitReader(reader, maxCPUQuoteBytes+1))
 	if err != nil {
 		return wire.Request{}, false, fmt.Errorf("reading attestation report: %w", err)
+	}
+	if len(quote) > maxCPUQuoteBytes {
+		return wire.Request{}, false, fmt.Errorf("attestation report exceeds %d bytes", maxCPUQuoteBytes)
 	}
 	return wire.Request{
 		Repo:        external.Metadata.Repo,

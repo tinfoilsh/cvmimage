@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"tinfoil/internal/attestation"
+	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/config"
 )
 
@@ -16,7 +17,7 @@ func TestCollateralRequestFromAttestation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, ok, err := collateralRequest(doc, &config.ExternalConfig{Metadata: config.Metadata{Repo: "repo", Tag: "v1"}})
+			request, ok, err := attestationmaterial.Request(doc, &config.ExternalConfig{Metadata: config.Metadata{Repo: "repo", Tag: "v1"}})
 			if err != nil {
 				t.Fatal(err)
 			}

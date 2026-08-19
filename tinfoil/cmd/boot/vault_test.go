@@ -72,7 +72,10 @@ func TestVaultChallengeAndFetchProtocol(t *testing.T) {
 			if _, found := decoded["token"]; found {
 				t.Fatal("vault request carried a token")
 			}
-			if string(decoded["nonce"]) != `"`+nonce+`"` || string(decoded["repo"]) != `"tinfoilsh/workload"` {
+			if string(decoded["nonce"]) != `"`+nonce+`"` ||
+				string(decoded["repo"]) != `"tinfoilsh/workload"` ||
+				string(decoded["secret_refs"]) != `["API_KEY"]` ||
+				string(decoded["document"]) != `{"format":"test"}` {
 				t.Fatalf("fetch request = %s", body)
 			}
 			return jsonResponse(http.StatusOK, `{"API_KEY":"secret"}`), nil

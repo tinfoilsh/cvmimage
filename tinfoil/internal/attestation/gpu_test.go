@@ -43,3 +43,12 @@ func TestGPUEvidenceCollectionArch(t *testing.T) {
 		t.Fatalf("arch = %q, want %q", got, GPUArchHopper)
 	}
 }
+
+func TestValidateNVSwitchEvidence(t *testing.T) {
+	if err := validateNVSwitchEvidence([]byte(`{"result_code":0,"evidences":[]}`)); err != nil {
+		t.Fatalf("valid evidence rejected: %v", err)
+	}
+	if err := validateNVSwitchEvidence([]byte(`{"result_code":7,"result_message":"failed"}`)); err == nil {
+		t.Fatal("failed evidence accepted")
+	}
+}

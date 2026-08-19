@@ -87,15 +87,6 @@ func WorkloadStore(config *runtimeconfig.Config, external *shimconfig.ExternalCo
 	return store, nil
 }
 
-func RequireWorkloadSecrets(config *runtimeconfig.Config, store Store) error {
-	for _, name := range WorkloadReferences(config) {
-		if store[name] == "" {
-			return fmt.Errorf("declared container secret %q is unavailable", name)
-		}
-	}
-	return nil
-}
-
 func WriteHandoff(file *os.File, configDigest string, store Store) error {
 	if file == nil {
 		return fmt.Errorf("secret handoff file is required")

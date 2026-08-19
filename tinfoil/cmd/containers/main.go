@@ -203,11 +203,6 @@ func (m *manager) boot(override []byte) (result error) {
 	if err != nil {
 		return err
 	}
-	if !m.debug {
-		if err := secretstore.RequireWorkloadSecrets(config, m.secrets); err != nil {
-			return err
-		}
-	}
 	externalData, err := os.ReadFile(boot.ExternalConfigPath)
 	if err != nil {
 		return fmt.Errorf("reading external config: %w", err)
@@ -215,6 +210,11 @@ func (m *manager) boot(override []byte) (result error) {
 	external, err := shimconfig.DecodeExternal(externalData)
 	if err != nil {
 		return err
+	}
+	secretValues := m.secrets
+	if m.debug {
+		// Debug users may request any customer-supplied external secret.
+		secretValues = secretstore.Store(external.Secrets)
 	}
 	previous, err := loadRuntimeConfig()
 	if err != nil {
@@ -265,7 +265,7 @@ func (m *manager) boot(override []byte) (result error) {
 		return fmt.Errorf("restarting egress policy: %w", err)
 	}
 	frozenEgress = nil
-	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, m.secrets, m.debug, preserved); err != nil {
+	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, secretValues, m.debug, preserved); err != nil {
 		return err
 	}
 	return restartRuntimeServices(m.ctx)

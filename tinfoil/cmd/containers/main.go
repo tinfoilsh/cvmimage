@@ -203,8 +203,10 @@ func (m *manager) boot(override []byte) (result error) {
 	if err != nil {
 		return err
 	}
-	if err := secretstore.RequireWorkloadSecrets(config, m.secrets); err != nil {
-		return err
+	if !m.debug {
+		if err := secretstore.RequireWorkloadSecrets(config, m.secrets); err != nil {
+			return err
+		}
 	}
 	externalData, err := os.ReadFile(boot.ExternalConfigPath)
 	if err != nil {

@@ -434,7 +434,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 
 	// Build environment variables
-	env := buildEnv(c.Env, c.Secrets, extConfig, secrets)
+	env := buildEnv(c.Env, c.Secrets, extConfig, secrets, debug)
 
 	// Container configuration
 	containerConfig := &container.Config{
@@ -660,7 +660,7 @@ func containerMemoryBytes(c *Container, cfg *Config) int64 {
 }
 
 // buildEnv parses env entries and secrets from external config
-func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.ExternalConfig, secretValues secretstore.Store) []string {
+func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.ExternalConfig, secretValues secretstore.Store, debug bool) []string {
 	var env []string
 
 	// Process env items
@@ -685,12 +685,18 @@ func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.Ex
 		}
 	}
 
-	// Process secrets resolved by tinfoil-boot and held by tinfoil-containers.
+	// Debug workloads may use customer-supplied external secrets; production only uses the sealed store.
 	for _, key := range secrets {
-		if v := secretValues[key]; v != "" {
-			env = append(env, key+"="+v)
+		value := secretValues[key]
+		if debug && extConfig != nil {
+			if externalValue := extConfig.GetSecret(key); externalValue != "" {
+				value = externalValue
+			}
+		}
+		if value != "" {
+			env = append(env, key+"="+value)
 		} else {
-			log.Printf("Warning: secret key %s not found in secret store", key)
+			log.Printf("Warning: secret key %s not found", key)
 		}
 	}
 

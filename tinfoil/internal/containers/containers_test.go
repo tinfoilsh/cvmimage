@@ -100,6 +100,7 @@ func TestBuildEnv(t *testing.T) {
 		[]string{"API_KEY", "MISSING_SECRET"},
 		ext,
 		secretstore.Store{"API_KEY": "from-handoff"},
+		false,
 	)
 
 	want := map[string]bool{
@@ -120,9 +121,38 @@ func TestBuildEnv(t *testing.T) {
 
 func TestBuildEnvNilConfig(t *testing.T) {
 	ext := &shimconfig.ExternalConfig{}
-	env := buildEnv([]interface{}{"FOO"}, []string{"BAR"}, ext, nil)
+	env := buildEnv([]interface{}{"FOO"}, []string{"BAR"}, ext, nil, false)
 	if len(env) != 0 {
 		t.Errorf("expected empty env with nil maps, got %v", env)
+	}
+}
+
+func TestBuildEnvDebugUsesExternalSecrets(t *testing.T) {
+	external := &shimconfig.ExternalConfig{Secrets: map[string]string{
+		"API_KEY":    "from-external",
+		"DEBUG_ONLY": "debug-secret",
+	}}
+	env := buildEnv(
+		nil,
+		[]string{"API_KEY", "DEBUG_ONLY", "VAULT_ONLY"},
+		external,
+		secretstore.Store{"API_KEY": "from-handoff", "VAULT_ONLY": "vault-secret"},
+		true,
+	)
+
+	want := map[string]bool{
+		"API_KEY=from-external":   true,
+		"DEBUG_ONLY=debug-secret": true,
+		"VAULT_ONLY=vault-secret": true,
+	}
+	for _, value := range env {
+		if !want[value] {
+			t.Fatalf("unexpected environment entry %q", value)
+		}
+		delete(want, value)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing environment entries: %v", want)
 	}
 }
 

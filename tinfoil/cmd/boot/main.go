@@ -42,6 +42,7 @@ func main() {
 type invocation struct {
 	configHash string
 	debug      bool
+	secretsFD  int
 }
 
 func parseInvocation(args []string) (invocation, error) {
@@ -53,6 +54,7 @@ func parseInvocation(args []string) (invocation, error) {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&parsed.configHash, "config-hash", "", "verified config hash from the kernel command line")
 	flags.BoolVar(&parsed.debug, "debug", false, "enable the measured debug policy")
+	flags.IntVar(&parsed.secretsFD, "secrets-fd", -1, "sealed container-secret handoff descriptor")
 	if err := flags.Parse(args[1:]); err != nil {
 		return invocation{}, err
 	}
@@ -63,6 +65,12 @@ func parseInvocation(args []string) (invocation, error) {
 }
 
 func run(ctx context.Context, invocation invocation) error {
+	if invocation.secretsFD < 0 {
+		return fmt.Errorf("container-secret handoff descriptor is required")
+	}
+	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-container-secrets")
+	defer secretHandoff.Close()
+
 	tracker := boot.NewTracker(boot.InitialStages)
 
 	// 1. Config
@@ -146,18 +154,14 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
 
-	// 7. Fetch any external vault secrets.
+	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	if config.VaultURL == "" {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusSkipped, time.Since(start), "no vault configured")
-	} else {
-		log.Println("Fetching vault secrets")
-		if err := fetchVaultSecrets(config, externalConfig); err != nil {
-			tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
-			return fmt.Errorf("vault secret fetch failed: %w", err)
-		}
-		tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), config.VaultURL)
+	secretDetail, err := prepareSecretHandoff(config, externalConfig, secretHandoff, invocation.configHash)
+	if err != nil {
+		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+		return err
 	}
+	tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), secretDetail)
 
 	// 8. Registry auth
 	start = time.Now()

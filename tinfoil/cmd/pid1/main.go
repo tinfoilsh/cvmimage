@@ -22,6 +22,7 @@ import (
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
+	"tinfoil/internal/secretstore"
 )
 
 const (
@@ -206,6 +207,11 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.limits(); err != nil {
 		return fmt.Errorf("runtime limits: %w", err)
 	}
+	secretHandoff, err := secretstore.NewHandoffFile()
+	if err != nil {
+		return err
+	}
+	defer secretHandoff.Close()
 	if err := deps.oneShot(bootCtx, command("loopback", "/usr/sbin/ip", "link", "set", "dev", "lo", "up")); err != nil {
 		return err
 	}
@@ -245,18 +251,22 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
-	if err := deps.oneShot(bootCtx, hardenedCommand(
+	bootCommand := hardenedCommand(
 		hardening.ServiceBoot, boot.BootBinary,
 		"--config-hash="+deps.cmdline.ConfigHash,
 		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
-	)); err != nil {
+	)
+	bootCommand = withSecretHandoff(bootCommand, secretHandoff)
+	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
 		return err
 	}
+	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
+		fmt.Sprintf("--debug=%t", deps.cmdline.Debug))
+	containersCommand = withSecretHandoff(containersCommand, secretHandoff)
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containersName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
-			fmt.Sprintf("--debug=%t", deps.cmdline.Debug)),
-		Ready: fileReady(boot.ContainersReadyPath),
+		Command: containersCommand,
+		Ready:   fileReady(boot.ContainersReadyPath),
 	}); err != nil {
 		return err
 	}
@@ -275,6 +285,12 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	<-parent.Done()
 	initLogf("shutdown requested")
 	return nil
+}
+
+func withSecretHandoff(command supervisor.Command, handoff *os.File) supervisor.Command {
+	childFD := command.AddExtraFile(handoff)
+	command.Args = append(command.Args, fmt.Sprintf("--secrets-fd=%d", childFD))
+	return command
 }
 
 type nvidiaBootstrapControl interface {

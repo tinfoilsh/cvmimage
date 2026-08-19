@@ -36,3 +36,19 @@ func TestStartConsoleUsesManagedEphemeralScope(t *testing.T) {
 		}
 	}
 }
+
+func TestStartConsoleRejectsExtraFiles(t *testing.T) {
+	sigchld := make(chan os.Signal, 1)
+	manager := newManager(newFakeBackend(sigchld), sigchld, nil)
+	console, err := os.CreateTemp(t.TempDir(), "console")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer console.Close()
+
+	command := Command{Name: "debug-console", Path: "/bin/sh"}
+	command.AddExtraFile(console)
+	if _, err := manager.StartConsole(command, console); err == nil {
+		t.Fatal("StartConsole accepted an extra file")
+	}
+}

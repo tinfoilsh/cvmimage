@@ -14,6 +14,9 @@ func (m *Manager) StartConsole(command Command, console *os.File) (*Process, err
 	if console == nil {
 		return nil, errors.New("console is required")
 	}
+	if len(command.ExtraFiles) != 0 {
+		return nil, errors.New("console commands do not support extra files")
+	}
 	return m.start(command, "", startOptions{
 		files:   []*os.File{console, console, console},
 		console: true,

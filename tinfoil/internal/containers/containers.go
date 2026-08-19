@@ -25,6 +25,7 @@ import (
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
+	"tinfoil/internal/secretstore"
 )
 
 const (
@@ -122,11 +123,11 @@ func networkCreateOptions(name string) client.NetworkCreateOptions {
 // launchContainersAndWaitHealthy launches all containers in parallel with
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
-func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
-	return LaunchAndWaitHealthyExcept(ctx, tracker, config, extConfig, debug, nil)
+func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) error {
+	return LaunchAndWaitHealthyExcept(ctx, tracker, config, extConfig, secrets, debug, nil)
 }
 
-func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, debug bool, preserved map[string]bool) error {
+func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool, preserved map[string]bool) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
 		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
@@ -177,7 +178,7 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 		wg.Add(1)
 		go func(i int, c Container) {
 			defer wg.Done()
-			errs[i] = runContainer(ctx, cli, c, config, extConfig, &substages, &mu, flush, debug)
+			errs[i] = runContainer(ctx, cli, c, config, extConfig, secrets, &substages, &mu, flush, debug)
 		}(i, c)
 	}
 	wg.Wait()
@@ -241,6 +242,7 @@ func runContainer(
 	c Container,
 	cfg *Config,
 	extConfig *shimconfig.ExternalConfig,
+	secrets secretstore.Store,
 	substages *[]boot.Stage,
 	mu *sync.Mutex,
 	flush func(),
@@ -274,7 +276,7 @@ func runContainer(
 
 	// Create + start
 	startPhase := time.Now()
-	if err := createAndStartContainer(ctx, cli, c, cfg, extConfig, debug); err != nil {
+	if err := createAndStartContainer(ctx, cli, c, cfg, extConfig, secrets, debug); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
 		record("start", boot.StatusFailed, time.Since(startPhase), detail)
 		finish(boot.StatusFailed, detail)
@@ -390,8 +392,8 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 	return first, rest
 }
 
-func createAndStartContainer(ctx context.Context, cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) error {
-	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, debug)
+func createAndStartContainer(ctx context.Context, cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) error {
+	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, secrets, debug)
 	if err != nil {
 		return err
 	}
@@ -426,13 +428,13 @@ func createAndStartContainer(ctx context.Context, cli *client.Client, c Containe
 	return nil
 }
 
-func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, debug bool) (*container.Config, *container.HostConfig, *dockernetwork.NetworkingConfig, []string, error) {
+func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) (*container.Config, *container.HostConfig, *dockernetwork.NetworkingConfig, []string, error) {
 	if c.Image == "" {
 		return nil, nil, nil, nil, fmt.Errorf("no image specified for container %s", c.Name)
 	}
 
 	// Build environment variables
-	env := buildEnv(c.Env, c.Secrets, extConfig)
+	env := buildEnv(c.Env, c.Secrets, extConfig, secrets)
 
 	// Container configuration
 	containerConfig := &container.Config{
@@ -657,8 +659,8 @@ func containerMemoryBytes(c *Container, cfg *Config) int64 {
 	return 0
 }
 
-// buildEnv parses env entries and secrets from external config
-func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.ExternalConfig) []string {
+// buildEnv combines external-config environment entries with resolved secret values.
+func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.ExternalConfig, secretValues secretstore.Store) []string {
 	var env []string
 
 	// Process env items
@@ -683,12 +685,12 @@ func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.Ex
 		}
 	}
 
-	// Process secrets (lookup from external-config secrets section)
+	// Process secrets resolved by tinfoil-boot and held by tinfoil-containers.
 	for _, key := range secrets {
-		if v := extConfig.GetSecret(key); v != "" {
+		if v := secretValues[key]; v != "" {
 			env = append(env, key+"="+v)
 		} else {
-			log.Printf("Warning: secret key %s not found in external config", key)
+			log.Printf("Warning: secret key %s not found in secret store", key)
 		}
 	}
 

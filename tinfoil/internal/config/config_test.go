@@ -34,6 +34,12 @@ func TestDecodeServiceURLDefaults(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsMissingDocument(t *testing.T) {
+	if _, err := Decode(nil); err == nil {
+		t.Fatal("Decode accepted a missing YAML document")
+	}
+}
+
 func TestGetSecret(t *testing.T) {
 	tests := []struct {
 		name   string

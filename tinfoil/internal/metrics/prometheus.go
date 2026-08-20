@@ -139,9 +139,9 @@ func handlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey, container
 		containers, err := loadContainerMetricStatuses(containerStatusPath)
 		if err != nil {
 			log.Printf("Warning: failed to load container metrics: %v", err)
-			containers = nil
+		} else {
+			containerCollector.update(metrics, containers)
 		}
-		containerCollector.update(metrics, containers)
 		handler.ServeHTTP(w, r)
 	}
 }

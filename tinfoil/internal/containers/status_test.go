@@ -255,6 +255,80 @@ func TestMergeContainerLifecyclesCountsReplacement(t *testing.T) {
 	if current[0].RestartCount != 3 {
 		t.Fatalf("restart_count = %d, want 3", current[0].RestartCount)
 	}
+	if current[0].RestartCounts[restartReasonReplacement] != 1 || current[0].RestartCounts[restartReasonUnknown] != 2 {
+		t.Fatalf("restart counts = %#v", current[0].RestartCounts)
+	}
+	if current[0].LastRestartReason != restartReasonReplacement {
+		t.Fatalf("last restart reason = %q", current[0].LastRestartReason)
+	}
+}
+
+func TestMergeContainerLifecyclesTracksOOMRestart(t *testing.T) {
+	current := []containerStatus{{
+		Name:         "model",
+		ContainerID:  "container-id",
+		Created:      true,
+		Status:       "restarting",
+		RestartCount: 3,
+		OOMKilled:    true,
+		ExitCode:     137,
+		StartedAt:    "2026-07-25T01:01:00Z",
+	}}
+	mergeContainerLifecycles([]containerStatus{{
+		Name:          "model",
+		ContainerID:   "container-id",
+		Created:       true,
+		Status:        "running",
+		RestartCount:  1,
+		RestartCounts: map[string]int{restartReasonNonzero: 1},
+		StartedAt:     "2026-07-25T01:00:00Z",
+	}}, current)
+
+	if current[0].RestartCount != 3 {
+		t.Fatalf("restart_count = %d, want 3", current[0].RestartCount)
+	}
+	if current[0].RestartCounts[restartReasonNonzero] != 1 || current[0].RestartCounts[restartReasonOOMKilled] != 1 || current[0].RestartCounts[restartReasonUnknown] != 1 {
+		t.Fatalf("restart counts = %#v", current[0].RestartCounts)
+	}
+	if current[0].LastRestartReason != restartReasonOOMKilled {
+		t.Fatalf("last restart reason = %q", current[0].LastRestartReason)
+	}
+}
+
+func TestMergeContainerLifecyclesBackfillsLegacyCounts(t *testing.T) {
+	current := []containerStatus{{Name: "model", Created: false}}
+	mergeContainerLifecycles([]containerStatus{{
+		Name:         "model",
+		Created:      true,
+		RestartCount: 4,
+	}}, current)
+
+	if current[0].RestartCount != 4 || current[0].RestartCounts[restartReasonUnknown] != 4 {
+		t.Fatalf("restart state = %#v", current[0])
+	}
+}
+
+func TestClassifyRestart(t *testing.T) {
+	tests := []struct {
+		name        string
+		previous    containerStatus
+		current     containerStatus
+		replacement bool
+		want        string
+	}{
+		{name: "replacement", replacement: true, want: restartReasonReplacement},
+		{name: "oom killed", current: containerStatus{OOMKilled: true, ExitCode: 137}, want: restartReasonOOMKilled},
+		{name: "nonzero exit", current: containerStatus{ExitCode: 1}, want: restartReasonNonzero},
+		{name: "clean exit", current: containerStatus{Status: "restarting"}, want: restartReasonClean},
+		{name: "cause no longer observable", previous: containerStatus{Status: "running"}, current: containerStatus{Status: "running"}, want: restartReasonUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyRestart(test.previous, test.current, test.replacement); got != test.want {
+				t.Fatalf("classifyRestart() = %q, want %q", got, test.want)
+			}
+		})
+	}
 }
 
 func TestPreservePreviousContainerStatusesAfterInspectFailure(t *testing.T) {

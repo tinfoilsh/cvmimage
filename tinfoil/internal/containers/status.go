@@ -20,7 +20,12 @@ import (
 )
 
 const (
-	pollInterval = 5 * time.Second
+	pollInterval             = 5 * time.Second
+	restartReasonOOMKilled   = "oom_killed"
+	restartReasonNonzero     = "nonzero_exit"
+	restartReasonClean       = "clean_exit"
+	restartReasonReplacement = "replacement"
+	restartReasonUnknown     = "unknown"
 )
 
 type declaredContainer struct {
@@ -44,20 +49,22 @@ type containersResponse struct {
 }
 
 type containerStatus struct {
-	Name          string           `json:"name"`
-	ContainerID   string           `json:"container_id,omitempty"`
-	Image         string           `json:"image"`
-	Declared      bool             `json:"declared"`
-	Created       bool             `json:"created"`
-	Status        string           `json:"status,omitempty"`
-	RestartCount  int              `json:"restart_count"`
-	RestartPolicy string           `json:"restart_policy,omitempty"`
-	OOMKilled     bool             `json:"oom_killed"`
-	ExitCode      int              `json:"exit_code"`
-	Error         string           `json:"error,omitempty"`
-	StartedAt     string           `json:"started_at,omitempty"`
-	FinishedAt    string           `json:"finished_at,omitempty"`
-	Health        *containerHealth `json:"health,omitempty"`
+	Name              string           `json:"name"`
+	ContainerID       string           `json:"container_id,omitempty"`
+	Image             string           `json:"image"`
+	Declared          bool             `json:"declared"`
+	Created           bool             `json:"created"`
+	Status            string           `json:"status,omitempty"`
+	RestartCount      int              `json:"restart_count"`
+	RestartCounts     map[string]int   `json:"restart_counts,omitempty"`
+	LastRestartReason string           `json:"last_restart_reason,omitempty"`
+	RestartPolicy     string           `json:"restart_policy,omitempty"`
+	OOMKilled         bool             `json:"oom_killed"`
+	ExitCode          int              `json:"exit_code"`
+	Error             string           `json:"error,omitempty"`
+	StartedAt         string           `json:"started_at,omitempty"`
+	FinishedAt        string           `json:"finished_at,omitempty"`
+	Health            *containerHealth `json:"health,omitempty"`
 }
 
 type containerHealth struct {
@@ -184,17 +191,64 @@ func mergeContainerLifecycles(previous, current []containerStatus) {
 	}
 	for i := range current {
 		prior, ok := byName[current[i].Name]
-		if !ok || !prior.Created || !current[i].Created {
+		if !ok {
+			current[i].RestartCounts = restartCountsWithUnknown(nil, current[i].RestartCount)
+			if current[i].RestartCount > 0 {
+				current[i].LastRestartReason = restartReasonUnknown
+			}
 			continue
 		}
-		observedReplacement := prior.ContainerID != "" && current[i].ContainerID != "" && prior.ContainerID != current[i].ContainerID
-		observedRestart := prior.StartedAt != "" && current[i].StartedAt != "" && prior.StartedAt != current[i].StartedAt
+
+		current[i].RestartCounts = restartCountsWithUnknown(prior.RestartCounts, prior.RestartCount)
+		current[i].LastRestartReason = prior.LastRestartReason
+		observedReplacement := prior.Created && current[i].Created && prior.ContainerID != "" && current[i].ContainerID != "" && prior.ContainerID != current[i].ContainerID
+		observedRestart := prior.Created && current[i].Created && prior.StartedAt != "" && current[i].StartedAt != "" && prior.StartedAt != current[i].StartedAt
+		restartCount := max(current[i].RestartCount, prior.RestartCount)
 		if observedReplacement || observedRestart {
-			current[i].RestartCount = max(current[i].RestartCount, prior.RestartCount+1)
-		} else {
-			current[i].RestartCount = max(current[i].RestartCount, prior.RestartCount)
+			restartCount = max(restartCount, prior.RestartCount+1)
 		}
+		if delta := restartCount - prior.RestartCount; delta > 0 {
+			reason := classifyRestart(prior, current[i], observedReplacement)
+			current[i].RestartCounts[reason]++
+			if delta > 1 {
+				current[i].RestartCounts[restartReasonUnknown] += delta - 1
+			}
+			current[i].LastRestartReason = reason
+		}
+		current[i].RestartCount = restartCount
 	}
+}
+
+func restartCountsWithUnknown(counts map[string]int, total int) map[string]int {
+	out := make(map[string]int, len(counts)+1)
+	recorded := 0
+	for reason, count := range counts {
+		if count <= 0 {
+			continue
+		}
+		out[reason] = count
+		recorded += count
+	}
+	if recorded < total {
+		out[restartReasonUnknown] += total - recorded
+	}
+	return out
+}
+
+func classifyRestart(previous, current containerStatus, replacement bool) string {
+	if replacement {
+		return restartReasonReplacement
+	}
+	if current.OOMKilled || previous.OOMKilled {
+		return restartReasonOOMKilled
+	}
+	if current.ExitCode != 0 || previous.ExitCode != 0 {
+		return restartReasonNonzero
+	}
+	if current.Status == "restarting" || previous.Status == "exited" {
+		return restartReasonClean
+	}
+	return restartReasonUnknown
 }
 
 func loadDeclaredContainers(path string) ([]declaredContainer, error) {

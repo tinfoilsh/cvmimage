@@ -1,11 +1,13 @@
 package metrics
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"tinfoil/internal/auth"
+	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 )
 
@@ -105,7 +107,12 @@ func updatePrometheusMetrics(metrics *Metrics) {
 
 // HandlePrometheusMetrics handles the /metrics endpoint for Prometheus scraping
 func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) http.HandlerFunc {
+	return handlePrometheusMetrics(metadata, metricsAPIKey, boot.ContainerStatusPath)
+}
+
+func handlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey, containerStatusPath string) http.HandlerFunc {
 	registry := prometheus.NewRegistry()
+	containerCollector := newContainerPrometheusCollector()
 	registry.MustRegister(
 		cpuUtilGauge,
 		gpuUtilGauge,
@@ -113,6 +120,7 @@ func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) ht
 		gpuMemUtilGauge,
 		cpuMemTotalGauge,
 		gpuMemTotalGauge,
+		containerCollector,
 	)
 	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 
@@ -128,6 +136,12 @@ func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) ht
 		}
 
 		updatePrometheusMetrics(metrics)
+		containers, err := loadContainerMetricStatuses(containerStatusPath)
+		if err != nil {
+			log.Printf("Warning: failed to load container metrics: %v", err)
+			containers = nil
+		}
+		containerCollector.update(metrics, containers)
 		handler.ServeHTTP(w, r)
 	}
 }

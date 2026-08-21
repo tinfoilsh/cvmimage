@@ -353,10 +353,26 @@ func registerObservabilityHandlers(
 				return
 			}
 
+			// RFC 9266 tls-exporter channel binding for the TLS session this
+			// request arrived over.
+			var tlsExporter []byte
+			if r.TLS != nil {
+				if exporter, exErr := r.TLS.ExportKeyingMaterial(
+					tinfoilattestation.TLSExporterLabel,
+					nil,
+					tinfoilattestation.TLSExporterSize,
+				); exErr == nil {
+					tlsExporter = exporter
+				} else {
+					log.Printf("tls-exporter channel binding unavailable: %v", exErr)
+				}
+			}
+
 			fresh, err := tinfoilattestation.BuildAttestation(
 				identityBody.TLSKeyFP,
 				identityBody.HPKEKey,
 				nonce,
+				tlsExporter,
 				deviceEvidence,
 				collateral,
 			)

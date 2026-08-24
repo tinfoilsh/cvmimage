@@ -277,7 +277,7 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 		Models: []string{"private-model"},
 	}
 
-	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, false)
+	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 	_, ungrantedHostConfig, _, _, err := buildContainerCreateSpec(Container{
 		Name:  "sidecar",
 		Image: "example.invalid/sidecar",
-	}, cfg, &shimconfig.ExternalConfig{}, false)
+	}, cfg, &shimconfig.ExternalConfig{}, nil, false)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}

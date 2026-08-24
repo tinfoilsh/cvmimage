@@ -42,6 +42,22 @@ func TestModelPackRefLayout(t *testing.T) {
 	}
 }
 
+func TestModelMountTarget(t *testing.T) {
+	ref := &modelPackRef{ArtifactRef: &modelwrap.ArtifactRef{RootHash: strings.Repeat("a", 64)}}
+	model := ModelSpec{Name: "private-model"}
+
+	isolatedConfig := &Config{Containers: []Container{{Models: []string{model.Name}}}}
+	mountPoint, legacyAlias := modelMountTarget(isolatedConfig, model, ref)
+	if mountPoint != boot.PrivateModelsDir+"/"+model.Name || legacyAlias {
+		t.Fatalf("isolated target = (%q, %t)", mountPoint, legacyAlias)
+	}
+
+	mountPoint, legacyAlias = modelMountTarget(&Config{}, model, ref)
+	if mountPoint != ref.mountPoint() || !legacyAlias {
+		t.Fatalf("legacy target = (%q, %t)", mountPoint, legacyAlias)
+	}
+}
+
 func TestVerityTableUsesFixedModelwrapContract(t *testing.T) {
 	rootHash := strings.Repeat("a", 64)
 	salt := bytes.Repeat([]byte{0x5a}, veritySaltSize)

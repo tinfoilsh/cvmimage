@@ -30,6 +30,10 @@ func Validate(config *Config, debug bool) error {
 	return sharedconfig.Validate(config, options(debug))
 }
 
+func ModelIsIsolated(config *Config, name string) bool {
+	return sharedconfig.ModelIsIsolated(config, name)
+}
+
 func ReservedDebugRuntimeEnabled(containerName string, debug bool) bool {
 	return sharedconfig.ReservedDebugRuntimeEnabled(containerName, options(debug))
 }

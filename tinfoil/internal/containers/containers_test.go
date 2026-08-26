@@ -299,3 +299,29 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildContainerCreateSpec_PublishesDeclaredPorts(t *testing.T) {
+	cfg := &Config{Networks: map[string]*NetworkSpec{"app": {Egress: "closed"}}}
+	c := Container{
+		Name:     "sandbox",
+		Image:    "example.invalid/sandbox",
+		Networks: []string{"app"},
+		Ports:    []string{"2022:22"},
+	}
+
+	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	port := dockernetwork.MustParsePort("22/tcp")
+	if _, ok := containerConfig.ExposedPorts[port]; !ok {
+		t.Fatalf("ExposedPorts = %v, want %s", containerConfig.ExposedPorts, port)
+	}
+	bindings := hostConfig.PortBindings[port]
+	if len(bindings) != 1 || bindings[0].HostPort != "2022" {
+		t.Fatalf("PortBindings[%s] = %v, want host port 2022", port, bindings)
+	}
+	if hostConfig.NetworkMode != container.NetworkMode("app") {
+		t.Fatalf("NetworkMode = %q, want app", hostConfig.NetworkMode)
+	}
+}

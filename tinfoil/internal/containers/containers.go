@@ -361,37 +361,6 @@ func lastHealthLog(h *container.Health) string {
 	return fmt.Sprintf("exit %d", last.ExitCode)
 }
 
-// attachOrder returns the bridges to connect to a container. Docker needs
-// the first network at ContainerCreate time, so it's returned separately.
-// The egress-capable network (if any) goes first; shim-net is appended
-// last for the shim's upstream.
-func attachOrder(c Container, cfg *Config) (first string, rest []string) {
-	var egress string
-	var closed []string
-	for _, n := range c.Networks {
-		if cfg.Networks[n].Egress != "closed" {
-			egress = n
-			continue
-		}
-		closed = append(closed, n)
-	}
-	if egress != "" {
-		first = egress
-		rest = append(rest, closed...)
-	} else if len(closed) > 0 {
-		first = closed[0]
-		rest = append(rest, closed[1:]...)
-	}
-	if runtimeconfig.ShimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
-		if first == "" {
-			first = containernet.ShimNetName
-		} else {
-			rest = append(rest, containernet.ShimNetName)
-		}
-	}
-	return first, rest
-}
-
 func createAndStartContainer(ctx context.Context, cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) error {
 	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, secrets, debug)
 	if err != nil {
@@ -465,7 +434,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		pidsLimit = &n
 	}
 
-	first, rest := attachOrder(c, cfg)
+	first, rest := runtimeconfig.AttachOrder(c, cfg)
 
 	// Host configuration
 	hostConfig := &container.HostConfig{
@@ -519,6 +488,14 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		})
 	}
 
+	// Published ports. Validation guarantees an attached network, so Docker
+	// has a bridge to DNAT from; the firewall opens the matching hole.
+	ports, err := runtimeconfig.ParsePorts(c.Ports)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("container %s: %v", c.Name, err)
+	}
+	publishPorts(containerConfig, hostConfig, ports)
+
 	// Volume mounts
 	reservedDebugRuntime := runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug)
 	for _, vol := range c.Volumes {
@@ -557,17 +534,27 @@ func gatewayPriorityForNetwork(cfg *Config, name string) int {
 
 func applyReservedDebugRuntime(containerConfig *container.Config, hostConfig *container.HostConfig) {
 	hostConfig.NetworkMode = "bridge"
-	port := dockernetwork.MustParsePort(reservedDebugPort)
-	if containerConfig.ExposedPorts == nil {
-		containerConfig.ExposedPorts = dockernetwork.PortSet{}
+	// The toolbox listens on the same number it is published as (2222/tcp),
+	// which is what the firewall's docker0 rule matches on.
+	publishPorts(containerConfig, hostConfig, []runtimeconfig.PortMapping{
+		{Host: reservedDebugHostPort, Container: reservedDebugHostPort},
+	})
+}
+
+func publishPorts(containerConfig *container.Config, hostConfig *container.HostConfig, ports []runtimeconfig.PortMapping) {
+	for _, mapping := range ports {
+		port := dockernetwork.MustParsePort(fmt.Sprintf("%d/tcp", mapping.Container))
+		if containerConfig.ExposedPorts == nil {
+			containerConfig.ExposedPorts = dockernetwork.PortSet{}
+		}
+		containerConfig.ExposedPorts[port] = struct{}{}
+		if hostConfig.PortBindings == nil {
+			hostConfig.PortBindings = dockernetwork.PortMap{}
+		}
+		hostConfig.PortBindings[port] = []dockernetwork.PortBinding{{
+			HostPort: fmt.Sprintf("%d", mapping.Host),
+		}}
 	}
-	containerConfig.ExposedPorts[port] = struct{}{}
-	if hostConfig.PortBindings == nil {
-		hostConfig.PortBindings = dockernetwork.PortMap{}
-	}
-	hostConfig.PortBindings[port] = []dockernetwork.PortBinding{{
-		HostPort: fmt.Sprintf("%d", reservedDebugHostPort),
-	}}
 }
 
 func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettings {

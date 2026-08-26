@@ -63,6 +63,14 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "unsupported capability", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    cap_add: [SETUID]", 1), want: "capability"},
 		{name: "model key exposed to container", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    secrets: [MODEL_KEY]", 1) + "\nmodels:\n  - name: private\n    key-secret: MODEL_KEY\n", want: "exposes models[0].key-secret"},
 		{name: "invalid allowlist", yaml: strings.Replace(validConfig, "egress: closed", "egress: allowlist\n    allow: ['*.example.com']", 1), want: "wildcards"},
+		{name: "published port", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ports: ['2022:22']", 1)},
+		{name: "port without mapping", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ports: ['22']", 1), want: `must be "<host>:<container>"`},
+		{name: "port out of range", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ports: ['70000:22']", 1), want: "host port 70000 is not in 1..65535"},
+		{name: "port not a number", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ports: ['2022:ssh']", 1), want: `container port "ssh" is not a number`},
+		{name: "shim host port", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ports: ['443:22']", 1), want: "reserved for the shim"},
+		{name: "debug toolbox host port", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ports: ['2222:22']", 1), want: "reserved for the debug toolbox"},
+		{name: "port without network", yaml: strings.Replace(validConfig, "networks: [app]", "ports: ['2022:22']", 1), want: "requires an attached network"},
+		{name: "duplicate host port", yaml: strings.Replace(validConfig, "containers:\n", "containers:\n  - name: other\n    image: example.com/other@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n    networks: [app]\n    ports: ['2022:22']\n", 1) + "    ports: ['2022:2222']\n", want: `already published by "other"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := Decode([]byte(test.yaml), test.debug)

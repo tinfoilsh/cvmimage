@@ -8,6 +8,7 @@ import (
 	"time"
 
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/runtimeconfig"
 )
 
 type fakeEgressPopulator struct {
@@ -93,7 +94,7 @@ func TestAttachOrderEgressFirstThenShim(t *testing.T) {
 			"ipc":     {Egress: "closed"},
 		},
 	}
-	first, rest := attachOrder(Container{Name: "api", Networks: []string{"ipc", "control"}}, config)
+	first, rest := runtimeconfig.AttachOrder(Container{Name: "api", Networks: []string{"ipc", "control"}}, config)
 	if first != "control" || len(rest) == 0 || rest[len(rest)-1] != "shim-net" {
 		t.Fatalf("attach order = %q, %v", first, rest)
 	}

@@ -49,14 +49,12 @@ aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
 the attested top-level GPU count; boolean, zero, negative, duplicate, and
 out-of-range selections are rejected.
 
-A container may publish TCP ports to the CVM's network namespace with
-`ports: ["<host>:<container>"]` entries. The entry is rejected unless the
-container has an attached network for Docker to translate onto, the host port
-is free of every other container's claim, and it avoids the ports the CVM itself
-listens on (443, 80, and the debug toolbox's 2222). The published service's
-runtime integrity and confidentiality is not guaranteed by the measurement.
-It is up to the container deployer's discretion to ensure no runtime
-vulnerabilities are present in the software.
+A container may publish TCP ports with `ports: ["<host>:<container>"]`, which
+requires an attached network for Docker to translate onto, a host port no other
+container claims, and one the CVM does not listen on itself (443, 80, and the
+debug toolbox's 2222). The measurement says nothing about the published service's
+own integrity or confidentiality; keeping it free of runtime vulnerabilities
+is the deployer's job.
 
 Every container image must be an OCI reference containing an immutable digest,
 including in measured debug mode. The container manager pulls that exact

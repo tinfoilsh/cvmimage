@@ -16,10 +16,7 @@ const (
 )
 
 func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
-	script, err := renderContainerNetworkScript(config, debug)
-	if err != nil {
-		return err
-	}
+	script := renderContainerNetworkScript(config, debug)
 	if err := Apply(script); err != nil {
 		return fmt.Errorf("installing container-network firewall rules: %w", err)
 	}
@@ -32,78 +29,32 @@ func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
 	return nil
 }
 
-func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (string, error) {
+func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) string {
 	names := make([]string, 0, len(config.Networks))
 	for name := range config.Networks {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	published, err := publishedPortsByBridge(config)
-	if err != nil {
-		return "", err
-	}
 	var script strings.Builder
 	script.WriteString("flush chain inet tinfoil container_input\n")
 	script.WriteString("flush chain inet tinfoil container_forward\n")
+	if debug && runtimeconfig.HasReservedDebugContainer(config) {
+		writeReservedDebugForwardRules(&script)
+	}
+	// Every other published port is reachable only over the shim's CONNECT tunnel.
+	script.WriteString("add rule inet tinfoil container_forward ct status dnat drop\n")
 	for _, name := range names {
-		// Published-port rules go first: on an `open` or `allowlist` bridge
-		// the egress policy drops traffic addressed to private ranges, which
-		// would otherwise eat the reply leg of a connection opened from one.
-		writePublishedPortRules(&script, name, published[name])
 		writeBridgeRules(&script, name, config.Networks[name])
 	}
 	if runtimeconfig.ShimUpstreamSet(config) {
 		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"})
 	}
-	if debug && runtimeconfig.HasReservedDebugContainer(config) {
-		// The toolbox publishes onto docker0, which is not a declared
-		// network and so gets no writeBridgeRules pass of its own.
-		writePublishedPortRules(&script, "docker0", []int{runtimeconfig.ReservedDebugHostPort})
-	}
-	return script.String(), nil
+	return script.String()
 }
 
-// publishedPortsByBridge groups every container's published container-side
-// ports under the bridge Docker DNATs them on — the container's first
-// attached network, the same one it is created with.
-func publishedPortsByBridge(config *runtimeconfig.Config) (map[string][]int, error) {
-	published := map[string][]int{}
-	for _, container := range config.Containers {
-		ports, err := runtimeconfig.ParsePorts(container.Ports)
-		if err != nil {
-			return nil, fmt.Errorf("container %s: %v", container.Name, err)
-		}
-		if len(ports) == 0 {
-			continue
-		}
-		bridge, _ := runtimeconfig.AttachOrder(container, config)
-		if bridge == "" {
-			continue
-		}
-		for _, mapping := range ports {
-			published[bridge] = append(published[bridge], mapping.Container)
-		}
-	}
-	for _, ports := range published {
-		sort.Ints(ports)
-	}
-	return published, nil
-}
-
-// writePublishedPortRules opens the forward path for ports Docker DNATs into
-// bridge: the inbound leg is matched after translation, so the rule carries
-// the container-side port, and the reply leg needs its own accept because
-// writeBridgeRules only covers container-initiated flows. Accepting an
-// established flow out of the bridge cannot widen egress — a flow only
-// becomes established once its first packet survived the policy below.
-func writePublishedPortRules(script *strings.Builder, bridge string, ports []int) {
-	if len(ports) == 0 {
-		return
-	}
-	for _, port := range ports {
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct status dnat tcp dport %d accept\n", bridge, port)
-	}
-	fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ct state established,related accept\n", bridge)
+func writeReservedDebugForwardRules(script *strings.Builder) {
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct status dnat tcp dport %d accept\n", "docker0", runtimeconfig.ReservedDebugHostPort)
+	fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ct state established,related accept\n", "docker0")
 }
 
 func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeconfig.NetworkSpec) {

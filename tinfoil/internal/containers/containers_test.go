@@ -242,6 +242,9 @@ func TestBuildContainerCreateSpec_DebugInstallerGetsFixedRuntime(t *testing.T) {
 	if len(bindings) != 1 || bindings[0].HostPort != "2222" {
 		t.Fatalf("PortBindings[%s] = %v, want host port 2222", port, bindings)
 	}
+	if bindings[0].HostIP.IsValid() {
+		t.Fatalf("HostIP = %s, want unset", bindings[0].HostIP)
+	}
 	if len(hostConfig.Devices) != 0 {
 		t.Fatalf("Devices = %v, want no synthesized device mappings", hostConfig.Devices)
 	}
@@ -302,12 +305,7 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 
 func TestBuildContainerCreateSpec_PublishesDeclaredPorts(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{"app": {Egress: "closed"}}}
-	c := Container{
-		Name:     "sandbox",
-		Image:    "example.invalid/sandbox",
-		Networks: []string{"app"},
-		Ports:    []string{"2022:22"},
-	}
+	c := Container{Name: "sandbox", Image: "example.invalid/sandbox", Networks: []string{"app"}, Ports: []string{"2022:22"}}
 
 	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
 	if err != nil {
@@ -321,7 +319,7 @@ func TestBuildContainerCreateSpec_PublishesDeclaredPorts(t *testing.T) {
 	if len(bindings) != 1 || bindings[0].HostPort != "2022" {
 		t.Fatalf("PortBindings[%s] = %v, want host port 2022", port, bindings)
 	}
-	if hostConfig.NetworkMode != container.NetworkMode("app") {
-		t.Fatalf("NetworkMode = %q, want app", hostConfig.NetworkMode)
+	if bindings[0].HostIP.String() != containernet.PublishedHostIP {
+		t.Fatalf("HostIP = %s, want %s", bindings[0].HostIP, containernet.PublishedHostIP)
 	}
 }

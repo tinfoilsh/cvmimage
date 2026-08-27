@@ -15,6 +15,10 @@ const (
 	ShimNetGatewayIP  = "172.31.255.1"
 	ShimUpstreamIP    = "172.31.255.2"
 
+	// PublishedHostIP binds operator ports and is what the shim's tunnel dials;
+	// Docker DNATs it from nat-OUTPUT, keeping the port off every other interface.
+	PublishedHostIP = "127.0.0.1"
+
 	// AllowSetPrefix is the nftables-set name prefix for an `egress:
 	// allowlist` network's resolved IPs: allow-<network-name>.
 	AllowSetPrefix = "allow-"

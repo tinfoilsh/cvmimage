@@ -1,10 +1,6 @@
 package runtimeconfig
 
-import (
-	sharedconfig "github.com/tinfoilsh/tinfoil-config"
-
-	"tinfoil/internal/containernet"
-)
+import sharedconfig "github.com/tinfoilsh/tinfoil-config"
 
 const (
 	ReservedDebugContainerName = sharedconfig.ReservedDebugContainerName
@@ -50,40 +46,6 @@ func HasReservedDebugContainer(config *Config) bool {
 	return sharedconfig.HasReservedDebugContainer(config)
 }
 
-type PortMapping = sharedconfig.PortMapping
-
-func ParsePorts(ports []string) ([]PortMapping, error) {
+func ParsePorts(ports []string) ([]sharedconfig.PortMapping, error) {
 	return sharedconfig.ParsePorts(ports)
-}
-
-// AttachOrder returns the bridges to connect to a container. Docker needs
-// the first network at ContainerCreate time, so it's returned separately.
-// The egress-capable network (if any) goes first; shim-net is appended
-// last for the shim's upstream. The first network is also the one Docker
-// publishes `ports:` on, so the firewall derives its DNAT rules from it.
-func AttachOrder(c Container, cfg *Config) (first string, rest []string) {
-	var egress string
-	var closed []string
-	for _, n := range c.Networks {
-		if cfg.Networks[n].Egress != "closed" {
-			egress = n
-			continue
-		}
-		closed = append(closed, n)
-	}
-	if egress != "" {
-		first = egress
-		rest = append(rest, closed...)
-	} else if len(closed) > 0 {
-		first = closed[0]
-		rest = append(rest, closed[1:]...)
-	}
-	if ShimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
-		if first == "" {
-			first = containernet.ShimNetName
-		} else {
-			rest = append(rest, containernet.ShimNetName)
-		}
-	}
-	return first, rest
 }

@@ -199,6 +199,7 @@ func NewShimServer(
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
+	tunnelTargets map[string]bool,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
@@ -235,12 +236,13 @@ func NewShimServer(
 		},
 	}
 
-	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A CONNECT carries no path for requiresAuth to match, so it always needs a key.
+	authorize := func(w http.ResponseWriter, r *http.Request) bool {
 		apiKey := extractBearerToken(r.Header.Get("Authorization"))
-		if validator != nil && requiresAuth(config.AuthenticatedEndpoints, r.URL.Path) {
+		if validator != nil && (r.Method == http.MethodConnect || requiresAuth(config.AuthenticatedEndpoints, r.URL.Path)) {
 			if len(apiKey) == 0 {
 				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
-				return
+				return false
 			}
 
 			validationReq := key.Request{
@@ -253,22 +255,28 @@ func NewShimServer(
 			if err := validator.Validate(validationReq); err != nil {
 				log.Printf("Warning: failed to validate API key: %v", err)
 				writeValidationFailure(w, err)
-				return
+				return false
 			}
 		}
 
 		if rateLimiter != nil {
 			if apiKey == "" {
 				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
-				return
+				return false
 			}
 			limiter := rateLimiter.Limit(apiKey)
 			if !limiter.Allow() {
 				writeJSONError(w, errMsgRateLimited, errTypeInvalidRequest, http.StatusTooManyRequests)
-				return
+				return false
 			}
 		}
+		return true
+	}
 
+	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authorize(w, r) {
+			return
+		}
 		proxy.ServeHTTP(w, r)
 	}))
 
@@ -282,7 +290,11 @@ func NewShimServer(
 
 	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 
-	return wrapShimMux(config, att, mux)
+	// Fail closed: an authenticated deployment with no validator must not tunnel.
+	if config.Authenticated && validator == nil {
+		tunnelTargets = nil
+	}
+	return wrapShimMux(config, att, tunnels(tunnelTargets, authorize, mux))
 }
 
 func NewObservabilityServer(
@@ -304,7 +316,7 @@ func NewObservabilityServer(
 	return wrapShimMux(config, att, mux)
 }
 
-func wrapShimMux(config *config.Config, att *legacy.Document, mux *http.ServeMux) http.Handler {
+func wrapShimMux(config *config.Config, att *legacy.Document, mux http.Handler) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Tinfoil-Pt", string(att.Format))

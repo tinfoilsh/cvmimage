@@ -520,13 +520,31 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 
 	// Volume mounts
-	reservedDebugRuntime := runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug)
 	for _, vol := range c.Volumes {
 		hostConfig.Binds = append(hostConfig.Binds, vol)
 	}
 
-	if reservedDebugRuntime {
-		applyReservedDebugRuntime(containerConfig, hostConfig)
+	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
+	if runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {
+		hostConfig.NetworkMode = "bridge"
+		// Unset: tinctl ssh dials the toolbox from outside the CVM.
+		hostIP = netip.Addr{}
+		c.Ports = []string{fmt.Sprintf("%d:%d", reservedDebugHostPort, reservedDebugHostPort)}
+	}
+
+	ports, err := runtimeconfig.ParsePorts(c.Ports)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("container %s: %v", c.Name, err)
+	}
+	containerConfig.ExposedPorts = dockernetwork.PortSet{}
+	hostConfig.PortBindings = dockernetwork.PortMap{}
+	for _, mapping := range ports {
+		port := dockernetwork.MustParsePort(fmt.Sprintf("%d/tcp", mapping.Container))
+		containerConfig.ExposedPorts[port] = struct{}{}
+		hostConfig.PortBindings[port] = append(hostConfig.PortBindings[port], dockernetwork.PortBinding{
+			HostIP:   hostIP,
+			HostPort: fmt.Sprintf("%d", mapping.Host),
+		})
 	}
 
 	// GPU configuration
@@ -553,21 +571,6 @@ func gatewayPriorityForNetwork(cfg *Config, name string) int {
 		return openEgressGwPriority
 	}
 	return 0
-}
-
-func applyReservedDebugRuntime(containerConfig *container.Config, hostConfig *container.HostConfig) {
-	hostConfig.NetworkMode = "bridge"
-	port := dockernetwork.MustParsePort(reservedDebugPort)
-	if containerConfig.ExposedPorts == nil {
-		containerConfig.ExposedPorts = dockernetwork.PortSet{}
-	}
-	containerConfig.ExposedPorts[port] = struct{}{}
-	if hostConfig.PortBindings == nil {
-		hostConfig.PortBindings = dockernetwork.PortMap{}
-	}
-	hostConfig.PortBindings[port] = []dockernetwork.PortBinding{{
-		HostPort: fmt.Sprintf("%d", reservedDebugHostPort),
-	}}
 }
 
 func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettings {

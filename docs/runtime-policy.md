@@ -49,6 +49,13 @@ aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
 the attested top-level GPU count; boolean, zero, negative, duplicate, and
 out-of-range selections are rejected.
 
+A container may publish TCP ports with `ports: ["<host>:<container>"]`, which
+requires an attached network for Docker to translate onto, a host port no other
+container claims, and one the CVM does not listen on itself (443, 80, and the
+debug toolbox's 2222). The measurement says nothing about the published service's
+own integrity or confidentiality; keeping it free of runtime vulnerabilities
+is the deployer's job.
+
 Every container image must be an OCI reference containing an immutable digest,
 including in measured debug mode. The container manager pulls that exact
 reference and verifies Docker's inspected repository digests before creating

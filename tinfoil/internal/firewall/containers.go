@@ -38,14 +38,16 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) stri
 	var script strings.Builder
 	script.WriteString("flush chain inet tinfoil container_input\n")
 	script.WriteString("flush chain inet tinfoil container_forward\n")
+	if debug && runtimeconfig.HasReservedDebugContainer(config) {
+		writeReservedDebugForwardRules(&script)
+	}
+	// Every other published port is reachable only over the shim's CONNECT tunnel.
+	script.WriteString("add rule inet tinfoil container_forward ct status dnat drop\n")
 	for _, name := range names {
 		writeBridgeRules(&script, name, config.Networks[name])
 	}
 	if runtimeconfig.ShimUpstreamSet(config) {
 		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"})
-	}
-	if debug && runtimeconfig.HasReservedDebugContainer(config) {
-		writeReservedDebugForwardRules(&script)
 	}
 	return script.String()
 }

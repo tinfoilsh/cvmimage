@@ -8,6 +8,8 @@ import (
 	"tinfoil/internal/runtimeconfig"
 )
 
+const dnatDrop = "add rule inet tinfoil container_forward ct status dnat drop"
+
 func TestContainerNetworkPolicyModes(t *testing.T) {
 	config := &runtimeconfig.Config{Networks: map[string]*runtimeconfig.NetworkSpec{
 		"closed":  {Egress: "closed"},
@@ -67,10 +69,25 @@ func TestContainerNetworkPolicyKeepsShimClosed(t *testing.T) {
 
 func TestContainerNetworkPolicyDebugForwarding(t *testing.T) {
 	config := &runtimeconfig.Config{Containers: []runtimeconfig.Container{{Name: runtimeconfig.ReservedDebugContainerName}}}
-	if script := renderContainerNetworkScript(config, true); !strings.Contains(script, `oifname "docker0" ct status dnat tcp dport 2222 accept`) {
-		t.Fatalf("debug forwarding missing:\n%s", script)
+	script := renderContainerNetworkScript(config, true)
+	toolbox := strings.Index(script, `oifname "docker0" ct status dnat tcp dport 2222 accept`)
+	reply := strings.Index(script, `iifname "docker0" ct state established,related accept`)
+	drop := strings.Index(script, dnatDrop)
+	if toolbox < 0 || reply < 0 || drop < 0 || toolbox > reply || reply > drop {
+		t.Fatalf("toolbox accept must outrank the dnat drop:\n%s", script)
 	}
 	if script := renderContainerNetworkScript(config, false); strings.Contains(script, "docker0") {
 		t.Fatalf("production policy opened docker0:\n%s", script)
+	}
+}
+
+func TestContainerNetworkPolicyDropsPublishedPorts(t *testing.T) {
+	config := &runtimeconfig.Config{
+		Networks:   map[string]*runtimeconfig.NetworkSpec{"app": {Egress: "closed"}},
+		Containers: []runtimeconfig.Container{{Name: "sandbox", Networks: []string{"app"}, Ports: []string{"2022:22"}}},
+	}
+	script := renderContainerNetworkScript(config, false)
+	if drop, bridge := strings.Index(script, dnatDrop), strings.Index(script, `container_forward iifname "app"`); drop < 0 || drop > bridge {
+		t.Fatalf("dnat drop must precede the per-bridge rules:\n%s", script)
 	}
 }

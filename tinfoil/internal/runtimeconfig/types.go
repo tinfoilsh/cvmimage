@@ -45,3 +45,7 @@ func ShimUpstreamSet(config *Config) bool {
 func HasReservedDebugContainer(config *Config) bool {
 	return sharedconfig.HasReservedDebugContainer(config)
 }
+
+func ParsePorts(ports []string) ([]sharedconfig.PortMapping, error) {
+	return sharedconfig.ParsePorts(ports)
+}

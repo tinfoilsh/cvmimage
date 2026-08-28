@@ -44,7 +44,7 @@ const (
 	StageIdentity       = "identity"
 	StageCPUAttestation = "cpu-attestation"
 	StageGPUAttestation = "gpu-attestation"
-	StageVaultSecrets   = "vault-secrets"
+	StageKBSSecrets     = "kbs-secrets"
 	StageCertificate    = "certificate"
 	StageRegistryAuth   = "registry-auth"
 	StageModels         = "models"
@@ -57,7 +57,7 @@ const (
 // Both boot and shim use this as the starting point.
 var InitialStages = []string{
 	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
-	StageVaultSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
+	StageKBSSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
 }
 
 // Tracker records boot stages as they complete.

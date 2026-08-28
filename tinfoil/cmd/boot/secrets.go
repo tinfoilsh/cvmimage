@@ -22,12 +22,13 @@ func prepareSecretHandoff(
 	collateralRequest wire.Request,
 ) (string, error) {
 	fetched := 0
-	if config.VaultURL != "" {
-		log.Println("Fetching vault secrets")
+	kbsURL := config.VaultURL
+	if kbsURL != "" {
+		log.Println("Fetching secrets from KBS")
 		var err error
-		fetched, err = fetchVaultSecrets(ctx, config, externalConfig, nodeID, collateralRequest)
+		fetched, err = fetchKBSSecrets(ctx, kbsURL, config, externalConfig, nodeID, collateralRequest)
 		if err != nil {
-			return "", fmt.Errorf("vault secret fetch failed: %w", err)
+			return "", fmt.Errorf("KBS secret fetch failed: %w", err)
 		}
 	}
 
@@ -44,10 +45,10 @@ func prepareSecretHandoff(
 
 	detail := fmt.Sprintf("handed off %d workload secret(s)", len(workloadSecrets))
 	if fetched != 0 {
-		return fmt.Sprintf("%s; fetched %d from vault", detail, fetched), nil
+		return fmt.Sprintf("%s; fetched %d from KBS", detail, fetched), nil
 	}
-	if config.VaultURL != "" {
+	if kbsURL != "" {
 		return detail + "; all declared secrets already populated", nil
 	}
-	return detail + "; vault not configured", nil
+	return detail + "; KBS not configured", nil
 }

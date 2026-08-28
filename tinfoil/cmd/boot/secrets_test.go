@@ -28,7 +28,7 @@ func TestPrepareSecretHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail != "handed off 1 workload secret(s); vault not configured" {
+	if detail != "handed off 1 workload secret(s); KBS not configured" {
 		t.Fatalf("detail = %q", detail)
 	}
 	store, err := secretstore.ReadHandoff(handoff, "config-digest", []string{"API_KEY"})

@@ -18,7 +18,7 @@ import (
 	shimconfig "tinfoil/internal/config"
 )
 
-func TestMergeVaultSecretsRequiresExactResponse(t *testing.T) {
+func TestMergeKBSSecretsRequiresExactResponse(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		secrets map[string]string
@@ -30,16 +30,16 @@ func TestMergeVaultSecretsRequiresExactResponse(t *testing.T) {
 		{name: "extra", secrets: map[string]string{"API_KEY": "value", "OTHER": "value"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := mergeVaultSecrets([]string{"API_KEY"}, test.secrets, &shimconfig.ExternalConfig{}); err == nil {
-				t.Fatal("invalid Vault response accepted")
+			if err := mergeKBSSecrets([]string{"API_KEY"}, test.secrets, &shimconfig.ExternalConfig{}); err == nil {
+				t.Fatal("invalid KBS response accepted")
 			}
 		})
 	}
 }
 
-func TestMergeVaultSecrets(t *testing.T) {
+func TestMergeKBSSecrets(t *testing.T) {
 	external := &shimconfig.ExternalConfig{Secrets: map[string]string{"EXISTING": "value"}}
-	if err := mergeVaultSecrets([]string{"API_KEY"}, map[string]string{"API_KEY": "secret"}, external); err != nil {
+	if err := mergeKBSSecrets([]string{"API_KEY"}, map[string]string{"API_KEY": "secret"}, external); err != nil {
 		t.Fatal(err)
 	}
 	if external.Secrets["API_KEY"] != "secret" || external.Secrets["EXISTING"] != "value" {
@@ -47,7 +47,7 @@ func TestMergeVaultSecrets(t *testing.T) {
 	}
 }
 
-func TestVaultChallengeAndFetchProtocol(t *testing.T) {
+func TestKBSChallengeAndFetchProtocol(t *testing.T) {
 	nonce := strings.Repeat("01", 32)
 	requests := 0
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -68,7 +68,7 @@ func TestVaultChallengeAndFetchProtocol(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, found := decoded["token"]; found {
-				t.Fatal("vault request carried a token")
+				t.Fatal("KBS request carried a token")
 			}
 			if string(decoded["nonce"]) != `"`+nonce+`"` ||
 				string(decoded["repo"]) != `"tinfoilsh/workload"` ||
@@ -83,11 +83,11 @@ func TestVaultChallengeAndFetchProtocol(t *testing.T) {
 		}
 	})}
 
-	challenge, err := vaultChallenge(context.Background(), client, "https://vault.example")
+	challenge, err := kbsChallenge(context.Background(), client, "https://kbs.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secrets, err := vaultFetch(context.Background(), client, "https://vault.example", vaultFetchRequest{
+	secrets, err := kbsFetch(context.Background(), client, "https://kbs.example", kbsFetchRequest{
 		Repo:       "tinfoilsh/workload",
 		SecretRefs: []string{"API_KEY"},
 		Nonce:      nonce,
@@ -101,23 +101,23 @@ func TestVaultChallengeAndFetchProtocol(t *testing.T) {
 	}
 }
 
-func TestVaultChallengeRejectsMalformedResponse(t *testing.T) {
+func TestKBSChallengeRejectsMalformedResponse(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusOK, `{"nonce":"00","extra":true}`), nil
 	})}
-	if _, err := vaultChallenge(context.Background(), client, "https://vault.example"); err == nil {
+	if _, err := kbsChallenge(context.Background(), client, "https://kbs.example"); err == nil {
 		t.Fatal("malformed challenge accepted")
 	}
 }
 
-func TestVaultClientRejectsRedirects(t *testing.T) {
-	client := vaultClient(tls.Certificate{})
+func TestKBSClientRejectsRedirects(t *testing.T) {
+	client := kbsClient(tls.Certificate{})
 	if err := client.CheckRedirect(&http.Request{}, nil); err != http.ErrUseLastResponse {
 		t.Fatalf("redirect error = %v", err)
 	}
 }
 
-func TestPrefetchVaultCollateral(t *testing.T) {
+func TestPrefetchKBSCollateral(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/attestation-collaterals" {
 			t.Fatalf("path = %s", request.URL.Path)
@@ -159,7 +159,7 @@ func TestPrefetchVaultCollateral(t *testing.T) {
 	if persisted != collateralRequest {
 		t.Fatalf("persisted request = %#v, want %#v", persisted, collateralRequest)
 	}
-	collateral, err := prefetchVaultCollateral(context.Background(), config, collateralRequest)
+	collateral, err := prefetchKBSCollateral(context.Background(), config, collateralRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

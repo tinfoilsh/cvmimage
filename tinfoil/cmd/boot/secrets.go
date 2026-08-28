@@ -22,7 +22,7 @@ func prepareSecretHandoff(
 	collateralRequest wire.Request,
 ) (string, error) {
 	fetched := 0
-	kbsURL := config.KeyBrokerURL()
+	kbsURL := config.KBSURL
 	if kbsURL != "" {
 		log.Println("Fetching secrets from KBS")
 		var err error

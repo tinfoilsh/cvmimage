@@ -9,12 +9,21 @@ let
     "tzdata-1.19.patch"
   ];
   upstreamGo = pkgs.go_1_26.overrideAttrs (old: {
-    patches = builtins.filter (
+    version = "1.27.1";
+    src = pkgs.fetchurl {
+      url = "https://go.dev/dl/go1.27.1.src.tar.gz";
+      hash = "sha256-TkCKuuEm2Ra2FkYnGT8sVPDjyhMS1pO4bbRfhiqyOLE=";
+    };
+    patches = builtins.map (patch:
+      if pkgs.lib.hasSuffix "go_no_vendor_checks-1.26.patch" (builtins.baseNameOf (toString patch))
+      then ./go_no_vendor_checks-1.27.patch
+      else patch
+    ) (builtins.filter (
       patch:
       !pkgs.lib.any (
         suffix: pkgs.lib.hasSuffix suffix (builtins.baseNameOf (toString patch))
       ) nixRuntimePatchSuffixes
-    ) old.patches;
+    ) old.patches);
   });
   buildGoModule = pkgs.buildGoModule.override { go = upstreamGo; };
   cgoEnv = {
@@ -29,7 +38,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-goV23tkT83U7G/j6Yw5WCE3sBFxTkiEOXjg1fuPrSUo=";
+    vendorHash = "sha256-rVJ1ThCfjndfCzZxEEz+ueRAx5/FhFG7k3DkGT0ZDAw=";
     ldflags = [
       "-s"
       "-w"

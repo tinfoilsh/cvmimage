@@ -1,6 +1,6 @@
 module tinfoil
 
-go 1.26.6
+go 1.27.1
 
 require (
 	github.com/containerd/errdefs v1.0.0
@@ -21,6 +21,7 @@ require (
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.3.2
 	github.com/tinfoilsh/modelwrap v0.2.1
 	github.com/tinfoilsh/tinfoil-config v0.1.13
+	github.com/tinfoilsh/tinfoil-go v0.15.8-0.20260922190603-5ac22aacbb4c
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/time v0.15.0
@@ -54,7 +55,6 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/tinfoilsh/tinfoil-go v0.15.1-0.20260828100839-55b5eae365cb
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect

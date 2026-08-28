@@ -126,7 +126,7 @@ func TestPrefetchVaultCollateral(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&collateralRequest); err != nil {
 			t.Fatal(err)
 		}
-		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Platform != "sev-snp" {
+		if collateralRequest.DeploymentID != "deployment-private" || collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Platform != "sev-snp" {
 			t.Fatalf("request = %#v", collateralRequest)
 		}
 		quote, err := base64.StdEncoding.DecodeString(collateralRequest.QuoteBase64)
@@ -141,7 +141,7 @@ func TestPrefetchVaultCollateral(t *testing.T) {
 	defer server.Close()
 
 	config := &Config{ShimCfg: &shimconfig.Config{ATC: server.URL}}
-	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{Repo: "tinfoilsh/workload", Tag: "v1.2.3"}}
+	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{ID: "deployment-private", Repo: "tinfoilsh/workload", Tag: "v1.2.3"}}
 	cpu := &CPUAttestation{RawReport: []byte("raw quote"), Platform: "sev-snp"}
 	path := t.TempDir() + "/collateral-request.json"
 	collateralRequest, err := writeCollateralRequest(path, cpu, external)

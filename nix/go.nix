@@ -9,6 +9,11 @@ let
     "tzdata-1.19.patch"
   ];
   upstreamGo = pkgs.go_1_26.overrideAttrs (old: {
+    version = "1.26.6";
+    src = pkgs.fetchurl {
+      url = "https://go.dev/dl/go1.26.6.src.tar.gz";
+      hash = "sha256-oHIcVMaIkBRI13rZs+x+p8R0cwdV/4kTgukuy5P/LLE=";
+    };
     patches = builtins.filter (
       patch:
       !pkgs.lib.any (
@@ -29,7 +34,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-Pai94mgQANx1SwSCTqfgO5xGeKmEIjxsSeRsNk3LnYk=";
+    vendorHash = "sha256-WslpucII2VzZ3z0O6gscEbIJAk4hKzJkoEhQIC4LnYE=";
     ldflags = [
       "-s"
       "-w"

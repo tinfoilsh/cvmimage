@@ -24,3 +24,12 @@ func RequireBearer(apiKey string, w http.ResponseWriter, r *http.Request) bool {
 	}
 	return true
 }
+
+// RequireConfiguredBearer returns 401 unless a non-empty expected token is configured and supplied.
+func RequireConfiguredBearer(apiKey string, w http.ResponseWriter, r *http.Request) bool {
+	if apiKey == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return RequireBearer(apiKey, w, r)
+}

@@ -117,7 +117,7 @@ func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) ht
 	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !auth.RequireBearer(metricsAPIKey, w, r) {
+		if !auth.RequireConfiguredBearer(metricsAPIKey, w, r) {
 			return
 		}
 

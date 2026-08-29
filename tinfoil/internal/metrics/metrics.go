@@ -139,7 +139,7 @@ func collectMetrics(metadata *config.Metadata) (*Metrics, error) {
 
 func HandleMetrics(externalConfig *config.ExternalConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !auth.RequireBearer(externalConfig.MetricsAPIKey, w, r) {
+		if !auth.RequireConfiguredBearer(externalConfig.MetricsAPIKey, w, r) {
 			return
 		}
 

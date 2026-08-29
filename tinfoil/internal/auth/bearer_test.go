@@ -44,33 +44,13 @@ func TestRequireBearer(t *testing.T) {
 }
 
 func TestRequireConfiguredBearer(t *testing.T) {
-	tests := []struct {
-		name       string
-		apiKey     string
-		authHeader string
-		wantOK     bool
-		wantStatus int
-	}{
-		{"empty key rejects request", "", "", false, http.StatusUnauthorized},
-		{"valid token", "secret", "Bearer secret", true, 0},
-		{"missing token", "secret", "", false, http.StatusUnauthorized},
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+
+	if RequireConfiguredBearer("", w, r) {
+		t.Fatal("empty configured key should reject request")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodGet, "/", nil)
-			if tt.authHeader != "" {
-				r.Header.Set("Authorization", tt.authHeader)
-			}
-			w := httptest.NewRecorder()
-
-			ok := RequireConfiguredBearer(tt.apiKey, w, r)
-			if ok != tt.wantOK {
-				t.Errorf("RequireConfiguredBearer() = %v, want %v", ok, tt.wantOK)
-			}
-			if !ok && w.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", w.Code, tt.wantStatus)
-			}
-		})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }

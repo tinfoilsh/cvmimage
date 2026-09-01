@@ -24,6 +24,7 @@ const (
 	ServiceContainers Service = "tinfoil-containers"
 	ServiceEgress     Service = "tinfoil-egress"
 	ServiceShim       Service = "tinfoil-shim"
+	ServiceVolumes    Service = "tinfoil-volume-worker"
 )
 
 type servicePolicy struct {
@@ -98,6 +99,26 @@ var restrictedServiceSyscalls = append([]uint32{
 	unix.SYS_UNSHARE,
 }, kernelManagementSyscalls...)
 
+var volumeServiceSyscalls = append([]uint32{
+	unix.SYS_CHROOT,
+	unix.SYS_CLONE3,
+	unix.SYS_FANOTIFY_INIT,
+	unix.SYS_FSCONFIG,
+	unix.SYS_FSMOUNT,
+	unix.SYS_FSOPEN,
+	unix.SYS_FSPICK,
+	unix.SYS_MOUNT_SETATTR,
+	unix.SYS_MOVE_MOUNT,
+	unix.SYS_NAME_TO_HANDLE_AT,
+	unix.SYS_OPEN_TREE,
+	unix.SYS_OPEN_TREE_ATTR,
+	unix.SYS_PIVOT_ROOT,
+	unix.SYS_SETDOMAINNAME,
+	unix.SYS_SETHOSTNAME,
+	unix.SYS_SETNS,
+	unix.SYS_UNSHARE,
+}, kernelManagementSyscalls...)
+
 // A non-nil empty boundCapabilities list means that no capabilities are
 // permitted. Boot is a one-shot privileged helper: its fixed set covers
 // device-mapper/mount operations, nftables, and mapper-node creation.
@@ -126,6 +147,14 @@ func policyFor(service Service) (servicePolicy, bool) {
 		)
 		policy.exposeAttestationDevices = true
 		return policy, true
+	case ServiceVolumes:
+		return servicePolicy{
+			noNewPrivileges:      true,
+			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN},
+			deniedSyscalls:       volumeServiceSyscalls,
+			restrictNamespaceOps: true,
+			allowedSocketDomains: []uint32{unix.AF_UNIX},
+		}, true
 	default:
 		return servicePolicy{}, false
 	}

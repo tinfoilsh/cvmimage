@@ -12,6 +12,7 @@ type Config = sharedconfig.Config
 type CVMNetworkConfig = sharedconfig.CVMNetworkConfig
 type NetworkSpec = sharedconfig.NetworkSpec
 type ModelSpec = sharedconfig.ModelSpec
+type VolumeSpec = sharedconfig.VolumeSpec
 type Container = sharedconfig.Container
 type Healthcheck = sharedconfig.Healthcheck
 

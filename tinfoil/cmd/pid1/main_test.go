@@ -18,6 +18,7 @@ import (
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
+	"tinfoil/internal/runtimeconfig"
 )
 
 type fakeServices struct {
@@ -70,6 +71,7 @@ type lifecycleHarness struct {
 	readiness *readinessState
 	ready     chan bool
 	existing  map[string]bool
+	config    runtimeconfig.Config
 }
 
 type fakeConsole struct{}
@@ -104,6 +106,9 @@ func newLifecycleHarness() *lifecycleHarness {
 		syslog:       func(context.Context) {},
 		exists: func(path string) (bool, error) {
 			return harness.existing[path], nil
+		},
+		measuredConfig: func() (*runtimeconfig.Config, error) {
+			return &harness.config, nil
 		},
 	}
 	return harness
@@ -829,5 +834,40 @@ func TestHardeningWrapperAppliesPolicyBeforeExec(t *testing.T) {
 	want := []string{"apply:tinfoil-shim", "exec:/usr/bin/tinfoil-shim"}
 	if fmt.Sprint(calls) != fmt.Sprint(want) {
 		t.Fatalf("dispatch calls = %v, want %v", calls, want)
+	}
+}
+
+func TestVolumeWorkersStartPerDeclaredVolume(t *testing.T) {
+	harness := newLifecycleHarness()
+	harness.config = runtimeconfig.Config{
+		Models:  []runtimeconfig.ModelSpec{{Name: "one"}, {Name: "two"}},
+		Volumes: []runtimeconfig.VolumeSpec{{Name: "state"}, {Name: "workspace", Exec: true, Owner: 1000}},
+	}
+	if err := startVolumeWorkers(context.Background(), harness.deps); err != nil {
+		t.Fatal(err)
+	}
+	started := harness.services.started
+	if len(started) != 2 {
+		t.Fatalf("started %d services, want 2", len(started))
+	}
+	want := [][]string{
+		{"tinfoil-volume-state", "--models=2", "--index=0", "--name=state", "--exec=false", "--owner=0"},
+		{"tinfoil-volume-workspace", "--models=2", "--index=1", "--name=workspace", "--exec=true", "--owner=1000"},
+	}
+	for index, service := range started {
+		if service.Name != want[index][0] || service.Command.Name != want[index][0] {
+			t.Fatalf("service %d named %q/%q, want %q", index, service.Name, service.Command.Name, want[index][0])
+		}
+		if service.Restart || service.Required {
+			t.Fatalf("service %d is supervised as restart=%t required=%t", index, service.Restart, service.Required)
+		}
+		if service.Ready == nil {
+			t.Fatalf("service %d has no readiness probe", index)
+		}
+		args := []string{"--exec-service", string(hardening.ServiceVolumes), "--", boot.VolumeWorkerBinary}
+		args = append(args, want[index][1:]...)
+		if fmt.Sprint(service.Command.Args) != fmt.Sprint(args) {
+			t.Fatalf("service %d args = %v, want %v", index, service.Command.Args, args)
+		}
 	}
 }

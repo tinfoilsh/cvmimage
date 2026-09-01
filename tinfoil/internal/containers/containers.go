@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -521,7 +522,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 
 	// Volume mounts
 	for _, vol := range c.Volumes {
-		hostConfig.Binds = append(hostConfig.Binds, vol)
+		hostConfig.Binds = append(hostConfig.Binds, volumeBinds(vol, cfg)...)
 	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
@@ -564,6 +565,20 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 
 	return containerConfig, hostConfig, networkingConfig, rest, nil
+}
+
+func volumeBinds(vol string, cfg *Config) []string {
+	source, target, found := strings.Cut(vol, ":")
+	if !found || cfg == nil || !slices.ContainsFunc(cfg.Volumes, func(v runtimeconfig.VolumeSpec) bool {
+		return v.Name == source
+	}) {
+		return []string{vol}
+	}
+	control := boot.VolumeControlDir + "/" + source
+	return []string{
+		boot.VolumeDataDir + "/" + source + ":" + target + ":rslave",
+		control + ":" + control + ":ro",
+	}
 }
 
 func gatewayPriorityForNetwork(cfg *Config, name string) int {

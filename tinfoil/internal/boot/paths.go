@@ -37,6 +37,9 @@ const (
 	// NVIDIABootstrapStatusPath is the fixed PID 1 to tinfoil-boot handoff
 	// for NVIDIA bring-up readiness.
 	NVIDIABootstrapStatusPath = "/run/tinfoil/nvidia-bootstrap-status"
+	VolumeControlDir          = "/run/tinfoil/volumes"
+	VolumeDataDir             = "/run/tinfoil/volumedata"
+	VolumeSocketName          = "control.sock"
 	ContainersReadyPath       = "/run/tinfoil/containers.ready"
 	ShimPIDPath               = "/run/tinfoil/pids/tinfoil-shim.pid"
 	EgressPIDPath             = "/run/tinfoil/pids/tinfoil-egress.pid"
@@ -49,12 +52,13 @@ const (
 	HTTPChallengePort = 80
 
 	// InitBinary is PID 1 after the measured root replaces the initrd.
-	InitBinary       = "/usr/bin/tinfoil-pid1"
-	BootBinary       = "/usr/bin/tinfoil-boot"
-	ContainersBinary = "/usr/bin/tinfoil-containers"
-	ContainersSocket = "/run/tinfoil/containers.sock"
-	EgressBinary     = "/usr/bin/tinfoil-egress"
-	ShimBinary       = "/usr/bin/tinfoil-shim"
+	InitBinary         = "/usr/bin/tinfoil-pid1"
+	BootBinary         = "/usr/bin/tinfoil-boot"
+	ContainersBinary   = "/usr/bin/tinfoil-containers"
+	ContainersSocket   = "/run/tinfoil/containers.sock"
+	EgressBinary       = "/usr/bin/tinfoil-egress"
+	VolumeWorkerBinary = "/usr/bin/tinfoil-volume-worker"
+	ShimBinary         = "/usr/bin/tinfoil-shim"
 
 	// ExternalNICPCIAddress is the measured virtio-net topology ABI. It MUST
 	// match tinfoild/admin/guest_topology.go.

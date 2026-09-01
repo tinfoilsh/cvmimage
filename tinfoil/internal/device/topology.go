@@ -246,3 +246,55 @@ func findPartition(diskPath string, partition int) (string, error) {
 	}
 	return "", fmt.Errorf("partition %d on %s not found", partition, diskPath)
 }
+
+func StorageSlots(modelCount, volumeCount int) error {
+	if modelCount < 0 || volumeCount < 0 {
+		return fmt.Errorf("invalid disk counts %d models and %d storage volumes", modelCount, volumeCount)
+	}
+	if modelCount+volumeCount > MaxModelDisks {
+		return fmt.Errorf(
+			"%d models and %d storage volumes exceed the %d measured PCI disk slots",
+			modelCount, volumeCount, MaxModelDisks,
+		)
+	}
+	return nil
+}
+
+func StoragePartition(modelCount, index int) (string, error) {
+	pciAddress, err := storageDiskPCIAddress(modelCount, index)
+	if err != nil {
+		return "", err
+	}
+	return waitForDevice(func() (string, error) {
+		disk, err := findDiskByPCIAddress(pciAddress, storageDiskSerial(index))
+		if err != nil {
+			return "", err
+		}
+		return findPartition(disk, 1)
+	})
+}
+
+func StorageDisk(modelCount, index int) (string, error) {
+	pciAddress, err := storageDiskPCIAddress(modelCount, index)
+	if err != nil {
+		return "", err
+	}
+	return waitForDevice(func() (string, error) {
+		return findDiskByPCIAddress(pciAddress, storageDiskSerial(index))
+	})
+}
+
+func storageDiskSerial(index int) string {
+	return fmt.Sprintf("tinfoil-volume%d", index+1)
+}
+
+func storageDiskPCIAddress(modelCount, index int) (string, error) {
+	if modelCount < 0 || index < 0 {
+		return "", fmt.Errorf("invalid storage volume position %d after %d models", index, modelCount)
+	}
+	slot := firstModelDiskPCISlot + modelCount + index
+	if slot > lastUsableDiskPCISlot {
+		return "", fmt.Errorf("storage volume %d exceeds the measured PCI slot range", index)
+	}
+	return fmt.Sprintf("0000:00:%02x.0", slot), nil
+}

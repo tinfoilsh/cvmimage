@@ -29,7 +29,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-9f9sq2kL9hukQD+QESObGt5XRHNHz5zLSG3oRAhAPKc=";
+    vendorHash = "sha256-HcGgMM5kxlB4n2fqjslBq4DAXTLEQ4s/7vai79h3DTY=";
     ldflags = [
       "-s"
       "-w"
@@ -60,11 +60,13 @@ let
       "cmd/egress"
       "cmd/pid1"
       "cmd/shim"
+      "cmd/volumeworker"
     ];
     postInstall = ''
       for command in boot containers egress pid1 shim; do
         mv "$out/bin/$command" "$out/bin/tinfoil-$command"
       done
+      mv "$out/bin/volumeworker" "$out/bin/tinfoil-volume-worker"
     '';
   };
 

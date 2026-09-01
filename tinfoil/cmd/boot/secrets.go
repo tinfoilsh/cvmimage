@@ -22,12 +22,12 @@ func prepareSecretHandoff(
 	collateralRequest wire.Request,
 ) (string, error) {
 	fetched := 0
-	if config.VaultURL != "" {
-		log.Println("Fetching vault secrets")
+	if config.KeyserverURL != "" {
+		log.Println("Fetching keyserver secrets")
 		var err error
-		fetched, err = fetchVaultSecrets(ctx, config, externalConfig, nodeID, collateralRequest)
+		fetched, err = fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest)
 		if err != nil {
-			return "", fmt.Errorf("vault secret fetch failed: %w", err)
+			return "", fmt.Errorf("keyserver secret fetch failed: %w", err)
 		}
 	}
 
@@ -44,10 +44,10 @@ func prepareSecretHandoff(
 
 	detail := fmt.Sprintf("handed off %d workload secret(s)", len(workloadSecrets))
 	if fetched != 0 {
-		return fmt.Sprintf("%s; fetched %d from vault", detail, fetched), nil
+		return fmt.Sprintf("%s; fetched %d from keyserver", detail, fetched), nil
 	}
-	if config.VaultURL != "" {
+	if config.KeyserverURL != "" {
 		return detail + "; all declared secrets already populated", nil
 	}
-	return detail + "; vault not configured", nil
+	return detail + "; keyserver not configured", nil
 }

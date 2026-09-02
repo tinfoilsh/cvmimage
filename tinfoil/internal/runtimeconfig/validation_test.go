@@ -42,6 +42,8 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		want  string
 	}{
 		{name: "valid", yaml: validConfig},
+		{name: "keyserver URL", yaml: validConfig + "keyserver-url: https://keys.example.com\n"},
+		{name: "obsolete vault URL", yaml: validConfig + "vault-url: https://keys.example.com\n", want: "field vault-url not found"},
 		{name: "unknown field", yaml: validConfig + "unknown: true\n", want: "field unknown not found"},
 		{name: "unknown container field", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    typo: true", 1), want: "unknown container field"},
 		{name: "duplicate container field", yaml: strings.Replace(validConfig, "networks: [app]", "image: duplicate\n    networks: [app]", 1), want: "duplicate container field"},

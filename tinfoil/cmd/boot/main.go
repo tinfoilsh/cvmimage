@@ -163,10 +163,10 @@ func run(ctx context.Context, invocation invocation) error {
 	start = time.Now()
 	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, invocation.configHash, nodeID, collateralRequest)
 	if err != nil {
-		tracker.Record(boot.StageVaultSecrets, boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record(boot.StageKeyserverSecrets, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	tracker.Record(boot.StageVaultSecrets, boot.StatusOK, time.Since(start), secretDetail)
+	tracker.Record(boot.StageKeyserverSecrets, boot.StatusOK, time.Since(start), secretDetail)
 
 	// 8. Registry auth
 	start = time.Now()

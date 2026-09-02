@@ -161,7 +161,10 @@ func run(ctx context.Context, invocation invocation) error {
 
 	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, invocation.configHash, nodeID, collateralRequest)
+	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, invocation.configHash, invocation.debug,
+		func(ctx context.Context, names []string) (map[string]string, error) {
+			return fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest, names)
+		})
 	if err != nil {
 		tracker.Record(boot.StageKeyserverSecrets, boot.StatusFailed, time.Since(start), err.Error())
 		return err

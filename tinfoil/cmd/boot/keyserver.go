@@ -21,7 +21,6 @@ import (
 	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/secretstore"
 )
 
 const (
@@ -41,53 +40,49 @@ type keyserverFetchRequest struct {
 	Document   json.RawMessage `json:"document"`
 }
 
-// fetchKeyserverSecrets asks the keyserver for the declared secrets the
-// external config did not populate. The keyserver authenticates a fresh v3
-// document and binds it to the mTLS certificate before releasing any value.
+// fetchKeyserverSecrets asks the keyserver for the named declared secrets.
+// The keyserver authenticates a fresh v3 document and binds it to the mTLS
+// certificate before releasing any value.
 func fetchKeyserverSecrets(
 	ctx context.Context,
 	config *Config,
 	ext *shimconfig.ExternalConfig,
 	nodeID *NodeIdentity,
 	collateralRequest wire.Request,
-) (int, error) {
-	names := secretstore.MissingReferences(config, ext)
-	if len(names) == 0 {
-		log.Println("All declared secrets populated by external config, nothing to fetch")
-		return 0, nil
-	}
+	names []string,
+) (map[string]string, error) {
 	if ext == nil || ext.Metadata.Repo == "" {
-		return 0, fmt.Errorf("keyserver secret fetch requires repository metadata")
+		return nil, fmt.Errorf("keyserver secret fetch requires repository metadata")
 	}
 	if nodeID == nil {
-		return 0, fmt.Errorf("keyserver secret fetch requires boot identity")
+		return nil, fmt.Errorf("keyserver secret fetch requires boot identity")
 	}
 	if _, err := keyserverBaseURL(config.KeyserverURL); err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	cert, err := tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
 	if err != nil {
-		return 0, fmt.Errorf("loading enclave TLS certificate: %w", err)
+		return nil, fmt.Errorf("loading enclave TLS certificate: %w", err)
 	}
 
 	// Fetch collateral before obtaining the short-lived challenge nonce. The
 	// final document carries this untrusted transport for offline verification.
 	collateral, err := prefetchKeyserverCollateral(ctx, config, collateralRequest)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	client := keyserverClient(cert)
 	nonce, err := keyserverChallenge(ctx, client, config.KeyserverURL)
 	if err != nil {
-		return 0, fmt.Errorf("requesting keyserver challenge: %w", err)
+		return nil, fmt.Errorf("requesting keyserver challenge: %w", err)
 	}
 	var nonce32 [envelope.NonceSize]byte
 	copy(nonce32[:], nonce)
 	deviceEvidence, err := attestation.CollectDeviceEvidence(nonce32, config.GPUs)
 	if err != nil {
-		return 0, fmt.Errorf("collecting keyserver device evidence: %w", err)
+		return nil, fmt.Errorf("collecting keyserver device evidence: %w", err)
 	}
 
 	identityBody := nodeID.attestationBody()
@@ -99,11 +94,11 @@ func fetchKeyserverSecrets(
 		collateral,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("building keyserver attestation: %w", err)
+		return nil, fmt.Errorf("building keyserver attestation: %w", err)
 	}
 	documentJSON, err := json.Marshal(document)
 	if err != nil {
-		return 0, fmt.Errorf("marshaling keyserver attestation: %w", err)
+		return nil, fmt.Errorf("marshaling keyserver attestation: %w", err)
 	}
 
 	secrets, err := keyserverFetch(ctx, client, config.KeyserverURL, keyserverFetchRequest{
@@ -113,13 +108,10 @@ func fetchKeyserverSecrets(
 		Document:   documentJSON,
 	})
 	if err != nil {
-		return 0, err
-	}
-	if err := mergeKeyserverSecrets(names, secrets, ext); err != nil {
-		return 0, err
+		return nil, err
 	}
 	log.Printf("Keyserver released %d secret(s) for %s", len(secrets), ext.Metadata.Repo)
-	return len(secrets), nil
+	return secrets, nil
 }
 
 func prefetchKeyserverCollateral(

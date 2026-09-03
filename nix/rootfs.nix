@@ -29,6 +29,7 @@ let
     "etc/gai.conf"
     "etc/ld.so.conf"
     "etc/ld.so.conf.d"
+    "etc/mke2fs.conf"
     "etc/netconfig"
     "etc/ssl/openssl.cnf"
     "usr/bin/ip"
@@ -40,6 +41,8 @@ let
     "usr/lib64/ld-linux-x86-64.so.2"
     "usr/sbin/ip"
     "usr/sbin/ldconfig"
+    "usr/sbin/mke2fs"
+    "usr/sbin/mkfs.ext4"
     "usr/sbin/nft"
   ];
 
@@ -184,7 +187,7 @@ let
       install_new 0755 "$docker/$command" "$root/usr/bin/$command"
     done
 
-    for command in boot containers egress pid1 shim; do
+    for command in boot containers egress pid1 shim volume-worker; do
       install_new 0755 ${runtimeGo}/bin/tinfoil-$command \
         "$root/usr/bin/tinfoil-$command"
     done

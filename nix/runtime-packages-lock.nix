@@ -1,5 +1,5 @@
 # This is a generated file.  Do not modify!
-# Following are the Debian packages constituting the closure of: ca-certificates iproute2 nftables libc6 libc-bin libcap2 libxml2-16 libstdc++6 libgcc-s1 zlib1g libtirpc3t64 libtirpc-common libseccomp2
+# Following are the Debian packages constituting the closure of: ca-certificates e2fsprogs iproute2 nftables libc6 libc-bin libcap2 libxml2-16 libstdc++6 libgcc-s1 zlib1g libtirpc3t64 libtirpc-common libseccomp2
 
 { fetchurl }:
 
@@ -95,6 +95,69 @@
   [
 
     (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/logsave_1.47.2-3ubuntu4_amd64.deb";
+      sha256 = "465cb25b468c5f6e883f3ae46c044506e14cdd1aed539a9cc19ce1be8a31d517";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/u/util-linux/libblkid1_2.41.3-3ubuntu2_amd64.deb";
+      sha256 = "f2caf1f807c0b203e5f4545c3010ac34b2dd5f546704e5b1b9c62a41d483771e";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libcom-err2_1.47.2-3ubuntu4_amd64.deb";
+      sha256 = "180b6ea0b9c07d4fd2ede79e29ee8eca830cd9384f856507e28dc24d1d3ae514";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libext2fs2t64_1.47.2-3ubuntu4_amd64.deb";
+      sha256 = "0c58fa90fcb38c1bcc0dbce47b105c60c990128e0220b087f4513d82499d404e";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libss2_1.47.2-3ubuntu4_amd64.deb";
+      sha256 = "08d28bd0e1402f45c1e7c9b28cc65ec55442876217c9f553e8836c0622a71509";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/u/util-linux/libuuid1_2.41.3-3ubuntu2_amd64.deb";
+      sha256 = "ea9d94da2fb6564391145f3a9630c140c8dd771a38ae753983e8dc55cc22e102";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/e2fsprogs_1.47.2-3ubuntu4_amd64.deb";
+      sha256 = "a4343a8c026e1ca8e2e76a5d01abb8c2d6381961a1766b2d2363e3e23cc362ca";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
       url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/elfutils/libelf1t64_0.194-4_amd64.deb";
       sha256 = "c2feae172b14d2a8317348023c5e0b6572314c097a9f7b8225c62b0988cc8d92";
     })
@@ -160,15 +223,6 @@
     (fetchurl {
       url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/k/krb5/libkrb5support0_1.22.1-2ubuntu4_amd64.deb";
       sha256 = "f9cfb4ba27d0745cbfc7c064cc68f15ea3d6b144a4fd1da9c5f83fe30008aef7";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libcom-err2_1.47.2-3ubuntu4_amd64.deb";
-      sha256 = "180b6ea0b9c07d4fd2ede79e29ee8eca830cd9384f856507e28dc24d1d3ae514";
     })
 
   ]

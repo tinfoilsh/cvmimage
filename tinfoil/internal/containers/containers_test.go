@@ -12,6 +12,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
 
@@ -321,5 +322,34 @@ func TestBuildContainerCreateSpec_PublishesDeclaredPorts(t *testing.T) {
 	}
 	if bindings[0].HostIP.String() != containernet.PublishedHostIP {
 		t.Fatalf("HostIP = %s, want %s", bindings[0].HostIP, containernet.PublishedHostIP)
+	}
+}
+
+func TestBuildContainerCreateSpec_DeclaredVolumeBecomesPropagatedBind(t *testing.T) {
+	cfg := &Config{
+		Networks: map[string]*NetworkSpec{},
+		Volumes:  []runtimeconfig.VolumeSpec{{Name: "workspace"}},
+	}
+	c := Container{
+		Name:    "app",
+		Image:   "example.invalid/app",
+		Volumes: []string{"workspace:/workspace", "other:/other"},
+	}
+
+	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	if err != nil {
+		t.Fatalf("buildContainerCreateSpec: %v", err)
+	}
+	for _, want := range []string{
+		boot.VolumeDataDir + "/workspace:/workspace:rslave",
+		boot.VolumeControlDir + "/workspace:" + boot.VolumeControlDir + "/workspace:ro",
+		"other:/other",
+	} {
+		if !slices.Contains(hostConfig.Binds, want) {
+			t.Fatalf("Binds = %v, want %q", hostConfig.Binds, want)
+		}
+	}
+	if slices.Contains(hostConfig.Binds, "workspace:/workspace") {
+		t.Fatalf("Binds = %v, want the declared volume resolved to its measured mount", hostConfig.Binds)
 	}
 }

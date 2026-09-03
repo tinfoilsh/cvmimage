@@ -42,6 +42,13 @@ func TestServicePoliciesAreExact(t *testing.T) {
 			restrictNamespaceOps:     true,
 			allowedSocketDomains:     []uint32{unix.AF_INET, unix.AF_INET6},
 		},
+		ServiceVolumes: {
+			noNewPrivileges:      true,
+			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN},
+			deniedSyscalls:       volumeServiceSyscalls,
+			restrictNamespaceOps: true,
+			allowedSocketDomains: []uint32{unix.AF_UNIX},
+		},
 	}
 	for service, wantPolicy := range want {
 		got, ok := policyFor(service)

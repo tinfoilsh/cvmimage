@@ -206,6 +206,59 @@ func TestModelDiskBounds(t *testing.T) {
 	}
 }
 
+func TestStoragePartitionUsesConfigOrder(t *testing.T) {
+	fixture := withFixture(t)
+	addPCIDisk(t, fixture, "0000:00:0a.0", "sdd")
+	mustWrite(t, filepath.Join(fixture.sys, "sdd", "serial"), storageDiskSerial(1)+"\n")
+	addPartition(t, fixture, "sdd", "sdd1", 1)
+
+	partition, err := StoragePartition(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(fixture.dev, "sdd1"); partition != want {
+		t.Fatalf("StoragePartition(2, 1) = %q, want %q", partition, want)
+	}
+}
+
+func TestStorageSlots(t *testing.T) {
+	if err := StorageSlots(2, MaxModelDisks-2); err != nil {
+		t.Fatal(err)
+	}
+	for _, counts := range [][2]int{{-1, 1}, {1, -1}, {2, MaxModelDisks - 1}} {
+		if err := StorageSlots(counts[0], counts[1]); err == nil {
+			t.Fatalf("StorageSlots(%d, %d) succeeded", counts[0], counts[1])
+		}
+	}
+}
+
+func TestStorageDiskBounds(t *testing.T) {
+	for name, test := range map[string]struct {
+		models int
+		index  int
+		want   string
+	}{
+		"first":        {models: 0, index: 0, want: "0000:00:07.0"},
+		"after models": {models: 2, index: 1, want: "0000:00:0a.0"},
+		"last":         {models: MaxModelDisks - 1, index: 0, want: "0000:00:1e.0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := storageDiskPCIAddress(test.models, test.index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("storageDiskPCIAddress(%d, %d) = %q, want %q", test.models, test.index, got, test.want)
+			}
+		})
+	}
+	for _, position := range [][2]int{{-1, 0}, {0, -1}, {MaxModelDisks, 1}} {
+		if _, err := storageDiskPCIAddress(position[0], position[1]); err == nil {
+			t.Fatalf("storageDiskPCIAddress(%d, %d) succeeded", position[0], position[1])
+		}
+	}
+}
+
 func addPCIDisk(t *testing.T, fixture deviceFixture, controller, name string) {
 	t.Helper()
 	blockDir := filepath.Join(

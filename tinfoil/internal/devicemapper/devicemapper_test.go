@@ -119,6 +119,26 @@ func TestTableLoadBuffer(t *testing.T) {
 	}
 }
 
+func TestCryptTableLoadBufferFlags(t *testing.T) {
+	for name, test := range map[string]struct {
+		flags uint32
+		want  uint32
+	}{
+		"read-only": {flags: readOnlyFlag, want: readOnlyFlag | existsFlag | secureDataFlag},
+		"writable":  {flags: 0, want: existsFlag | secureDataFlag},
+	} {
+		t.Run(name, func(t *testing.T) {
+			buf, err := cryptTableBuffer("crypt", 8, []byte("params"), test.flags)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := binary.LittleEndian.Uint32(buf[28:32]); got != test.want {
+				t.Fatalf("flags = %#x, want %#x", got, test.want)
+			}
+		})
+	}
+}
+
 func TestTableLoadBufferRejectsEmbeddedNUL(t *testing.T) {
 	for name, tc := range map[string]struct {
 		targetType string

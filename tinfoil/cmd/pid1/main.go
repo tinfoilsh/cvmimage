@@ -8,7 +8,9 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +24,7 @@ import (
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
+	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
 
@@ -41,6 +44,7 @@ const (
 	containersName    = "tinfoil-containers"
 	shimName          = "tinfoil-shim"
 	egressName        = "tinfoil-egress"
+	volumesName       = "tinfoil-volume"
 	persistencedName  = "nvidia-persistenced"
 	fabricManagerName = "nvidia-fabricmanager"
 	containerdSocket  = "/run/containerd/containerd.sock"
@@ -102,21 +106,22 @@ type consoleControl interface {
 }
 
 type lifecycleDeps struct {
-	services     serviceControl
-	startConsole func(context.Context) (consoleControl, error)
-	oneShot      func(context.Context, supervisor.Command) error
-	nvidia       func(context.Context) error
-	lockModules  func() error
-	debugFailure func(context.Context, error)
-	setupFS      func(pidruntime.LogFunc) error
-	sysctls      func(pidruntime.LogFunc) error
-	ramdisk      func(pidruntime.LogFunc) error
-	limits       func() error
-	syslog       func(context.Context)
-	exists       func(string) (bool, error)
-	term         time.Duration
-	kill         time.Duration
-	cmdline      kernelcmdline.Values
+	services       serviceControl
+	startConsole   func(context.Context) (consoleControl, error)
+	oneShot        func(context.Context, supervisor.Command) error
+	nvidia         func(context.Context) error
+	lockModules    func() error
+	debugFailure   func(context.Context, error)
+	setupFS        func(pidruntime.LogFunc) error
+	sysctls        func(pidruntime.LogFunc) error
+	ramdisk        func(pidruntime.LogFunc) error
+	limits         func() error
+	syslog         func(context.Context)
+	exists         func(string) (bool, error)
+	measuredConfig func() (*runtimeconfig.Config, error)
+	term           time.Duration
+	kill           time.Duration
+	cmdline        kernelcmdline.Values
 }
 
 func run(parent context.Context) (result error) {
@@ -150,16 +155,19 @@ func run(parent context.Context) (result error) {
 			)
 		},
 		debugFailure: parkDebugFailure,
-		lockModules:  hardening.LockKernelModules,
-		setupFS:      pidruntime.SetupFilesystems,
-		sysctls:      pidruntime.ApplySysctls,
-		ramdisk:      pidruntime.SetupRamdisk,
-		limits:       hardening.ApplyRuntimeLimits,
-		syslog:       startOptionalSyslogSink,
-		exists:       pathExists,
-		term:         serviceTermGrace,
-		kill:         serviceKillGrace,
-		cmdline:      cmdline,
+		measuredConfig: func() (*runtimeconfig.Config, error) {
+			return readMeasuredConfig(cmdline.Debug)
+		},
+		lockModules: hardening.LockKernelModules,
+		setupFS:     pidruntime.SetupFilesystems,
+		sysctls:     pidruntime.ApplySysctls,
+		ramdisk:     pidruntime.SetupRamdisk,
+		limits:      hardening.ApplyRuntimeLimits,
+		syslog:      startOptionalSyslogSink,
+		exists:      pathExists,
+		term:        serviceTermGrace,
+		kill:        serviceKillGrace,
+		cmdline:     cmdline,
 	}
 	return runLifecycle(parent, deps, readiness)
 }
@@ -259,6 +267,9 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	bootCommand = withSecretHandoff(bootCommand, secretHandoff)
 	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
 		return err
+	}
+	if err := startVolumeWorkers(bootCtx, deps); err != nil {
+		return fmt.Errorf("storage volumes: %w", err)
 	}
 	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
 		fmt.Sprintf("--debug=%t", deps.cmdline.Debug))
@@ -537,6 +548,47 @@ func fabricManagerCommand() supervisor.Command {
 	}
 	cmd.Env = env
 	return cmd
+}
+
+// readMeasuredConfig reads the config tinfoil-boot verified against the hash on
+// the kernel command line and wrote to the public ramdisk. That write is part of
+// the boot one-shot, which is what makes it readable here: volume workers start
+// immediately after it and well before the containers binary, which reads the
+// same file for the same reason.
+func readMeasuredConfig(debug bool) (*runtimeconfig.Config, error) {
+	verified, err := os.ReadFile(boot.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	return runtimeconfig.Decode(verified, debug)
+}
+
+func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
+	config, err := deps.measuredConfig()
+	if err != nil {
+		return err
+	}
+	if config == nil {
+		return nil
+	}
+	for index, volume := range config.Volumes {
+		command := hardenedCommand(hardening.ServiceVolumes, boot.VolumeWorkerBinary,
+			"--models="+strconv.Itoa(len(config.Models)),
+			"--index="+strconv.Itoa(index),
+			"--name="+volume.Name,
+			fmt.Sprintf("--exec=%t", volume.Exec),
+			"--owner="+strconv.Itoa(volume.Owner),
+		)
+		command.Name = volumesName + "-" + volume.Name
+		if err := deps.services.Start(ctx, supervisor.Service{
+			Name:    command.Name,
+			Command: command,
+			Ready:   fileReady(filepath.Join(boot.VolumeControlDir, volume.Name, boot.VolumeSocketName)),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func requiredServiceNames() []string {

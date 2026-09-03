@@ -51,6 +51,7 @@ const (
 	readOnlyFlag      = 1 << 0
 	existsFlag        = 0x00000004
 	activePresentFlag = 1 << 5
+	secureDataFlag    = 1 << 15
 	ioctlMagic        = 0xfd
 	ioctlReadWrite    = 3
 )
@@ -196,6 +197,10 @@ func CheckVersion(control *os.File) (Version, error) {
 
 // CreateReadOnly creates an empty read-only device-mapper device.
 func CreateReadOnly(control *os.File, name string) (Info, error) {
+	return create(control, name, readOnlyFlag)
+}
+
+func create(control *os.File, name string, flags uint32) (Info, error) {
 	if err := validateName(name); err != nil {
 		return Info{}, err
 	}
@@ -203,7 +208,7 @@ func CreateReadOnly(control *os.File, name string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	setFlags(buf, readOnlyFlag|existsFlag)
+	setFlags(buf, flags|existsFlag)
 	if err := ioctl(control, devCreateIOCTL, buf, 0); err != nil {
 		return Info{}, fmt.Errorf("device-mapper create %s failed: %w", name, err)
 	}
@@ -231,10 +236,11 @@ func LoadReadOnlyVerityTable(control *os.File, name string, lengthSectors uint64
 // lengthSectors. Parameters are bytes so embedded key material can be erased
 // immediately after the ioctl completes.
 func LoadReadOnlyCryptTable(control *os.File, name string, lengthSectors uint64, params []byte) error {
-	if err := validateName(name); err != nil {
-		return err
-	}
-	buf, err := tableLoadBufferBytes(name, lengthSectors, "crypt", params)
+	return loadCryptTable(control, name, lengthSectors, params, readOnlyFlag)
+}
+
+func loadCryptTable(control *os.File, name string, lengthSectors uint64, params []byte, flags uint32) error {
+	buf, err := cryptTableBuffer(name, lengthSectors, params, flags)
 	if err != nil {
 		return err
 	}
@@ -245,8 +251,24 @@ func LoadReadOnlyCryptTable(control *os.File, name string, lengthSectors uint64,
 	return nil
 }
 
+func cryptTableBuffer(name string, lengthSectors uint64, params []byte, flags uint32) ([]byte, error) {
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+	buf, err := tableLoadBufferBytes(name, lengthSectors, "crypt", params)
+	if err != nil {
+		return nil, err
+	}
+	setFlags(buf, flags|existsFlag|secureDataFlag)
+	return buf, nil
+}
+
 // ResumeReadOnly activates a loaded read-only table.
 func ResumeReadOnly(control *os.File, name string) error {
+	return resume(control, name, readOnlyFlag)
+}
+
+func resume(control *os.File, name string, flags uint32) error {
 	if err := validateName(name); err != nil {
 		return err
 	}
@@ -254,7 +276,7 @@ func ResumeReadOnly(control *os.File, name string) error {
 	if err != nil {
 		return err
 	}
-	setFlags(buf, readOnlyFlag|existsFlag)
+	setFlags(buf, flags|existsFlag)
 	if err := ioctl(control, devSuspendIOCTL, buf, 1); err != nil {
 		return fmt.Errorf("device-mapper resume %s failed: %w", name, err)
 	}
@@ -263,22 +285,36 @@ func ResumeReadOnly(control *os.File, name string) error {
 
 // Status returns the current device state.
 func Status(control *os.File, name string) (Info, error) {
-	if err := validateName(name); err != nil {
-		return Info{}, err
-	}
-	buf, err := baseBuffer(maxIOCTLSize, name)
+	info, exists, err := Lookup(control, name)
 	if err != nil {
 		return Info{}, err
 	}
-	setFlags(buf, existsFlag)
-	if err := ioctl(control, devStatusIOCTL, buf, 1); err != nil {
-		return Info{}, fmt.Errorf("device-mapper status %s failed: %w", name, err)
-	}
-	info := infoFromBuffer(buf)
-	if info.Flags&existsFlag == 0 {
+	if !exists {
 		return Info{}, fmt.Errorf("device-mapper device %s does not exist", name)
 	}
 	return info, nil
+}
+
+func Lookup(control *os.File, name string) (Info, bool, error) {
+	if err := validateName(name); err != nil {
+		return Info{}, false, err
+	}
+	buf, err := baseBuffer(maxIOCTLSize, name)
+	if err != nil {
+		return Info{}, false, err
+	}
+	setFlags(buf, existsFlag)
+	if err := ioctl(control, devStatusIOCTL, buf, 1); err != nil {
+		if errors.Is(err, unix.ENXIO) {
+			return Info{}, false, nil
+		}
+		return Info{}, false, fmt.Errorf("device-mapper status %s failed: %w", name, err)
+	}
+	info := infoFromBuffer(buf)
+	if info.Flags&existsFlag == 0 {
+		return Info{}, false, nil
+	}
+	return info, true, nil
 }
 
 // Remove deletes a device-mapper device and its userspace block node.
@@ -309,27 +345,54 @@ func MapperNode(name string) string {
 // block device from the same opened descriptor. Symlinks and non-block files
 // are rejected.
 func BlockDeviceInfo(path string) (string, uint64, error) {
+	device, err := OpenBlockDevice(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer device.Close()
+	return blockDeviceInfo(device)
+}
+
+func OpenBlockDevice(path string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return "", 0, fmt.Errorf("opening direct block device %s: %w", path, err)
+		return nil, fmt.Errorf("opening direct block device %s: %w", path, err)
 	}
-	defer unix.Close(fd)
-
+	device := os.NewFile(uintptr(fd), path)
+	if device == nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("wrapping direct block device %s", path)
+	}
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
-		return "", 0, fmt.Errorf("stat opened block device %s: %w", path, err)
+		device.Close()
+		return nil, fmt.Errorf("stat opened block device %s: %w", path, err)
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFBLK {
-		return "", 0, fmt.Errorf("%s is not a direct block device", path)
+		device.Close()
+		return nil, fmt.Errorf("%s is not a direct block device", path)
 	}
+	return device, nil
+}
 
+func blockDeviceInfo(device *os.File) (string, uint64, error) {
+	if device == nil {
+		return "", 0, errors.New("nil block device")
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(device.Fd()), &stat); err != nil {
+		return "", 0, fmt.Errorf("stat opened block device %s: %w", device.Name(), err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFBLK {
+		return "", 0, fmt.Errorf("%s is not a direct block device", device.Name())
+	}
 	var size uint64
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.BLKGETSIZE64, uintptr(unsafe.Pointer(&size)))
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, device.Fd(), unix.BLKGETSIZE64, uintptr(unsafe.Pointer(&size)))
 	if errno != 0 {
-		return "", 0, fmt.Errorf("reading block device size %s: %w", path, errno)
+		return "", 0, fmt.Errorf("reading block device size %s: %w", device.Name(), errno)
 	}
 	if size == 0 || size%dmSectorSizeBytes != 0 {
-		return "", 0, fmt.Errorf("invalid block device size %d for %s", size, path)
+		return "", 0, fmt.Errorf("invalid block device size %d for %s", size, device.Name())
 	}
 	return fmt.Sprintf("%d:%d", unix.Major(stat.Rdev), unix.Minor(stat.Rdev)), size / dmSectorSizeBytes, nil
 }
@@ -558,4 +621,46 @@ func readMajorMinor(path string) (uint32, uint32, error) {
 		return 0, 0, fmt.Errorf("invalid minor in %s: %w", path, err)
 	}
 	return major, minor, nil
+}
+
+func ActivateWritableCrypt(control, source *os.File, name string, key []byte) (device uint64, result error) {
+	deviceNumber, lengthSectors, err := blockDeviceInfo(source)
+	if err != nil {
+		return 0, err
+	}
+	params, err := CryptTable(deviceNumber, key, lengthSectors)
+	if err != nil {
+		return 0, err
+	}
+	defer zeroBytes(params)
+	if _, err := create(control, name, 0); err != nil {
+		return 0, err
+	}
+	defer func() {
+		if result != nil {
+			if err := Remove(control, name); err != nil {
+				result = errors.Join(result, fmt.Errorf("removing incomplete mapping: %w", err))
+			}
+		}
+	}()
+	if err := loadCryptTable(control, name, lengthSectors, params, 0); err != nil {
+		return 0, err
+	}
+	if err := resume(control, name, 0); err != nil {
+		return 0, err
+	}
+	info, err := Status(control, name)
+	if err != nil {
+		return 0, err
+	}
+	if !info.Active() || info.ReadOnly() || info.TargetCount != 1 {
+		return 0, fmt.Errorf(
+			"mapping %s has unexpected state: active=%t read-only=%t targets=%d",
+			name, info.Active(), info.ReadOnly(), info.TargetCount,
+		)
+	}
+	if err := EnsureBlockNode(MapperNode(name), info.Dev); err != nil {
+		return 0, err
+	}
+	return info.Dev, nil
 }

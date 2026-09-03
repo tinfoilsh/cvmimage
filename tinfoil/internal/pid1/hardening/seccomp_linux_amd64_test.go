@@ -78,6 +78,9 @@ func TestServiceSocketDomains(t *testing.T) {
 		{name: "egress-unix", service: ServiceEgress, domain: unix.AF_UNIX},
 		{name: "egress-packet", service: ServiceEgress, domain: unix.AF_PACKET},
 		{name: "egress-vsock", service: ServiceEgress, domain: unix.AF_VSOCK},
+		{name: "volumes-unix", service: ServiceVolumes, domain: unix.AF_UNIX, allowed: true},
+		{name: "volumes-inet", service: ServiceVolumes, domain: unix.AF_INET},
+		{name: "volumes-netlink", service: ServiceVolumes, domain: unix.AF_NETLINK},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -161,6 +164,9 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 		{name: "shim-forces-clone3-fallback", service: ServiceShim, operation: "clone3"},
 		{name: "egress-cannot-clone-namespace", service: ServiceEgress, operation: "namespace-clone"},
 		{name: "containers-rejects-x32", service: ServiceContainers, operation: "x32"},
+		{name: "volumes-cannot-load-modules", service: ServiceVolumes, operation: "finit-module"},
+		{name: "volumes-cannot-clone-namespace", service: ServiceVolumes, operation: "namespace-clone"},
+		{name: "volumes-forces-clone3-fallback", service: ServiceVolumes, operation: "clone3"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

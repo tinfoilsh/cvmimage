@@ -222,9 +222,6 @@ func NewShimServer(
 
 			// proxied
 		},
-		Transport: &streamTransport{
-			base: http.DefaultTransport,
-		},
 		ModifyResponse: func(res *http.Response) error {
 			res.Header.Del("Access-Control-Allow-Origin")
 			res.Header.Del(ehbpProtocol.ResponseNonceHeader)

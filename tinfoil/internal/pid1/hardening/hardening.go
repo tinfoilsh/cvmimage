@@ -149,8 +149,13 @@ func policyFor(service Service) (servicePolicy, bool) {
 		return policy, true
 	case ServiceVolumes:
 		return servicePolicy{
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN},
+			noNewPrivileges: true,
+			// FOWNER because overlayfs applies upper-layer metadata changes
+			// under the credentials of whoever mounted it.
+			boundCapabilities: []int{
+				unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN,
+				unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER,
+			},
 			deniedSyscalls:       volumeServiceSyscalls,
 			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX},

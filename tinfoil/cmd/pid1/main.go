@@ -572,13 +572,17 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 		return nil
 	}
 	for index, volume := range config.Volumes {
-		command := hardenedCommand(hardening.ServiceVolumes, boot.VolumeWorkerBinary,
-			"--models="+strconv.Itoa(len(config.Models)),
-			"--index="+strconv.Itoa(index),
-			"--name="+volume.Name,
+		args := []string{
+			"--models=" + strconv.Itoa(len(config.Models)),
+			"--index=" + strconv.Itoa(index),
+			"--name=" + volume.Name,
 			fmt.Sprintf("--exec=%t", volume.Exec),
-			"--owner="+strconv.Itoa(volume.Owner),
-		)
+			"--owner=" + strconv.Itoa(volume.Owner),
+		}
+		for _, overlay := range volume.Overlays {
+			args = append(args, "--overlay="+overlay.Model+":"+overlay.Source+":"+overlay.Target)
+		}
+		command := hardenedCommand(hardening.ServiceVolumes, boot.VolumeWorkerBinary, args...)
 		command.Name = volumesName + "-" + volume.Name
 		if err := deps.services.Start(ctx, supervisor.Service{
 			Name:    command.Name,

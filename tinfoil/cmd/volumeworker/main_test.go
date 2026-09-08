@@ -1,9 +1,6 @@
 package main
 
-import (
-	"reflect"
-	"testing"
-)
+import "testing"
 
 func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
 	for _, test := range []struct {
@@ -17,9 +14,6 @@ func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
 		{"owner beyond range", []string{"worker", "--name=workspace", "--owner=65535"}},
 		{"more disks than slots", []string{"worker", "--name=workspace", "--models=24", "--index=0"}},
 		{"trailing arguments", []string{"worker", "--name=workspace", "extra"}},
-		{"overlay without three fields", []string{"worker", "--name=workspace", "--overlay=nix:store"}},
-		{"overlay escaping the pack", []string{"worker", "--name=workspace", "--exec=true", "--overlay=nix:../store:nix/store"}},
-		{"overlay on a noexec volume", []string{"worker", "--name=workspace", "--overlay=nix:store:nix/store"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := parseInvocation(test.args); err == nil {
@@ -30,18 +24,12 @@ func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
 }
 
 func TestParseInvocationAcceptsDeclaredVolume(t *testing.T) {
-	parsed, err := parseInvocation([]string{
-		"worker", "--models=2", "--index=1", "--name=workspace", "--exec=true", "--owner=1000",
-		"--overlay=nix:store:nix/store",
-	})
+	parsed, err := parseInvocation([]string{"worker", "--models=2", "--index=1", "--name=workspace", "--exec=true", "--owner=1000"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := invocation{
-		models: 2, index: 1, name: "workspace", executable: true, owner: 1000,
-		overlays: []overlay{{model: "nix", source: "store", target: "nix/store"}},
-	}
-	if !reflect.DeepEqual(parsed, want) {
+	want := invocation{models: 2, index: 1, name: "workspace", executable: true, owner: 1000}
+	if parsed != want {
 		t.Fatalf("parsed = %+v, want %+v", parsed, want)
 	}
 }

@@ -44,7 +44,7 @@ func TestServicePoliciesAreExact(t *testing.T) {
 		},
 		ServiceVolumes: {
 			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER},
+			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN},
 			deniedSyscalls:       volumeServiceSyscalls,
 			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX},

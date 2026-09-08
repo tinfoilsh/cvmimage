@@ -149,15 +149,8 @@ func policyFor(service Service) (servicePolicy, bool) {
 		return policy, true
 	case ServiceVolumes:
 		return servicePolicy{
-			noNewPrivileges: true,
-			// DAC_OVERRIDE because this service builds and mounts directories
-			// inside a volume it hands to another uid, and grants nothing that
-			// SYS_ADMIN above does not already imply. FOWNER because overlayfs
-			// applies metadata changes to the upper layer under the credentials
-			// of whoever mounted it: without it the volume's owner cannot chmod
-			// or unlink its own files through an overlay this service mounted,
-			// and CHOWN above already implies it.
-			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER},
+			noNewPrivileges:      true,
+			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN},
 			deniedSyscalls:       volumeServiceSyscalls,
 			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX},

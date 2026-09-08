@@ -46,7 +46,7 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 		}
 		seen[ref.mapperName()] = struct{}{}
 		mountPoint, legacyAlias := modelMountTarget(config, model, ref)
-		executable := runtimeconfig.ModelBacksExecutableVolume(config, model.Name)
+		executable := model.Exec
 		if !legacyAlias {
 			containerMountPoint := boot.PublicModelsDir + "/" + model.Name
 			if err := os.MkdirAll(containerMountPoint, 0755); err != nil {
@@ -336,10 +336,7 @@ func (directModelVolumeOps) mount(sourceDevice, mountPoint string, executable bo
 	if err := os.MkdirAll(mountPoint, 0755); err != nil {
 		return fmt.Errorf("creating model mount point: %w", err)
 	}
-	// Weights are never programs, so a pack is noexec unless the measured
-	// config backs an executable volume with it. Then the pack holds a store,
-	// and the merged view above cannot make its contents runnable: the lower
-	// layer's noexec is enforced through it.
+	// No view stacked above the pack can launder this flag away.
 	flags := uintptr(unix.MS_RDONLY | unix.MS_NODEV | unix.MS_NOSUID)
 	if !executable {
 		flags |= unix.MS_NOEXEC

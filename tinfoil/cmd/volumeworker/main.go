@@ -35,14 +35,7 @@ const (
 	formatMode  = "--format"
 	selfPath    = "/proc/self/exe"
 
-	maxOwner    = 65534
-	maxOverlays = 8
-	modelsRoot  = boot.PrivateModelsDir
-
-	// Siblings of the merged mount point, on the same volume because overlayfs
-	// requires the upper layer and its work directory to share a filesystem.
-	upperSuffix    = ".upper"
-	workSuffix     = ".work"
+	maxOwner       = 65534
 	keyBytes       = 64
 	blankProbeSize = 1 << 20
 	requestTimeout = 5 * time.Second
@@ -57,23 +50,7 @@ const (
 	responseLocked   byte = 3
 )
 
-var (
-	namePattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-	modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-
-	// Every segment has to begin with something other than a dot, which is what
-	// keeps `.` and `..` out, and the character class is what keeps the comma
-	// and colon that delimit mount options and this flag out of both paths.
-	overlayPathPattern = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$`)
-)
-
-// overlay is one model pack merged into this volume: source inside the pack is
-// the lower layer, target inside the volume is where the merged tree appears.
-type overlay struct {
-	model  string
-	source string
-	target string
-}
+var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 type invocation struct {
 	models     int
@@ -81,7 +58,6 @@ type invocation struct {
 	name       string
 	executable bool
 	owner      int
-	overlays   []overlay
 }
 
 type mountState struct {
@@ -93,7 +69,6 @@ type worker struct {
 	name       string
 	executable bool
 	owner      int
-	overlays   []overlay
 	control    *os.File
 	source     *os.File
 	unlocked   bool
@@ -130,14 +105,6 @@ func parseInvocation(args []string) (invocation, error) {
 	flags.StringVar(&parsed.name, "name", "", "")
 	flags.BoolVar(&parsed.executable, "exec", false, "")
 	flags.IntVar(&parsed.owner, "owner", 0, "")
-	flags.Func("overlay", "", func(value string) error {
-		parts := strings.Split(value, ":")
-		if len(parts) != 3 {
-			return fmt.Errorf("overlay %q is not model:source:target", value)
-		}
-		parsed.overlays = append(parsed.overlays, overlay{model: parts[0], source: parts[1], target: parts[2]})
-		return nil
-	})
 	if err := flags.Parse(args[1:]); err != nil {
 		return invocation{}, err
 	}
@@ -158,23 +125,6 @@ func parseInvocation(args []string) (invocation, error) {
 	}
 	if err := device.StorageSlots(parsed.models, parsed.index+1); err != nil {
 		return invocation{}, err
-	}
-	// Re-checked here rather than trusted from the caller, because these two
-	// paths are spliced into mount options and one of them names a directory
-	// this worker creates on the volume.
-	if len(parsed.overlays) > maxOverlays {
-		return invocation{}, fmt.Errorf("too many overlays: %d", len(parsed.overlays))
-	}
-	for _, spec := range parsed.overlays {
-		if !modelPattern.MatchString(spec.model) {
-			return invocation{}, fmt.Errorf("invalid overlay model %q", spec.model)
-		}
-		if !overlayPathPattern.MatchString(spec.source) || !overlayPathPattern.MatchString(spec.target) {
-			return invocation{}, fmt.Errorf("invalid overlay path in %q", spec.model)
-		}
-	}
-	if !parsed.executable && len(parsed.overlays) > 0 {
-		return invocation{}, errors.New("overlays require an executable volume")
 	}
 	return parsed, nil
 }
@@ -246,7 +196,6 @@ func openWorker(parsed invocation) (*worker, error) {
 		name:       parsed.name,
 		executable: parsed.executable,
 		owner:      parsed.owner,
-		overlays:   parsed.overlays,
 		control:    control,
 		source:     source,
 	}, nil
@@ -420,58 +369,6 @@ func (w *worker) activate(key []byte, initialize bool) (result error) {
 	}
 	if target.device != mappedDevice {
 		return fmt.Errorf("mounted unexpected device %d:%d", unix.Major(target.device), unix.Minor(target.device))
-	}
-	// Last, so that nothing after it can fail and leave the rollback above
-	// unable to unmount a volume with an overlay still on top of it.
-	return w.mountOverlays()
-}
-
-// mountOverlays merges each declared pack into the volume: the pack is the
-// lower layer and the volume holds the upper, so a container writes into a
-// tree whose contents are the attested pack until it writes over them. This
-// mount is also the one a container executes through, which is why the pack's
-// own noexec mount does not reach the programs in it.
-func (w *worker) mountOverlays() (result error) {
-	merged := make([]string, 0, len(w.overlays))
-	defer func() {
-		if result == nil {
-			return
-		}
-		for index := len(merged) - 1; index >= 0; index-- {
-			result = errors.Join(result, unix.Unmount(merged[index], 0))
-		}
-	}()
-	for _, spec := range w.overlays {
-		lower := filepath.Join(modelsRoot, spec.model, spec.source)
-		if _, err := os.Stat(lower); err != nil {
-			return fmt.Errorf("overlay lower layer: %w", err)
-		}
-		mountPoint := filepath.Join(w.dataPath(), spec.target)
-		upper, work := mountPoint+upperSuffix, mountPoint+workSuffix
-		// The upper and work layers stay this worker's: overlayfs creates a
-		// directory inside the work layer as the mounting process, and giving
-		// it away first is what makes that fail -- quietly, by mounting the
-		// merged tree read-only. Only the merged root is handed over, below.
-		for _, directory := range []string{mountPoint, upper, work} {
-			if err := os.MkdirAll(directory, 0o755); err != nil {
-				return err
-			}
-		}
-		flags := uintptr(unix.MS_NODEV | unix.MS_NOSUID)
-		if !w.executable {
-			flags |= unix.MS_NOEXEC
-		}
-		if err := unix.Mount("overlay", mountPoint, "overlay", flags,
-			"lowerdir="+lower+",upperdir="+upper+",workdir="+work); err != nil {
-			return fmt.Errorf("mounting overlay at %s: %w", mountPoint, err)
-		}
-		merged = append(merged, mountPoint)
-		// The merged root is the pack's directory until something writes to it,
-		// so the owner is given it here instead of inheriting root from below.
-		// This is also the write that proves the mount is not read-only.
-		if err := os.Chown(mountPoint, w.owner, w.owner); err != nil {
-			return err
-		}
 	}
 	return nil
 }

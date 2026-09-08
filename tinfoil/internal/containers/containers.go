@@ -520,8 +520,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		})
 	}
 
-	// Volume mounts. A volume named twice mounts at both targets but brings its
-	// control socket along only once, which is what docker will accept.
+	// Volume mounts. A volume named twice brings its control socket only once.
 	for _, vol := range c.Volumes {
 		for _, bind := range volumeBinds(vol, cfg) {
 			if !slices.Contains(hostConfig.Binds, bind) {

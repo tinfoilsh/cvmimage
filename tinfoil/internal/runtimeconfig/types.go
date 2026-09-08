@@ -35,6 +35,10 @@ func ModelIsIsolated(config *Config, name string) bool {
 	return sharedconfig.ModelIsIsolated(config, name)
 }
 
+func ModelBacksExecutableVolume(config *Config, name string) bool {
+	return sharedconfig.ModelBacksExecutableVolume(config, name)
+}
+
 func ReservedDebugRuntimeEnabled(containerName string, debug bool) bool {
 	return sharedconfig.ReservedDebugRuntimeEnabled(containerName, options(debug))
 }

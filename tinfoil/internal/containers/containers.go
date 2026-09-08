@@ -520,9 +520,14 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		})
 	}
 
-	// Volume mounts
+	// Volume mounts. A volume named twice mounts at both targets but brings its
+	// control socket along only once, which is what docker will accept.
 	for _, vol := range c.Volumes {
-		hostConfig.Binds = append(hostConfig.Binds, volumeBinds(vol, cfg)...)
+		for _, bind := range volumeBinds(vol, cfg) {
+			if !slices.Contains(hostConfig.Binds, bind) {
+				hostConfig.Binds = append(hostConfig.Binds, bind)
+			}
+		}
 	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)

@@ -579,6 +579,10 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 			fmt.Sprintf("--exec=%t", volume.Exec),
 			"--owner="+strconv.Itoa(volume.Owner),
 		)
+		for _, overlay := range volume.Overlays {
+			command.Args = append(command.Args,
+				"--overlay="+overlay.Model+":"+overlay.Source+":"+overlay.Target)
+		}
 		command.Name = volumesName + "-" + volume.Name
 		if err := deps.services.Start(ctx, supervisor.Service{
 			Name:    command.Name,

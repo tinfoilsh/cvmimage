@@ -105,11 +105,11 @@ func TestModelSalt(t *testing.T) {
 
 func TestOpenAndMountVerityCleansUpMountFailure(t *testing.T) {
 	ops := &fakeModelVolumeOps{mountErr: errors.New("mount failed")}
-	err := openAndMountVerityWithOps(ops, "/dev/source", "mwp-test", strings.Repeat("a", 64), "4096", testSalt(), "/mnt/model")
+	err := openAndMountVerityWithOps(ops, "/dev/source", "mwp-test", strings.Repeat("a", 64), "4096", testSalt(), "/mnt/model", false)
 	if err == nil || !strings.Contains(err.Error(), "mount failed") {
 		t.Fatalf("error = %v, want mount failure", err)
 	}
-	wantCalls := []string{"verity:mwp-test", "mount:/dev/mapper/mwp-test", "remove:mwp-test"}
+	wantCalls := []string{"verity:mwp-test", "mount:/dev/mapper/mwp-test:exec=false", "remove:mwp-test"}
 	if fmt.Sprint(ops.calls) != fmt.Sprint(wantCalls) {
 		t.Fatalf("calls = %v, want %v", ops.calls, wantCalls)
 	}
@@ -128,6 +128,7 @@ func TestOpenEncryptedAndMountZeroesKeyAndCleansUp(t *testing.T) {
 		testSalt(),
 		"/mnt/model",
 		key,
+		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "verity failed") {
 		t.Fatalf("error = %v, want verity failure", err)
@@ -157,6 +158,7 @@ func TestOpenEncryptedAndMountCleansBothMappingsAfterMountFailure(t *testing.T) 
 		testSalt(),
 		"/mnt/model",
 		key,
+		true,
 	)
 	if err == nil || !strings.Contains(err.Error(), "mount failed") {
 		t.Fatalf("error = %v, want mount failure", err)
@@ -164,7 +166,7 @@ func TestOpenEncryptedAndMountCleansBothMappingsAfterMountFailure(t *testing.T) 
 	wantCalls := []string{
 		"crypt:emwp-test-crypt",
 		"verity:mwp-test",
-		"mount:/dev/mapper/mwp-test",
+		"mount:/dev/mapper/mwp-test:exec=true",
 		"remove:mwp-test",
 		"remove:emwp-test-crypt",
 	}
@@ -211,8 +213,8 @@ func (ops *fakeModelVolumeOps) remove(name string) error {
 	return ops.removeErr
 }
 
-func (ops *fakeModelVolumeOps) mount(sourceDevice, _ string) error {
-	ops.calls = append(ops.calls, "mount:"+sourceDevice)
+func (ops *fakeModelVolumeOps) mount(sourceDevice, _ string, executable bool) error {
+	ops.calls = append(ops.calls, fmt.Sprintf("mount:%s:exec=%t", sourceDevice, executable))
 	return ops.mountErr
 }
 

@@ -489,9 +489,23 @@ func (w *worker) activate(spec request) (result error) {
 	if target.device != mappedDevice {
 		return fmt.Errorf("mounted unexpected device %d:%d", unix.Major(target.device), unix.Minor(target.device))
 	}
+	merged, err := w.mountOverlays()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if result == nil {
+			return
+		}
+		for index := len(merged) - 1; index >= 0; index-- {
+			result = errors.Join(result, unix.Unmount(merged[index], 0))
+		}
+	}()
 	// Here rather than before the mapping, because dm-crypt accepts any key: the
 	// mount is the only proof this one opened the volume, so a wrong key leaves
-	// the register untouched and the permit still worth retrying.
+	// the register untouched and the permit still worth retrying. Last of all
+	// because the extend cannot be undone: anything failing after it would leave
+	// the next attempt marking this boot a second time.
 	seed, err := hkdf.Key(sha256.New, spec.Key, nil, sealKeyInfo, ed25519.SeedSize)
 	if err != nil {
 		return err
@@ -500,12 +514,7 @@ func (w *worker) activate(spec request) (result error) {
 	private := ed25519.NewKeyFromSeed(seed)
 	defer clear(private)
 	identity := sha512.Sum384(private.Public().(ed25519.PublicKey))
-	if err := extendSeal(identity[:]); err != nil {
-		return err
-	}
-	// Last, so a later failure never leaves the rollback above unable to unmount
-	// a volume with an overlay still on top of it.
-	return w.mountOverlays()
+	return extendSeal(identity[:])
 }
 
 // extendSeal marks this boot with the identity of the opening key. The write is
@@ -529,7 +538,7 @@ func extendSeal(digest []byte) error {
 	return file.Close()
 }
 
-func (w *worker) mountOverlays() (result error) {
+func (w *worker) mountOverlays() (_ []string, result error) {
 	merged := make([]string, 0, len(w.overlays))
 	defer func() {
 		if result == nil {
@@ -542,11 +551,11 @@ func (w *worker) mountOverlays() (result error) {
 	for _, spec := range w.overlays {
 		mountPoint, err := w.overlay(spec)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		merged = append(merged, mountPoint)
 	}
-	return nil
+	return merged, nil
 }
 
 func (w *worker) overlay(spec overlay) (string, error) {

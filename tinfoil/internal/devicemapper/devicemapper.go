@@ -38,11 +38,14 @@ const (
 	cryptSectorSizeBytes   = 4096
 
 	// The workspace volume is authenticated: dm-crypt MACs each sector and the
-	// dm-integrity device below it stores the tag.
+	// dm-integrity device below it stores the tag and the IV drawn for the write.
 	integrityMAC             = "hmac(sha256)"
-	authenticatedCipher      = "capi:authenc(" + integrityMAC + ",xts(aes))-plain64"
+	authenticatedCipher      = "capi:authenc(" + integrityMAC + ",xts(aes))-random"
+	integrityProfile         = "aead"
 	authenticatedMACKeyBytes = 32
-	integrityTagBytes        = 32
+	authenticatedTagBytes    = 32
+	authenticatedIVBytes     = 16
+	integrityTagBytes        = authenticatedTagBytes + authenticatedIVBytes
 	integrityJournalMode     = "J"
 	integrityTarget          = "integrity"
 	integrityMagic           = "integrt\x00"
@@ -82,7 +85,7 @@ const (
 
 var (
 	sectorSizeOption = fmt.Sprintf("sector_size:%d", cryptSectorSizeBytes)
-	integrityOption  = fmt.Sprintf("integrity:%d:%s", integrityTagBytes, integrityMAC)
+	integrityOption  = fmt.Sprintf("integrity:%d:%s", integrityTagBytes, integrityProfile)
 )
 
 // Version is the device-mapper ioctl protocol version reported by the kernel.

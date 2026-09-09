@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hkdf"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -45,6 +47,8 @@ const (
 
 	// A request carries one key, but the table needs a cipher key and a MAC key.
 	tableKeyInfo = "tinfoil volume table key v1"
+	// tinfoil-cli's sealFor derives the same identity from the same key.
+	sealKeyInfo = "tinfoil seal identity v1"
 
 	// The extend is one write of a whole digest to this file. It is TDX's
 	// alone; SEV-SNP guests have no such register and the path is absent.
@@ -53,7 +57,6 @@ const (
 	maxOwner        = 65534
 	maxOverlays     = 8
 	keyBytes        = 64
-	sealBytes       = 48
 	maxRequestBytes = 512
 	blankProbeSize  = 1 << 20
 	requestTimeout  = 5 * time.Second
@@ -102,11 +105,10 @@ type mountState struct {
 
 // request is one JSON object per SOCK_SEQPACKET datagram. The overlay layout is
 // measured and reaches the worker through its invocation, so the caller supplies
-// only the operation, the unlock key, and what to seal the boot to.
+// only the operation and the unlock key.
 type request struct {
-	Op   string `json:"op"`
-	Key  []byte `json:"key,omitempty"`
-	Seal []byte `json:"seal,omitempty"`
+	Op  string `json:"op"`
+	Key []byte `json:"key,omitempty"`
 }
 
 type response struct {
@@ -414,9 +416,6 @@ func (w *worker) handle(packet []byte) (string, error) {
 	if len(spec.Key) != keyBytes {
 		return statusRejected, fmt.Errorf("key is %d bytes, want %d", len(spec.Key), keyBytes)
 	}
-	if spec.Seal != nil && len(spec.Seal) != sealBytes {
-		return statusRejected, fmt.Errorf("seal is %d bytes, want %d", len(spec.Seal), sealBytes)
-	}
 	if spec.Op == opInitialize {
 		blank, err := blockDeviceBlank(w.source)
 		if err != nil {
@@ -493,17 +492,23 @@ func (w *worker) activate(spec request) (result error) {
 	// Here rather than before the mapping, because dm-crypt accepts any key: the
 	// mount is the only proof this one opened the volume, so a wrong key leaves
 	// the register untouched and the permit still worth retrying.
-	if spec.Seal != nil {
-		if err := extendSeal(spec.Seal); err != nil {
-			return err
-		}
+	seed, err := hkdf.Key(sha256.New, spec.Key, nil, sealKeyInfo, ed25519.SeedSize)
+	if err != nil {
+		return err
+	}
+	defer clear(seed)
+	private := ed25519.NewKeyFromSeed(seed)
+	defer clear(private)
+	identity := sha512.Sum384(private.Public().(ed25519.PublicKey))
+	if err := extendSeal(identity[:]); err != nil {
+		return err
 	}
 	// Last, so a later failure never leaves the rollback above unable to unmount
 	// a volume with an overlay still on top of it.
 	return w.mountOverlays()
 }
 
-// extendSeal marks this boot with what the caller sealed it to. The write is
+// extendSeal marks this boot with the identity of the opening key. The write is
 // the extend -- hardware replaces the register with the hash of its old value
 // and these bytes -- so a marked boot cannot be returned to an unmarked one
 // without a reboot. Where the guest has no such register there is nothing to

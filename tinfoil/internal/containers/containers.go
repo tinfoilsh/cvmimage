@@ -520,9 +520,13 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		})
 	}
 
-	// Volume mounts
+	// Volume mounts. A volume named twice brings its control socket only once.
 	for _, vol := range c.Volumes {
-		hostConfig.Binds = append(hostConfig.Binds, volumeBinds(vol, cfg)...)
+		for _, bind := range volumeBinds(vol, cfg) {
+			if !slices.Contains(hostConfig.Binds, bind) {
+				hostConfig.Binds = append(hostConfig.Binds, bind)
+			}
+		}
 	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)

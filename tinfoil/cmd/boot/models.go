@@ -46,6 +46,7 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 		}
 		seen[ref.mapperName()] = struct{}{}
 		mountPoint, legacyAlias := modelMountTarget(config, model, ref)
+		executable := model.Exec
 		if !legacyAlias {
 			containerMountPoint := boot.PublicModelsDir + "/" + model.Name
 			if err := os.MkdirAll(containerMountPoint, 0755); err != nil {
@@ -63,7 +64,7 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 			if err != nil {
 				return fmt.Errorf("finding model disk %d: %w", index, err)
 			}
-			if err := mountModelPack(ref, salt, sourceDevice, mountPoint, legacyAlias); err != nil {
+			if err := mountModelPack(ref, salt, sourceDevice, mountPoint, legacyAlias, executable); err != nil {
 				return fmt.Errorf("mounting model pack %s: %w", ref.raw, err)
 			}
 		case modelKindEncrypted:
@@ -71,7 +72,7 @@ func mountModels(config *Config, externalConfig *shimconfig.ExternalConfig) erro
 			if err != nil {
 				return fmt.Errorf("finding encrypted model partition %d: %w", index, err)
 			}
-			if err := mountEncryptedModelPack(model, externalConfig, sourceDevice, mountPoint); err != nil {
+			if err := mountEncryptedModelPack(model, externalConfig, sourceDevice, mountPoint, executable); err != nil {
 				return fmt.Errorf("mounting encrypted model pack %q: %w", model.Name, err)
 			}
 		}
@@ -92,7 +93,7 @@ func modelSalt(model ModelSpec) ([]byte, error) {
 }
 
 // mountModelPack mounts a plaintext model wrap using dm-verity.
-func mountModelPack(spec *modelPackRef, salt []byte, sourceDevice, mountPoint string, legacyAlias bool) error {
+func mountModelPack(spec *modelPackRef, salt []byte, sourceDevice, mountPoint string, legacyAlias, executable bool) error {
 	deviceName := spec.mapperName()
 
 	log.Printf("Opening verity device %s (uuid=%s)", deviceName, spec.UUID)
@@ -101,7 +102,7 @@ func mountModelPack(spec *modelPackRef, salt []byte, sourceDevice, mountPoint st
 			return err
 		}
 	}
-	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, salt, mountPoint); err != nil {
+	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, salt, mountPoint, executable); err != nil {
 		if legacyAlias {
 			removeLegacyModelPackAlias(spec)
 		}
@@ -119,6 +120,7 @@ func mountEncryptedModelPack(
 	model ModelSpec,
 	externalConfig *shimconfig.ExternalConfig,
 	sourceDevice, mountPoint string,
+	executable bool,
 ) error {
 	spec, err := parseModelPackRef(model.EMWP)
 	if err != nil {
@@ -148,6 +150,7 @@ func mountEncryptedModelPack(
 		salt,
 		mountPoint,
 		key,
+		executable,
 	); err != nil {
 		return err
 	}
@@ -278,15 +281,15 @@ func encryptedModelKey(keySecret string, spec *modelPackRef, externalConfig *shi
 	return modelwrap.DeriveKey(key, spec.ArtifactRef)
 }
 
-func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset string, salt []byte, mountPoint string) error {
-	return openAndMountVerityWithOps(directModelVolumeOps{}, sourceDevice, deviceName, rootHash, hashOffset, salt, mountPoint)
+func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset string, salt []byte, mountPoint string, executable bool) error {
+	return openAndMountVerityWithOps(directModelVolumeOps{}, sourceDevice, deviceName, rootHash, hashOffset, salt, mountPoint, executable)
 }
 
 type modelVolumeOps interface {
 	openVerity(sourceDevice, name, rootHash, hashOffset string, salt []byte) (string, error)
 	openCrypt(sourceDevice, name string, key []byte) (string, error)
 	remove(name string) error
-	mount(sourceDevice, mountPoint string) error
+	mount(sourceDevice, mountPoint string, executable bool) error
 }
 
 type directModelVolumeOps struct{}
@@ -329,17 +332,16 @@ func (directModelVolumeOps) remove(name string) error {
 	return devicemapper.Remove(control, name)
 }
 
-func (directModelVolumeOps) mount(sourceDevice, mountPoint string) error {
+func (directModelVolumeOps) mount(sourceDevice, mountPoint string, executable bool) error {
 	if err := os.MkdirAll(mountPoint, 0755); err != nil {
 		return fmt.Errorf("creating model mount point: %w", err)
 	}
-	if err := unix.Mount(
-		sourceDevice,
-		mountPoint,
-		"erofs",
-		unix.MS_RDONLY|unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC,
-		"",
-	); err != nil {
+	// No view stacked above the pack can launder this flag away.
+	flags := uintptr(unix.MS_RDONLY | unix.MS_NODEV | unix.MS_NOSUID)
+	if !executable {
+		flags |= unix.MS_NOEXEC
+	}
+	if err := unix.Mount(sourceDevice, mountPoint, "erofs", flags, ""); err != nil {
 		return fmt.Errorf("mounting verified model volume: %w", err)
 	}
 	return nil
@@ -350,12 +352,13 @@ func openAndMountVerityWithOps(
 	sourceDevice, deviceName, rootHash, hashOffset string,
 	salt []byte,
 	mountPoint string,
+	executable bool,
 ) error {
 	mapperNode, err := ops.openVerity(sourceDevice, deviceName, rootHash, hashOffset, salt)
 	if err != nil {
 		return err
 	}
-	if err := ops.mount(mapperNode, mountPoint); err != nil {
+	if err := ops.mount(mapperNode, mountPoint, executable); err != nil {
 		if removeErr := ops.remove(deviceName); removeErr != nil {
 			return errors.Join(err, fmt.Errorf("removing failed verity mapping: %w", removeErr))
 		}
@@ -370,13 +373,14 @@ func openEncryptedAndMount(
 	salt []byte,
 	mountPoint string,
 	key []byte,
+	executable bool,
 ) error {
 	defer zeroBytes(key)
 	cryptDevice, err := ops.openCrypt(sourceDevice, cryptName, key)
 	if err != nil {
 		return err
 	}
-	if err := openAndMountVerityWithOps(ops, cryptDevice, verityName, rootHash, hashOffset, salt, mountPoint); err != nil {
+	if err := openAndMountVerityWithOps(ops, cryptDevice, verityName, rootHash, hashOffset, salt, mountPoint, executable); err != nil {
 		if removeErr := ops.remove(cryptName); removeErr != nil {
 			return errors.Join(err, fmt.Errorf("removing failed crypt mapping: %w", removeErr))
 		}

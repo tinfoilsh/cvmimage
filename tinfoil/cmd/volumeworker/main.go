@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,22 +37,43 @@ const (
 	formatMode  = "--format"
 	selfPath    = "/proc/self/exe"
 
-	maxOwner       = 65534
-	keyBytes       = 64
-	blankProbeSize = 1 << 20
-	requestTimeout = 5 * time.Second
+	upperSuffix = ".upper"
+	workSuffix  = ".work"
 
-	opStatus     byte = 0
-	opUnlock     byte = 1
-	opInitialize byte = 2
+	maxOwner        = 65534
+	maxOverlays     = 8
+	keyBytes        = 64
+	maxRequestBytes = 512
+	blankProbeSize  = 1 << 20
+	requestTimeout  = 5 * time.Second
 
-	responseOK       byte = 0
-	responseRejected byte = 1
-	responseFailed   byte = 2
-	responseLocked   byte = 3
+	opStatus     = "status"
+	opUnlock     = "unlock"
+	opInitialize = "initialize"
+
+	statusOK       = "ok"
+	statusRejected = "rejected"
+	statusFailed   = "failed"
+	statusLocked   = "locked"
 )
 
-var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var (
+	namePattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	// A source may hold slashes; every segment begins with a non-dot to keep out
+	// `.`/`..`, and the class keeps out the comma and colon that would inject
+	// extra layers or mount options.
+	sourcePattern = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$`)
+)
+
+// overlay merges one model pack into this volume, entirely from the measured
+// invocation: source inside the pack is the read-only lower, target inside the
+// volume is where the merged tree appears.
+type overlay struct {
+	model  string
+	source string
+	target string
+}
 
 type invocation struct {
 	models     int
@@ -58,6 +81,7 @@ type invocation struct {
 	name       string
 	executable bool
 	owner      int
+	overlays   []overlay
 }
 
 type mountState struct {
@@ -65,10 +89,23 @@ type mountState struct {
 	device uint64
 }
 
+// request is one JSON object per SOCK_SEQPACKET datagram. The overlay layout is
+// measured and reaches the worker through its invocation, so the caller supplies
+// only the operation and the unlock key.
+type request struct {
+	Op  string `json:"op"`
+	Key []byte `json:"key,omitempty"`
+}
+
+type response struct {
+	Status string `json:"status"`
+}
+
 type worker struct {
 	name       string
 	executable bool
 	owner      int
+	overlays   []overlay
 	control    *os.File
 	source     *os.File
 	unlocked   bool
@@ -105,6 +142,14 @@ func parseInvocation(args []string) (invocation, error) {
 	flags.StringVar(&parsed.name, "name", "", "")
 	flags.BoolVar(&parsed.executable, "exec", false, "")
 	flags.IntVar(&parsed.owner, "owner", 0, "")
+	flags.Func("overlay", "", func(value string) error {
+		parts := strings.Split(value, ":")
+		if len(parts) != 3 {
+			return fmt.Errorf("overlay %q is not model:source:target", value)
+		}
+		parsed.overlays = append(parsed.overlays, overlay{model: parts[0], source: parts[1], target: parts[2]})
+		return nil
+	})
 	if err := flags.Parse(args[1:]); err != nil {
 		return invocation{}, err
 	}
@@ -125,6 +170,21 @@ func parseInvocation(args []string) (invocation, error) {
 	}
 	if err := device.StorageSlots(parsed.models, parsed.index+1); err != nil {
 		return invocation{}, err
+	}
+	// Re-checked here, not trusted from the caller: these strings are spliced
+	// into mount options and one names a directory this worker creates on the
+	// volume. The same paths are measured in tinfoil-config; this is the second
+	// gate.
+	if len(parsed.overlays) > maxOverlays {
+		return invocation{}, fmt.Errorf("too many overlays: %d", len(parsed.overlays))
+	}
+	if len(parsed.overlays) > 0 && !parsed.executable {
+		return invocation{}, errors.New("overlays require an executable volume")
+	}
+	for _, spec := range parsed.overlays {
+		if !modelPattern.MatchString(spec.model) || !sourcePattern.MatchString(spec.source) || !namePattern.MatchString(spec.target) {
+			return invocation{}, fmt.Errorf("invalid overlay %q", spec.model)
+		}
 	}
 	return parsed, nil
 }
@@ -196,6 +256,7 @@ func openWorker(parsed invocation) (*worker, error) {
 		name:       parsed.name,
 		executable: parsed.executable,
 		owner:      parsed.owner,
+		overlays:   parsed.overlays,
 		control:    control,
 		source:     source,
 	}, nil
@@ -291,48 +352,61 @@ func (w *worker) serve(connection *net.UnixConn) error {
 	if err := connection.SetDeadline(time.Now().Add(requestTimeout)); err != nil {
 		return err
 	}
-	var packet [keyBytes + 2]byte
+	var packet [maxRequestBytes + 1]byte
 	defer clear(packet[:])
 	n, err := connection.Read(packet[:])
 	if err != nil {
 		return err
 	}
 	status, requestErr := w.handle(packet[:n])
-	if _, err := connection.Write([]byte{status}); err != nil {
+	reply, err := json.Marshal(response{Status: status})
+	if err != nil {
+		return errors.Join(requestErr, err)
+	}
+	if _, err := connection.Write(reply); err != nil {
 		return errors.Join(requestErr, err)
 	}
 	return requestErr
 }
 
-func (w *worker) handle(packet []byte) (byte, error) {
-	if len(packet) == 1 && packet[0] == opStatus {
-		return responseLocked, nil
+func (w *worker) handle(packet []byte) (string, error) {
+	if len(packet) > maxRequestBytes {
+		return statusRejected, errors.New("request is too large")
 	}
-	if len(packet) != keyBytes+1 {
-		return responseRejected, errors.New("invalid request size")
+	var spec request
+	defer func() { clear(spec.Key) }()
+	decoder := json.NewDecoder(bytes.NewReader(packet))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&spec); err != nil {
+		return statusRejected, err
 	}
-	if packet[0] != opUnlock && packet[0] != opInitialize {
-		return responseRejected, errors.New("invalid request operation")
+	if spec.Op == opStatus {
+		return statusLocked, nil
 	}
-	initialize := packet[0] == opInitialize
-	if initialize {
+	if spec.Op != opUnlock && spec.Op != opInitialize {
+		return statusRejected, fmt.Errorf("invalid request operation %q", spec.Op)
+	}
+	if len(spec.Key) != keyBytes {
+		return statusRejected, fmt.Errorf("key is %d bytes, want %d", len(spec.Key), keyBytes)
+	}
+	if spec.Op == opInitialize {
 		blank, err := blockDeviceBlank(w.source)
 		if err != nil {
-			return responseFailed, err
+			return statusFailed, err
 		}
 		if !blank {
-			return responseRejected, errors.New("storage volume is not blank")
+			return statusRejected, errors.New("storage volume is not blank")
 		}
 	}
-	if err := w.activate(packet[1:], initialize); err != nil {
-		return responseFailed, err
+	if err := w.activate(spec); err != nil {
+		return statusFailed, err
 	}
 	w.unlocked = true
-	return responseOK, nil
+	return statusOK, nil
 }
 
-func (w *worker) activate(key []byte, initialize bool) (result error) {
-	mappedDevice, err := devicemapper.ActivateWritableCrypt(w.control, w.source, w.mapperName(), key)
+func (w *worker) activate(spec request) (result error) {
+	mappedDevice, err := devicemapper.ActivateWritableCrypt(w.control, w.source, w.mapperName(), spec.Key)
 	if err != nil {
 		return err
 	}
@@ -346,7 +420,7 @@ func (w *worker) activate(key []byte, initialize bool) (result error) {
 		}
 		result = errors.Join(result, devicemapper.Remove(w.control, w.mapperName()))
 	}()
-	if initialize {
+	if spec.Op == opInitialize {
 		command := exec.Command(selfPath, formatMode, w.mapperNode(), strconv.Itoa(w.owner))
 		command.Env = []string{}
 		command.Stdout = io.Discard
@@ -370,7 +444,71 @@ func (w *worker) activate(key []byte, initialize bool) (result error) {
 	if target.device != mappedDevice {
 		return fmt.Errorf("mounted unexpected device %d:%d", unix.Major(target.device), unix.Minor(target.device))
 	}
+	// Last, so a later failure never leaves the rollback above unable to unmount
+	// a volume with an overlay still on top of it.
+	return w.mountOverlays()
+}
+
+func (w *worker) mountOverlays() (result error) {
+	merged := make([]string, 0, len(w.overlays))
+	defer func() {
+		if result == nil {
+			return
+		}
+		for index := len(merged) - 1; index >= 0; index-- {
+			result = errors.Join(result, unix.Unmount(merged[index], 0))
+		}
+	}()
+	for _, spec := range w.overlays {
+		mountPoint, err := w.overlay(spec)
+		if err != nil {
+			return err
+		}
+		merged = append(merged, mountPoint)
+	}
 	return nil
+}
+
+func (w *worker) overlay(spec overlay) (string, error) {
+	lower := filepath.Join(boot.PrivateModelsDir, spec.model, spec.source)
+	// sourcePattern keeps the spec inside the pack, but a symlink in the pack
+	// would still resolve the lower layer out of it, so the path has to be real.
+	resolved, err := filepath.EvalSymlinks(lower)
+	if err != nil {
+		return "", err
+	}
+	if resolved != lower {
+		return "", fmt.Errorf("overlay source %s is not a real path in the pack", lower)
+	}
+	mountPoint := filepath.Join(w.dataPath(), spec.target)
+	upper, work := mountPoint+upperSuffix, mountPoint+workSuffix
+	for _, directory := range []string{mountPoint, upper, work} {
+		if err := os.Mkdir(directory, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+		// A pre-existing entry is tolerated because the volume persists, but a
+		// symlink here would send the mount, or the upper writes, off the volume.
+		info, err := os.Lstat(directory)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", fmt.Errorf("overlay path %s is not a directory", directory)
+		}
+	}
+	flags := uintptr(unix.MS_NODEV | unix.MS_NOSUID)
+	if !w.executable {
+		flags |= unix.MS_NOEXEC
+	}
+	options := "lowerdir=" + lower + ",upperdir=" + upper + ",workdir=" + work
+	if err := unix.Mount("overlay", mountPoint, "overlay", flags, options); err != nil {
+		return "", fmt.Errorf("merging %s into %s: %w", lower, mountPoint, err)
+	}
+	// overlayfs performs every upper-layer operation as the mounter, so upper and work stay ours.
+	if err := os.Chown(mountPoint, w.owner, w.owner); err != nil {
+		return "", errors.Join(err, unix.Unmount(mountPoint, 0))
+	}
+	return mountPoint, nil
 }
 
 func runFormatter(args []string) error {
@@ -406,7 +544,7 @@ func runFormatter(args []string) error {
 	// with the volume gid and no CAP_DAC_OVERRIDE, and new directories have to
 	// stay in the group as it grows. mkfs has to set both: it writes the root
 	// inode directly, whereas a chmod afterwards would need CAP_FOWNER, which
-	// the volume worker is not given.
+	// this formatter has just dropped.
 	root := fmt.Sprintf("root_owner=%d:%d,root_perms=2775", owner, owner)
 	return syscall.Exec(mkfsPath, []string{mkfsPath, "-F", "-q", "-E", root, args[2]}, []string{})
 }

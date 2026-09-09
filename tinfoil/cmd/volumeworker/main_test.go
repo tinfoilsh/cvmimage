@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
 	for _, test := range []struct {
@@ -29,8 +32,32 @@ func TestParseInvocationAcceptsDeclaredVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := invocation{models: 2, index: 1, name: "workspace", executable: true, owner: 1000}
-	if parsed != want {
+	if !reflect.DeepEqual(parsed, want) {
 		t.Fatalf("parsed = %+v, want %+v", parsed, want)
+	}
+}
+
+func TestParseInvocationOverlays(t *testing.T) {
+	base := []string{"worker", "--name=workspace", "--exec=true", "--owner=1000"}
+	for _, bad := range []string{
+		"nix:nix/store:st:ore",            // target splits a fourth field
+		"nix:nix/store:Store",             // target is not a single lowercase name
+		"nix:nix/store:store/x",           // target holds a separator
+		"nix:../etc:store",                // source escapes the pack
+		"nix:nix/store,upperdir=/x:store", // option injection in source
+		"n/x:nix/store:store",             // model holds a separator
+	} {
+		if _, err := parseInvocation(append(base, "--overlay="+bad)); err == nil {
+			t.Fatalf("parseInvocation accepted overlay %q", bad)
+		}
+	}
+	parsed, err := parseInvocation(append(base, "--overlay=nix:nix/store:store"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []overlay{{model: "nix", source: "nix/store", target: "store"}}
+	if !reflect.DeepEqual(parsed.overlays, want) {
+		t.Fatalf("overlays = %+v, want %+v", parsed.overlays, want)
 	}
 }
 

@@ -33,9 +33,24 @@ const (
 	maxIOCTLSize      = 16 * 1024
 	dmSectorSizeBytes = 512
 
-	encryptedModelCipher          = "aes-xts-plain64"
-	encryptedModelKeyBytes        = 64
-	encryptedModelSectorSizeBytes = 4096
+	encryptedModelCipher   = "aes-xts-plain64"
+	encryptedModelKeyBytes = 64
+	cryptSectorSizeBytes   = 4096
+
+	// The workspace volume is authenticated: dm-crypt MACs each sector and the
+	// dm-integrity device below it stores the tag.
+	integrityMAC             = "hmac(sha256)"
+	authenticatedCipher      = "capi:authenc(" + integrityMAC + ",xts(aes))-plain64"
+	authenticatedMACKeyBytes = 32
+	integrityTagBytes        = 32
+	integrityJournalMode     = "J"
+	integrityTarget          = "integrity"
+	integrityMagic           = "integrt\x00"
+	integrityDataSectorsAt   = 16
+	integrityProbeSectors    = 8
+
+	// AuthenticatedKeyBytes covers the XTS key followed by the MAC key.
+	AuthenticatedKeyBytes = encryptedModelKeyBytes + authenticatedMACKeyBytes
 
 	versionMajor = 4
 	versionMinor = 0
@@ -63,6 +78,11 @@ const (
 	devSuspendIOCTL = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | devSuspendCmd)
 	devStatusIOCTL  = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | devStatusCmd)
 	tableLoadIOCTL  = uintptr((ioctlReadWrite << 30) | (ioctlSize << 16) | (ioctlMagic << 8) | tableLoadCmd)
+)
+
+var (
+	sectorSizeOption = fmt.Sprintf("sector_size:%d", cryptSectorSizeBytes)
+	integrityOption  = fmt.Sprintf("integrity:%d:%s", integrityTagBytes, integrityMAC)
 )
 
 // Version is the device-mapper ioctl protocol version reported by the kernel.
@@ -401,25 +421,39 @@ func blockDeviceInfo(device *os.File) (string, uint64, error) {
 // volumes. The returned buffer contains key material and must be erased after
 // table loading.
 func CryptTable(deviceNumber string, key []byte, lengthSectors uint64) ([]byte, error) {
+	return cryptTable(encryptedModelCipher, deviceNumber, key, encryptedModelKeyBytes, lengthSectors, sectorSizeOption)
+}
+
+// AuthenticatedCryptTable builds the fixed dm-crypt parameters used for the
+// writable workspace volume, whose tags live on the dm-integrity device below.
+func AuthenticatedCryptTable(deviceNumber string, key []byte, lengthSectors uint64) ([]byte, error) {
+	return cryptTable(authenticatedCipher, deviceNumber, key, AuthenticatedKeyBytes, lengthSectors, integrityOption, sectorSizeOption)
+}
+
+func cryptTable(cipher, deviceNumber string, key []byte, keyBytes int, lengthSectors uint64, options ...string) ([]byte, error) {
 	if deviceNumber == "" || strings.IndexByte(deviceNumber, 0) >= 0 || strings.ContainsAny(deviceNumber, " \t\r\n") {
 		return nil, fmt.Errorf("invalid dm-crypt device number %q", deviceNumber)
 	}
-	if len(key) != encryptedModelKeyBytes {
+	if len(key) != keyBytes {
 		return nil, fmt.Errorf("invalid dm-crypt key length %d bytes", len(key))
 	}
-	sectorMultiple := uint64(encryptedModelSectorSizeBytes / dmSectorSizeBytes)
+	sectorMultiple := uint64(cryptSectorSizeBytes / dmSectorSizeBytes)
 	if lengthSectors == 0 || lengthSectors%sectorMultiple != 0 {
-		return nil, fmt.Errorf("dm-crypt length %d sectors is not aligned to sector size %d", lengthSectors, encryptedModelSectorSizeBytes)
+		return nil, fmt.Errorf("dm-crypt length %d sectors is not aligned to sector size %d", lengthSectors, cryptSectorSizeBytes)
 	}
 
-	params := make([]byte, 0, len(encryptedModelCipher)+hex.EncodedLen(len(key))+len(deviceNumber)+32)
-	params = append(params, encryptedModelCipher...)
+	params := make([]byte, 0, len(cipher)+hex.EncodedLen(len(key))+len(deviceNumber)+64)
+	params = append(params, cipher...)
 	params = append(params, ' ')
 	params = hex.AppendEncode(params, key)
 	params = append(params, " 0 "...)
 	params = append(params, deviceNumber...)
-	params = append(params, " 0 1 sector_size:"...)
-	params = strconv.AppendUint(params, encryptedModelSectorSizeBytes, 10)
+	params = append(params, " 0 "...)
+	params = strconv.AppendInt(params, int64(len(options)), 10)
+	for _, option := range options {
+		params = append(params, ' ')
+		params = append(params, option...)
+	}
 	return params, nil
 }
 
@@ -623,12 +657,113 @@ func readMajorMinor(path string) (uint32, uint32, error) {
 	return major, minor, nil
 }
 
+// IntegrityDataSectors reports the capacity dm-integrity publishes on source,
+// and whether source carries a superblock at all.
+func IntegrityDataSectors(source *os.File) (uint64, bool, error) {
+	if source == nil {
+		return 0, false, errors.New("nil block device")
+	}
+	// The target writes the superblock straight to the disk, so this descriptor
+	// caches a stale sector both before the first format and after it.
+	if err := unix.IoctlSetInt(int(source.Fd()), unix.BLKFLSBUF, 0); err != nil {
+		return 0, false, fmt.Errorf("invalidating the stale block cache: %w", err)
+	}
+	var header [dmSectorSizeBytes]byte
+	if _, err := source.ReadAt(header[:], 0); err != nil {
+		return 0, false, fmt.Errorf("reading integrity superblock: %w", err)
+	}
+	if string(header[:len(integrityMagic)]) != integrityMagic {
+		return 0, false, nil
+	}
+	return binary.LittleEndian.Uint64(header[integrityDataSectorsAt:]), true, nil
+}
+
+// ActivateIntegrity opens the dm-integrity device that stores the tags for a
+// writable crypt mapping. The target formats a zeroed device as it builds its
+// first table, so a volume without a superblock is only accepted when
+// initialize is set.
+func ActivateIntegrity(control, source *os.File, name string, initialize bool) (result error) {
+	deviceNumber, deviceSectors, err := blockDeviceInfo(source)
+	if err != nil {
+		return err
+	}
+	params := fmt.Sprintf("%s 0 %d %s 2 block_size:%d fix_padding",
+		deviceNumber, integrityTagBytes, integrityJournalMode, cryptSectorSizeBytes)
+	dataSectors, formatted, err := IntegrityDataSectors(source)
+	if err != nil {
+		return err
+	}
+	if !formatted {
+		if !initialize {
+			return fmt.Errorf("device %s carries no integrity superblock", deviceNumber)
+		}
+		// The capacity is published only once a table exists, and building one
+		// is what writes the superblock the zeroed device lacks.
+		if err := loadIntegrityTable(control, name, integrityProbeSectors, params); err != nil {
+			return err
+		}
+		if err := Remove(control, name); err != nil {
+			return err
+		}
+		if dataSectors, formatted, err = IntegrityDataSectors(source); err != nil {
+			return err
+		} else if !formatted {
+			return fmt.Errorf("device %s was not formatted", deviceNumber)
+		}
+	}
+	if dataSectors == 0 || dataSectors > deviceSectors {
+		return fmt.Errorf("integrity capacity %d sectors does not fit %s", dataSectors, deviceNumber)
+	}
+	if err := loadIntegrityTable(control, name, dataSectors, params); err != nil {
+		return err
+	}
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, Remove(control, name))
+		}
+	}()
+	if err := resume(control, name, 0); err != nil {
+		return err
+	}
+	info, err := Status(control, name)
+	if err != nil {
+		return err
+	}
+	if !info.Active() || info.ReadOnly() || info.TargetCount != 1 {
+		return fmt.Errorf(
+			"mapping %s has unexpected state: active=%t read-only=%t targets=%d",
+			name, info.Active(), info.ReadOnly(), info.TargetCount,
+		)
+	}
+	return EnsureBlockNode(MapperNode(name), info.Dev)
+}
+
+func loadIntegrityTable(control *os.File, name string, lengthSectors uint64, params string) (result error) {
+	if _, err := create(control, name, 0); err != nil {
+		return err
+	}
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, Remove(control, name))
+		}
+	}()
+	buf, err := tableLoadBuffer(name, lengthSectors, integrityTarget, params)
+	if err != nil {
+		return err
+	}
+	setFlags(buf, existsFlag)
+	if err := ioctl(control, tableLoadIOCTL, buf, 1); err != nil {
+		return fmt.Errorf("device-mapper table load %s failed: %w", name, err)
+	}
+	return nil
+}
+
 func ActivateWritableCrypt(control, source *os.File, name string, key []byte) (device uint64, result error) {
 	deviceNumber, lengthSectors, err := blockDeviceInfo(source)
 	if err != nil {
 		return 0, err
 	}
-	params, err := CryptTable(deviceNumber, key, lengthSectors)
+	params, err := AuthenticatedCryptTable(deviceNumber, key, lengthSectors)
 	if err != nil {
 		return 0, err
 	}

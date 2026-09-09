@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hkdf"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -37,12 +39,21 @@ const (
 	formatMode  = "--format"
 	selfPath    = "/proc/self/exe"
 
-	upperSuffix = ".upper"
-	workSuffix  = ".work"
+	upperSuffix     = ".upper"
+	workSuffix      = ".work"
+	integritySuffix = "-integrity"
+
+	// A request carries one key, but the table needs a cipher key and a MAC key.
+	tableKeyInfo = "tinfoil volume table key v1"
+
+	// The extend is one write of a whole digest to this file. It is TDX's
+	// alone; SEV-SNP guests have no such register and the path is absent.
+	rtmr3Path = "/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384"
 
 	maxOwner        = 65534
 	maxOverlays     = 8
 	keyBytes        = 64
+	sealBytes       = 48
 	maxRequestBytes = 512
 	blankProbeSize  = 1 << 20
 	requestTimeout  = 5 * time.Second
@@ -91,10 +102,11 @@ type mountState struct {
 
 // request is one JSON object per SOCK_SEQPACKET datagram. The overlay layout is
 // measured and reaches the worker through its invocation, so the caller supplies
-// only the operation and the unlock key.
+// only the operation, the unlock key, and what to seal the boot to.
 type request struct {
-	Op  string `json:"op"`
-	Key []byte `json:"key,omitempty"`
+	Op   string `json:"op"`
+	Key  []byte `json:"key,omitempty"`
+	Seal []byte `json:"seal,omitempty"`
 }
 
 type response struct {
@@ -293,6 +305,10 @@ func (w *worker) mapperNode() string {
 	return devicemapper.MapperNode(w.mapperName())
 }
 
+func (w *worker) integrityName() string {
+	return w.mapperName() + integritySuffix
+}
+
 func (w *worker) prepare() (bool, error) {
 	if err := os.MkdirAll(w.controlDir(), 0o700); err != nil {
 		return false, err
@@ -333,18 +349,27 @@ func (w *worker) inspect() (bool, error) {
 		}
 		return true, nil
 	}
-	if mapped {
-		if info.OpenCount > 0 {
-			return false, fmt.Errorf("mapping %s is open without its mount", w.mapperName())
-		}
-		if err := devicemapper.Remove(w.control, w.mapperName()); err != nil {
-			return false, err
-		}
+	if err := w.removeUnopened(w.mapperName()); err != nil {
+		return false, err
+	}
+	if err := w.removeUnopened(w.integrityName()); err != nil {
+		return false, err
 	}
 	if target.id != parent.id && target.device != parent.device {
 		return false, fmt.Errorf("unexpected mount at %s", w.dataPath())
 	}
 	return false, nil
+}
+
+func (w *worker) removeUnopened(name string) error {
+	info, mapped, err := devicemapper.Lookup(w.control, name)
+	if err != nil || !mapped {
+		return err
+	}
+	if info.OpenCount > 0 {
+		return fmt.Errorf("mapping %s is open without its mount", name)
+	}
+	return devicemapper.Remove(w.control, name)
 }
 
 func (w *worker) serve(connection *net.UnixConn) error {
@@ -389,6 +414,9 @@ func (w *worker) handle(packet []byte) (string, error) {
 	if len(spec.Key) != keyBytes {
 		return statusRejected, fmt.Errorf("key is %d bytes, want %d", len(spec.Key), keyBytes)
 	}
+	if spec.Seal != nil && len(spec.Seal) != sealBytes {
+		return statusRejected, fmt.Errorf("seal is %d bytes, want %d", len(spec.Seal), sealBytes)
+	}
 	if spec.Op == opInitialize {
 		blank, err := blockDeviceBlank(w.source)
 		if err != nil {
@@ -406,7 +434,25 @@ func (w *worker) handle(packet []byte) (string, error) {
 }
 
 func (w *worker) activate(spec request) (result error) {
-	mappedDevice, err := devicemapper.ActivateWritableCrypt(w.control, w.source, w.mapperName(), spec.Key)
+	tableKey, err := hkdf.Key(sha256.New, spec.Key, nil, tableKeyInfo, devicemapper.AuthenticatedKeyBytes)
+	if err != nil {
+		return err
+	}
+	defer clear(tableKey)
+	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), spec.Op == opInitialize); err != nil {
+		return err
+	}
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, devicemapper.Remove(w.control, w.integrityName()))
+		}
+	}()
+	tags, err := devicemapper.OpenBlockDevice(devicemapper.MapperNode(w.integrityName()))
+	if err != nil {
+		return err
+	}
+	defer tags.Close()
+	mappedDevice, err := devicemapper.ActivateWritableCrypt(w.control, tags, w.mapperName(), tableKey)
 	if err != nil {
 		return err
 	}
@@ -444,9 +490,38 @@ func (w *worker) activate(spec request) (result error) {
 	if target.device != mappedDevice {
 		return fmt.Errorf("mounted unexpected device %d:%d", unix.Major(target.device), unix.Minor(target.device))
 	}
+	// Here rather than before the mapping, because dm-crypt accepts any key: the
+	// mount is the only proof this one opened the volume, so a wrong key leaves
+	// the register untouched and the permit still worth retrying.
+	if spec.Seal != nil {
+		if err := extendSeal(spec.Seal); err != nil {
+			return err
+		}
+	}
 	// Last, so a later failure never leaves the rollback above unable to unmount
 	// a volume with an overlay still on top of it.
 	return w.mountOverlays()
+}
+
+// extendSeal marks this boot with what the caller sealed it to. The write is
+// the extend -- hardware replaces the register with the hash of its old value
+// and these bytes -- so a marked boot cannot be returned to an unmarked one
+// without a reboot. Where the guest has no such register there is nothing to
+// extend and nothing in the attestation to read it from, which is why the mark
+// is a client-side check against the report rather than this worker's word.
+func extendSeal(digest []byte) error {
+	file, err := os.OpenFile(rtmr3Path, os.O_WRONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("opening the seal register: %w", err)
+	}
+	if _, err := file.Write(digest); err != nil {
+		file.Close()
+		return fmt.Errorf("extending the seal register: %w", err)
+	}
+	return file.Close()
 }
 
 func (w *worker) mountOverlays() (result error) {
@@ -546,7 +621,9 @@ func runFormatter(args []string) error {
 	// inode directly, whereas a chmod afterwards would need CAP_FOWNER, which
 	// this formatter has just dropped.
 	root := fmt.Sprintf("root_owner=%d:%d,root_perms=2775", owner, owner)
-	return syscall.Exec(mkfsPath, []string{mkfsPath, "-F", "-q", "-E", root, args[2]}, []string{})
+	// Nothing is left to first use: dm-integrity holds no tag for a block that was
+	// never written, so a lazy table or journal reads back as an I/O error.
+	return syscall.Exec(mkfsPath, []string{mkfsPath, "-F", "-q", "-E", root + ",lazy_itable_init=0,lazy_journal_init=0", args[2]}, []string{})
 }
 
 func listen(path string, owner int) (*net.UnixListener, error) {

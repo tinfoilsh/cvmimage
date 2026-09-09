@@ -490,9 +490,6 @@ func (w *worker) activate(spec request) (result error) {
 		return fmt.Errorf("mounted unexpected device %d:%d", unix.Major(target.device), unix.Minor(target.device))
 	}
 	merged, err := w.mountOverlays()
-	if err != nil {
-		return err
-	}
 	defer func() {
 		if result == nil {
 			return
@@ -501,6 +498,9 @@ func (w *worker) activate(spec request) (result error) {
 			result = errors.Join(result, unix.Unmount(merged[index], 0))
 		}
 	}()
+	if err != nil {
+		return err
+	}
 	// Here rather than before the mapping, because dm-crypt accepts any key: the
 	// mount is the only proof this one opened the volume, so a wrong key leaves
 	// the register untouched and the permit still worth retrying. Last of all
@@ -538,20 +538,14 @@ func extendSeal(digest []byte) error {
 	return file.Close()
 }
 
-func (w *worker) mountOverlays() (_ []string, result error) {
+// mountOverlays reports every layer it merged, on failure as well, because the
+// caller unwinds them.
+func (w *worker) mountOverlays() ([]string, error) {
 	merged := make([]string, 0, len(w.overlays))
-	defer func() {
-		if result == nil {
-			return
-		}
-		for index := len(merged) - 1; index >= 0; index-- {
-			result = errors.Join(result, unix.Unmount(merged[index], 0))
-		}
-	}()
 	for _, spec := range w.overlays {
 		mountPoint, err := w.overlay(spec)
 		if err != nil {
-			return nil, err
+			return merged, err
 		}
 		merged = append(merged, mountPoint)
 	}

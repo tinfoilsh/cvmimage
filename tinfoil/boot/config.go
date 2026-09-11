@@ -113,6 +113,9 @@ func loadAndVerifyConfig(expectedHash string, debug bool, validate func(*Config)
 	if err := loadExternalConfig(); err != nil {
 		return nil, err
 	}
+	if err := shimconfig.WriteShim(bootstate.ShimConfigPath, config.ShimCfg); err != nil {
+		return nil, fmt.Errorf("writing shim config: %w", err)
+	}
 
 	return config, nil
 }

@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/bootstate"
+	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -56,11 +57,7 @@ func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
 	if err := atomicWrite(variant.RuntimeConfigPath, source, 0o600); err != nil {
 		return err
 	}
-	shimYAML, err := yaml.Marshal(config.ShimCfg)
-	if err != nil {
-		return err
-	}
-	if err := atomicWrite(bootstate.ShimConfigPath, shimYAML, 0o644); err != nil {
+	if err := shimconfig.WriteShim(bootstate.ShimConfigPath, config.ShimCfg); err != nil {
 		return err
 	}
 	type egressEntry struct {

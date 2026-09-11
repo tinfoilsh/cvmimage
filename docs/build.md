@@ -73,6 +73,8 @@ model secrets plus the secret names selected by the variant. Inference
 prepares registry credentials and the public directories for isolated models.
 Shared hardening applies each service's declared device paths, and the shim
 accepts configured evidence providers and HTTP handlers.
+Boot publishes the initial shim config so observability can start before the
+workload. The inference container manager replaces it when applying a reload.
 
 The configuration aliases still use the common `tinfoil-config` wire schema,
 including its container and GPU fields. External metadata and token audience

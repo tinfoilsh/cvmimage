@@ -170,5 +170,5 @@ func fixedStageIndex(t *testing.T, name string) int {
 
 var InitialStages = []string{
 	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, "gpu-attestation", StageCertificate,
-	StageKeyserverSecrets, StageRegistryAuth, "firewall", StageModels, "containers", StageShim,
+	StageKeyserverSecrets, "registry-auth", "firewall", StageModels, "containers", StageShim,
 }

@@ -16,7 +16,7 @@ func BootStages() []string {
 	return []string{
 		bootstate.StageConfig, bootstate.StageNetwork, bootstate.StageIdentity, bootstate.StageCPUAttestation,
 		StageGPUAttestation, bootstate.StageCertificate, bootstate.StageKeyserverSecrets,
-		bootstate.StageRegistryAuth, StageFirewall, bootstate.StageModels, StageContainers, bootstate.StageShim,
+		StageRegistryAuth, StageFirewall, bootstate.StageModels, StageContainers, bootstate.StageShim,
 	}
 }
 

@@ -46,7 +46,6 @@ const (
 
 	StageKeyserverSecrets = "keyserver-secrets"
 	StageCertificate      = "certificate"
-	StageRegistryAuth     = "registry-auth"
 	StageModels           = "models"
 
 	StageShim = "shim"

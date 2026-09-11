@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/secretstore"
@@ -21,13 +22,14 @@ type keyserverFetcher func(ctx context.Context, names []string) (map[string]stri
 func prepareSecretHandoff(
 	ctx context.Context,
 	config *Config,
+	workloadReferences []string,
 	externalConfig *shimconfig.ExternalConfig,
 	handoff *os.File,
 	configDigest string,
 	debug bool,
 	fetch keyserverFetcher,
 ) (string, error) {
-	names := secretstore.AllReferences(config)
+	names := secretReferences(config, workloadReferences)
 	var source string
 	switch {
 	case config.KeyserverURL == "":
@@ -57,10 +59,10 @@ func prepareSecretHandoff(
 		source = fmt.Sprintf("fetched %d from keyserver", len(names))
 	}
 
-	if missing := secretstore.MissingReferences(config, externalConfig); len(missing) != 0 {
+	if missing := secretstore.MissingReferences(names, externalConfig); len(missing) != 0 {
 		return "", fmt.Errorf("%d declared secret(s) remain unresolved", len(missing))
 	}
-	workloadSecrets, err := secretstore.WorkloadStore(config, externalConfig)
+	workloadSecrets, err := secretstore.Select(workloadReferences, externalConfig)
 	if err != nil {
 		return "", fmt.Errorf("resolving workload secrets: %w", err)
 	}
@@ -68,4 +70,17 @@ func prepareSecretHandoff(
 		return "", fmt.Errorf("creating sealed secret handoff: %w", err)
 	}
 	return fmt.Sprintf("handed off %d workload secret(s); %s", len(workloadSecrets), source), nil
+}
+
+// Model keys are resolved for boot, but only the workload's requested names
+// are written to its handoff.
+func secretReferences(config *Config, workload []string) []string {
+	names := append([]string(nil), workload...)
+	for _, model := range config.Models {
+		if model.KeySecret != "" {
+			names = append(names, model.KeySecret)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }

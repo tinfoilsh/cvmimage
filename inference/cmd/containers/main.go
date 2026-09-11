@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	containersecrets "tinfoil/inference/internal/secrets"
 	"tinfoil/inference/internal/variant"
 
 	"tinfoil/inference/internal/containers"
@@ -87,11 +88,11 @@ func run(ctx context.Context, invocation invocation) error {
 	if err != nil {
 		return err
 	}
-	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-container-secrets")
+	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-workload-secrets")
 	secrets, err := secretstore.ReadHandoff(
 		secretHandoff,
 		secretstore.ConfigDigest(verifiedConfig),
-		secretstore.WorkloadReferences(config),
+		containersecrets.References(config),
 	)
 	if err != nil {
 		return err

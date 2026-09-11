@@ -3,6 +3,7 @@ package variant
 import "tinfoil/internal/bootstate"
 
 const (
+	StageRegistryAuth         = "registry-auth"
 	RuntimeConfigPath         = bootstate.PrivateDir + "/runtime-config.yml"
 	ContainerStatusPath       = bootstate.PublicDir + "/container-status.json"
 	ContainerModelsDir        = "/tinfoil/models"

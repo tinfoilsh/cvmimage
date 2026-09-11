@@ -28,15 +28,13 @@ func noFetch(t *testing.T) keyserverFetcher {
 }
 
 func TestPrepareSecretHandoff(t *testing.T) {
-	config := &Config{
-		Containers: []Container{{Secrets: []string{"API_KEY"}}},
-	}
+	config := &Config{}
 	externalConfig := &shimconfig.ExternalConfig{
 		Secrets: map[string]string{"API_KEY": "secret"},
 	}
 	handoff := newHandoff(t)
 
-	detail, err := prepareSecretHandoff(context.Background(), config, externalConfig, handoff, "config-digest", false, noFetch(t))
+	detail, err := prepareSecretHandoff(context.Background(), config, []string{"API_KEY"}, externalConfig, handoff, "config-digest", false, noFetch(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,17 +51,15 @@ func TestPrepareSecretHandoff(t *testing.T) {
 }
 
 func TestPrepareSecretHandoffRejectsUnresolvedSecrets(t *testing.T) {
-	config := &Config{
-		Containers: []Container{{Secrets: []string{"API_KEY"}}},
-	}
-	_, err := prepareSecretHandoff(context.Background(), config, &shimconfig.ExternalConfig{}, newHandoff(t), "config-digest", false, noFetch(t))
+	config := &Config{}
+	_, err := prepareSecretHandoff(context.Background(), config, []string{"API_KEY"}, &shimconfig.ExternalConfig{}, newHandoff(t), "config-digest", false, noFetch(t))
 	if err == nil || !strings.Contains(err.Error(), "1 declared secret(s) remain unresolved") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestPrepareSecretHandoffReportsHandoffFailure(t *testing.T) {
-	_, err := prepareSecretHandoff(context.Background(), &Config{}, &shimconfig.ExternalConfig{}, nil, "config-digest", false, noFetch(t))
+	_, err := prepareSecretHandoff(context.Background(), &Config{}, nil, &shimconfig.ExternalConfig{}, nil, "config-digest", false, noFetch(t))
 	if err == nil || !strings.Contains(err.Error(), "creating sealed secret handoff") {
 		t.Fatalf("error = %v", err)
 	}
@@ -73,7 +69,6 @@ func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
 	config := &Config{
 		KeyserverURL: "https://keys.example",
 		Models:       []ModelSpec{{Name: "model", KeySecret: "MODEL_KEY"}},
-		Containers:   []Container{{Secrets: []string{"API_KEY"}}},
 	}
 	externalConfig := &shimconfig.ExternalConfig{}
 	handoff := newHandoff(t)
@@ -83,7 +78,7 @@ func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
 		requested = append(requested, names...)
 		return map[string]string{"API_KEY": "secret", "MODEL_KEY": "key"}, nil
 	}
-	detail, err := prepareSecretHandoff(context.Background(), config, externalConfig, handoff, "config-digest", false, fetch)
+	detail, err := prepareSecretHandoff(context.Background(), config, []string{"API_KEY"}, externalConfig, handoff, "config-digest", false, fetch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,12 +103,11 @@ func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
 func TestPrepareSecretHandoffKeyserverRejectsHostSuppliedSecret(t *testing.T) {
 	config := &Config{
 		KeyserverURL: "https://keys.example",
-		Containers:   []Container{{Secrets: []string{"API_KEY"}}},
 	}
 	externalConfig := &shimconfig.ExternalConfig{
 		Secrets: map[string]string{"API_KEY": "from-host"},
 	}
-	_, err := prepareSecretHandoff(context.Background(), config, externalConfig, newHandoff(t), "config-digest", false, noFetch(t))
+	_, err := prepareSecretHandoff(context.Background(), config, []string{"API_KEY"}, externalConfig, newHandoff(t), "config-digest", false, noFetch(t))
 	if err == nil || !strings.Contains(err.Error(), "must come from the keyserver") {
 		t.Fatalf("error = %v", err)
 	}
@@ -122,12 +116,11 @@ func TestPrepareSecretHandoffKeyserverRejectsHostSuppliedSecret(t *testing.T) {
 func TestPrepareSecretHandoffDebugIgnoresKeyserver(t *testing.T) {
 	config := &Config{
 		KeyserverURL: "https://keys.example",
-		Containers:   []Container{{Secrets: []string{"API_KEY"}}},
 	}
 	externalConfig := &shimconfig.ExternalConfig{
 		Secrets: map[string]string{"API_KEY": "secret"},
 	}
-	detail, err := prepareSecretHandoff(context.Background(), config, externalConfig, newHandoff(t), "config-digest", true, noFetch(t))
+	detail, err := prepareSecretHandoff(context.Background(), config, []string{"API_KEY"}, externalConfig, newHandoff(t), "config-digest", true, noFetch(t))
 	if err != nil {
 		t.Fatal(err)
 	}

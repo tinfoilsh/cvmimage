@@ -47,7 +47,7 @@ func TestSandboxPolicyDeniesModuleLoading(t *testing.T) {
 func TestBootCompletionWaitsForSandbox(t *testing.T) {
 	state := bootstate.State{}
 	for _, name := range BootStages() {
-		if name == "gpu-attestation" || name == "firewall" || name == "containers" || name == bootstate.StageRegistryAuth {
+		if name == "gpu-attestation" || name == "firewall" || name == "containers" || name == "registry-auth" {
 			t.Fatalf("unrelated stage %s", name)
 		}
 		status := bootstate.StatusOK

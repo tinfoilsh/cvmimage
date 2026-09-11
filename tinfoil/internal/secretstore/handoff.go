@@ -12,7 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -30,11 +29,11 @@ type handoff struct {
 }
 
 func NewHandoffFile() (*os.File, error) {
-	fd, err := unix.MemfdCreate("tinfoil-container-secrets", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	fd, err := unix.MemfdCreate("tinfoil-workload-secrets", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
 	if err != nil {
 		return nil, fmt.Errorf("creating secret handoff: %w", err)
 	}
-	return os.NewFile(uintptr(fd), "tinfoil-container-secrets"), nil
+	return os.NewFile(uintptr(fd), "tinfoil-workload-secrets"), nil
 }
 
 func ConfigDigest(source []byte) string {
@@ -42,32 +41,9 @@ func ConfigDigest(source []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func AllReferences(config *runtimeconfig.Config) []string {
-	seen := map[string]struct{}{}
-	for _, model := range config.Models {
-		if model.KeySecret != "" {
-			seen[model.KeySecret] = struct{}{}
-		}
-	}
-	for _, name := range WorkloadReferences(config) {
-		seen[name] = struct{}{}
-	}
-	return sortedKeys(seen)
-}
-
-func WorkloadReferences(config *runtimeconfig.Config) []string {
-	seen := map[string]struct{}{}
-	for _, container := range config.Containers {
-		for _, name := range container.Secrets {
-			seen[name] = struct{}{}
-		}
-	}
-	return sortedKeys(seen)
-}
-
-func MissingReferences(config *runtimeconfig.Config, external *shimconfig.ExternalConfig) []string {
+func MissingReferences(names []string, external *shimconfig.ExternalConfig) []string {
 	var missing []string
-	for _, name := range AllReferences(config) {
+	for _, name := range names {
 		if external.GetSecret(name) == "" {
 			missing = append(missing, name)
 		}
@@ -75,12 +51,12 @@ func MissingReferences(config *runtimeconfig.Config, external *shimconfig.Extern
 	return missing
 }
 
-func WorkloadStore(config *runtimeconfig.Config, external *shimconfig.ExternalConfig) (Store, error) {
+func Select(names []string, external *shimconfig.ExternalConfig) (Store, error) {
 	store := make(Store)
-	for _, name := range WorkloadReferences(config) {
+	for _, name := range names {
 		value := external.GetSecret(name)
 		if value == "" {
-			return nil, fmt.Errorf("declared container secret %q is unresolved", name)
+			return nil, fmt.Errorf("declared secret %q is unresolved", name)
 		}
 		store[name] = value
 	}

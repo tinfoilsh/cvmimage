@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"time"
+	containersecrets "tinfoil/inference/internal/secrets"
 
 	"tinfoil/boot"
 	"tinfoil/inference/internal/gpuattestation"
@@ -19,7 +20,8 @@ func bootSpec() boot.Spec {
 		Validate:        validate,
 		AttestDevices:   attestDevices,
 		IsolateModel:    runtimeconfig.ModelIsIsolated,
-		PrepareRegistry: setupRegistryAuth,
+		WorkloadSecrets: containersecrets.References,
+		PrepareWorkload: prepareWorkload,
 		DeviceEvidence:  gpuattestation.CollectDeviceEvidence,
 	}
 }

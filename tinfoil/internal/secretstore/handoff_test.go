@@ -6,32 +6,24 @@ import (
 	"testing"
 
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
 )
 
-func TestReferencesAndWorkloadStore(t *testing.T) {
-	config := &runtimeconfig.Config{
-		Models: []runtimeconfig.ModelSpec{{KeySecret: "MODEL_KEY"}},
-		Containers: []runtimeconfig.Container{
-			{Secrets: []string{"API_KEY", "SHARED"}},
-			{Secrets: []string{"SHARED"}},
-		},
-	}
+func TestSelectOnlyRequestedSecrets(t *testing.T) {
 	external := &shimconfig.ExternalConfig{Secrets: map[string]string{
-		"API_KEY": "api", "SHARED": "shared",
+		"API_KEY": "api", "SHARED": "shared", "MODEL_KEY": "model",
 	}}
-	if got := AllReferences(config); !slices.Equal(got, []string{"API_KEY", "MODEL_KEY", "SHARED"}) {
-		t.Fatalf("AllReferences() = %v", got)
-	}
-	if got := MissingReferences(config, external); !slices.Equal(got, []string{"MODEL_KEY"}) {
+	if got := MissingReferences([]string{"API_KEY", "MISSING"}, external); !slices.Equal(got, []string{"MISSING"}) {
 		t.Fatalf("MissingReferences() = %v", got)
 	}
-	store, err := WorkloadStore(config, external)
+	store, err := Select([]string{"API_KEY", "SHARED"}, external)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if store["API_KEY"] != "api" || store["SHARED"] != "shared" || len(store) != 2 {
-		t.Fatalf("WorkloadStore() = %#v", store)
+		t.Fatalf("Select() = %#v", store)
+	}
+	if _, err := Select([]string{"MISSING"}, external); err == nil {
+		t.Fatal("unresolved secret accepted")
 	}
 }
 

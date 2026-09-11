@@ -32,7 +32,7 @@ func mountModels(isolate func(*Config, string) bool, config *Config, externalCon
 
 	log.Printf("Mounting %d model packs", len(config.Models))
 	if err := os.MkdirAll(bootstate.PublicModelsDir, 0755); err != nil {
-		return fmt.Errorf("creating container model directory: %w", err)
+		return fmt.Errorf("creating public model directory: %w", err)
 	}
 	seen := map[string]struct{}{}
 	for index, model := range config.Models {
@@ -46,12 +46,6 @@ func mountModels(isolate func(*Config, string) bool, config *Config, externalCon
 		seen[ref.mapperName()] = struct{}{}
 		mountPoint, legacyAlias := modelMountTarget(isolate(config, model.Name), model, ref)
 		executable := model.Exec
-		if !legacyAlias {
-			containerMountPoint := bootstate.PublicModelsDir + "/" + model.Name
-			if err := os.MkdirAll(containerMountPoint, 0755); err != nil {
-				return fmt.Errorf("creating container mount point for model %q: %w", model.Name, err)
-			}
-		}
 
 		switch kind {
 		case modelKindPlaintext:

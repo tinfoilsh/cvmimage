@@ -18,6 +18,7 @@ import (
 	containersecrets "tinfoil/inference/internal/secrets"
 	"tinfoil/inference/internal/variant"
 
+	sharedconfig "github.com/tinfoilsh/tinfoil-config"
 	"tinfoil/inference/internal/containers"
 	"tinfoil/inference/internal/firewall"
 	"tinfoil/internal/bootstate"
@@ -228,11 +229,11 @@ func (m *manager) boot(override []byte) (result error) {
 		return fmt.Errorf("reading installed config: %w", err)
 	}
 	preserved := map[string]bool{}
-	if previous != nil && runtimeconfig.HasReservedDebugContainer(previous) {
-		if !runtimeconfig.HasReservedDebugContainer(config) {
+	if previous != nil && sharedconfig.HasReservedDebugContainer(previous) {
+		if !sharedconfig.HasReservedDebugContainer(config) {
 			return errors.New("debug config must retain tinfoil-debug-toolbox")
 		}
-		preserved[runtimeconfig.ReservedDebugContainerName] = true
+		preserved[sharedconfig.ReservedDebugContainerName] = true
 	}
 	frozenEgress, err := freezeFromPIDFile(variant.EgressPIDPath)
 	if err != nil {

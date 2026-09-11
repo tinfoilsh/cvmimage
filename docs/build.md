@@ -60,11 +60,31 @@ those builders.
 
 The Go modules follow the same ownership. `tinfoil/` owns CPU boot, PID 1
 supervision, and the TLS shim. Each takes a `Spec` with declared policy and
-focused hooks. `inference/` owns GPU bootstrap and attestation, Docker,
-containers, egress, and container diagnostics. `sandbox/` owns workspace
+focused hooks. `inference/` owns GPU bootstrap, attestation and metrics, Docker,
+containers, registry credentials, container networking, and diagnostics. `sandbox/` owns workspace
 setup, SSH, its daemon, and its CPU-only configuration rules. Each module has
 its own `go.mod` and checks; the two variants depend on `tinfoil/` through a
 local module replacement.
+
+Shared code applies policy supplied by each variant. `internal/bootstate`
+contains the stage tracker and common boot artifacts; inference's runtime
+paths live in `inference/internal/variant/paths.go`. Shared boot resolves
+model secrets plus the secret names selected by the variant. Inference
+prepares registry credentials and the public directories for isolated models.
+Shared hardening applies each service's declared device paths, and the shim
+accepts configured evidence providers and HTTP handlers.
+
+The configuration aliases still use the common `tinfoil-config` wire schema,
+including its container and GPU fields. External metadata and token audience
+and scope values also retain their existing protocol contracts. These are
+compatibility boundaries; workload behavior belongs to the variant. Container
+policy helpers and their validation tests are owned by inference.
+
+NVIDIA builders, patches, the nvattest dependency lock, and NVIDIA and Docker
+source pins live under `inference/nix/`. The shared `nix/runtime-sources.nix`
+contains only the BusyBox debug payload. Each variant owns its measured
+`rootfs/etc/nftables.conf`; shared firewall code only executes nft commands,
+including the HTTP-01 rule used by boot.
 
 Inference includes the NVIDIA payload and container runtime. Sandbox includes
 `tinfoil-sandbox`, OpenSSH, and the ext4 and dm-integrity support its encrypted
@@ -77,10 +97,11 @@ outputs below exist for each variant, with sandbox outputs prefixed
 | Runtime and debug Go binaries | Nixpkgs `buildGoModule` | `nix/go.nix`, variant command lists, each module's `go.mod` and `go.sum` |
 | Fixed initrd | Pinned GNU cpio and Zstandard | `nix/platform.nix`, `nix/initrd.nix` |
 | Custom kernel | Nixpkgs `linuxManualConfig` | `nix/kernel.nix`, shared `kernel/` configuration, variant kernel fragments |
-| Three NVIDIA modules | Nixpkgs kernel-module build | `inference/default.nix`, `nix/nvidia-modules.nix` |
-| nvattest and libnvat | Nixpkgs CMake and Rust builders | `inference/default.nix`, `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock` |
+| Three NVIDIA modules | Nixpkgs kernel-module build | `inference/default.nix`, `inference/nix/nvidia-modules.nix` |
+| nvattest and libnvat | Nixpkgs CMake and Rust builders | `inference/nix/nvattest.nix`, `inference/nix/patches/`, `inference/nix/locks/regorus.Cargo.lock` |
 | Ubuntu package payloads | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/platform.nix`, `sandbox/default.nix`, their package locks |
-| NVIDIA, Docker, and debug payloads | Fixed-output archive fetches | `inference/default.nix`, `nix/debug-rootfs.nix`, `nix/runtime-sources.nix` |
+| NVIDIA and Docker payloads | Fixed-output archive fetches | `inference/default.nix`, `inference/nix/sources.nix` |
+| Debug payloads | Fixed-output archive fetches | `nix/debug-rootfs.nix`, `nix/runtime-sources.nix` |
 | Repository configuration | Explicit file manifests | `image/rootfs/`, `inference/rootfs/`, `sandbox/rootfs/` |
 | Rootfs and debug archives | Fixed tar materializer | `nix/rootfs.nix`, shared and variant manifests |
 | Shipping and debug disk images | Nix-owned fakeroot and `systemd-repart` | `nix/image.nix`, `repart.d/` |
@@ -169,9 +190,14 @@ Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
 sandbox variant exposes `sandbox-runtime-go` and `sandbox-kernel-artifacts`,
 and `sandbox-checks` vets and tests its Go module. `platform-checks` and
 `inference-checks` cover the other modules; `checks` builds all three. The
-platform checks also run the PID 1 and boot race tests and the debug-console
-tests. Inference checks run the NVML race tests, and both variants test their
-debug PID 1 builds. There is no task-runner layer. Deleting result symlinks or
+platform checks also run the PID 1, boot-state, metrics, and shim race tests
+and the debug-console tests. Inference checks run the NVML, GPU metrics, and
+shim race tests, and both variants test their debug PID 1 builds. Dependency
+checks inspect `go list -deps -test` for production and debug builds: shared
+code cannot import either variant, the variants cannot import each other,
+and shared code and sandbox cannot import the NVIDIA, Docker, Moby, or
+containerd SDK namespaces. Schema dependencies for OCI references and digests
+remain allowed. There is no task-runner layer. Deleting result symlinks or
 collecting the Nix store is a separate host operation.
 
 Regenerate the reviewed Ubuntu package locks only when changing package inputs

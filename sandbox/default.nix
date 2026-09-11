@@ -36,6 +36,13 @@ in
   kernelConfigs = [ ./kernel.config ];
   checks = go.checks {
     name = "tinfoil-sandbox-checks";
+    forbiddenDependencies = [
+      "tinfoil/inference"
+      "github.com/NVIDIA"
+      "github.com/containerd"
+      "github.com/docker"
+      "github.com/moby"
+    ];
     module = module // {
       src = pkgs.lib.fileset.toSource {
         root = ../.;

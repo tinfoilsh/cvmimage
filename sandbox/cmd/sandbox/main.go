@@ -2,7 +2,7 @@
 // orchestrator creates. It is the guest half of one contract: orchestrator
 // mints a short-lived ES256 permit naming a sandbox's domain and the nonce of
 // the boot it is meant for, and that permit buys exactly one thing -- the right
-// to name the public key that owns this sandbox for the rest of the bootstate.
+// to name the public key that owns this sandbox for the rest of the boot.
 //
 // The permit is spent by the call that uses it. After one POST /enroll succeeds
 // the orchestrator's key is never read again, so the party that launched the

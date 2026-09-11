@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tinfoil/internal/bootstate"
@@ -489,20 +490,22 @@ func TestFileReadyWaitsForTheServiceLifecycle(t *testing.T) {
 
 func TestFileReadyReturnsWhenReadinessIsPublished(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "containers.ready")
-	writeResult := make(chan error, 1)
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		writeResult <- os.WriteFile(path, nil, 0o600)
-	}()
+	synctest.Test(t, func(t *testing.T) {
+		writeResult := make(chan error, 1)
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			writeResult <- os.WriteFile(path, nil, 0o600)
+		}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := FileReady(path)(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-writeResult; err != nil {
-		t.Fatal(err)
-	}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := FileReady(path)(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-writeResult; err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestHardeningWrapperAppliesPolicyBeforeExec(t *testing.T) {

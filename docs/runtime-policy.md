@@ -21,13 +21,28 @@ capability list preserves the inherited set; an empty list drops all
 capabilities. Only inference declares Docker's environment and the container
 and egress service policies.
 
+The shim's policy lists the device paths visible under its restricted `/dev`.
+The shared policy includes `null`, `tdx_guest`, and `sev-guest`; inference adds
+the NVIDIA control devices, capability directory, and numbered GPU and
+NVSwitch devices. Sandbox uses the CPU device list. An empty list gives a
+service an empty `/dev` and `/sys`. The shared filesystem code contains no
+NVIDIA device selection.
+
 Each variant also declares its boot stages. Inference reports GPU attestation,
 registry authentication, firewall setup, and container startup. Sandbox
 reports workspace and SSH preparation through its `sandbox` stage, without
 placeholder inference stages. The shim uses the variant's device-evidence
-provider in both boot and serving modes. Inference registers GPU metrics and
-container diagnostics; sandbox registers neither and rejects requests for
-nonzero GPU evidence.
+provider in both observability and proxy serving phases. The provider accepts
+only a nonce; inference binds its expected GPU count when configuring the
+provider. Boot uses the same contract for keyserver attestation. Sandbox
+rejects a nonzero GPU count before supplying its empty evidence provider.
+
+Both variants register authenticated JSON and Prometheus metrics handlers at
+`/.well-known/tinfoil-metrics` and `/.well-known/metrics`. Inference preserves
+the existing GPU JSON fields and the six Prometheus series with their
+`gpu_type` labels. Sandbox exposes CPU metrics without GPU fields or labels.
+Only inference registers `/.well-known/tinfoil-containers`. Each Prometheus
+handler has its own registry and produces a fresh snapshot for each scrape.
 
 The measured daemon policy includes these mode `0644` files:
 
@@ -49,7 +64,9 @@ The measured daemon policy includes these mode `0644` files:
   `tinfoil-boot` populates the HTTP-01 chain and `tinfoil-containers`
   populates the inbound and container chains after creating the fixed
   container bridge. The fixed external address and gateway contract has no
-  DHCP allowance.
+  DHCP allowance. Each variant owns a copy of this measured baseline. The
+  copies currently retain identical rules, including sandbox's unused
+  container chains; moving ownership does not change firewall behavior.
 - `/etc/nvidia-container-runtime/config.toml` prevents runtime module loading,
   exposes only compute and utility capabilities, invokes only the pinned
   `runc` path, consumes only `/var/run/cdi` specifications, and rejects
@@ -91,3 +108,9 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+Inference selects container secret names and creates the public mount
+directories for isolated models. Shared boot adds model-key references,
+resolves the combined secret set, and writes the sealed handoff bound to the
+measured config digest. Only workload secrets enter the handoff; model keys
+stay with boot. The container manager reads the handoff using inference's
+secret selection rules.

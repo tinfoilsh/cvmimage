@@ -7,12 +7,12 @@ import (
 	containersecrets "tinfoil/inference/internal/secrets"
 	"tinfoil/internal/attestation"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	"tinfoil/boot"
 	"tinfoil/inference/internal/gpuattestation"
 	"tinfoil/inference/internal/nvidia"
 	"tinfoil/inference/internal/variant"
 	"tinfoil/internal/bootstate"
-	"tinfoil/internal/runtimeconfig"
 )
 
 func bootSpec() boot.Spec {

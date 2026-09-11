@@ -1,13 +1,15 @@
-package runtimeconfig
+package main
 
 import (
 	"fmt"
+	sharedconfig "github.com/tinfoilsh/tinfoil-config"
 	"strings"
 	"testing"
+	"tinfoil/internal/runtimeconfig"
 )
 
 func TestDecodeRejectsUnknownHealthcheckField(t *testing.T) {
-	_, err := Decode([]byte(`
+	_, err := runtimeconfig.Decode([]byte(`
 shim: {}
 containers:
   - name: app
@@ -55,8 +57,8 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "production docker socket", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [/run/docker.sock:/var/run/docker.sock]", 1), want: "must name a volume declared in volumes"},
 		{name: "declared volume attached", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [workspace:/workspace]", 1) + "volumes:\n  - name: workspace\n    exec: true\n"},
 		{name: "undeclared volume attached", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [workspace:/workspace]", 1), want: "must name a volume declared in volumes"},
-		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", ReservedDebugContainerName), 1)},
-		{name: "debug toolbox capability", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    cap_add: [SETGID]\n    image", ReservedDebugContainerName), 1), want: "capability"},
+		{name: "debug toolbox socket", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    volumes: [/run/docker.sock:/var/run/docker.sock]\n    image", sharedconfig.ReservedDebugContainerName), 1)},
+		{name: "debug toolbox capability", debug: true, yaml: strings.Replace(validConfig, "name: app\n    image", fmt.Sprintf("name: %s\n    cap_add: [SETGID]\n    image", sharedconfig.ReservedDebugContainerName), 1), want: "capability"},
 		{name: "host ipc", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    ipc: host", 1), want: "ipc must be private or none"},
 		{name: "host pid", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    pid: host", 1), want: "pid is unsupported"},
 		{name: "raw device", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    devices: [/dev/kvm]", 1), want: "devices is unsupported"},
@@ -74,7 +76,7 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "duplicate host port", yaml: strings.Replace(validConfig, "containers:\n", "containers:\n  - name: other\n    image: example.com/other@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n    networks: [app]\n    ports: ['2022:22']\n", 1) + "    ports: ['2022:2222']\n", want: `already published by "other"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Decode([]byte(test.yaml), test.debug)
+			_, err := runtimeconfig.Decode([]byte(test.yaml), test.debug)
 			if test.want == "" && err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +108,7 @@ func TestDecodeValidatesModelAccess(t *testing.T) {
 		{name: "duplicate model", yaml: strings.Replace(strings.Replace(base, "containers:\n", "  - name: private-model\n    mwp: "+ref+"\ncontainers:\n", 1), "networks: [app]", "networks: [app]\n    models: [private-model]", 1), want: "duplicates"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Decode([]byte(test.yaml), false)
+			_, err := runtimeconfig.Decode([]byte(test.yaml), false)
 			if test.want == "" && err != nil {
 				t.Fatal(err)
 			}
@@ -117,11 +119,11 @@ func TestDecodeValidatesModelAccess(t *testing.T) {
 	}
 
 	plaintext := strings.Replace(validConfig, "containers:\n", "models:\n  - name: public-model\n    mwp: "+ref+"\ncontainers:\n", 1)
-	if _, err := Decode([]byte(plaintext), false); err != nil {
+	if _, err := runtimeconfig.Decode([]byte(plaintext), false); err != nil {
 		t.Fatalf("legacy plaintext model without grant: %v", err)
 	}
 	namelessPlaintext := strings.Replace(plaintext, "  - name: public-model\n    mwp:", "  - mwp:", 1)
-	if _, err := Decode([]byte(namelessPlaintext), false); err != nil {
+	if _, err := runtimeconfig.Decode([]byte(namelessPlaintext), false); err != nil {
 		t.Fatalf("legacy nameless plaintext model: %v", err)
 	}
 }
@@ -146,7 +148,7 @@ func TestDecodeValidatesGPUSelections(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			yaml := strings.Replace(base, "networks: [app]", "networks: [app]\n    runtime: nvidia\n    gpus: "+test.selection, 1)
-			_, err := Decode([]byte(yaml), false)
+			_, err := runtimeconfig.Decode([]byte(yaml), false)
 			if test.want == "" && err != nil {
 				t.Fatal(err)
 			}
@@ -158,7 +160,7 @@ func TestDecodeValidatesGPUSelections(t *testing.T) {
 }
 
 func TestDecodeDefaultsNullNetworkBeforeValidation(t *testing.T) {
-	config, err := Decode([]byte(strings.Replace(validConfig, "app:\n    egress: closed", "app:", 1)), false)
+	config, err := runtimeconfig.Decode([]byte(strings.Replace(validConfig, "app:\n    egress: closed", "app:", 1)), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +170,7 @@ func TestDecodeDefaultsNullNetworkBeforeValidation(t *testing.T) {
 }
 
 func TestDecodeRejectsMultipleDocuments(t *testing.T) {
-	_, err := Decode([]byte(validConfig+"\n---\n{}\n"), false)
+	_, err := runtimeconfig.Decode([]byte(validConfig+"\n---\n{}\n"), false)
 	if err == nil || !strings.Contains(err.Error(), "multiple YAML documents") {
 		t.Fatalf("error = %v", err)
 	}

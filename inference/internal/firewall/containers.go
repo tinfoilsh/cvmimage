@@ -7,8 +7,8 @@ import (
 	"strings"
 	nft "tinfoil/internal/firewall"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	"tinfoil/inference/internal/containernet"
-	"tinfoil/internal/runtimeconfig"
 )
 
 const (

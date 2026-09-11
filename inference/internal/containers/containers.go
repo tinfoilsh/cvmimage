@@ -22,10 +22,10 @@ import (
 	dockernetwork "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	"tinfoil/inference/internal/containernet"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
 
@@ -523,7 +523,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	hostConfig.Binds = append(hostConfig.Binds, c.Volumes...)
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
-	if runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {
+	if debug && c.Name == reservedDebugContainerName {
 		hostConfig.NetworkMode = "bridge"
 		// Unset: tinctl ssh dials the toolbox from outside the CVM.
 		hostIP = netip.Addr{}

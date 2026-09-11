@@ -10,11 +10,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	"tinfoil/inference/internal/containernet"
 	"tinfoil/inference/internal/gpuattestation"
 	"tinfoil/inference/internal/gpumetrics"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
 	"tinfoil/shim"
 )
 

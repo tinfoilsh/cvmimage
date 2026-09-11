@@ -14,7 +14,7 @@ import (
 	shimconfig "tinfoil/internal/config"
 )
 
-// NodeIdentity holds the cryptographic identity generated during bootstate.
+// NodeIdentity holds the cryptographic identity generated during boot.
 type NodeIdentity struct {
 	TLSKey       *ecdsa.PrivateKey
 	HPKEKeyBytes []byte

@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"time"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	"tinfoil/boot"
 	"tinfoil/inference/internal/variant"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
 )
 
 func prepareWorkload(tracker *bootstate.Tracker, config *boot.Config, external *shimconfig.ExternalConfig) error {

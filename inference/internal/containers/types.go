@@ -1,6 +1,6 @@
 package containers
 
-import "tinfoil/internal/runtimeconfig"
+import runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 
 type Config = runtimeconfig.Config
 type Container = runtimeconfig.Container

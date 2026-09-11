@@ -99,6 +99,7 @@ let
       name,
       module,
       extraChecks ? "",
+      forbiddenDependencies ? [ ],
     }:
     buildGoModule (
       module
@@ -110,6 +111,21 @@ let
         buildPhase = "true";
         checkPhase = ''
           runHook preCheck
+          ${pkgs.lib.optionalString (forbiddenDependencies != [ ]) ''
+            for tags in "" tinfoil_debug_image; do
+              go list -deps -test -tags="$tags" -f '{{.ImportPath}}' ./... > dependencies.txt
+              while IFS= read -r dependency; do
+                for forbidden in ${pkgs.lib.escapeShellArgs forbiddenDependencies}; do
+                  case "$dependency" in
+                    "$forbidden"|"$forbidden"/*)
+                      echo "${name}: forbidden dependency $dependency (tags=$tags)" >&2
+                      exit 1
+                      ;;
+                  esac
+                done
+              done < dependencies.txt
+            done
+          ''}
           go test ./...
           ${extraChecks}
           go vet ./...

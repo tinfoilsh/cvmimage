@@ -33,6 +33,14 @@ let
   initrd = import ./initrd.nix { inherit pkgs tinfoilInitrd; };
   checks = go.checks {
     name = "tinfoil-platform-checks";
+    forbiddenDependencies = [
+      "tinfoil/inference"
+      "tinfoil/sandbox"
+      "github.com/NVIDIA"
+      "github.com/containerd"
+      "github.com/docker"
+      "github.com/moby"
+    ];
     module = module // {
       src = pkgs.lib.fileset.toSource {
         root = ../.;
@@ -44,7 +52,7 @@ let
       };
     };
     extraChecks = ''
-      go test -race ./pid1 ./internal/bootstate/...
+      go test -race ./pid1 ./internal/bootstate/... ./internal/metrics ./shim
       go test -tags=tinfoil_debug_image ./pid1
     '';
   };

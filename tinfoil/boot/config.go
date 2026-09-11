@@ -15,11 +15,7 @@ import (
 )
 
 type Config = runtimeconfig.Config
-type CVMNetworkConfig = runtimeconfig.CVMNetworkConfig
-type NetworkSpec = runtimeconfig.NetworkSpec
 type ModelSpec = runtimeconfig.ModelSpec
-type Container = runtimeconfig.Container
-type Healthcheck = runtimeconfig.Healthcheck
 
 const maxDiskPayloadBytes = 1 << 20
 

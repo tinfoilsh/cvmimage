@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
 )
 
 const dnatDrop = "add rule inet tinfoil container_forward ct status dnat drop"

@@ -9,6 +9,7 @@ import (
 
 	"tinfoil/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/runtimeconfig"
 )
 
 func TestRegistryAuthUsesProvidedSecrets(t *testing.T) {
@@ -50,7 +51,7 @@ func TestPrepareModelDirectoriesOnlyCreatesGrantedMountPoints(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "models")
 	config := &boot.Config{
 		Models:     []boot.ModelSpec{{Name: "private"}, {Name: "public"}},
-		Containers: []boot.Container{{Models: []string{"private"}}},
+		Containers: []runtimeconfig.Container{{Models: []string{"private"}}},
 	}
 	if err := prepareModelDirectories(config, directory); err != nil {
 		t.Fatal(err)

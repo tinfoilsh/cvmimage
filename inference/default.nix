@@ -34,6 +34,7 @@ in
   kernelConfigs = [ ];
   checks = go.checks {
     name = "tinfoil-inference-checks";
+    forbiddenDependencies = [ "tinfoil/sandbox" ];
     module = module // {
       src = pkgs.lib.fileset.toSource {
         root = ../.;
@@ -45,7 +46,7 @@ in
       };
     };
     extraChecks = ''
-      go test -race ./internal/nvml
+      go test -race ./internal/nvml ./internal/gpumetrics ./cmd/shim
       go test -tags=tinfoil_debug_image ./cmd/pid1
     '';
   };

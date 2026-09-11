@@ -19,7 +19,7 @@ import (
 const (
 	persistencedUID     = 143
 	persistencedGID     = 143
-	serviceReadyWait    = 30 * time.Second
+	serviceReadyWait    = 120 * time.Second
 	servicePollInterval = 500 * time.Millisecond
 	maxPIDFileSize      = 32
 )

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"tinfoil/inference/internal/variant"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/distribution/reference"
@@ -21,7 +22,7 @@ import (
 	dockernetwork "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
@@ -123,14 +124,14 @@ func networkCreateOptions(name string) client.NetworkCreateOptions {
 // launchContainersAndWaitHealthy launches all containers in parallel with
 // health checking. Each container is tracked as a substage of "containers"
 // with per-phase sub-substages (pull, start, healthy).
-func LaunchAndWaitHealthy(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) error {
+func LaunchAndWaitHealthy(ctx context.Context, tracker *bootstate.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) error {
 	return LaunchAndWaitHealthyExcept(ctx, tracker, config, extConfig, secrets, debug, nil)
 }
 
-func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool, preserved map[string]bool) error {
+func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *bootstate.Tracker, config *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool, preserved map[string]bool) error {
 	if len(config.Containers) == 0 {
 		log.Println("No containers to launch")
-		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "no containers")
+		tracker.Record(variant.StageContainers, bootstate.StatusSkipped, 0, "no containers")
 		return nil
 	}
 
@@ -143,34 +144,34 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 	launchContainers := containersToLaunch(config.Containers, preserved)
 	if len(launchContainers) == 0 {
 		log.Println("No containers to launch")
-		tracker.Record(boot.StageContainers, boot.StatusSkipped, 0, "all containers preserved")
+		tracker.Record(variant.StageContainers, bootstate.StatusSkipped, 0, "all containers preserved")
 		return nil
 	}
 
 	start := time.Now()
 
 	// Initialize substages: one per container, each with phase sub-substages.
-	var substages []boot.Stage
+	var substages []bootstate.Stage
 	for _, c := range launchContainers {
-		phases := []boot.Stage{
-			{Name: "pull", Status: boot.StatusPending},
-			{Name: "start", Status: boot.StatusPending},
+		phases := []bootstate.Stage{
+			{Name: "pull", Status: bootstate.StatusPending},
+			{Name: "start", Status: bootstate.StatusPending},
 		}
 		if c.Healthcheck != nil {
-			phases = append(phases, boot.Stage{Name: "healthy", Status: boot.StatusPending})
+			phases = append(phases, bootstate.Stage{Name: "healthy", Status: bootstate.StatusPending})
 		}
-		substages = append(substages, boot.Stage{
+		substages = append(substages, bootstate.Stage{
 			Name:   c.Name,
-			Status: boot.StatusPending,
+			Status: bootstate.StatusPending,
 			Stages: phases,
 		})
 	}
-	tracker.RecordSubstages(boot.StageContainers, substages)
+	tracker.RecordSubstages(variant.StageContainers, substages)
 
 	// Launch all containers in parallel. Each goroutine handles the full
 	// lifecycle: pull → start → wait-healthy.
 	var mu sync.Mutex
-	flush := func() { tracker.RecordSubstages(boot.StageContainers, substages) }
+	flush := func() { tracker.RecordSubstages(variant.StageContainers, substages) }
 
 	errs := make([]error, len(launchContainers))
 	var wg sync.WaitGroup
@@ -191,11 +192,11 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 	}
 	if len(failures) > 0 {
 		detail := strings.Join(failures, "; ")
-		tracker.Record(boot.StageContainers, boot.StatusFailed, time.Since(start), detail)
+		tracker.Record(variant.StageContainers, bootstate.StatusFailed, time.Since(start), detail)
 		return fmt.Errorf("container failures: %s", detail)
 	}
 
-	tracker.Record(boot.StageContainers, boot.StatusOK, time.Since(start), "")
+	tracker.Record(variant.StageContainers, bootstate.StatusOK, time.Since(start), "")
 	return nil
 }
 
@@ -243,7 +244,7 @@ func runContainer(
 	cfg *Config,
 	extConfig *shimconfig.ExternalConfig,
 	secrets secretstore.Store,
-	substages *[]boot.Stage,
+	substages *[]bootstate.Stage,
 	mu *sync.Mutex,
 	flush func(),
 	debug bool,
@@ -268,24 +269,24 @@ func runContainer(
 	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
 	if err := pullImage(ctx, cli, c.Image); err != nil {
 		detail := fmt.Sprintf("pulling image: %v", err)
-		record("pull", boot.StatusFailed, time.Since(pullStart), detail)
-		finish(boot.StatusFailed, detail)
+		record("pull", bootstate.StatusFailed, time.Since(pullStart), detail)
+		finish(bootstate.StatusFailed, detail)
 		return fmt.Errorf("%s: %s", c.Name, detail)
 	}
-	record("pull", boot.StatusOK, time.Since(pullStart), "")
+	record("pull", bootstate.StatusOK, time.Since(pullStart), "")
 
 	// Create + start
 	startPhase := time.Now()
 	if err := createAndStartContainer(ctx, cli, c, cfg, extConfig, secrets, debug); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
-		record("start", boot.StatusFailed, time.Since(startPhase), detail)
-		finish(boot.StatusFailed, detail)
+		record("start", bootstate.StatusFailed, time.Since(startPhase), detail)
+		finish(bootstate.StatusFailed, detail)
 		return fmt.Errorf("%s: %s", c.Name, detail)
 	}
-	record("start", boot.StatusOK, time.Since(startPhase), "")
+	record("start", bootstate.StatusOK, time.Since(startPhase), "")
 
 	if c.Healthcheck == nil {
-		finish(boot.StatusOK, "")
+		finish(bootstate.StatusOK, "")
 		return nil
 	}
 
@@ -306,8 +307,8 @@ func runContainer(
 		}
 		switch info.State.Health.Status {
 		case container.Healthy:
-			record("healthy", boot.StatusOK, time.Since(healthStart), "")
-			finish(boot.StatusOK, "")
+			record("healthy", bootstate.StatusOK, time.Since(healthStart), "")
+			finish(bootstate.StatusOK, "")
 			log.Printf("Container %s is healthy", c.Name)
 			return nil
 		case container.Unhealthy:
@@ -315,15 +316,15 @@ func runContainer(
 			if msg := lastHealthLog(info.State.Health); msg != "" {
 				detail = msg
 			}
-			record("healthy", boot.StatusFailed, time.Since(healthStart), detail)
-			finish(boot.StatusFailed, detail)
+			record("healthy", bootstate.StatusFailed, time.Since(healthStart), detail)
+			finish(bootstate.StatusFailed, detail)
 			log.Printf("Container %s is unhealthy: %s", c.Name, detail)
 			return fmt.Errorf("%s: %s", c.Name, detail)
 		}
 	}
 }
 
-func updateSubstage(substages *[]boot.Stage, name, status string, duration time.Duration, detail string) {
+func updateSubstage(substages *[]bootstate.Stage, name, status string, duration time.Duration, detail string) {
 	for i := range *substages {
 		if (*substages)[i].Name == name {
 			(*substages)[i].Status = status
@@ -334,7 +335,7 @@ func updateSubstage(substages *[]boot.Stage, name, status string, duration time.
 	}
 }
 
-func updateSubstagePhase(substages *[]boot.Stage, containerName, phase, status string, duration time.Duration, detail string) {
+func updateSubstagePhase(substages *[]bootstate.Stage, containerName, phase, status string, duration time.Duration, detail string) {
 	for i := range *substages {
 		if (*substages)[i].Name == containerName {
 			for j := range (*substages)[i].Stages {
@@ -477,11 +478,11 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		SecurityOpt:    []string{"no-new-privileges:true"},
 		ReadonlyRootfs: c.ReadOnly == nil || *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
-		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
+		Binds:          []string{bootstate.PublicDir + ":/tinfoil:ro"},
 	}
 	for _, model := range c.Models {
 		hostConfig.Binds = append(hostConfig.Binds,
-			boot.PrivateModelsDir+"/"+model+":"+boot.ContainerModelsDir+"/"+model+":ro",
+			bootstate.PrivateModelsDir+"/"+model+":"+variant.ContainerModelsDir+"/"+model+":ro",
 		)
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit

@@ -15,9 +15,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"tinfoil/inference/internal/variant"
 
 	"tinfoil/inference/internal/containers"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/firewall"
 	"tinfoil/internal/runtimeconfig"
@@ -78,7 +79,7 @@ func run(ctx context.Context, invocation invocation) error {
 	if invocation.secretsFD < 0 {
 		return fmt.Errorf("container-secret handoff descriptor is required")
 	}
-	verifiedConfig, err := os.ReadFile(boot.ConfigPath)
+	verifiedConfig, err := os.ReadFile(bootstate.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("reading verified config: %w", err)
 	}
@@ -118,21 +119,21 @@ func run(ctx context.Context, invocation invocation) error {
 			return err
 		}
 		defer listener.Close()
-		defer os.Remove(boot.ContainersSocket)
+		defer os.Remove(variant.ContainersSocket)
 	}
 
-	_ = os.Remove(boot.ContainersReadyPath)
-	if _, err := os.Stat(boot.RuntimeBootedPath); errors.Is(err, os.ErrNotExist) {
+	_ = os.Remove(variant.ContainersReadyPath)
+	if _, err := os.Stat(variant.RuntimeBootedPath); errors.Is(err, os.ErrNotExist) {
 		if err := manager.boot(nil); err != nil {
 			return err
 		}
-		if err := atomicWrite(boot.RuntimeBootedPath, []byte("booted\n"), 0o600); err != nil {
+		if err := atomicWrite(variant.RuntimeBootedPath, []byte("booted\n"), 0o600); err != nil {
 			return fmt.Errorf("recording runtime boot: %w", err)
 		}
 	} else if err != nil {
 		return fmt.Errorf("checking runtime boot marker: %w", err)
 	}
-	if err := atomicWrite(boot.ContainersReadyPath, []byte("ready\n"), 0o600); err != nil {
+	if err := atomicWrite(variant.ContainersReadyPath, []byte("ready\n"), 0o600); err != nil {
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
 
@@ -149,7 +150,7 @@ func run(ctx context.Context, invocation invocation) error {
 		<-runtimeCtx.Done()
 		_ = httpServer.Shutdown(context.Background())
 	}()
-	log.Printf("tinfoil-containers: debug API listening on %s", boot.ContainersSocket)
+	log.Printf("tinfoil-containers: debug API listening on %s", variant.ContainersSocket)
 	serveErr := httpServer.Serve(listener)
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		serveErr = nil
@@ -159,12 +160,12 @@ func run(ctx context.Context, invocation invocation) error {
 }
 
 func listenDebugSocket() (net.Listener, error) {
-	_ = os.Remove(boot.ContainersSocket)
-	listener, err := net.Listen("unix", boot.ContainersSocket)
+	_ = os.Remove(variant.ContainersSocket)
+	listener, err := net.Listen("unix", variant.ContainersSocket)
 	if err != nil {
-		return nil, fmt.Errorf("listening on %s: %w", boot.ContainersSocket, err)
+		return nil, fmt.Errorf("listening on %s: %w", variant.ContainersSocket, err)
 	}
-	if err := os.Chmod(boot.ContainersSocket, 0o660); err != nil {
+	if err := os.Chmod(variant.ContainersSocket, 0o660); err != nil {
 		listener.Close()
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func (m *manager) boot(override []byte) (result error) {
 	if err != nil {
 		return err
 	}
-	externalData, err := os.ReadFile(boot.ExternalConfigPath)
+	externalData, err := os.ReadFile(bootstate.ExternalConfigPath)
 	if err != nil {
 		return fmt.Errorf("reading external config: %w", err)
 	}
@@ -232,7 +233,7 @@ func (m *manager) boot(override []byte) (result error) {
 		}
 		preserved[runtimeconfig.ReservedDebugContainerName] = true
 	}
-	frozenEgress, err := freezeFromPIDFile(boot.EgressPIDPath)
+	frozenEgress, err := freezeFromPIDFile(variant.EgressPIDPath)
 	if err != nil {
 		return fmt.Errorf("freezing current egress policy: %w", err)
 	}
@@ -241,7 +242,7 @@ func (m *manager) boot(override []byte) (result error) {
 	}
 	defer func() {
 		if frozenEgress != nil {
-			if err := restartFrozenFromPIDFile(context.Background(), boot.EgressPIDPath, frozenEgress); err != nil {
+			if err := restartFrozenFromPIDFile(context.Background(), variant.EgressPIDPath, frozenEgress); err != nil {
 				result = errors.Join(result, fmt.Errorf("restoring egress policy service: %w", err))
 			}
 		}
@@ -252,21 +253,21 @@ func (m *manager) boot(override []byte) (result error) {
 	if err := writeRuntimeArtifacts(config, source); err != nil {
 		return err
 	}
-	tracker, err := boot.ResumeTracker()
+	tracker, err := bootstate.ResumeTracker()
 	if err != nil {
 		return err
 	}
 	start := time.Now()
 	if err := firewall.ApplyInbound(config.CVMNetwork.InboundPorts); err != nil {
-		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record(variant.StageFirewall, bootstate.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
 	if err := containers.PrepareNetworks(m.ctx, config, m.debug); err != nil {
-		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record(variant.StageFirewall, bootstate.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("preparing container networks: %w", err)
 	}
-	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-	if err := restartFrozenFromPIDFile(m.ctx, boot.EgressPIDPath, frozenEgress); err != nil {
+	tracker.Record(variant.StageFirewall, bootstate.StatusOK, time.Since(start), "")
+	if err := restartFrozenFromPIDFile(m.ctx, variant.EgressPIDPath, frozenEgress); err != nil {
 		return fmt.Errorf("restarting egress policy: %w", err)
 	}
 	frozenEgress = nil

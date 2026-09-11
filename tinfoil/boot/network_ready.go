@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -47,7 +47,7 @@ func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetwo
 	iface, err := waitForNetworkInterface(
 		ctx,
 		sysBusPCIDevices,
-		boot.ExternalNICPCIAddress,
+		bootstate.ExternalNICPCIAddress,
 		networkPollInterval,
 	)
 	if err != nil {

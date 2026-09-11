@@ -11,10 +11,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"tinfoil/inference/internal/variant"
 
 	"gopkg.in/yaml.v3"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -37,7 +38,7 @@ func (instance *serviceInstance) close() {
 }
 
 func loadRuntimeConfig() (*runtimeconfig.Config, error) {
-	data, err := os.ReadFile(boot.RuntimeConfigPath)
+	data, err := os.ReadFile(bootstate.RuntimeConfigPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -52,14 +53,14 @@ func loadRuntimeConfig() (*runtimeconfig.Config, error) {
 }
 
 func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
-	if err := atomicWrite(boot.RuntimeConfigPath, source, 0o600); err != nil {
+	if err := atomicWrite(bootstate.RuntimeConfigPath, source, 0o600); err != nil {
 		return err
 	}
 	shimYAML, err := yaml.Marshal(config.ShimCfg)
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(boot.ShimConfigPath, shimYAML, 0o644); err != nil {
+	if err := atomicWrite(bootstate.ShimConfigPath, shimYAML, 0o644); err != nil {
 		return err
 	}
 	type egressEntry struct {
@@ -78,12 +79,12 @@ func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(boot.EgressConfigPath, data, 0o600)
+	return atomicWrite(variant.EgressConfigPath, data, 0o600)
 }
 
 func restartRuntimeServices(ctx context.Context) error {
 	var errs []error
-	for _, path := range []string{boot.ShimPIDPath} {
+	for _, path := range []string{bootstate.ShimPIDPath} {
 		if err := restartFromPIDFile(ctx, path); err != nil {
 			errs = append(errs, err)
 		}

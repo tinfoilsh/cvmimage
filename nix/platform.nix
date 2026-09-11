@@ -44,7 +44,7 @@ let
       };
     };
     extraChecks = ''
-      go test -race ./pid1 ./internal/boot/...
+      go test -race ./pid1 ./internal/bootstate/...
       go test -tags=tinfoil_debug_image ./pid1
     '';
   };

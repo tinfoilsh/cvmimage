@@ -2,7 +2,7 @@ package variant
 
 import (
 	"golang.org/x/sys/unix"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/pid1/hardening"
 )
 
@@ -15,8 +15,8 @@ const (
 
 func BootStages() []string {
 	return []string{
-		boot.StageConfig, boot.StageNetwork, boot.StageIdentity, boot.StageCPUAttestation,
-		boot.StageCertificate, boot.StageKeyserverSecrets, boot.StageModels, Stage, boot.StageShim,
+		bootstate.StageConfig, bootstate.StageNetwork, bootstate.StageIdentity, bootstate.StageCPUAttestation,
+		bootstate.StageCertificate, bootstate.StageKeyserverSecrets, bootstate.StageModels, Stage, bootstate.StageShim,
 	}
 }
 

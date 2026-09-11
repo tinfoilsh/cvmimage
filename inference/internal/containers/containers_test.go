@@ -5,11 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"tinfoil/inference/internal/variant"
 
 	"github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/secretstore"
@@ -284,7 +285,7 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
-	want := boot.PrivateModelsDir + "/private-model:" + boot.ContainerModelsDir + "/private-model:ro"
+	want := bootstate.PrivateModelsDir + "/private-model:" + variant.ContainerModelsDir + "/private-model:ro"
 	if !slices.Contains(hostConfig.Binds, want) {
 		t.Fatalf("Binds = %v, want %q", hostConfig.Binds, want)
 	}
@@ -297,7 +298,7 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
 	for _, bind := range ungrantedHostConfig.Binds {
-		if strings.HasPrefix(bind, boot.PrivateModelsDir+"/") {
+		if strings.HasPrefix(bind, bootstate.PrivateModelsDir+"/") {
 			t.Fatalf("ungranted Binds = %v", ungrantedHostConfig.Binds)
 		}
 	}

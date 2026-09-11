@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	tinfoilattestation "tinfoil/internal/attestation"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
@@ -405,7 +405,7 @@ func registerObservabilityHandlers(
 	})
 
 	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
-		state, err := boot.Load()
+		state, err := bootstate.Load()
 		if err != nil {
 			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
 			return
@@ -425,7 +425,7 @@ func registerObservabilityHandlers(
 func writeWorkloadUnavailable(w http.ResponseWriter) {
 	status := "pending"
 	var state any
-	if s, err := boot.Load(); err == nil {
+	if s, err := bootstate.Load(); err == nil {
 		state = s
 		if s.HasFailed() {
 			status = "failed"

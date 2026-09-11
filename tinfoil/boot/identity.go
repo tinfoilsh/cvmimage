@@ -10,11 +10,11 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 )
 
-// NodeIdentity holds the cryptographic identity generated during boot.
+// NodeIdentity holds the cryptographic identity generated during bootstate.
 type NodeIdentity struct {
 	TLSKey       *ecdsa.PrivateKey
 	HPKEKeyBytes []byte
@@ -35,7 +35,7 @@ func generateIdentity(shimCfg *shimconfig.Config, externalConfig *shimconfig.Ext
 		domain = "localhost"
 	}
 
-	serverIdentity, err := loadOrCreateHPKEIdentity(boot.HPKEKeyPath)
+	serverIdentity, err := loadOrCreateHPKEIdentity(bootstate.HPKEKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading HPKE identity: %w", err)
 	}

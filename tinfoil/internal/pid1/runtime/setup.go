@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 )
 
 const (
@@ -136,13 +136,13 @@ func SetupRamdisk(log LogFunc) error {
 		logf(log, "warning: not enough RAM for full ramdisk, falling back to %dG", sizeGB)
 	}
 
-	if err := mountIfNeeded("tmpfs", boot.RamdiskDir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, fmt.Sprintf("size=%dG,mode=0755", sizeGB), log); err != nil {
+	if err := mountIfNeeded("tmpfs", bootstate.RamdiskDir, "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, fmt.Sprintf("size=%dG,mode=0755", sizeGB), log); err != nil {
 		return err
 	}
-	if err := ensureDir(boot.PrivateDir, 0700); err != nil {
+	if err := ensureDir(bootstate.PrivateDir, 0700); err != nil {
 		return err
 	}
-	if err := ensureDir(boot.PublicDir, 0755); err != nil {
+	if err := ensureDir(bootstate.PublicDir, 0755); err != nil {
 		return err
 	}
 	if err := mountIfNeeded("tmpfs", "/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, tmpfs512M, log); err != nil {

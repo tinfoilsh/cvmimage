@@ -1,4 +1,4 @@
-package boot
+package bootstate
 
 import (
 	"encoding/json"
@@ -39,18 +39,17 @@ const (
 )
 
 const (
-	StageConfig           = "config"
-	StageNetwork          = "network"
-	StageIdentity         = "identity"
-	StageCPUAttestation   = "cpu-attestation"
-	StageGPUAttestation   = "gpu-attestation"
+	StageConfig         = "config"
+	StageNetwork        = "network"
+	StageIdentity       = "identity"
+	StageCPUAttestation = "cpu-attestation"
+
 	StageKeyserverSecrets = "keyserver-secrets"
 	StageCertificate      = "certificate"
 	StageRegistryAuth     = "registry-auth"
 	StageModels           = "models"
-	StageFirewall         = "firewall"
-	StageContainers       = "containers"
-	StageShim             = "shim"
+
+	StageShim = "shim"
 )
 
 // Tracker records boot stages as they complete.

@@ -2,7 +2,7 @@
 // orchestrator creates. It is the guest half of one contract: orchestrator
 // mints a short-lived ES256 permit naming a sandbox's domain and the nonce of
 // the boot it is meant for, and that permit buys exactly one thing -- the right
-// to name the public key that owns this sandbox for the rest of the boot.
+// to name the public key that owns this sandbox for the rest of the bootstate.
 //
 // The permit is spent by the call that uses it. After one POST /enroll succeeds
 // the orchestrator's key is never read again, so the party that launched the
@@ -53,7 +53,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/sandbox/internal/variant"
@@ -205,7 +205,7 @@ func run() (result error) {
 	start := time.Now()
 	defer func() {
 		if result != nil {
-			_ = boot.RecordStage(variant.Stage, boot.StatusFailed, time.Since(start), result.Error())
+			_ = bootstate.RecordStage(variant.Stage, bootstate.StatusFailed, time.Since(start), result.Error())
 		}
 	}()
 	syscall.Umask(0o077)
@@ -253,7 +253,7 @@ func run() (result error) {
 	if err != nil {
 		return err
 	}
-	if err := boot.RecordStage(variant.Stage, boot.StatusOK, time.Since(start), "API listening"); err != nil {
+	if err := bootstate.RecordStage(variant.Stage, bootstate.StatusOK, time.Since(start), "API listening"); err != nil {
 		listener.Close()
 		return err
 	}
@@ -282,7 +282,7 @@ func run() (result error) {
 // kernel command line. The one volume is the workspace, and its first overlay
 // names the toolchain pack the shell runs from.
 func measuredConfig() (*runtimeconfig.Config, error) {
-	data, err := os.ReadFile(boot.ConfigPath)
+	data, err := os.ReadFile(bootstate.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func measuredConfig() (*runtimeconfig.Config, error) {
 }
 
 func externalDomain() (string, error) {
-	data, err := os.ReadFile(boot.ExternalConfigPath)
+	data, err := os.ReadFile(bootstate.ExternalConfigPath)
 	if err != nil {
 		return "", err
 	}
@@ -442,7 +442,7 @@ func (s *sandbox) open(key []byte, owner string) error {
 	if err := os.MkdirAll(profiles, 0o755); err != nil {
 		return err
 	}
-	pack := filepath.Join(boot.PrivateModelsDir, s.volume.spec.Overlays[0].Model, packProfile)
+	pack := filepath.Join(bootstate.PrivateModelsDir, s.volume.spec.Overlays[0].Model, packProfile)
 	if err := os.Symlink(pack, profile); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}

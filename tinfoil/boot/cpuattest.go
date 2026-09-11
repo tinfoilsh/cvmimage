@@ -13,7 +13,7 @@ import (
 	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/attestation"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	tlsutil "tinfoil/internal/tls"
 )
@@ -78,7 +78,7 @@ func writeAttestationDoc(att *verifier.Document) error {
 	if err != nil {
 		return fmt.Errorf("marshaling attestation document: %w", err)
 	}
-	if err := os.WriteFile(boot.AttestationPath, data, 0644); err != nil {
+	if err := os.WriteFile(bootstate.AttestationPath, data, 0644); err != nil {
 		return fmt.Errorf("writing attestation document: %w", err)
 	}
 	log.Println("V2 attestation document written to ramdisk")

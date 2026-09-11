@@ -3,12 +3,11 @@ package main
 import (
 	"net/http"
 	"os"
-
-	"tinfoil/internal/boot"
+	"tinfoil/inference/internal/variant"
 )
 
 func containersHandler() http.HandlerFunc {
-	return serveContainerStatusFile(boot.ContainerStatusPath)
+	return serveContainerStatusFile(variant.ContainerStatusPath)
 }
 
 func serveContainerStatusFile(path string) http.HandlerFunc {

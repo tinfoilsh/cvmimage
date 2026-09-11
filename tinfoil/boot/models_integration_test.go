@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -30,7 +30,7 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing EMWP ref: %v", err)
 	}
-	mountPoint := boot.PrivateModelsDir + "/emwp-integration"
+	mountPoint := bootstate.PrivateModelsDir + "/emwp-integration"
 	cleanupEMWPIntegration(spec, mountPoint)
 	t.Cleanup(func() {
 		cleanupEMWPIntegration(spec, mountPoint)

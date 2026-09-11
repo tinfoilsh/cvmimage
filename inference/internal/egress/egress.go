@@ -9,8 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"tinfoil/internal/boot"
+	"tinfoil/inference/internal/variant"
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/firewall"
 
@@ -41,7 +40,7 @@ type Engine struct {
 
 // Load reads the boot-generated allowlist config.
 func Load() (*Engine, error) {
-	cfg, err := loadConfig(boot.EgressConfigPath)
+	cfg, err := loadConfig(variant.EgressConfigPath)
 	if err != nil {
 		return nil, err
 	}

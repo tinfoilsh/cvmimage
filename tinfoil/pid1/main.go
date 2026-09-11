@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
@@ -245,14 +245,14 @@ func runLifecycle(parent context.Context, deps Deps, readiness *readinessState) 
 	// provisioning, then upgrades in place as boot publishes private artifacts.
 	if err := deps.Services.Start(bootCtx, supervisor.Service{
 		Name: ShimName, Required: true, Restart: true,
-		Command: HardenedCommand(hardening.ServiceShim, boot.ShimBinary),
+		Command: HardenedCommand(hardening.ServiceShim, bootstate.ShimBinary),
 		Ready:   EndpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile: boot.ShimPIDPath,
+		PIDFile: bootstate.ShimPIDPath,
 	}); err != nil {
 		return err
 	}
 	bootCommand := HardenedCommand(
-		hardening.ServiceBoot, boot.BootBinary,
+		hardening.ServiceBoot, bootstate.BootBinary,
 		"--config-hash="+deps.Cmdline.ConfigHash,
 		fmt.Sprintf("--debug=%t", deps.Cmdline.Debug),
 	)
@@ -322,7 +322,7 @@ func runOneShot(ctx context.Context, manager *supervisor.Manager, cmd supervisor
 	exit, waitErr := process.Wait(ctx)
 	if waitErr == nil {
 		return errors.Join(
-			annotateOneShotFailure(cmd.Name, exit.Err(), boot.Load, stages),
+			annotateOneShotFailure(cmd.Name, exit.Err(), bootstate.Load, stages),
 			process.Stop(0, grace),
 		)
 	}
@@ -336,7 +336,7 @@ func runOneShot(ctx context.Context, manager *supervisor.Manager, cmd supervisor
 func annotateOneShotFailure(
 	commandName string,
 	failure error,
-	loadState func() (*boot.State, error),
+	loadState func() (*bootstate.State, error),
 	stages []string,
 ) error {
 	if failure == nil || commandName != string(hardening.ServiceBoot) {

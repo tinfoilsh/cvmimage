@@ -12,7 +12,7 @@ import (
 	"github.com/tinfoilsh/modelwrap"
 	"golang.org/x/sys/unix"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
@@ -31,7 +31,7 @@ func mountModels(isolate func(*Config, string) bool, config *Config, externalCon
 	}
 
 	log.Printf("Mounting %d model packs", len(config.Models))
-	if err := os.MkdirAll(boot.PublicModelsDir, 0755); err != nil {
+	if err := os.MkdirAll(bootstate.PublicModelsDir, 0755); err != nil {
 		return fmt.Errorf("creating container model directory: %w", err)
 	}
 	seen := map[string]struct{}{}
@@ -47,7 +47,7 @@ func mountModels(isolate func(*Config, string) bool, config *Config, externalCon
 		mountPoint, legacyAlias := modelMountTarget(isolate(config, model.Name), model, ref)
 		executable := model.Exec
 		if !legacyAlias {
-			containerMountPoint := boot.PublicModelsDir + "/" + model.Name
+			containerMountPoint := bootstate.PublicModelsDir + "/" + model.Name
 			if err := os.MkdirAll(containerMountPoint, 0755); err != nil {
 				return fmt.Errorf("creating container mount point for model %q: %w", model.Name, err)
 			}
@@ -160,13 +160,13 @@ func mountEncryptedModelPack(
 
 func modelMountTarget(isolated bool, model ModelSpec, spec *modelPackRef) (string, bool) {
 	if isolated {
-		return boot.PrivateModelsDir + "/" + model.Name, false
+		return bootstate.PrivateModelsDir + "/" + model.Name, false
 	}
 	return spec.mountPoint(), true
 }
 
 func createLegacyModelPackAlias(spec *modelPackRef) error {
-	if err := os.MkdirAll(boot.MPKDir, 0755); err != nil {
+	if err := os.MkdirAll(bootstate.MPKDir, 0755); err != nil {
 		return fmt.Errorf("creating legacy model pack alias directory: %w", err)
 	}
 	aliasPath := spec.legacyMountPoint()
@@ -246,11 +246,11 @@ func (r *modelPackRef) mapperName() string {
 }
 
 func (r *modelPackRef) mountPoint() string {
-	return boot.MWPDir + "/" + r.mapperName()
+	return bootstate.MWPDir + "/" + r.mapperName()
 }
 
 func (r *modelPackRef) legacyMountPoint() string {
-	return boot.MPKDir + "/mpk-" + r.RootHash
+	return bootstate.MPKDir + "/mpk-" + r.RootHash
 }
 
 func parseModelPackRef(ref string) (*modelPackRef, error) {

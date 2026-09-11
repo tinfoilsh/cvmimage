@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/pid1/hardening"
 )
 
@@ -45,23 +45,23 @@ func TestSandboxPolicyDeniesModuleLoading(t *testing.T) {
 }
 
 func TestBootCompletionWaitsForSandbox(t *testing.T) {
-	state := boot.State{}
+	state := bootstate.State{}
 	for _, name := range BootStages() {
-		if name == boot.StageGPUAttestation || name == boot.StageFirewall || name == boot.StageContainers || name == boot.StageRegistryAuth {
+		if name == "gpu-attestation" || name == "firewall" || name == "containers" || name == bootstate.StageRegistryAuth {
 			t.Fatalf("unrelated stage %s", name)
 		}
-		status := boot.StatusOK
+		status := bootstate.StatusOK
 		if name == Stage {
-			status = boot.StatusPending
+			status = bootstate.StatusPending
 		}
-		state.Stages = append(state.Stages, boot.Stage{Name: name, Status: status})
+		state.Stages = append(state.Stages, bootstate.Stage{Name: name, Status: status})
 	}
 	if state.IsComplete() {
 		t.Fatal("completed before sandbox readiness")
 	}
 	for i := range state.Stages {
 		if state.Stages[i].Name == Stage {
-			state.Stages[i].Status = boot.StatusFailed
+			state.Stages[i].Status = bootstate.StatusFailed
 			state.Stages[i].Detail = "SSH preparation failed"
 		}
 	}

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
@@ -358,17 +358,17 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 
 func TestAnnotateOneShotFailureIncludesFixedBootStage(t *testing.T) {
 	failure := errors.New("boot child exited")
-	state := &boot.State{Stages: make([]boot.Stage, len(testBootStages))}
+	state := &bootstate.State{Stages: make([]bootstate.Stage, len(testBootStages))}
 	for index, name := range testBootStages {
-		state.Stages[index] = boot.Stage{Name: name, Status: boot.StatusOK}
-		if name == boot.StageNetwork {
-			state.Stages[index] = boot.Stage{
-				Name: boot.StageNetwork, Status: boot.StatusFailed, Detail: "route rejected",
+		state.Stages[index] = bootstate.Stage{Name: name, Status: bootstate.StatusOK}
+		if name == bootstate.StageNetwork {
+			state.Stages[index] = bootstate.Stage{
+				Name: bootstate.StageNetwork, Status: bootstate.StatusFailed, Detail: "route rejected",
 			}
 		}
 	}
 
-	got := annotateOneShotFailure(string(hardening.ServiceBoot), failure, func() (*boot.State, error) {
+	got := annotateOneShotFailure(string(hardening.ServiceBoot), failure, func() (*bootstate.State, error) {
 		return state, nil
 	}, testBootStages)
 	if !errors.Is(got, failure) {
@@ -385,12 +385,12 @@ func TestAnnotateOneShotFailureFallsBackToChildError(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		commandName string
-		load        func() (*boot.State, error)
+		load        func() (*bootstate.State, error)
 	}{
 		{
 			name:        "other command",
 			commandName: "nftables",
-			load: func() (*boot.State, error) {
+			load: func() (*bootstate.State, error) {
 				t.Fatal("non-boot command loaded boot state")
 				return nil, nil
 			},
@@ -398,15 +398,15 @@ func TestAnnotateOneShotFailureFallsBackToChildError(t *testing.T) {
 		{
 			name:        "missing state",
 			commandName: string(hardening.ServiceBoot),
-			load: func() (*boot.State, error) {
+			load: func() (*bootstate.State, error) {
 				return nil, loadFailure
 			},
 		},
 		{
 			name:        "no failed stage",
 			commandName: string(hardening.ServiceBoot),
-			load: func() (*boot.State, error) {
-				return &boot.State{Stages: []boot.Stage{{Name: boot.StageConfig, Status: boot.StatusOK}}}, nil
+			load: func() (*bootstate.State, error) {
+				return &bootstate.State{Stages: []bootstate.Stage{{Name: bootstate.StageConfig, Status: bootstate.StatusOK}}}, nil
 			},
 		},
 	} {
@@ -533,4 +533,4 @@ func TestHardeningWrapperAppliesPolicyBeforeExec(t *testing.T) {
 	}
 }
 
-var testBootStages = []string{boot.StageConfig, boot.StageNetwork, boot.StageIdentity, boot.StageShim}
+var testBootStages = []string{bootstate.StageConfig, bootstate.StageNetwork, bootstate.StageIdentity, bootstate.StageShim}

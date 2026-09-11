@@ -1,4 +1,4 @@
-package boot
+package bootstate
 
 import (
 	"os"
@@ -55,8 +55,8 @@ func TestFailureSummaryReturnsFirstFailedStage(t *testing.T) {
 	state.Stages[fixedStageIndex(t, StageCertificate)] = Stage{
 		Name: StageCertificate, Status: StatusFailed, Detail: "issuer\nrejected request",
 	}
-	state.Stages[fixedStageIndex(t, StageContainers)] = Stage{
-		Name: StageContainers, Status: StatusFailed, Detail: "later failure",
+	state.Stages[fixedStageIndex(t, "containers")] = Stage{
+		Name: "containers", Status: StatusFailed, Detail: "later failure",
 	}
 
 	got, ok := state.FailureSummary(InitialStages)
@@ -169,6 +169,6 @@ func fixedStageIndex(t *testing.T, name string) int {
 }
 
 var InitialStages = []string{
-	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
-	StageKeyserverSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
+	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, "gpu-attestation", StageCertificate,
+	StageKeyserverSecrets, StageRegistryAuth, "firewall", StageModels, "containers", StageShim,
 }

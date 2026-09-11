@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"tinfoil/internal/attestation"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -21,7 +21,7 @@ import (
 type Spec struct {
 	Stages          []string
 	Validate        func(*Config) error
-	AttestDevices   func(*boot.Tracker, *Config) error
+	AttestDevices   func(*bootstate.Tracker, *Config) error
 	IsolateModel    func(*Config, string) bool
 	PrepareRegistry func(*shimconfig.ExternalConfig) error
 	DeviceEvidence  attestation.DeviceEvidenceProvider
@@ -83,57 +83,57 @@ func run(ctx context.Context, invocation invocation, spec Spec) error {
 	secretHandoff := os.NewFile(uintptr(invocation.secretsFD), "tinfoil-container-secrets")
 	defer secretHandoff.Close()
 
-	tracker := boot.NewTracker(spec.Stages)
+	tracker := bootstate.NewTracker(spec.Stages)
 
 	// Config
 	start := time.Now()
 	log.Println("Loading configuration")
 	config, err := loadAndVerifyConfig(invocation.configHash, invocation.debug, spec.Validate)
 	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record("config", bootstate.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
 	externalConfig, err := getExternalConfig()
 	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record("config", bootstate.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("loading external config: %w", err)
 	}
-	tracker.Record("config", boot.StatusOK, time.Since(start), "")
+	tracker.Record("config", bootstate.StatusOK, time.Since(start), "")
 
 	// Network
 	start = time.Now()
 	log.Println("Configuring guest network")
 	networkDetail, err := configureGuestNetwork(ctx, externalConfig.Network)
 	if err != nil {
-		tracker.Record(boot.StageNetwork, boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record(bootstate.StageNetwork, bootstate.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("network configuration failed: %w", err)
 	}
-	tracker.Record(boot.StageNetwork, boot.StatusOK, time.Since(start), networkDetail)
+	tracker.Record(bootstate.StageNetwork, bootstate.StatusOK, time.Since(start), networkDetail)
 
 	// Identity
 	start = time.Now()
 	log.Println("Generating node identity")
 	nodeID, err := generateIdentity(config.ShimCfg, externalConfig)
 	if err != nil {
-		tracker.Record("identity", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record("identity", bootstate.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	tracker.Record("identity", boot.StatusOK, time.Since(start), nodeID.Domain)
+	tracker.Record("identity", bootstate.StatusOK, time.Since(start), nodeID.Domain)
 
 	// CPU attestation
 	start = time.Now()
 	log.Println("Fetching CPU attestation")
 	cpuAtt, err := fetchCPUAttestation(nodeID, config.ShimCfg)
 	if err != nil {
-		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record("cpu-attestation", bootstate.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	collateralRequest, err := writeCollateralRequest(boot.CollateralRequestPath, cpuAtt, externalConfig)
+	collateralRequest, err := writeCollateralRequest(bootstate.CollateralRequestPath, cpuAtt, externalConfig)
 	if err != nil {
-		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record("cpu-attestation", bootstate.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
+	tracker.Record("cpu-attestation", bootstate.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
 	// Optional device attestation
 	if spec.AttestDevices != nil {
@@ -146,10 +146,10 @@ func run(ctx context.Context, invocation invocation, spec Spec) error {
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
 	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
-		tracker.Record("certificate", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record("certificate", bootstate.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("certificate acquisition failed: %w", err)
 	}
-	tracker.Record("certificate", boot.StatusOK, time.Since(start), "")
+	tracker.Record("certificate", bootstate.StatusOK, time.Since(start), "")
 
 	// Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
@@ -158,28 +158,28 @@ func run(ctx context.Context, invocation invocation, spec Spec) error {
 			return fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest, names, spec.DeviceEvidence)
 		})
 	if err != nil {
-		tracker.Record(boot.StageKeyserverSecrets, boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record(bootstate.StageKeyserverSecrets, bootstate.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	tracker.Record(boot.StageKeyserverSecrets, boot.StatusOK, time.Since(start), secretDetail)
+	tracker.Record(bootstate.StageKeyserverSecrets, bootstate.StatusOK, time.Since(start), secretDetail)
 
 	if spec.PrepareRegistry != nil {
 		start = time.Now()
 		if err := spec.PrepareRegistry(externalConfig); err != nil {
-			tracker.Record(boot.StageRegistryAuth, boot.StatusFailed, time.Since(start), err.Error())
+			tracker.Record(bootstate.StageRegistryAuth, bootstate.StatusFailed, time.Since(start), err.Error())
 			return fmt.Errorf("registry auth setup failed: %w", err)
 		}
-		tracker.Record(boot.StageRegistryAuth, boot.StatusOK, time.Since(start), "")
+		tracker.Record(bootstate.StageRegistryAuth, bootstate.StatusOK, time.Since(start), "")
 	}
 
 	// Models
 	start = time.Now()
 	log.Println("Mounting models")
 	if err := mountModels(spec.IsolateModel, config, externalConfig); err != nil {
-		tracker.Record("models", boot.StatusFailed, time.Since(start), err.Error())
+		tracker.Record("models", bootstate.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("model mount failed: %w", err)
 	}
-	tracker.Record("models", boot.StatusOK, time.Since(start), "")
+	tracker.Record("models", bootstate.StatusOK, time.Since(start), "")
 
 	return nil
 }

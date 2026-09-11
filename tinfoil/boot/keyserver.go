@@ -19,7 +19,7 @@ import (
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -62,7 +62,7 @@ func fetchKeyserverSecrets(
 		return nil, err
 	}
 
-	cert, err := tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
+	cert, err := tls.LoadX509KeyPair(bootstate.TLSCertPath, bootstate.TLSKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading enclave TLS certificate: %w", err)
 	}

@@ -24,7 +24,7 @@ import (
 	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
 	localjwt "tinfoil/internal/key/jwt"
@@ -34,8 +34,8 @@ import (
 )
 
 var (
-	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
-	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
+	configFile         = flag.String("c", bootstate.ShimConfigPath, "Path to config file")
+	externalConfigFile = flag.String("e", bootstate.ExternalConfigPath, "Path to external config file")
 )
 
 const (
@@ -85,7 +85,7 @@ func Main(spec Spec) {
 	}
 
 	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", boot.ShimListenPort),
+		Addr:              fmt.Sprintf(":%d", bootstate.ShimListenPort),
 		ReadHeaderTimeout: shimReadHeaderTimeout,
 		IdleTimeout:       shimIdleTimeout,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +110,7 @@ func Main(spec Spec) {
 func bootStagesHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
-		state, err := boot.Load()
+		state, err := bootstate.Load()
 		if err != nil {
 			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
 			return
@@ -148,7 +148,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			config.UpstreamContainer, config.UpstreamPort, config.TLSMode, len(config.Paths))
 
 		realCert, err := waitForArtifact("TLS certificate", func() (tls.Certificate, error) {
-			return tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
+			return tls.LoadX509KeyPair(bootstate.TLSCertPath, bootstate.TLSKeyPath)
 		})
 		if err != nil {
 			return err
@@ -162,14 +162,14 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 		collateralRequest, err := waitForArtifact("Collateral request", func() (wire.Request, error) {
-			return loadCollateralRequest(boot.CollateralRequestPath)
+			return loadCollateralRequest(bootstate.CollateralRequestPath)
 		})
 		if err != nil {
 			return err
 		}
 
 		serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
-			return identity.FromFile(boot.HPKEKeyPath)
+			return identity.FromFile(bootstate.HPKEKeyPath)
 		})
 		if err != nil {
 			return err
@@ -203,19 +203,19 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		// workload traffic. Well-known observability endpoints stay live while
 		// containers load, restart, or fail.
 		waitUntil(func() bool {
-			state, err := boot.Load()
+			state, err := bootstate.Load()
 			if err != nil {
 				return false
 			}
 			for _, s := range state.Stages {
-				if s.Status == boot.StatusPending && s.Name != boot.StageShim {
+				if s.Status == bootstate.StatusPending && s.Name != bootstate.StageShim {
 					return false
 				}
 			}
 			return true
 		})
 
-		if state, err := boot.Load(); err == nil && state.HasFailed() {
+		if state, err := bootstate.Load(); err == nil && state.HasFailed() {
 			return fmt.Errorf("boot stage failed, not enabling proxy")
 		}
 
@@ -261,7 +261,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		targets, err := spec.PublishedPorts(boot.RuntimeConfigPath)
+		targets, err := spec.PublishedPorts(bootstate.RuntimeConfigPath)
 		if err != nil {
 			return fmt.Errorf("loading published ports: %w", err)
 		}
@@ -275,17 +275,17 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 
 	if err != nil {
 		log.Printf("Shim upgrade failed: %v", err)
-		boot.RecordStage(boot.StageShim, boot.StatusFailed, time.Since(start), err.Error())
+		bootstate.RecordStage(bootstate.StageShim, bootstate.StatusFailed, time.Since(start), err.Error())
 	} else {
-		boot.RecordStage(boot.StageShim, boot.StatusOK, time.Since(start), "")
+		bootstate.RecordStage(bootstate.StageShim, bootstate.StatusOK, time.Since(start), "")
 	}
-	boot.Complete()
+	bootstate.Complete()
 }
 
 // waitForArtifact polls load until it succeeds or boot fails.
 func waitForArtifact[T any](name string, load func() (T, error)) (T, error) {
 	for {
-		state, _ := boot.Load()
+		state, _ := bootstate.Load()
 		if state != nil && state.HasFailed() {
 			var zero T
 			return zero, fmt.Errorf("boot failed before %s was provisioned", name)
@@ -326,9 +326,9 @@ func generateEphemeralCert() (tls.Certificate, error) {
 }
 
 func loadAttestation() (*verifier.Document, error) {
-	data, err := os.ReadFile(boot.AttestationPath)
+	data, err := os.ReadFile(bootstate.AttestationPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", boot.AttestationPath, err)
+		return nil, fmt.Errorf("reading %s: %w", bootstate.AttestationPath, err)
 	}
 	var att verifier.Document
 	if err := json.Unmarshal(data, &att); err != nil {

@@ -10,7 +10,6 @@ import (
 
 	"tinfoil/inference/internal/nvidia"
 	"tinfoil/inference/internal/variant"
-	"tinfoil/internal/boot"
 	"tinfoil/internal/pid1/supervisor"
 	"tinfoil/pid1"
 )
@@ -56,7 +55,7 @@ func bootstrapDevices(ctx context.Context, deps pid1.Deps) error {
 		deps.OneShot,
 		deps.Services.Start,
 		func(status nvidia.BootstrapStatus) error {
-			return nvidia.WriteBootstrapStatus(boot.NVIDIABootstrapStatusPath, status)
+			return nvidia.WriteBootstrapStatus(variant.NVIDIABootstrapStatusPath, status)
 		},
 	)
 }
@@ -78,20 +77,20 @@ func startDaemons(ctx context.Context, deps pid1.Deps) error {
 }
 
 func startWorkload(ctx context.Context, deps pid1.Deps, secretHandoff *os.File) error {
-	containersCommand := pid1.HardenedCommand(variant.ServiceContainers, boot.ContainersBinary,
+	containersCommand := pid1.HardenedCommand(variant.ServiceContainers, variant.ContainersBinary,
 		fmt.Sprintf("--debug=%t", deps.Cmdline.Debug))
 	containersCommand = pid1.WithSecretHandoff(containersCommand, secretHandoff)
 	if err := deps.Services.Start(ctx, supervisor.Service{
 		Name: containersName, Required: true, Restart: true,
 		Command: containersCommand,
-		Ready:   pid1.FileReady(boot.ContainersReadyPath),
+		Ready:   pid1.FileReady(variant.ContainersReadyPath),
 	}); err != nil {
 		return err
 	}
 	return deps.Services.Start(ctx, supervisor.Service{
 		Name: egressName, Restart: true,
-		Command: pid1.HardenedCommand(variant.ServiceEgress, boot.EgressBinary),
-		PIDFile: boot.EgressPIDPath,
+		Command: pid1.HardenedCommand(variant.ServiceEgress, variant.EgressBinary),
+		PIDFile: variant.EgressPIDPath,
 	})
 }
 

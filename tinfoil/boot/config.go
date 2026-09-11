@@ -8,7 +8,7 @@ import (
 	"net/netip"
 	"os"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/device"
 	"tinfoil/internal/runtimeconfig"
@@ -98,7 +98,7 @@ func loadAndVerifyConfig(expectedHash string, debug bool, validate func(*Config)
 	log.Printf("Config hash verified: %s", actualHash)
 
 	// Write verified config to ramdisk
-	if err := os.WriteFile(boot.ConfigPath, configData, 0644); err != nil {
+	if err := os.WriteFile(bootstate.ConfigPath, configData, 0644); err != nil {
 		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
@@ -135,7 +135,7 @@ func loadExternalConfig() error {
 		return err
 	}
 
-	if err := os.WriteFile(boot.ExternalConfigPath, data, 0600); err != nil {
+	if err := os.WriteFile(bootstate.ExternalConfigPath, data, 0600); err != nil {
 		return fmt.Errorf("writing external config: %w", err)
 	}
 
@@ -154,7 +154,7 @@ func externalConfigOrEmpty() *shimconfig.ExternalConfig {
 }
 
 func getExternalConfig() (*shimconfig.ExternalConfig, error) {
-	data, err := os.ReadFile(boot.ExternalConfigPath)
+	data, err := os.ReadFile(bootstate.ExternalConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading external config: %w", err)
 	}

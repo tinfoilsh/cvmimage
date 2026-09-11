@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
 	"tinfoil/internal/runtimeconfig"
@@ -204,7 +204,7 @@ func (v *volume) mountOverlays() (result error) {
 // config: source inside the pack is the read-only lower, target inside the
 // volume is where the merged tree appears.
 func (v *volume) overlay(spec runtimeconfig.VolumeOverlay) (string, error) {
-	lower := filepath.Join(boot.PrivateModelsDir, spec.Model, spec.Source)
+	lower := filepath.Join(bootstate.PrivateModelsDir, spec.Model, spec.Source)
 	// The config keeps the spec inside the pack, but a symlink in the pack
 	// would still resolve the lower layer out of it, so the path has to be real.
 	resolved, err := filepath.EvalSymlinks(lower)

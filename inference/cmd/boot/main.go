@@ -9,7 +9,7 @@ import (
 	"tinfoil/inference/internal/gpuattestation"
 	"tinfoil/inference/internal/nvidia"
 	"tinfoil/inference/internal/variant"
-	bootstate "tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -39,7 +39,7 @@ func validate(config *boot.Config) error {
 func attestDevices(tracker *bootstate.Tracker, config *boot.Config) error {
 	start := time.Now()
 	gpuCount := config.GPUs
-	if err := validateGPUAttestationBootstrap(bootstate.NVIDIABootstrapStatusPath, config); err != nil {
+	if err := validateGPUAttestationBootstrap(variant.NVIDIABootstrapStatusPath, config); err != nil {
 		wrapped := fmt.Errorf("NVIDIA bootstrap status: %w", err)
 		tracker.Record("gpu-attestation", bootstate.StatusFailed, time.Since(start), wrapped.Error())
 		return wrapped

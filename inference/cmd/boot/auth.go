@@ -8,8 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
-
-	"tinfoil/internal/boot"
+	"tinfoil/inference/internal/variant"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -31,7 +30,7 @@ type DockerAuth struct {
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
 func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
-	os.Setenv("DOCKER_CONFIG", boot.DockerConfigDir)
+	os.Setenv("DOCKER_CONFIG", variant.DockerConfigDir)
 	if ext == nil || ext.Secrets == nil {
 		log.Println("No external config, skipping registry auth")
 		return nil
@@ -39,7 +38,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 
 	cfg := DockerConfig{Auths: make(map[string]DockerAuth)}
 
-	if data, err := os.ReadFile(boot.DockerConfigPath); err == nil && len(data) > 0 {
+	if data, err := os.ReadFile(variant.DockerConfigPath); err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			log.Printf("Warning: failed to parse existing docker config: %v", err)
 		}
@@ -79,7 +78,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 	}
 	if gcloudKey != "" {
 		// Write key file for containers that mount it directly (e.g., Pollux)
-		if err := os.WriteFile(boot.GCloudKeyPath, []byte(gcloudKey), 0600); err != nil {
+		if err := os.WriteFile(variant.GCloudKeyPath, []byte(gcloudKey), 0600); err != nil {
 			log.Printf("Warning: failed to write GCloud key file: %v", err)
 		}
 	}
@@ -98,11 +97,11 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 
 	// Write config
 	if len(cfg.Auths) > 0 {
-		if err := os.MkdirAll(boot.DockerConfigDir, 0700); err != nil {
+		if err := os.MkdirAll(variant.DockerConfigDir, 0700); err != nil {
 			return fmt.Errorf("creating docker config dir: %w", err)
 		}
 		data, _ := json.MarshalIndent(cfg, "", "  ")
-		if err := os.WriteFile(boot.DockerConfigPath, data, 0600); err != nil {
+		if err := os.WriteFile(variant.DockerConfigPath, data, 0600); err != nil {
 			return fmt.Errorf("writing docker config: %w", err)
 		}
 	}

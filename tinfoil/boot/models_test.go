@@ -10,7 +10,7 @@ import (
 
 	"github.com/tinfoilsh/modelwrap"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -28,10 +28,10 @@ func TestModelPackRefLayout(t *testing.T) {
 	if got.mapperName() != "mwp-"+strings.Repeat("a", 64) {
 		t.Fatalf("mapper name mismatch: %s", got.mapperName())
 	}
-	if got.mountPoint() != boot.MWPDir+"/mwp-"+strings.Repeat("a", 64) {
+	if got.mountPoint() != bootstate.MWPDir+"/mwp-"+strings.Repeat("a", 64) {
 		t.Fatalf("mount point mismatch: %s", got.mountPoint())
 	}
-	if got.legacyMountPoint() != boot.MPKDir+"/mpk-"+strings.Repeat("a", 64) {
+	if got.legacyMountPoint() != bootstate.MPKDir+"/mpk-"+strings.Repeat("a", 64) {
 		t.Fatalf("legacy mount point mismatch: %s", got.legacyMountPoint())
 	}
 	if got.ArtifactID() != strings.Repeat("a", 64)+"_0eefa619-50b7-588f-a072-d405fb439d36" {
@@ -47,7 +47,7 @@ func TestModelMountTarget(t *testing.T) {
 	model := ModelSpec{Name: "private-model"}
 
 	mountPoint, legacyAlias := modelMountTarget(true, model, ref)
-	if mountPoint != boot.PrivateModelsDir+"/"+model.Name || legacyAlias {
+	if mountPoint != bootstate.PrivateModelsDir+"/"+model.Name || legacyAlias {
 		t.Fatalf("isolated target = (%q, %t)", mountPoint, legacyAlias)
 	}
 

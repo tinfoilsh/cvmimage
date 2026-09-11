@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
 )
@@ -113,7 +113,7 @@ func run() error {
 	if err := unix.Mount(dmRootNode, "/sysroot", "erofs", unix.MS_RDONLY, ""); err != nil {
 		return fmt.Errorf("mounting measured root: %w", err)
 	}
-	return switchRoot("/sysroot", boot.InitBinary)
+	return switchRoot("/sysroot", bootstate.InitBinary)
 }
 
 func verityTableParams(rootDev, hashDev string, dataBlocks uint64, roothash string) string {

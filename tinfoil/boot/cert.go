@@ -15,7 +15,7 @@ import (
 	"golang.org/x/net/publicsuffix"
 	verifier "tinfoil/internal/legacy"
 
-	"tinfoil/internal/boot"
+	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/dcode"
 	"tinfoil/internal/firewall"
@@ -101,11 +101,11 @@ func obtainCertificate(id *NodeIdentity, att *verifier.Document, shimCfg *shimco
 		var listenPort int
 		if shimCfg.TLSChallengeMode == "http" {
 			httpChallengeDomains = []string{id.Domain}
-			listenPort = boot.HTTPChallengePort
+			listenPort = bootstate.HTTPChallengePort
 		}
 		requestCertificate := func() (*tls.Certificate, error) {
 			mgr, err := tlsutil.NewCertProxyManager(
-				domains, boot.CacheDir, shimCfg.ControlPlane, id.TLSKey,
+				domains, bootstate.CacheDir, shimCfg.ControlPlane, id.TLSKey,
 				httpChallengeDomains, listenPort, certAuthToken,
 			)
 			if err != nil {
@@ -127,9 +127,9 @@ func obtainCertificate(id *NodeIdentity, att *verifier.Document, shimCfg *shimco
 			dir = lego.LEDirectoryStaging
 		}
 		mgr, err := tlsutil.NewCertManager(
-			domains, shimCfg.Email, boot.CacheDir, dir,
+			domains, shimCfg.Email, bootstate.CacheDir, dir,
 			tlsutil.ChallengeMode(shimCfg.TLSChallengeMode),
-			boot.ShimListenPort, id.TLSKey,
+			bootstate.ShimListenPort, id.TLSKey,
 			cfDNS, cfZone,
 		)
 		if err != nil {
@@ -157,7 +157,7 @@ func retryCertificate(fn func() (*tls.Certificate, error), interval time.Duratio
 }
 
 func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
-	if err := os.MkdirAll(boot.TLSDir, 0700); err != nil {
+	if err := os.MkdirAll(bootstate.TLSDir, 0700); err != nil {
 		return fmt.Errorf("creating TLS directory: %w", err)
 	}
 
@@ -165,7 +165,7 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 	for _, derCert := range cert.Certificate {
 		certPEM = append(certPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derCert})...)
 	}
-	if err := os.WriteFile(boot.TLSCertPath, certPEM, 0644); err != nil {
+	if err := os.WriteFile(bootstate.TLSCertPath, certPEM, 0644); err != nil {
 		return fmt.Errorf("writing TLS cert: %w", err)
 	}
 
@@ -174,7 +174,7 @@ func writeTLSArtifacts(cert *tls.Certificate, key *ecdsa.PrivateKey) error {
 		return fmt.Errorf("marshaling TLS key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(boot.TLSKeyPath, keyPEM, 0600); err != nil {
+	if err := os.WriteFile(bootstate.TLSKeyPath, keyPEM, 0600); err != nil {
 		return fmt.Errorf("writing TLS key: %w", err)
 	}
 

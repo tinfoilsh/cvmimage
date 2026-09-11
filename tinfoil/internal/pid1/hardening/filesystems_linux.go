@@ -15,8 +15,8 @@ const (
 	tdxReportSource         = "/sys/kernel/config/tsm"
 )
 
-func (linuxServiceKernel) restrictFilesystems(exposeAttestation bool) error {
-	return restrictServiceFilesystems(linuxFilesystemKernel{}, exposeAttestation)
+func (linuxServiceKernel) restrictFilesystems(devices []string) error {
+	return restrictServiceFilesystems(linuxFilesystemKernel{}, devices)
 }
 
 type filesystemKernel interface {
@@ -86,7 +86,7 @@ func (linuxFilesystemKernel) remove(path string) error {
 	return os.RemoveAll(path)
 }
 
-func restrictServiceFilesystems(kernel filesystemKernel, exposeAttestation bool) error {
+func restrictServiceFilesystems(kernel filesystemKernel, devices []string) error {
 	if err := kernel.unshare(unix.CLONE_NEWNS); err != nil {
 		return fmt.Errorf("unshare mount namespace: %w", err)
 	}
@@ -96,14 +96,14 @@ func restrictServiceFilesystems(kernel filesystemKernel, exposeAttestation bool)
 	if err := mountRestrictedProc(kernel); err != nil {
 		return err
 	}
-	if exposeAttestation {
-		if err := mountAttestationDeviceView(kernel); err != nil {
+	if len(devices) != 0 {
+		if err := mountAttestationDeviceView(kernel, devices); err != nil {
 			return err
 		}
 	} else if err := mountEmptyReadOnly(kernel, "/dev"); err != nil {
 		return err
 	}
-	if exposeAttestation {
+	if len(devices) != 0 {
 		if err := mountAttestationSysView(kernel); err != nil {
 			return err
 		}
@@ -155,7 +155,7 @@ func mountAttestationSysView(kernel filesystemKernel) (result error) {
 	return nil
 }
 
-func mountAttestationDeviceView(kernel filesystemKernel) (result error) {
+func mountAttestationDeviceView(kernel filesystemKernel, devices []string) (result error) {
 	if err := resetStagingDirectory(kernel, attestationDeviceSource); err != nil {
 		return fmt.Errorf("reset attestation device source: %w", err)
 	}
@@ -175,7 +175,7 @@ func mountAttestationDeviceView(kernel filesystemKernel) (result error) {
 	if err := kernel.mount("tmpfs", "/dev", "tmpfs", flags, "size=64k,nr_inodes=128,mode=0755"); err != nil {
 		return fmt.Errorf("mount restricted attestation /dev: %w", err)
 	}
-	for _, relative := range attestationDevicePaths() {
+	for _, relative := range devices {
 		source := filepath.Join(attestationDeviceSource, relative)
 		kind, err := kernel.pathKind(source)
 		if err != nil {
@@ -210,24 +210,6 @@ func resetStagingDirectory(kernel filesystemKernel, path string) error {
 		return fmt.Errorf("create clean directory: %w", err)
 	}
 	return nil
-}
-
-func attestationDevicePaths() []string {
-	paths := []string{
-		"null",
-		"tdx_guest",
-		"sev-guest",
-		"nvidiactl",
-		"nvidia-uvm",
-		"nvidia-uvm-tools",
-		"nvidia-caps",
-		"nvidia-nvswitchctl",
-		"nvidia-nvlink",
-	}
-	for index := 0; index < 16; index++ {
-		paths = append(paths, fmt.Sprintf("nvidia%d", index), fmt.Sprintf("nvidia-nvswitch%d", index))
-	}
-	return paths
 }
 
 func mountRestrictedProc(kernel filesystemKernel) error {

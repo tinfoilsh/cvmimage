@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var testAttestationDevices = []string{"null", "tdx_guest", "device0", "device-caps"}
+
 type mountCall struct {
 	source         string
 	target         string
@@ -69,7 +71,7 @@ func (kernel *fakeFilesystemKernel) remove(path string) error {
 
 func TestRestrictServiceFilesystemsUsesFixedPrivateReadOnlyLayout(t *testing.T) {
 	kernel := &fakeFilesystemKernel{}
-	if err := restrictServiceFilesystems(kernel, false); err != nil {
+	if err := restrictServiceFilesystems(kernel, nil); err != nil {
 		t.Fatalf("restrictServiceFilesystems: %v", err)
 	}
 
@@ -94,7 +96,7 @@ func TestRestrictServiceFilesystemsFailsClosedAtEveryStep(t *testing.T) {
 		t.Run(fmt.Sprint(failAt), func(t *testing.T) {
 			stepErr := errors.New("step failed")
 			kernel := &fakeFilesystemKernel{failAt: failAt, err: stepErr}
-			err := restrictServiceFilesystems(kernel, false)
+			err := restrictServiceFilesystems(kernel, nil)
 			if !errors.Is(err, stepErr) {
 				t.Fatalf("error = %v, want %v", err, stepErr)
 			}
@@ -107,15 +109,15 @@ func TestRestrictServiceFilesystemsFailsClosedAtEveryStep(t *testing.T) {
 
 func TestRestrictShimFilesystemsFailsClosedAtEveryStep(t *testing.T) {
 	kinds := map[string]devicePathKind{tdxReportSource: devicePathDirectory}
-	for _, relative := range attestationDevicePaths() {
+	for _, relative := range testAttestationDevices {
 		kind := devicePathNode
-		if relative == "nvidia-caps" {
+		if relative == "device-caps" {
 			kind = devicePathDirectory
 		}
 		kinds[filepath.Join(attestationDeviceSource, relative)] = kind
 	}
 	baseline := &fakeFilesystemKernel{kinds: kinds}
-	if err := restrictServiceFilesystems(baseline, true); err != nil {
+	if err := restrictServiceFilesystems(baseline, testAttestationDevices); err != nil {
 		t.Fatalf("baseline restrictServiceFilesystems: %v", err)
 	}
 
@@ -123,7 +125,7 @@ func TestRestrictShimFilesystemsFailsClosedAtEveryStep(t *testing.T) {
 		t.Run(fmt.Sprint(failAt), func(t *testing.T) {
 			stepErr := errors.New("step failed")
 			kernel := &fakeFilesystemKernel{failAt: failAt, err: stepErr, kinds: kinds}
-			err := restrictServiceFilesystems(kernel, true)
+			err := restrictServiceFilesystems(kernel, testAttestationDevices)
 			if !errors.Is(err, stepErr) {
 				t.Fatalf("error = %v, want %v", err, stepErr)
 			}
@@ -134,15 +136,13 @@ func TestRestrictShimFilesystemsFailsClosedAtEveryStep(t *testing.T) {
 func TestRestrictShimFilesystemsBindsOnlyAttestationDevices(t *testing.T) {
 	kernel := &fakeFilesystemKernel{kinds: map[string]devicePathKind{
 		tdxReportSource: devicePathDirectory,
-		filepath.Join(attestationDeviceSource, "null"):               devicePathNode,
-		filepath.Join(attestationDeviceSource, "tdx_guest"):          devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidiactl"):          devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia0"):            devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia-caps"):        devicePathDirectory,
-		filepath.Join(attestationDeviceSource, "nvidia-nvswitchctl"): devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia-nvlink"):      devicePathNode,
+		filepath.Join(attestationDeviceSource, "undeclared"):  devicePathNode,
+		filepath.Join(attestationDeviceSource, "null"):        devicePathNode,
+		filepath.Join(attestationDeviceSource, "tdx_guest"):   devicePathNode,
+		filepath.Join(attestationDeviceSource, "device0"):     devicePathNode,
+		filepath.Join(attestationDeviceSource, "device-caps"): devicePathDirectory,
 	}}
-	if err := restrictServiceFilesystems(kernel, true); err != nil {
+	if err := restrictServiceFilesystems(kernel, testAttestationDevices); err != nil {
 		t.Fatalf("restrictServiceFilesystems: %v", err)
 	}
 
@@ -155,11 +155,8 @@ func TestRestrictShimFilesystemsBindsOnlyAttestationDevices(t *testing.T) {
 	want := []mountCall{
 		{source: filepath.Join(attestationDeviceSource, "null"), target: "/dev/null", flags: unix.MS_BIND},
 		{source: filepath.Join(attestationDeviceSource, "tdx_guest"), target: "/dev/tdx_guest", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidiactl"), target: "/dev/nvidiactl", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidia-caps"), target: "/dev/nvidia-caps", flags: unix.MS_BIND | unix.MS_REC},
-		{source: filepath.Join(attestationDeviceSource, "nvidia-nvswitchctl"), target: "/dev/nvidia-nvswitchctl", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidia-nvlink"), target: "/dev/nvidia-nvlink", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidia0"), target: "/dev/nvidia0", flags: unix.MS_BIND},
+		{source: filepath.Join(attestationDeviceSource, "device0"), target: "/dev/device0", flags: unix.MS_BIND},
+		{source: filepath.Join(attestationDeviceSource, "device-caps"), target: "/dev/device-caps", flags: unix.MS_BIND | unix.MS_REC},
 	}
 	if !reflect.DeepEqual(bindings, want) {
 		t.Fatalf("attestation bindings = %#v, want %#v", bindings, want)
@@ -180,7 +177,7 @@ func TestRestrictShimFilesystemsResetsReservedStagingDirectories(t *testing.T) {
 	kernel := &fakeFilesystemKernel{kinds: map[string]devicePathKind{
 		tdxReportSource: devicePathDirectory,
 	}}
-	if err := restrictServiceFilesystems(kernel, true); err != nil {
+	if err := restrictServiceFilesystems(kernel, testAttestationDevices); err != nil {
 		t.Fatalf("restrictServiceFilesystems: %v", err)
 	}
 

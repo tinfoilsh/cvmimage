@@ -26,14 +26,16 @@ const (
 
 // Policy declares process restrictions. Nil BoundCapabilities preserves the
 // inherited set; a non-nil empty slice drops every capability.
+// AttestationDevices lists relative /dev paths exposed to a restricted service.
+// An empty list gives the service an empty /dev and /sys.
 type Policy struct {
-	NoNewPrivileges          bool
-	BoundCapabilities        []int
-	RestrictFilesystems      bool
-	ExposeAttestationDevices bool
-	DeniedSyscalls           []uint32
-	RestrictNamespaceOps     bool
-	AllowedSocketDomains     []uint32
+	NoNewPrivileges      bool
+	BoundCapabilities    []int
+	RestrictFilesystems  bool
+	AttestationDevices   []string
+	DeniedSyscalls       []uint32
+	RestrictNamespaceOps bool
+	AllowedSocketDomains []uint32
 }
 
 // kernelManagementSyscalls are denied for every hardened service, including
@@ -110,7 +112,7 @@ func BootPolicy() Policy {
 // ShimPolicy isolates the public TLS service while exposing attestation devices.
 func ShimPolicy() Policy {
 	policy := RestrictedPolicy([]int{unix.CAP_NET_BIND_SERVICE}, []uint32{unix.AF_INET, unix.AF_INET6})
-	policy.ExposeAttestationDevices = true
+	policy.AttestationDevices = []string{"null", "tdx_guest", "sev-guest"}
 	return policy
 }
 
@@ -133,7 +135,7 @@ func Apply(service Service, policy Policy) error {
 }
 
 type serviceKernel interface {
-	restrictFilesystems(bool) error
+	restrictFilesystems([]string) error
 	dropBoundingCapability(int) error
 	setCapabilities([2]unix.CapUserData) error
 	setNoNewPrivileges() error
@@ -142,7 +144,7 @@ type serviceKernel interface {
 
 func applyPolicy(kernel serviceKernel, service Service, policy Policy) error {
 	if policy.RestrictFilesystems {
-		if err := kernel.restrictFilesystems(policy.ExposeAttestationDevices); err != nil {
+		if err := kernel.restrictFilesystems(policy.AttestationDevices); err != nil {
 			return fmt.Errorf("restrict filesystems for %s: %w", service, err)
 		}
 	}

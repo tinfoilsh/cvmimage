@@ -25,6 +25,14 @@ func TestSandboxPolicyPreservesRestrictions(t *testing.T) {
 	}
 }
 
+func TestSandboxShimExposesOnlyCPUAttestationDevices(t *testing.T) {
+	policy := Policies()[hardening.ServiceShim]
+	want := []string{"null", "tdx_guest", "sev-guest"}
+	if !reflect.DeepEqual(policy.AttestationDevices, want) {
+		t.Fatalf("shim devices = %v, want %v", policy.AttestationDevices, want)
+	}
+}
+
 func TestSandboxPolicyDeniesModuleLoading(t *testing.T) {
 	if os.Getenv("TINFOIL_SANDBOX_POLICY_TEST") == "1" {
 		runtime.LockOSThread()

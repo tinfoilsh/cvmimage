@@ -283,9 +283,9 @@ type fakeServiceKernel struct {
 	socketDomains        []uint32
 }
 
-func (kernel *fakeServiceKernel) restrictFilesystems(exposeAttestation bool) error {
+func (kernel *fakeServiceKernel) restrictFilesystems(devices []string) error {
 	kernel.calls = append(kernel.calls, "restrict-filesystems")
-	if exposeAttestation {
+	if len(devices) != 0 {
 		kernel.calls = append(kernel.calls, "expose-attestation-devices")
 	}
 	return kernel.restrictFilesystemsErr

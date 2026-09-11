@@ -53,13 +53,6 @@ const (
 	StageShim             = "shim"
 )
 
-// InitialStages is the ordered list of stages known at boot time.
-// Both boot and shim use this as the starting point.
-var InitialStages = []string{
-	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
-	StageKeyserverSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
-}
-
 // Tracker records boot stages as they complete.
 type Tracker struct {
 	mu    sync.Mutex
@@ -199,11 +192,11 @@ func (s *State) HasFailed() bool {
 
 // FailureSummary returns the first failed fixed boot stage as bounded,
 // log-safe text. It is diagnostic only and must not replace readiness checks.
-func (s *State) FailureSummary() (string, bool) {
-	if len(s.Stages) != len(InitialStages) {
+func (s *State) FailureSummary(expectedStages []string) (string, bool) {
+	if len(expectedStages) == 0 || len(s.Stages) != len(expectedStages) {
 		return "", false
 	}
-	for index, name := range InitialStages {
+	for index, name := range expectedStages {
 		if s.Stages[index].Name != name {
 			return "", false
 		}

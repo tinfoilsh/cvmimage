@@ -59,7 +59,7 @@ func TestFailureSummaryReturnsFirstFailedStage(t *testing.T) {
 		Name: StageContainers, Status: StatusFailed, Detail: "later failure",
 	}
 
-	got, ok := state.FailureSummary()
+	got, ok := state.FailureSummary(InitialStages)
 	if !ok {
 		t.Fatal("FailureSummary did not report a failed stage")
 	}
@@ -77,7 +77,7 @@ func TestFailureSummaryBoundsDetail(t *testing.T) {
 		Detail: strings.Repeat("x", failureDetailLimit+100),
 	}
 
-	got, ok := state.FailureSummary()
+	got, ok := state.FailureSummary(InitialStages)
 	if !ok {
 		t.Fatal("FailureSummary did not report a failed stage")
 	}
@@ -125,7 +125,7 @@ func TestFailureSummaryRequiresExactInitialStages(t *testing.T) {
 			state.Stages[0].Status = StatusFailed
 			state.Stages[0].Detail = "must not be trusted"
 			state.Stages = test.mutate(state.Stages)
-			if got, ok := state.FailureSummary(); ok || got != "" {
+			if got, ok := state.FailureSummary(InitialStages); ok || got != "" {
 				t.Fatalf("FailureSummary = %q, %v; want empty, false", got, ok)
 			}
 		})
@@ -166,4 +166,9 @@ func fixedStageIndex(t *testing.T, name string) int {
 	}
 	t.Fatalf("fixed stage %q not found", name)
 	return -1
+}
+
+var InitialStages = []string{
+	StageConfig, StageNetwork, StageIdentity, StageCPUAttestation, StageGPUAttestation, StageCertificate,
+	StageKeyserverSecrets, StageRegistryAuth, StageFirewall, StageModels, StageContainers, StageShim,
 }

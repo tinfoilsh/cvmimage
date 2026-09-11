@@ -1,4 +1,9 @@
-{ pkgs }:
+{
+  pkgs,
+  name,
+  packageNames,
+  lockFile,
+}:
 
 let
   packageUrlPrefix = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z";
@@ -42,37 +47,28 @@ let
       sha256 = "649e6c37f2c1fa6b2d5081bc7714c9e2ad66083005bb80fab34c3c537781a1c9";
     })
     (packageIndex {
-      timestamp = "20260615";
+      timestamp = "20260721";
       pocket = "resolute-security";
       component = "main";
-      sha256 = "63d7fad5a61519948c6d47682e300b7d2f66038d42bcea8137c4d3477ed4aa09";
+      sha256 = "f943c10bd75f3cc0ef581027e6008f287d7634df7fcd5700105b76a11acea88e";
     })
   ];
 
-  packageNames = [
-    "ca-certificates"
-    "e2fsprogs"
-    "iproute2"
-    "nftables"
-    "libc6"
-    "libc-bin"
-    "libcap2"
-    "libxml2-16"
-    "libstdc++6"
-    "libgcc-s1"
-    "zlib1g"
-    "libtirpc3t64"
-    "libtirpc-common"
-    "libseccomp2"
-  ];
+  lockFor =
+    name: packages:
+    pkgs.vmTools.debClosureGenerator {
+      inherit name packages;
+      packagesLists = packageIndexes;
+      urlPrefix = packageUrlPrefix;
+    };
+  packages = pkgs.lib.flatten (import lockFile { inherit (pkgs) fetchurl; });
+  matches = name: deb: pkgs.lib.hasPrefix "${name}_" deb.name;
 in
 {
-  lock = pkgs.vmTools.debClosureGenerator {
-    name = "cvmimage-runtime-packages-lock";
-    packagesLists = packageIndexes;
-    urlPrefix = packageUrlPrefix;
-    packages = packageNames;
-  };
-
-  packages = pkgs.lib.flatten (import ./runtime-packages-lock.nix { inherit (pkgs) fetchurl; });
+  inherit packages;
+  lock = lockFor name packageNames;
+  select =
+    names:
+    assert pkgs.lib.all (name: pkgs.lib.any (matches name) packages) names;
+    builtins.filter (deb: pkgs.lib.any (name: matches name deb) names) packages;
 }

@@ -50,23 +50,40 @@ This is intentionally kept simple: everything is built end-to-end in isolation, 
 
 ## Nix ownership
 
-The top-level `default.nix` pins one Nixpkgs source and exposes the complete set
-of image inputs:
+The top-level `default.nix` pins Nixpkgs and assembles the declarations in
+`inference/default.nix` and `sandbox/default.nix`. Each variant chooses its Go
+module, command list, kernel fragments, package payloads, accounts, and files.
+`nix/platform.nix` declares the shared libraries, network tools, configuration,
+and initrd. `nix/variant.nix` combines these declarations using the generic Go,
+rootfs, and image builders. Adding a variant does not require a new branch in
+those builders.
 
+The Go modules follow the same ownership. `tinfoil/` owns CPU boot, PID 1
+supervision, and the TLS shim. Each takes a `Spec` with declared policy and
+focused hooks. `inference/` owns GPU bootstrap and attestation, Docker,
+containers, egress, and container diagnostics. `sandbox/` owns workspace
+setup, SSH, its daemon, and its CPU-only configuration rules. Each module has
+its own `go.mod` and checks; the two variants depend on `tinfoil/` through a
+local module replacement.
 
-| Output                             | Owner                                                  | Declaration                                                                                          |
-| ---------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| Runtime and debug Go binaries      | Nixpkgs `buildGoModule`                                | `nix/go.nix`, `tinfoil/go.mod`, `tinfoil/go.sum`                                                     |
-| Fixed initrd                       | Pinned GNU cpio and Zstandard                          | `nix/initrd.nix`                                                                                     |
-| Custom kernel                      | Nixpkgs `linuxManualConfig`                            | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
-| Three NVIDIA modules               | Nixpkgs kernel-module build                            | `nix/nvidia-modules.nix`                                                                             |
-| nvattest and libnvat               | Nixpkgs CMake and Rust builders                        | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock`                                                   |
-| Ubuntu package payloads            | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix`                                          |
-| NVIDIA, Docker, and debug payloads | Fixed-output archive fetches                           | `nix/runtime-sources.nix`                                                                            |
-| Repository configuration           | Direct additive copy                                   | `image/rootfs/`                                                                                      |
-| Rootfs and debug layer archives    | Fixed tar materializer                                 | `nix/rootfs.nix`                                                                                     |
-| Shipping and debug disk images     | Nix-owned fakeroot and `systemd-repart`                | `nix/image.nix`, `repart.d/`                                                                         |
+Inference includes the NVIDIA payload and container runtime. Sandbox includes
+`tinfoil-sandbox`, OpenSSH, and the ext4 and dm-integrity support its encrypted
+workspace needs. Both mount EROFS model packs on an EROFS root. The producer
+outputs below exist for each variant, with sandbox outputs prefixed
+`sandbox-`; the initrd is shared.
 
+| Output | Builder | Declaration |
+| --- | --- | --- |
+| Runtime and debug Go binaries | Nixpkgs `buildGoModule` | `nix/go.nix`, variant command lists, each module's `go.mod` and `go.sum` |
+| Fixed initrd | Pinned GNU cpio and Zstandard | `nix/platform.nix`, `nix/initrd.nix` |
+| Custom kernel | Nixpkgs `linuxManualConfig` | `nix/kernel.nix`, shared `kernel/` configuration, variant kernel fragments |
+| Three NVIDIA modules | Nixpkgs kernel-module build | `inference/default.nix`, `nix/nvidia-modules.nix` |
+| nvattest and libnvat | Nixpkgs CMake and Rust builders | `inference/default.nix`, `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock` |
+| Ubuntu package payloads | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/platform.nix`, `sandbox/default.nix`, their package locks |
+| NVIDIA, Docker, and debug payloads | Fixed-output archive fetches | `inference/default.nix`, `nix/debug-rootfs.nix`, `nix/runtime-sources.nix` |
+| Repository configuration | Explicit file manifests | `image/rootfs/`, `inference/rootfs/`, `sandbox/rootfs/` |
+| Rootfs and debug archives | Fixed tar materializer | `nix/rootfs.nix`, shared and variant manifests |
+| Shipping and debug disk images | Nix-owned fakeroot and `systemd-repart` | `nix/image.nix`, `repart.d/` |
 
 Go binaries and Go validation use the same Nixpkgs Go 1.26 toolchain. The
 three NixOS-only patches that prepend Nix-store paths for timezone, MIME, and
@@ -94,8 +111,9 @@ The pinned Nixpkgs source is imported with an empty configuration and no
 overlays. Developer or machine-local Nixpkgs configuration is not part of the
 build graph.
 
-`nix/rootfs.nix` is additive: it starts from an empty tree and installs only
-the declared package paths, Nix-built outputs, and repository files. Package
+`nix/rootfs.nix` starts from an empty tree and applies the combined manifest
+of package paths, Nix-built outputs, and repository files. Duplicate file
+installs fail; intentional replacements must be declared separately. Package
 archives are extracted into build-only staging trees; package maintainer
 scripts do not run, and manuals, headers, service units, package helpers, and
 other undeclared paths never enter the image. The Ubuntu package closure is
@@ -127,7 +145,7 @@ the root filesystem, partition table, dm-verity metadata, and one validated
 artifact directory. Missing, duplicate, or malformed root-hash output fails
 the build.
 
-The disk contains only a fixed 2 GiB ext4 root partition and the exact
+The disk contains only a fixed 2 GiB EROFS root partition and the exact
 dm-verity hash partition calculated by `systemd-repart`. QEMU supplies the
 kernel, initrd, and firmware directly, so the image has no empty ESP. The build
 fails if the additive rootfs does not fit the fixed root partition.
@@ -138,22 +156,32 @@ The supported interface is the named Nix outputs:
 
 ```sh
 nix-build -I . -A rootfs-archive -o result-rootfs
-nix-build -I . -A shipping-image -o result
-nix-build -I . -A debug-image -o result-debug
+nix-build -I . -A inference-image -o result
+nix-build -I . -A inference-debug-image -o result-debug
+nix-build -I . -A sandbox-image -o result-sandbox
+nix-build -I . -A sandbox-debug-image -o result-sandbox-debug
 nix-build -I . -A checks
 ```
 
+`shipping-image` and `debug-image` remain as aliases of the inference outputs.
 Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
-`nvidia-modules`, `nvattest`, and `initrd` remain directly buildable. There is
-no task-runner layer and deleting result symlinks or collecting the Nix store
-is a separate host operation.
+`nvidia-modules`, `nvattest`, and `initrd` remain directly buildable; the
+sandbox variant exposes `sandbox-runtime-go` and `sandbox-kernel-artifacts`,
+and `sandbox-checks` vets and tests its Go module. `platform-checks` and
+`inference-checks` cover the other modules; `checks` builds all three. The
+platform checks also run the PID 1 and boot race tests and the debug-console
+tests. Inference checks run the NVML race tests, and both variants test their
+debug PID 1 builds. There is no task-runner layer. Deleting result symlinks or
+collecting the Nix store is a separate host operation.
 
-Regenerate the reviewed Ubuntu package lock only when changing package inputs
+Regenerate the reviewed Ubuntu package locks only when changing package inputs
 or snapshot indexes:
 
 ```sh
 nix-build --option sandbox true -I . -A runtime-package-lock -o result-package-lock
 cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
+nix-build --option sandbox true -I . -A sandbox-package-lock -o result-package-lock
+cp --no-preserve=mode result-package-lock sandbox/packages-lock.nix
 rm result-package-lock
 ```
 
@@ -176,7 +204,7 @@ The installer does not modify shell profiles, so put it on `PATH` and build:
 
 ```sh
 export PATH="/nix/var/nix/profiles/default/bin:$PATH"
-nix-build -I . -A shipping-image -o result
+nix-build -I . -A inference-image -o result
 ```
 
 Compare `sha256sum result/*` and the dm-verity root hash in
@@ -193,7 +221,7 @@ access. Enumerate them all, with their hashes, from the instantiated
 derivation graph:
 
 ```sh
-drv="$(nix-instantiate -I . -A shipping-image)"
+drv="$(nix-instantiate -I . -A inference-image)"
 nix --extra-experimental-features nix-command derivation show -r "$drv" \
   | jq -r '.derivations | to_entries[]
       | select(.value.outputs.out.hash?)
@@ -209,15 +237,19 @@ that enter the build from outside the repository.
 
 ### 3. Review the declarations
 
-The ownership table above maps every output to its declaration. Two files
-carry most of the security weight:
+The ownership table above maps each output to its declaration. Review the
+manifests and their materializers together:
 
-- `nix/rootfs.nix` lists every path that enters the measured root filesystem.
-Anything not declared there, in a Nix-built output, or in `image/rootfs/`
-does not ship.
-- `nix/image.nix` is the entire finalization step: it receives the rootfs
-archive, kernel, initrd, and `repart.d/` definitions, and produces the
-partitioned image and root hash with no network and no package installation.
+- `nix/platform.nix` declares the shared guest files and package paths.
+- `inference/default.nix` and `sandbox/default.nix` declare each variant's
+  additions. Their command lists determine both Go compilation and binary
+  installation. A file under a rootfs source directory ships only when a
+  manifest selects it.
+- `nix/rootfs.nix` applies those manifests and fixes archive ownership and
+  timestamps. `nix/debug-rootfs.nix` declares the debug additions.
+- `nix/image.nix` receives the archives, kernel, initrd, and `repart.d/`
+  definitions, then produces the partitioned image and root hash without
+  network access or package installation.
 
 To confirm the declarations match the output, list the built rootfs archive
 directly:
@@ -228,21 +260,25 @@ tar -tvf result-rootfs
 ```
 
 Every entry traces to a declared package path, a Nix-built binary, or a
-repository file. `nix-build -I . -A checks` runs the source checks, including
-the rejection of Nix-store references in runtime binaries.
+repository file. `nix-build -I . -A checks` runs the source checks. Building
+the runtime and debug binary outputs also checks that they contain no
+Nix-store references.
 
 ## Continuous integration
 
 Pull-request CI always checks the pinned Nix installation and isolated Nixpkgs
-evaluation. It compares the `checks`, `runtime-go`, `debug-pid1`, and `initrd`
-derivation paths with the pull request's base and builds only the changed
-outputs. Changes to the Nix installer or this workflow build all four. The
+evaluation. It compares the `platform-checks`, `inference-checks`,
+`sandbox-checks`, `runtime-go`, `debug-pid1`, `initrd`,
+`sandbox-runtime-go`, and `sandbox-debug-pid1`
+derivation paths with the pull request's
+base and builds only the changed outputs. Changes to the Nix installer or this
+workflow build all of them. The
 `initrd` output builds the initrd command and constructs the fixed archive with
 the pinned GNU cpio implementation.
 
-Pushes to `main`, and explicit manual runs, build `checks`, `shipping-image`,
-and `debug-image` on one runner. The two image outputs transitively build the
-kernel, NVIDIA modules, nvattest, initrd, runtime binaries, and rootfs without a
-second producer list. These workflows neither publish artifacts nor qualify a
-release. Derivation comparison only schedules CI work; it is not an integrity
+Pushes to `main`, and explicit manual runs, build `checks` and the four image
+outputs on one runner. The image outputs transitively build shipping and
+debug kernels, NVIDIA modules, nvattest, initrds, runtime binaries, and rootfs
+archives without a second producer list. These workflows neither publish
+artifacts nor qualify a release. Derivation comparison only schedules CI work; it is not an integrity
 check or a release policy.

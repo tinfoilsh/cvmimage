@@ -42,7 +42,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           /nix/var/nix/profiles/default/bin/nix-build \
-            -I . -A shipping-image -o result
+            -I . -A inference-image -o result
+          /nix/var/nix/profiles/default/bin/nix-build \
+            -I . -A sandbox-image -o result-sandbox
 
       - name: Generate manifest
         env:
@@ -61,14 +63,28 @@ jobs:
           }
           EOF
 
+          cat > "/tmp/out/tinfoil-sandbox-${REF_NAME}-manifest.json" << EOF
+          {
+            "version": "${REF_NAME}",
+            "root": "$(tr -d '\n' < result-sandbox/tinfoilcvm-sandbox.roothash)",
+            "initrd": "$(sha256sum result-sandbox/tinfoilcvm-sandbox.initrd | awk '{print $1}')",
+            "kernel": "$(sha256sum result-sandbox/tinfoilcvm-sandbox.vmlinuz | awk '{print $1}')",
+            "raw": "$(sha256sum result-sandbox/tinfoilcvm-sandbox.raw | awk '{print $1}')"
+          }
+          EOF
+
           # Copy artifacts with versioned names
           cp result/tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
           cp result/tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
           cp result/tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
+          cp result-sandbox/tinfoilcvm-sandbox.initrd "/tmp/out/tinfoil-sandbox-${REF_NAME}.initrd"
+          cp result-sandbox/tinfoilcvm-sandbox.vmlinuz "/tmp/out/tinfoil-sandbox-${REF_NAME}.vmlinuz"
+          cp result-sandbox/tinfoilcvm-sandbox.raw "/tmp/out/tinfoil-sandbox-${REF_NAME}.raw"
 
           # Generate checksums
           cd /tmp/out
-          sha256sum ./* | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
+          sha256sum ./tinfoil-inference-* | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
+          sha256sum ./tinfoil-sandbox-* | tee "tinfoil-sandbox-${REF_NAME}-checksums.sha256"
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
@@ -78,7 +94,12 @@ jobs:
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
+            /tmp/out/tinfoil-sandbox-${{ github.ref_name }}-manifest.json
+            /tmp/out/tinfoil-sandbox-${{ github.ref_name }}.initrd
+            /tmp/out/tinfoil-sandbox-${{ github.ref_name }}.vmlinuz
+            /tmp/out/tinfoil-sandbox-${{ github.ref_name }}.raw
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
+            /tmp/out/tinfoil-sandbox-${{ github.ref_name }}-checksums.sha256
 
       - name: Upload attested artifacts to R2
         env:
@@ -112,14 +133,22 @@ jobs:
             -R "$REPOSITORY" \
             $PRERELEASE_FLAG \
             --title "$REF_NAME" \
-            --notes "### Downloads
+            --notes "### Inference
           - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.vmlinuz
           - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.initrd
           - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.raw
-
-          ### Manifest
           \`\`\`json
           $(cat "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json")
+          \`\`\`
+
+          ### Sandbox
+          - Kernel: https://images.tinfoil.sh/cvm/tinfoil-sandbox-${REF_NAME}.vmlinuz
+          - Initrd: https://images.tinfoil.sh/cvm/tinfoil-sandbox-${REF_NAME}.initrd
+          - Disk: https://images.tinfoil.sh/cvm/tinfoil-sandbox-${REF_NAME}.raw
+          \`\`\`json
+          $(cat "/tmp/out/tinfoil-sandbox-${REF_NAME}-manifest.json")
           \`\`\`" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" \
-            "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256"
+            "/tmp/out/tinfoil-sandbox-${REF_NAME}-manifest.json" \
+            "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256" \
+            "/tmp/out/tinfoil-sandbox-${REF_NAME}-checksums.sha256"

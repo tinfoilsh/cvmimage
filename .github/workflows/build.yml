@@ -35,5 +35,7 @@ jobs:
           /nix/var/nix/profiles/default/bin/nix-build \
             --no-out-link -I . \
             -A checks \
-            -A shipping-image \
-            -A debug-image
+            -A inference-image \
+            -A inference-debug-image \
+            -A sandbox-image \
+            -A sandbox-debug-image

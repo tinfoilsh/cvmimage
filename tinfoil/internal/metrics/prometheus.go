@@ -104,7 +104,7 @@ func updatePrometheusMetrics(metrics *Metrics) {
 }
 
 // HandlePrometheusMetrics handles the /metrics endpoint for Prometheus scraping
-func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) http.HandlerFunc {
+func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string, devices DeviceCollector) http.HandlerFunc {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		cpuUtilGauge,
@@ -121,7 +121,7 @@ func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) ht
 			return
 		}
 
-		metrics, err := collectMetrics(metadata)
+		metrics, err := collectMetrics(metadata, devices)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

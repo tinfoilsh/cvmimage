@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,7 +12,6 @@ import (
 
 	"tinfoil/internal/auth"
 	"tinfoil/internal/config"
-	"tinfoil/internal/nvml"
 )
 
 func cpuVendor() string {
@@ -44,59 +42,11 @@ type Metrics struct {
 	GPUType     string `json:"gpu_type"`
 }
 
-// gpuMetrics collects GPU utilization and memory metrics
-func gpuMetrics() (string, int, int, int, error) {
-	ret := nvml.Init()
-	if ret != nvml.SUCCESS {
-		return "", 0, 0, 0, fmt.Errorf("unable to initialize NVML: %v", nvml.ErrorString(ret))
-	}
-	defer nvml.Shutdown()
-
-	var gpuType string
-	var totalMem, usedMem, totalUtil int
-
-	count, ret := nvml.DeviceGetCount()
-	if ret != nvml.SUCCESS {
-		return "", 0, 0, 0, fmt.Errorf("unable to get device count: %v", nvml.ErrorString(ret))
-	}
-	for i := range count {
-		device, ret := nvml.DeviceGetHandleByIndex(i)
-		if ret != nvml.SUCCESS {
-			return "", 0, 0, 0, fmt.Errorf("unable to get device at index %d: %v", i, nvml.ErrorString(ret))
-		}
-
-		gpuType, ret = nvml.DeviceGetName(device)
-		if ret != nvml.SUCCESS {
-			return "", 0, 0, 0, fmt.Errorf("unable to get name for device at index %d: %v", i, nvml.ErrorString(ret))
-		}
-
-		info, ret := nvml.DeviceGetMemoryInfo_v2(device)
-		if ret != nvml.SUCCESS {
-			return "", 0, 0, 0, fmt.Errorf("unable to get memory info for device at index %d: %v", i, nvml.ErrorString(ret))
-		}
-		totalMem += int(info.Total / 1024 / 1024 / 1024) // to GB
-		usedMem += int(info.Used / 1024 / 1024 / 1024)
-
-		// Get GPU utilization rates
-		rates, ret := nvml.DeviceGetUtilizationRates(device)
-		if ret != nvml.SUCCESS {
-			return "", 0, 0, 0, fmt.Errorf("unable to get utilization rates for device at index %d: %v", i, nvml.ErrorString(ret))
-		} else {
-			totalUtil += int(rates.Gpu)
-		}
-	}
-
-	// Calculate average utilization across all GPUs
-	avgUtil := 0
-	if count > 0 && totalUtil > 0 {
-		avgUtil = totalUtil / count
-	}
-
-	return gpuType, totalMem, usedMem, avgUtil, nil
-}
+// DeviceCollector adds workload-specific device measurements to the host metrics.
+type DeviceCollector func(*Metrics) error
 
 // collectMetrics gathers system metrics from CPU, memory, and GPU
-func collectMetrics(metadata *config.Metadata) (*Metrics, error) {
+func collectMetrics(metadata *config.Metadata, devices DeviceCollector) (*Metrics, error) {
 	// The image label is "repo@tag"; empty when the metadata carries no repo.
 	var image string
 	if metadata.Repo != "" && metadata.Tag != "" {
@@ -124,26 +74,22 @@ func collectMetrics(metadata *config.Metadata) (*Metrics, error) {
 	total := busy + cpuStats.Idle
 	metrics.CPUUtil = int(float64(busy) / float64(total) * 100)
 
-	// Set GPU metrics if available
-	gpuType, totalMem, usedMem, gpuUtil, err := gpuMetrics()
-	if err != nil {
-		log.Printf("Warning: failed to get GPU metrics: %v", err)
+	if devices != nil {
+		if err := devices(&metrics); err != nil {
+			log.Printf("Warning: failed to get device metrics: %v", err)
+		}
 	}
-	metrics.GPUMemTotal = totalMem
-	metrics.GPUMemUtil = usedMem
-	metrics.GPUUtil = gpuUtil
-	metrics.GPUType = gpuType
 
 	return &metrics, nil
 }
 
-func HandleMetrics(externalConfig *config.ExternalConfig) http.HandlerFunc {
+func HandleMetrics(externalConfig *config.ExternalConfig, devices DeviceCollector) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !auth.RequireBearer(externalConfig.MetricsAPIKey, w, r) {
 			return
 		}
 
-		metricsData, err := collectMetrics(&externalConfig.Metadata)
+		metricsData, err := collectMetrics(&externalConfig.Metadata, devices)
 		if err != nil {
 			log.Printf("metrics collection failed: %v", err)
 			http.Error(w, "internal server error", http.StatusInternalServerError)

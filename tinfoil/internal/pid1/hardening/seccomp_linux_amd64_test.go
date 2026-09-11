@@ -25,16 +25,16 @@ func TestServiceSocketDomains(t *testing.T) {
 			os.Exit(21)
 		}
 		policy, ok := policyFor(service)
-		if !ok || policy.allowedSocketDomains == nil {
+		if !ok || policy.AllowedSocketDomains == nil {
 			os.Exit(22)
 		}
 		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 			os.Exit(23)
 		}
 		if err := (linuxServiceKernel{}).restrictSyscalls(
-			policy.deniedSyscalls,
-			policy.restrictNamespaceOps,
-			policy.allowedSocketDomains,
+			policy.DeniedSyscalls,
+			policy.RestrictNamespaceOps,
+			policy.AllowedSocketDomains,
 		); err != nil {
 			os.Exit(24)
 		}
@@ -78,9 +78,6 @@ func TestServiceSocketDomains(t *testing.T) {
 		{name: "egress-unix", service: ServiceEgress, domain: unix.AF_UNIX},
 		{name: "egress-packet", service: ServiceEgress, domain: unix.AF_PACKET},
 		{name: "egress-vsock", service: ServiceEgress, domain: unix.AF_VSOCK},
-		{name: "volumes-unix", service: ServiceVolumes, domain: unix.AF_UNIX, allowed: true},
-		{name: "volumes-inet", service: ServiceVolumes, domain: unix.AF_INET},
-		{name: "volumes-netlink", service: ServiceVolumes, domain: unix.AF_NETLINK},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -111,9 +108,9 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 			os.Exit(31)
 		}
 		if err := (linuxServiceKernel{}).restrictSyscalls(
-			policy.deniedSyscalls,
-			policy.restrictNamespaceOps,
-			policy.allowedSocketDomains,
+			policy.DeniedSyscalls,
+			policy.RestrictNamespaceOps,
+			policy.AllowedSocketDomains,
 		); err != nil {
 			os.Exit(32)
 		}
@@ -164,9 +161,6 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 		{name: "shim-forces-clone3-fallback", service: ServiceShim, operation: "clone3"},
 		{name: "egress-cannot-clone-namespace", service: ServiceEgress, operation: "namespace-clone"},
 		{name: "containers-rejects-x32", service: ServiceContainers, operation: "x32"},
-		{name: "volumes-cannot-load-modules", service: ServiceVolumes, operation: "finit-module"},
-		{name: "volumes-cannot-clone-namespace", service: ServiceVolumes, operation: "namespace-clone"},
-		{name: "volumes-forces-clone3-fallback", service: ServiceVolumes, operation: "clone3"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -10,58 +10,28 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestServicePoliciesAreExact(t *testing.T) {
-	want := map[Service]servicePolicy{
-		ServiceBoot: {
-			noNewPrivileges:   true,
-			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD},
-			deniedSyscalls:    kernelManagementSyscalls,
-		},
-		ServiceContainers: {
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
-		},
-		ServiceEgress: {
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
-		},
-		ServiceShim: {
-			noNewPrivileges:          true,
-			boundCapabilities:        []int{unix.CAP_NET_BIND_SERVICE},
-			restrictFilesystems:      true,
-			exposeAttestationDevices: true,
-			deniedSyscalls:           restrictedServiceSyscalls,
-			restrictNamespaceOps:     true,
-			allowedSocketDomains:     []uint32{unix.AF_INET, unix.AF_INET6},
-		},
-		ServiceVolumes: {
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN},
-			deniedSyscalls:       volumeServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX},
-		},
+const (
+	ServiceContainers Service = "network-worker"
+	ServiceEgress     Service = "ip-worker"
+)
+
+var testPolicies = map[Service]Policy{
+	ServiceBoot:       BootPolicy(),
+	ServiceShim:       ShimPolicy(),
+	ServiceContainers: RestrictedPolicy([]int{unix.CAP_NET_ADMIN}, []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK}),
+	ServiceEgress:     RestrictedPolicy([]int{unix.CAP_NET_ADMIN}, []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK}),
+}
+
+func policyFor(service Service) (Policy, bool) {
+	policy, ok := testPolicies[service]
+	return policy, ok
+}
+func applyService(kernel serviceKernel, service Service) error {
+	p, ok := policyFor(service)
+	if !ok {
+		return fmt.Errorf("unknown service hardening policy %q", service)
 	}
-	for service, wantPolicy := range want {
-		got, ok := policyFor(service)
-		if !ok {
-			t.Fatalf("policyFor(%q) did not find policy", service)
-		}
-		if !reflect.DeepEqual(got, wantPolicy) {
-			t.Errorf("policyFor(%q) = %#v, want %#v", service, got, wantPolicy)
-		}
-	}
-	if _, ok := policyFor(Service("unknown")); ok {
-		t.Fatal("policyFor accepted unknown service")
-	}
+	return applyPolicy(kernel, service, p)
 }
 
 func TestPackCapabilitiesPacksLowAndHighCapabilities(t *testing.T) {
@@ -148,17 +118,6 @@ func TestApplyServiceBootUsesOnlyRequiredCapabilitiesAndKernelDenylist(t *testin
 	}
 	if !reflect.DeepEqual(kernel.deniedSyscalls, kernelManagementSyscalls) || kernel.restrictNamespaceOps {
 		t.Fatalf("boot seccomp policy = denied %v namespaces %t", kernel.deniedSyscalls, kernel.restrictNamespaceOps)
-	}
-}
-
-func TestApplyServiceRejectsUnknownPolicyWithoutKernelChanges(t *testing.T) {
-	kernel := &fakeServiceKernel{last: 63}
-	err := applyService(kernel, Service("containerd"))
-	if err == nil || !strings.Contains(err.Error(), "unknown service hardening policy") {
-		t.Fatalf("applyService error = %v, want unknown-policy error", err)
-	}
-	if len(kernel.calls) != 0 {
-		t.Fatalf("unknown policy made kernel calls: %v", kernel.calls)
 	}
 }
 
@@ -393,4 +352,31 @@ func (kernel *fakeRlimitKernel) setRlimit(resource int, limit unix.Rlimit) error
 		kernel.limits[resource] = limit
 	}
 	return nil
+}
+
+func TestApplyPolicyDistinguishesNilAndEmptyCapabilities(t *testing.T) {
+	inherited := [2]unix.CapUserData{{Effective: 7, Permitted: 7, Inheritable: 7}}
+	for _, test := range []struct {
+		name         string
+		capabilities []int
+	}{
+		{name: "inherit", capabilities: nil},
+		{name: "drop all", capabilities: []int{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			kernel := &fakeServiceKernel{last: 2, capabilityData: inherited}
+			if err := applyPolicy(kernel, "worker", Policy{BoundCapabilities: test.capabilities}); err != nil {
+				t.Fatal(err)
+			}
+			if test.capabilities == nil {
+				if len(kernel.calls) != 0 || kernel.capabilityData != inherited {
+					t.Fatalf("nil capability set changed inherited privileges: %+v", kernel)
+				}
+			} else {
+				if !reflect.DeepEqual(kernel.dropped, []int{0, 1, 2}) || kernel.capabilityData != ([2]unix.CapUserData{}) {
+					t.Fatalf("empty capability set did not drop all privileges: %+v", kernel)
+				}
+			}
+		})
+	}
 }

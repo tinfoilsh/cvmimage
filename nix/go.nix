@@ -1,7 +1,10 @@
 { pkgs }:
 
 let
-  commonEnv.GOTOOLCHAIN = "local";
+  commonEnv = {
+    GOTOOLCHAIN = "local";
+    GOWORK = "off";
+  };
 
   nixRuntimePatchSuffixes = [
     "iana-etc-1.25.patch"
@@ -28,8 +31,6 @@ let
 
   common = {
     version = "0";
-    src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-m9/7qndXRWpoj2fLXtgvNCN26L8bxbtBOmpcyTvA9m0=";
     ldflags = [
       "-s"
       "-w"
@@ -39,9 +40,10 @@ let
   };
 
   buildCgoCommand =
-    attributes:
+    module: attributes:
     buildGoModule (
       common
+      // module
       // cgoBase
       // {
         ldflags = common.ldflags ++ [
@@ -52,81 +54,89 @@ let
       // attributes
     );
 
-  runtime = buildCgoCommand {
-    pname = "tinfoil-runtime";
-    subPackages = [
-      "cmd/boot"
-      "cmd/containers"
-      "cmd/egress"
-      "cmd/pid1"
-      "cmd/shim"
-      "cmd/volumeworker"
-    ];
-    postInstall = ''
-      for command in boot containers egress pid1 shim; do
-        mv "$out/bin/$command" "$out/bin/tinfoil-$command"
-      done
-      mv "$out/bin/volumeworker" "$out/bin/tinfoil-volume-worker"
-    '';
-  };
-
-  debugPID1 = buildCgoCommand {
-    pname = "tinfoil-debug-pid1";
-    subPackages = [ "cmd/pid1" ];
-    tags = [ "tinfoil_debug_image" ];
-    postInstall = ''
-      mv "$out/bin/pid1" "$out/bin/tinfoil-pid1"
-    '';
-  };
-
-  initrd = buildGoModule (
-    common
-    // {
-      pname = "tinfoil-initrd";
-      subPackages = [ "cmd/initrd" ];
-      env = commonEnv // {
-        CGO_ENABLED = "0";
-      };
+  runtime =
+    module: commands:
+    buildCgoCommand module {
+      pname = "tinfoil-runtime";
+      subPackages = map (command: "cmd/${command}") commands;
       postInstall = ''
-        mv "$out/bin/initrd" "$out/bin/tinfoil-initrd"
+        for command in "$out"/bin/*; do
+          mv "$command" "$out/bin/tinfoil-$(basename "$command")"
+        done
       '';
-    }
-  );
+    };
 
-  checkSource = pkgs.lib.fileset.toSource {
-    root = ../.;
-    fileset = pkgs.lib.fileset.unions [
-      ../image
-      ../repart.d
-      ../tinfoil
-    ];
-  };
+  debugPID1 =
+    module:
+    buildCgoCommand module {
+      pname = "tinfoil-debug-pid1";
+      subPackages = [ "cmd/pid1" ];
+      tags = [ "tinfoil_debug_image" ];
+      postInstall = ''
+        mv "$out/bin/pid1" "$out/bin/tinfoil-pid1"
+      '';
+    };
 
-  checks = buildGoModule {
-    pname = "tinfoil-checks";
-    version = "0";
-    src = checkSource;
-    sourceRoot = "source/tinfoil";
-    inherit (common) vendorHash;
-    inherit (cgoBase) env;
-    doCheck = true;
-    buildPhase = "true";
-    checkPhase = ''
-      runHook preCheck
-      go test ./...
-      go test -race ./cmd/pid1 ./internal/boot/... ./internal/nvml
-      go test -tags=tinfoil_debug_image ./cmd/pid1
-      go vet ./...
-      runHook postCheck
-    '';
-    installPhase = "touch $out";
-  };
+  initrd =
+    module:
+    buildGoModule (
+      common
+      // module
+      // {
+        pname = "tinfoil-initrd";
+        subPackages = [ "cmd/initrd" ];
+        env = commonEnv // {
+          CGO_ENABLED = "0";
+        };
+        postInstall = ''
+          mv "$out/bin/initrd" "$out/bin/tinfoil-initrd"
+        '';
+      }
+    );
+
+  checks =
+    {
+      name,
+      module,
+      extraChecks ? "",
+    }:
+    buildGoModule (
+      module
+      // {
+        pname = name;
+        version = "0";
+        inherit (cgoBase) env;
+        doCheck = true;
+        buildPhase = "true";
+        checkPhase = ''
+          runHook preCheck
+          go test ./...
+          ${extraChecks}
+          go vet ./...
+          runHook postCheck
+        '';
+        installPhase = "touch $out";
+      }
+    );
+  fileset =
+    directory:
+    pkgs.lib.fileset.fileFilter (
+      file: file.hasExt "go" || file.hasExt "mod" || file.hasExt "sum"
+    ) directory;
+  source =
+    directories:
+    pkgs.lib.fileset.toSource {
+      root = ../.;
+      fileset = pkgs.lib.fileset.unions (map fileset directories);
+    };
 in
 {
-  inherit checks;
-  packages = {
-    "debug-pid1" = debugPID1;
-    "runtime-go" = runtime;
-    "tinfoil-initrd" = initrd;
-  };
+  inherit
+    runtime
+    debugPID1
+    initrd
+    checks
+    source
+    fileset
+    ;
 }

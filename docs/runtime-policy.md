@@ -1,13 +1,33 @@
 # Measured runtime policy
 
-`image/rootfs` contains fixed files that the additive rootfs copies byte-for-byte
-as root-owned declarations. It does not define package extraction, runtime
-directories, sysctls, systemd policy, or NVIDIA compatibility behavior.
+`image/rootfs/` contains common fixed files. `inference/rootfs/` and
+`sandbox/rootfs/` contain each variant's accounts and configuration. Their Nix
+manifests select files and install them byte-for-byte with declared modes and
+root ownership. Package extraction, runtime directories, and sysctls have
+separate declarations.
 
-The only non-root account is `nvidia-persistenced` with the measured identity
-`143:143`. The root and `nvidia-persistenced` accounts are locked and
-non-login. Resolver bytes must remain identical to the fixed resolver contract
-used by `tinfoil-boot`.
+Inference's only non-root account is `nvidia-persistenced` with the measured
+identity `143:143`. Both accounts are locked and non-login. Sandbox gives root
+the pack's bash shell, a home on the workspace volume, and a `*` password
+field, which sshd does not treat as locked. Its other account is sshd's
+privilege-separation user. Both variants use the same fixed resolver contract
+as `tinfoil-boot`.
+
+Each variant declares its service hardening policies in `internal/variant/`.
+PID 1's self-exec child selects from that map and rejects undeclared services
+before executing them. The shared hardening package applies the selected
+capability, filesystem, and syscall restrictions in a fixed order. A nil
+capability list preserves the inherited set; an empty list drops all
+capabilities. Only inference declares Docker's environment and the container
+and egress service policies.
+
+Each variant also declares its boot stages. Inference reports GPU attestation,
+registry authentication, firewall setup, and container startup. Sandbox
+reports workspace and SSH preparation through its `sandbox` stage, without
+placeholder inference stages. The shim uses the variant's device-evidence
+provider in both boot and serving modes. Inference registers GPU metrics and
+container diagnostics; sandbox registers neither and rejects requests for
+nonzero GPU evidence.
 
 The measured daemon policy includes these mode `0644` files:
 
@@ -18,7 +38,11 @@ The measured daemon policy includes these mode `0644` files:
 - `/etc/docker/daemon.json` disables inter-container communication and the
   userland proxy, uses Docker's nftables backend, enables no-new-privileges and
   the containerd snapshotter, and registers only the pinned NVIDIA runtime by
-  absolute path.
+  absolute path. The sandbox image carries neither Docker nor containerd; it
+  installs `sandbox/rootfs/etc/nix/nix.conf`, which stacks the read-only
+  toolchain pack under the workspace volume as nix's store, and
+  `sandbox/rootfs/etc/profile`, which puts that store's profile on the login
+  shell's path.
 - `/etc/nftables.conf` installs the fail-closed input and forward baseline and
   declares the fixed `http01`, `inbound`, `container_input`, and
   `container_forward` chains. The measured baseline only jumps to them;

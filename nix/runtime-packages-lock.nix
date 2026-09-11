@@ -1,5 +1,5 @@
 # This is a generated file.  Do not modify!
-# Following are the Debian packages constituting the closure of: ca-certificates e2fsprogs iproute2 nftables libc6 libc-bin libcap2 libxml2-16 libstdc++6 libgcc-s1 zlib1g libtirpc3t64 libtirpc-common libseccomp2
+# Following are the Debian packages constituting the closure of: ca-certificates iproute2 nftables libc6 libc-bin libcap2 libxml2-16 libstdc++6 libgcc-s1 zlib1g libtirpc3t64 libtirpc-common libseccomp2 libblkid1 libuuid1
 
 { fetchurl }:
 
@@ -86,71 +86,9 @@
   [
 
     (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/c/ca-certificates/ca-certificates_20260223_all.deb";
-      sha256 = "f7025ab9b24cd73215510931037b02d6960d89584d0d00afba81851abdbe6ef1";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/logsave_1.47.2-3ubuntu4_amd64.deb";
-      sha256 = "465cb25b468c5f6e883f3ae46c044506e14cdd1aed539a9cc19ce1be8a31d517";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/u/util-linux/libblkid1_2.41.3-3ubuntu2_amd64.deb";
-      sha256 = "f2caf1f807c0b203e5f4545c3010ac34b2dd5f546704e5b1b9c62a41d483771e";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libcom-err2_1.47.2-3ubuntu4_amd64.deb";
-      sha256 = "180b6ea0b9c07d4fd2ede79e29ee8eca830cd9384f856507e28dc24d1d3ae514";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libext2fs2t64_1.47.2-3ubuntu4_amd64.deb";
-      sha256 = "0c58fa90fcb38c1bcc0dbce47b105c60c990128e0220b087f4513d82499d404e";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libss2_1.47.2-3ubuntu4_amd64.deb";
-      sha256 = "08d28bd0e1402f45c1e7c9b28cc65ec55442876217c9f553e8836c0622a71509";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/u/util-linux/libuuid1_2.41.3-3ubuntu2_amd64.deb";
-      sha256 = "ea9d94da2fb6564391145f3a9630c140c8dd771a38ae753983e8dc55cc22e102";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/e2fsprogs_1.47.2-3ubuntu4_amd64.deb";
-      sha256 = "a4343a8c026e1ca8e2e76a5d01abb8c2d6381961a1766b2d2363e3e23cc362ca";
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/c/ca-certificates/ca-certificates_20260601~26.04.1_all.deb";
+      sha256 = "6077d27c6b6f8b23590cb01ff877ed8c804a67a5442cc32b5a33da10d2bd0e90";
+      name = "ca-certificates_2026060126.04.1_all.deb";
     })
 
   ]
@@ -223,6 +161,15 @@
     (fetchurl {
       url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/k/krb5/libkrb5support0_1.22.1-2ubuntu4_amd64.deb";
       sha256 = "f9cfb4ba27d0745cbfc7c064cc68f15ea3d6b144a4fd1da9c5f83fe30008aef7";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/e/e2fsprogs/libcom-err2_1.47.2-3ubuntu4_amd64.deb";
+      sha256 = "180b6ea0b9c07d4fd2ede79e29ee8eca830cd9384f856507e28dc24d1d3ae514";
     })
 
   ]
@@ -401,8 +348,8 @@
   [
 
     (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/libx/libxml2/libxml2-16_2.15.2+dfsg-0.1_amd64.deb";
-      sha256 = "f0c87cee9a1fb871e66698dc05fe38e0a3e7232eb961b690a8e7dc26f9753813";
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/libx/libxml2/libxml2-16_2.15.2+dfsg-0.1ubuntu0.1_amd64.deb";
+      sha256 = "14211c45bb75f9543e6053207533370047873ade7e4c70f7285400f1df6c898f";
     })
 
   ]
@@ -421,6 +368,24 @@
     (fetchurl {
       url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/libs/libseccomp/libseccomp2_2.6.0-2ubuntu5_amd64.deb";
       sha256 = "c5e4b198f251da0ede226fd179830bd8767482821a1773f835358f726795cb16";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/u/util-linux/libblkid1_2.41.3-3ubuntu2_amd64.deb";
+      sha256 = "f2caf1f807c0b203e5f4545c3010ac34b2dd5f546704e5b1b9c62a41d483771e";
+    })
+
+  ]
+
+  [
+
+    (fetchurl {
+      url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/u/util-linux/libuuid1_2.41.3-3ubuntu2_amd64.deb";
+      sha256 = "ea9d94da2fb6564391145f3a9630c140c8dd771a38ae753983e8dc55cc22e102";
     })
 
   ]

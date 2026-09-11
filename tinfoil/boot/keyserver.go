@@ -81,7 +81,7 @@ func fetchKeyserverSecrets(
 	}
 	var nonce32 [envelope.NonceSize]byte
 	copy(nonce32[:], nonce)
-	deviceEvidence, err := devices(nonce32, config.GPUs)
+	deviceEvidence, err := devices(nonce32)
 	if err != nil {
 		return nil, fmt.Errorf("collecting keyserver device evidence: %w", err)
 	}

@@ -25,7 +25,7 @@ type Spec struct {
 	IsolateModel    func(*Config, string) bool
 	WorkloadSecrets func(*Config) []string
 	PrepareWorkload func(*bootstate.Tracker, *Config, *shimconfig.ExternalConfig) error
-	DeviceEvidence  attestation.DeviceEvidenceProvider
+	DeviceEvidence  func(*Config) attestation.DeviceEvidenceProvider
 }
 
 func Main(spec Spec) {
@@ -101,6 +101,8 @@ func run(ctx context.Context, invocation invocation, spec Spec) error {
 	}
 	tracker.Record("config", bootstate.StatusOK, time.Since(start), "")
 
+	devices := spec.DeviceEvidence(config)
+
 	// Network
 	start = time.Now()
 	log.Println("Configuring guest network")
@@ -160,7 +162,7 @@ func run(ctx context.Context, invocation invocation, spec Spec) error {
 	}
 	secretDetail, err := prepareSecretHandoff(ctx, config, workloadReferences, externalConfig, secretHandoff, invocation.configHash, invocation.debug,
 		func(ctx context.Context, names []string) (map[string]string, error) {
-			return fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest, names, spec.DeviceEvidence)
+			return fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest, names, devices)
 		})
 	if err != nil {
 		tracker.Record(bootstate.StageKeyserverSecrets, bootstate.StatusFailed, time.Since(start), err.Error())

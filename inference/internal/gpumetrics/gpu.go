@@ -3,14 +3,7 @@ package gpumetrics
 import (
 	"fmt"
 	"tinfoil/inference/internal/nvml"
-	"tinfoil/internal/metrics"
 )
-
-func Collect(m *metrics.Metrics) error {
-	var err error
-	m.GPUType, m.GPUMemTotal, m.GPUMemUtil, m.GPUUtil, err = gpuMetrics()
-	return err
-}
 
 // gpuMetrics collects GPU utilization and memory metrics
 func gpuMetrics() (string, int, int, int, error) {

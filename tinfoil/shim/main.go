@@ -29,7 +29,6 @@ import (
 	"tinfoil/internal/key"
 	localjwt "tinfoil/internal/key/jwt"
 	"tinfoil/internal/key/online"
-	"tinfoil/internal/metrics"
 	tlsutil "tinfoil/internal/tls"
 )
 
@@ -45,20 +44,20 @@ const (
 
 // Observability declares the device providers and additional diagnostic routes.
 type Observability struct {
-	DeviceEvidence tinfoilattestation.DeviceEvidenceProvider
-	DeviceMetrics  metrics.DeviceCollector
-	Handlers       map[string]http.Handler
+	DeviceEvidence      tinfoilattestation.DeviceEvidenceProvider
+	EvidenceUnavailable string
+	Handlers            map[string]http.Handler
 }
 
 // Spec supplies proxy routing and observability for this workload.
 type Spec struct {
 	UpstreamHost   string
 	PublishedPorts func() (map[string]bool, error)
-	Observability  Observability
+	Observability  func(*shimconfig.Config, *shimconfig.ExternalConfig) (Observability, error)
 }
 
 func Main(spec Spec) {
-	if spec.UpstreamHost == "" || spec.PublishedPorts == nil || spec.Observability.DeviceEvidence == nil {
+	if spec.UpstreamHost == "" || spec.PublishedPorts == nil || spec.Observability == nil {
 		log.Fatal("incomplete shim spec")
 	}
 	flag.Parse()
@@ -144,8 +143,8 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 		config, externalConfig := cfgPair.config, cfgPair.external
-		log.Printf("Shim config loaded: upstream-container=%s upstream-port=%d tls-mode=%s paths=%d",
-			config.UpstreamContainer, config.UpstreamPort, config.TLSMode, len(config.Paths))
+		log.Printf("Shim config loaded: upstream-port=%d tls-mode=%s paths=%d",
+			config.UpstreamPort, config.TLSMode, len(config.Paths))
 
 		realCert, err := waitForArtifact("TLS certificate", func() (tls.Certificate, error) {
 			return tls.LoadX509KeyPair(bootstate.TLSCertPath, bootstate.TLSKeyPath)
@@ -191,17 +190,22 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
 
-		expectedGPUs := config.ExpectedGPUs
-		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
+		observability, err := spec.Observability(config, externalConfig)
+		if err != nil {
+			return fmt.Errorf("configure observability: %w", err)
+		}
+		if observability.DeviceEvidence == nil {
+			return fmt.Errorf("device evidence provider is required")
+		}
 
-		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, spec.Observability)
+		observabilityHandler := NewObservabilityServer(att, identityBody, serverIdentity, realCertParsed, collateralCache, config, observability)
 		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
 
 		log.Println("Shim observability ready")
 
 		// Wait for all boot stages (except shim) to resolve before proxying
 		// workload traffic. Well-known observability endpoints stay live while
-		// containers load, restart, or fail.
+		// workloads load, restart, or fail.
 		waitUntil(func() bool {
 			state, err := bootstate.Load()
 			if err != nil {
@@ -259,14 +263,14 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 
 		upstreamHost := spec.UpstreamHost
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
-		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
+		log.Printf("Shim upstream: %s", upstreamAddr)
 
 		targets, err := spec.PublishedPorts()
 		if err != nil {
 			return fmt.Errorf("loading published ports: %w", err)
 		}
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr, targets, spec.Observability)
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, serverIdentity, realCertParsed, collateralCache, config, externalConfig.Env["DOMAIN"], upstreamAddr, targets, observability)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

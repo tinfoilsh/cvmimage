@@ -22,18 +22,16 @@ func TestObservabilityUsesDeclaredProvidersInBothPhases(t *testing.T) {
 		}
 		calls := 0
 		observability := Observability{
-			DeviceEvidence: func(nonce [32]byte, count int) ([]envelope.DeviceEvidenceItem, error) {
+			DeviceEvidence: func(nonce [32]byte) ([]envelope.DeviceEvidenceItem, error) {
 				calls++
 				for _, b := range nonce {
 					if b != 0x42 {
 						t.Fatalf("nonce changed: %x", nonce)
 					}
 				}
-				if count != 8 {
-					t.Fatalf("configured device count = %d", count)
-				}
 				return nil, errors.New("test evidence unavailable")
 			},
+			EvidenceUnavailable: "Configured evidence failure",
 			Handlers: map[string]http.Handler{
 				"/.well-known/workload-status": http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusAccepted)
@@ -41,16 +39,16 @@ func TestObservabilityUsesDeclaredProvidersInBothPhases(t *testing.T) {
 			},
 		}
 		document := &legacy.Document{Format: legacy.DummyV2}
-		cfg, ext := &config.Config{}, &config.ExternalConfig{}
+		cfg := &config.Config{}
 		var handler http.Handler
 		if full {
-			handler = NewShimServer(nil, nil, document, attestation.BodyV2{}, 8, id, nil, nil, cfg, ext, "127.0.0.1:1", nil, observability)
+			handler = NewShimServer(nil, nil, document, attestation.BodyV2{}, id, nil, nil, cfg, "", "127.0.0.1:1", nil, observability)
 		} else {
-			handler = NewObservabilityServer(document, attestation.BodyV2{}, 8, id, nil, nil, cfg, ext, observability)
+			handler = NewObservabilityServer(document, attestation.BodyV2{}, id, nil, nil, cfg, observability)
 		}
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/.well-known/tinfoil-attestation?nonce="+strings.Repeat("42", 32), nil))
-		if calls != 1 || rec.Code != http.StatusInternalServerError {
+		if calls != 1 || rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "Configured evidence failure") {
 			t.Fatalf("full=%t: calls=%d status=%d", full, calls, rec.Code)
 		}
 		rec = httptest.NewRecorder()

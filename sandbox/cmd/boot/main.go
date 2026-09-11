@@ -13,7 +13,7 @@ func bootSpec() boot.Spec {
 		Stages:         variant.BootStages(),
 		Validate:       validate,
 		IsolateModel:   func(*boot.Config, string) bool { return true },
-		DeviceEvidence: attestation.NoDeviceEvidence,
+		DeviceEvidence: func(*boot.Config) attestation.DeviceEvidenceProvider { return attestation.NoDeviceEvidence },
 	}
 }
 

@@ -54,13 +54,12 @@ func testAuthServer(t *testing.T, validator key.Validator, authenticatedEndpoint
 		UpstreamPort:           9999,
 		AuthenticatedEndpoints: &authenticatedEndpoints,
 	}
-	extCfg := &config.ExternalConfig{}
 	att := &legacy.Document{
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
 
-	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, extCfg, "127.0.0.1:9999", nil, Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
+	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, id, nil, nil, cfg, "CVM.Example", "127.0.0.1:9999", nil, Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
 }
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
@@ -80,13 +79,12 @@ func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler
 		UpstreamPort: upstreamPort,
 		Paths:        paths,
 	}
-	extCfg := &config.ExternalConfig{}
 	att := &legacy.Document{
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
-	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg, upstreamAddr, nil, Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
+	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, id, nil, staticCollateralSource{}, cfg, "", upstreamAddr, nil, Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
 }
 
 func testObservabilityServer(t *testing.T, paths []string) http.Handler {
@@ -98,12 +96,11 @@ func testObservabilityServer(t *testing.T, paths []string) http.Handler {
 	}
 
 	cfg := &config.Config{Paths: paths}
-	extCfg := &config.ExternalConfig{}
 	att := &legacy.Document{
 		Format: "https://tinfoil.sh/predicate/dummy/v2",
 		Body:   "deadbeef",
 	}
-	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg, Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
+	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, id, nil, staticCollateralSource{}, cfg, Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
 }
 
 func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
@@ -114,12 +111,11 @@ func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
 	handler := NewObservabilityServer(
 		&legacy.Document{Format: legacy.DummyV2, Body: "deadbeef"},
 		tinfoilattestation.BodyV2{},
-		0,
 		id,
 		nil,
 		errorCollateralSource{},
 		&config.Config{},
-		&config.ExternalConfig{}, Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
+		Observability{DeviceEvidence: tinfoilattestation.NoDeviceEvidence})
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/tinfoil-attestation?nonce="+strings.Repeat("00", 32), nil)
 	rec := httptest.NewRecorder()
 
@@ -256,7 +252,7 @@ func TestMetricsValidation_OpaqueKeyGoesOnline(t *testing.T) {
 	if len(online.calls) != 1 {
 		t.Fatalf("online validator calls = %d, want 1", len(online.calls))
 	}
-	if got := online.calls[0]; got.APIKey != "tk-admin-key" || got.Path != "/metrics" {
+	if got := online.calls[0]; got.APIKey != "tk-admin-key" || got.Path != "/metrics" || got.Domain != "cvm.example" {
 		t.Fatalf("online validation request = %+v", got)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"tinfoil/inference/internal/containernet"
 	"tinfoil/inference/internal/gpuattestation"
 	"tinfoil/inference/internal/gpumetrics"
+	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/shim"
 )
@@ -21,11 +22,7 @@ func shimSpec() shim.Spec {
 	return shim.Spec{
 		UpstreamHost:   containernet.ShimUpstreamIP,
 		PublishedPorts: func() (map[string]bool, error) { return publishedPorts(variant.RuntimeConfigPath) },
-		Observability: shim.Observability{
-			DeviceEvidence: gpuattestation.CollectDeviceEvidence,
-			DeviceMetrics:  gpumetrics.Collect,
-			Handlers:       map[string]http.Handler{"/.well-known/tinfoil-containers": containersHandler()},
-		},
+		Observability:  observability,
 	}
 }
 
@@ -53,4 +50,17 @@ func publishedPorts(path string) (map[string]bool, error) {
 		}
 	}
 	return targets, nil
+}
+
+func observability(config *shimconfig.Config, external *shimconfig.ExternalConfig) (shim.Observability, error) {
+	log.Printf("Expected %d GPU(s) for attestation", config.ExpectedGPUs)
+	return shim.Observability{
+		DeviceEvidence:      gpuattestation.Provider(config.ExpectedGPUs),
+		EvidenceUnavailable: "GPU attestation evidence unavailable",
+		Handlers: map[string]http.Handler{
+			"/.well-known/tinfoil-metrics":    gpumetrics.HandleMetrics(external),
+			"/.well-known/metrics":            gpumetrics.HandlePrometheusMetrics(&external.Metadata, external.MetricsAPIKey),
+			"/.well-known/tinfoil-containers": containersHandler(),
+		},
+	}, nil
 }

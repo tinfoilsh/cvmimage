@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"time"
+	"tinfoil/internal/attestation"
 
 	envelope "github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 
@@ -256,4 +257,11 @@ func CollectDeviceEvidence(nonce [32]byte, expectedGPUs int) ([]envelope.DeviceE
 		return nil, fmt.Errorf("collecting NVSwitch evidence: %w", err)
 	}
 	return append(deviceEvidence, DeviceEvidenceFromNVSwitch(nvswitchEvidence)...), nil
+}
+
+// Provider fixes the configured GPU count for every request in this boot.
+func Provider(expectedGPUs int) attestation.DeviceEvidenceProvider {
+	return func(nonce [32]byte) ([]envelope.DeviceEvidenceItem, error) {
+		return CollectDeviceEvidence(nonce, expectedGPUs)
+	}
 }

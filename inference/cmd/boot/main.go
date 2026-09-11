@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 	containersecrets "tinfoil/inference/internal/secrets"
+	"tinfoil/internal/attestation"
 
 	"tinfoil/boot"
 	"tinfoil/inference/internal/gpuattestation"
@@ -22,7 +23,9 @@ func bootSpec() boot.Spec {
 		IsolateModel:    runtimeconfig.ModelIsIsolated,
 		WorkloadSecrets: containersecrets.References,
 		PrepareWorkload: prepareWorkload,
-		DeviceEvidence:  gpuattestation.CollectDeviceEvidence,
+		DeviceEvidence: func(config *boot.Config) attestation.DeviceEvidenceProvider {
+			return gpuattestation.Provider(config.GPUs)
+		},
 	}
 }
 

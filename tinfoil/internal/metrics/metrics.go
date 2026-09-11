@@ -33,20 +33,13 @@ type Metrics struct {
 	Domain      string `json:"domain"`
 	Image       string `json:"image"`
 	CPUUtil     int    `json:"cpu_util"`
-	GPUUtil     int    `json:"gpu_util,omitempty"`
 	CPUMemUtil  int    `json:"cpu_mem_util"`
-	GPUMemUtil  int    `json:"gpu_mem_util,omitempty"`
 	CPUMemTotal int    `json:"cpu_mem_total"`
-	GPUMemTotal int    `json:"gpu_mem_total,omitempty"`
 	CPUType     string `json:"cpu_type"`
-	GPUType     string `json:"gpu_type"`
 }
 
-// DeviceCollector adds workload-specific device measurements to the host metrics.
-type DeviceCollector func(*Metrics) error
-
-// collectMetrics gathers system metrics from CPU, memory, and GPU
-func collectMetrics(metadata *config.Metadata, devices DeviceCollector) (*Metrics, error) {
+// Collect reads CPU and memory measurements for this guest.
+func Collect(metadata *config.Metadata) (*Metrics, error) {
 	// The image label is "repo@tag"; empty when the metadata carries no repo.
 	var image string
 	if metadata.Repo != "" && metadata.Tag != "" {
@@ -74,22 +67,23 @@ func collectMetrics(metadata *config.Metadata, devices DeviceCollector) (*Metric
 	total := busy + cpuStats.Idle
 	metrics.CPUUtil = int(float64(busy) / float64(total) * 100)
 
-	if devices != nil {
-		if err := devices(&metrics); err != nil {
-			log.Printf("Warning: failed to get device metrics: %v", err)
-		}
-	}
-
 	return &metrics, nil
 }
 
-func HandleMetrics(externalConfig *config.ExternalConfig, devices DeviceCollector) http.HandlerFunc {
+func HandleMetrics(externalConfig *config.ExternalConfig) http.HandlerFunc {
+	return JSONHandler(externalConfig.MetricsAPIKey, func() (any, error) {
+		return Collect(&externalConfig.Metadata)
+	})
+}
+
+// JSONHandler authenticates the request before collecting a metrics snapshot.
+func JSONHandler(apiKey string, collect func() (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !auth.RequireBearer(externalConfig.MetricsAPIKey, w, r) {
+		if !auth.RequireBearer(apiKey, w, r) {
 			return
 		}
 
-		metricsData, err := collectMetrics(&externalConfig.Metadata, devices)
+		metricsData, err := collect()
 		if err != nil {
 			log.Printf("metrics collection failed: %v", err)
 			http.Error(w, "internal server error", http.StatusInternalServerError)

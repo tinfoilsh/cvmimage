@@ -20,7 +20,6 @@ import (
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
-	"tinfoil/internal/metrics"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
@@ -192,12 +191,11 @@ func NewShimServer(
 	rateLimiter *RateLimiter,
 	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
-	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
 	config *config.Config,
-	externalConfig *config.ExternalConfig,
+	domain string,
 	upstreamAddr string,
 	tunnelTargets map[string]bool,
 	observability Observability,
@@ -245,7 +243,7 @@ func NewShimServer(
 
 			validationReq := key.Request{
 				APIKey:        apiKey,
-				Domain:        strings.ToLower(externalConfig.Env["DOMAIN"]),
+				Domain:        strings.ToLower(domain),
 				RequestedHost: requestedHost(r),
 				Path:          r.URL.Path,
 			}
@@ -286,7 +284,7 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, observability)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, ehbpIdentity, tlsCert, collateralSource, observability)
 
 	// Fail closed: an authenticated deployment with no validator must not tunnel.
 	if config.Authenticated && validator == nil {
@@ -298,17 +296,15 @@ func NewShimServer(
 func NewObservabilityServer(
 	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
-	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
 	config *config.Config,
-	externalConfig *config.ExternalConfig,
 	observability Observability,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, observability)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, ehbpIdentity, tlsCert, collateralSource, observability)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
@@ -330,11 +326,9 @@ func registerObservabilityHandlers(
 	ehbpMiddleware func(http.Handler) http.Handler,
 	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
-	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
-	externalConfig *config.ExternalConfig,
 	observability Observability,
 ) {
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -358,10 +352,14 @@ func registerObservabilityHandlers(
 					return
 				}
 			}
-			deviceEvidence, err := observability.DeviceEvidence(nonce32, expectedGPUs)
+			deviceEvidence, err := observability.DeviceEvidence(nonce32)
 			if err != nil {
-				log.Printf("Device evidence collection failed for %d expected GPU(s): %v", expectedGPUs, err)
-				writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+				log.Printf("Device evidence collection failed: %v", err)
+				message := observability.EvidenceUnavailable
+				if message == "" {
+					message = "Device attestation evidence unavailable"
+				}
+				writeJSONError(w, message, errTypeServer, http.StatusInternalServerError)
 				return
 			}
 
@@ -414,8 +412,6 @@ func registerObservabilityHandlers(
 		json.NewEncoder(w).Encode(state)
 	})
 
-	mux.HandleFunc("/.well-known/tinfoil-metrics", metrics.HandleMetrics(externalConfig, observability.DeviceMetrics))
-	mux.HandleFunc("/.well-known/metrics", metrics.HandlePrometheusMetrics(&externalConfig.Metadata, externalConfig.MetricsAPIKey, observability.DeviceMetrics))
 	for pattern, handler := range observability.Handlers {
 		mux.Handle(pattern, handler)
 	}

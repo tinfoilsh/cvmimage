@@ -1,7 +1,11 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
 	"strconv"
+	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/metrics"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/shim"
@@ -16,9 +20,7 @@ func shimSpec() shim.Spec {
 	return shim.Spec{
 		UpstreamHost:   "127.0.0.1",
 		PublishedPorts: publishedPorts,
-		Observability: shim.Observability{
-			DeviceEvidence: attestation.NoDeviceEvidence,
-		},
+		Observability:  observability,
 	}
 }
 
@@ -30,4 +32,17 @@ func publishedPorts() (map[string]bool, error) {
 		targets[strconv.Itoa(port)] = true
 	}
 	return targets, nil
+}
+
+func observability(config *shimconfig.Config, external *shimconfig.ExternalConfig) (shim.Observability, error) {
+	if config.ExpectedGPUs != 0 {
+		return shim.Observability{}, fmt.Errorf("gpus are not supported by the sandbox image")
+	}
+	return shim.Observability{
+		DeviceEvidence: attestation.NoDeviceEvidence,
+		Handlers: map[string]http.Handler{
+			"/.well-known/tinfoil-metrics": metrics.HandleMetrics(external),
+			"/.well-known/metrics":         metrics.HandlePrometheusMetrics(&external.Metadata, external.MetricsAPIKey),
+		},
+	}, nil
 }

@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
-
-	"tinfoil/internal/containernet"
 )
 
 const (
@@ -45,7 +43,7 @@ func tunnels(targets map[string]bool, authorize func(http.ResponseWriter, *http.
 		}
 		defer open.Add(-1)
 
-		address := net.JoinHostPort(containernet.PublishedHostIP, port)
+		address := net.JoinHostPort("127.0.0.1", port)
 		dialed, err := net.DialTimeout("tcp", address, tunnelDialTimeout)
 		if err != nil {
 			log.Printf("Tunnel: dialing %s failed: %v", address, err)

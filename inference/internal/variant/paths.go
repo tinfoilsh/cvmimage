@@ -3,6 +3,7 @@ package variant
 import "tinfoil/internal/bootstate"
 
 const (
+	RuntimeConfigPath         = bootstate.PrivateDir + "/runtime-config.yml"
 	ContainerStatusPath       = bootstate.PublicDir + "/container-status.json"
 	ContainerModelsDir        = "/tinfoil/models"
 	EgressConfigPath          = bootstate.PrivateDir + "/egress.yml"

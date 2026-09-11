@@ -52,13 +52,13 @@ type Observability struct {
 
 // Spec supplies proxy routing and observability for this workload.
 type Spec struct {
-	UpstreamHost   func(string) string
-	PublishedPorts func(string) (map[string]bool, error)
+	UpstreamHost   string
+	PublishedPorts func() (map[string]bool, error)
 	Observability  Observability
 }
 
 func Main(spec Spec) {
-	if spec.UpstreamHost == nil || spec.PublishedPorts == nil || spec.Observability.DeviceEvidence == nil {
+	if spec.UpstreamHost == "" || spec.PublishedPorts == nil || spec.Observability.DeviceEvidence == nil {
 		log.Fatal("incomplete shim spec")
 	}
 	flag.Parse()
@@ -257,11 +257,11 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
 		}
 
-		upstreamHost := spec.UpstreamHost(config.UpstreamContainer)
+		upstreamHost := spec.UpstreamHost
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		targets, err := spec.PublishedPorts(bootstate.RuntimeConfigPath)
+		targets, err := spec.PublishedPorts()
 		if err != nil {
 			return fmt.Errorf("loading published ports: %w", err)
 		}

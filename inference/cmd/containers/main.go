@@ -18,9 +18,9 @@ import (
 	"tinfoil/inference/internal/variant"
 
 	"tinfoil/inference/internal/containers"
+	"tinfoil/inference/internal/firewall"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/firewall"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )

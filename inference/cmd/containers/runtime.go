@@ -38,7 +38,7 @@ func (instance *serviceInstance) close() {
 }
 
 func loadRuntimeConfig() (*runtimeconfig.Config, error) {
-	data, err := os.ReadFile(bootstate.RuntimeConfigPath)
+	data, err := os.ReadFile(variant.RuntimeConfigPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -53,7 +53,7 @@ func loadRuntimeConfig() (*runtimeconfig.Config, error) {
 }
 
 func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
-	if err := atomicWrite(bootstate.RuntimeConfigPath, source, 0o600); err != nil {
+	if err := atomicWrite(variant.RuntimeConfigPath, source, 0o600); err != nil {
 		return err
 	}
 	shimYAML, err := yaml.Marshal(config.ShimCfg)

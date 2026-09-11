@@ -6,20 +6,21 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"tinfoil/inference/internal/variant"
 
 	"gopkg.in/yaml.v3"
 
+	"tinfoil/inference/internal/containernet"
 	"tinfoil/inference/internal/gpuattestation"
 	"tinfoil/inference/internal/gpumetrics"
-	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/shim"
 )
 
 func shimSpec() shim.Spec {
 	return shim.Spec{
-		UpstreamHost:   upstreamHost,
-		PublishedPorts: publishedPorts,
+		UpstreamHost:   containernet.ShimUpstreamIP,
+		PublishedPorts: func() (map[string]bool, error) { return publishedPorts(variant.RuntimeConfigPath) },
 		Observability: shim.Observability{
 			DeviceEvidence: gpuattestation.CollectDeviceEvidence,
 			DeviceMetrics:  gpumetrics.Collect,
@@ -29,12 +30,6 @@ func shimSpec() shim.Spec {
 }
 
 func main() { shim.Main(shimSpec()) }
-
-// upstreamHost returns the fixed shim-net address assigned to the upstream
-// container by tinfoil-boot.
-func upstreamHost(string) string {
-	return containernet.ShimUpstreamIP
-}
 
 func publishedPorts(path string) (map[string]bool, error) {
 	data, err := os.ReadFile(path)

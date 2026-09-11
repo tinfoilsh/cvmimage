@@ -113,11 +113,6 @@ let
         target = "etc/ssl/certs/ca-certificates.crt";
         mode = "0644";
       }
-      {
-        source = ../image/rootfs/etc/nftables.conf;
-        target = "etc/nftables.conf";
-        mode = "0644";
-      }
     ];
     directories =
       map

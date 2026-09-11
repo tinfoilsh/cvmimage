@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"strings"
+	nft "tinfoil/internal/firewall"
 )
 
 func ApplyInbound(ports []int) error {
@@ -12,7 +13,7 @@ func ApplyInbound(ports []int) error {
 	if err != nil {
 		return err
 	}
-	if err := Apply(script); err != nil {
+	if err := nft.Apply(script); err != nil {
 		return fmt.Errorf("applying inbound ports %v: %w", ports, err)
 	}
 	log.Printf("Firewall: allowed inbound ports %v (in addition to shim port)", ports)

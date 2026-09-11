@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"tinfoil/inference/internal/containernet"
 	"tinfoil/inference/internal/variant"
-	"tinfoil/internal/containernet"
 	"tinfoil/internal/firewall"
 
 	"gopkg.in/yaml.v3"

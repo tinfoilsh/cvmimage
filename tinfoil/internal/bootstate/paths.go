@@ -23,7 +23,6 @@ const (
 
 	ExternalConfigPath = PrivateDir + "/external-config.yml"
 	PrivateModelsDir   = PrivateDir + "/models"
-	RuntimeConfigPath  = PrivateDir + "/runtime-config.yml"
 
 	CacheDir  = PrivateDir + "/tfshim-cache"
 	StatePath = PrivateDir + "/boot-state.json"

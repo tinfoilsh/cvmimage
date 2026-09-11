@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"tinfoil/internal/containernet"
+	"tinfoil/inference/internal/containernet"
 )
 
 func TestResolveUpstreamHostUsesPinnedShimAddress(t *testing.T) {
-	if got := upstreamHost("ignored"); got != containernet.ShimUpstreamIP {
+	if got := shimSpec().UpstreamHost; got != containernet.ShimUpstreamIP {
 		t.Fatalf("UpstreamHost() = %q, want %q", got, containernet.ShimUpstreamIP)
 	}
 }

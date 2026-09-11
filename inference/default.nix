@@ -5,7 +5,7 @@
 }:
 let
   payload = import ../nix/payload.nix { inherit pkgs; };
-  sources = import ../nix/runtime-sources.nix;
+  sources = import ./nix/sources.nix;
   module = {
     src = go.source [
       ../tinfoil
@@ -34,7 +34,16 @@ in
   kernelConfigs = [ ];
   checks = go.checks {
     name = "tinfoil-inference-checks";
-    inherit module;
+    module = module // {
+      src = pkgs.lib.fileset.toSource {
+        root = ../.;
+        fileset = pkgs.lib.fileset.unions [
+          (go.fileset ../tinfoil)
+          (go.fileset ./.)
+          ./rootfs/etc/nftables.conf
+        ];
+      };
+    };
     extraChecks = ''
       go test -race ./internal/nvml
       go test -tags=tinfoil_debug_image ./cmd/pid1
@@ -43,8 +52,8 @@ in
   rootfs =
     { kernel }:
     let
-      nvidia = import ../nix/nvidia-modules.nix { inherit pkgs kernel; };
-      nvattest = (import ../nix/nvattest.nix { inherit pkgs; }).nvattest;
+      nvidia = import ./nix/nvidia-modules.nix { inherit pkgs kernel; };
+      nvattest = (import ./nix/nvattest.nix { inherit pkgs; }).nvattest;
     in
     {
       outputs = {
@@ -94,6 +103,12 @@ in
         files =
           payload.accounts ./rootfs/etc
           ++ [
+        {
+          source = ./rootfs/etc/nftables.conf;
+          target = "etc/nftables.conf";
+          mode = "0644";
+        }
+
             {
               source = ./rootfs/etc/containerd/config.toml;
               target = "etc/containerd/config.toml";

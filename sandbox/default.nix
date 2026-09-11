@@ -36,7 +36,16 @@ in
   kernelConfigs = [ ./kernel.config ];
   checks = go.checks {
     name = "tinfoil-sandbox-checks";
-    inherit module;
+    module = module // {
+      src = pkgs.lib.fileset.toSource {
+        root = ../.;
+        fileset = pkgs.lib.fileset.unions [
+          (go.fileset ../tinfoil)
+          (go.fileset ./.)
+          ./rootfs/etc/nftables.conf
+        ];
+      };
+    };
     extraChecks = "go test -tags=tinfoil_debug_image ./cmd/pid1";
   };
   rootfs = { kernel }: {
@@ -92,6 +101,12 @@ in
         }
       ];
       files = payload.accounts ./rootfs/etc ++ [
+        {
+          source = ./rootfs/etc/nftables.conf;
+          target = "etc/nftables.conf";
+          mode = "0644";
+        }
+
         {
           source = ./rootfs/etc/nix/nix.conf;
           target = "etc/nix/nix.conf";

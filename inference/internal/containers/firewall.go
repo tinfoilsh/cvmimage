@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"tinfoil/inference/internal/egress"
-	"tinfoil/internal/firewall"
+	"tinfoil/inference/internal/firewall"
 )
 
 const egressInitialPopulationTimeout = 30 * time.Second

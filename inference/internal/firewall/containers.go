@@ -5,8 +5,9 @@ import (
 	"log"
 	"sort"
 	"strings"
+	nft "tinfoil/internal/firewall"
 
-	"tinfoil/internal/containernet"
+	"tinfoil/inference/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -17,7 +18,7 @@ const (
 
 func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
 	script := renderContainerNetworkScript(config, debug)
-	if err := Apply(script); err != nil {
+	if err := nft.Apply(script); err != nil {
 		return fmt.Errorf("installing container-network firewall rules: %w", err)
 	}
 	for name, network := range config.Networks {

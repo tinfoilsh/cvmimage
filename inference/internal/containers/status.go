@@ -16,8 +16,6 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"gopkg.in/yaml.v3"
-
-	"tinfoil/internal/bootstate"
 )
 
 const (
@@ -97,11 +95,11 @@ func PublishStatus(ctx context.Context) error {
 		return fmt.Errorf("creating docker client: %w", err)
 	}
 	defer cli.Close()
-	return publishContainerStatus(ctx, cli, bootstate.RuntimeConfigPath, variant.ContainerStatusPath)
+	return publishContainerStatus(ctx, cli, variant.RuntimeConfigPath, variant.ContainerStatusPath)
 }
 
 func publishAndLog(ctx context.Context, cli containerStatusClient) {
-	if err := publishContainerStatus(ctx, cli, bootstate.RuntimeConfigPath, variant.ContainerStatusPath); err != nil {
+	if err := publishContainerStatus(ctx, cli, variant.RuntimeConfigPath, variant.ContainerStatusPath); err != nil {
 		log.Printf("container status publish failed: %v", err)
 	}
 }

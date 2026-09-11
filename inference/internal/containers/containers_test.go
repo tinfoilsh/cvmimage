@@ -10,9 +10,9 @@ import (
 	"github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
 
+	"tinfoil/inference/internal/containernet"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/containernet"
 	"tinfoil/internal/secretstore"
 )
 

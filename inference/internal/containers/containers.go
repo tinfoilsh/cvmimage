@@ -22,9 +22,9 @@ import (
 	dockernetwork "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
+	"tinfoil/inference/internal/containernet"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )

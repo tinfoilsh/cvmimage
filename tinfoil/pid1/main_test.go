@@ -73,28 +73,31 @@ type fakeVariant struct {
 	bootstrap func(context.Context) error
 }
 
-func (v *fakeVariant) BootstrapDevices(ctx context.Context, _ Deps) error {
+func (v *fakeVariant) BootstrapDevices(ctx context.Context, _ Runtime) error {
 	if v.bootstrap == nil {
 		return nil
 	}
 	return v.bootstrap(ctx)
 }
 
-func (*fakeVariant) StartDaemons(ctx context.Context, deps Deps) error {
+func (*fakeVariant) StartDaemons(ctx context.Context, deps Runtime) error {
 	return deps.Services.Start(ctx, supervisor.Service{
 		Name: daemonName, Required: true, Command: Command(daemonName, "/usr/bin/daemon"),
 	})
 }
 
-func (*fakeVariant) StartWorkload(ctx context.Context, deps Deps, handoff *os.File) error {
+func (*fakeVariant) StartWorkload(ctx context.Context, deps Runtime, handoff *os.File) error {
 	command := Command(workloadName, "/usr/bin/workload", fmt.Sprintf("--debug=%t", deps.Cmdline.Debug))
 	return deps.Services.Start(ctx, supervisor.Service{
 		Name: workloadName, Required: true, Command: WithSecretHandoff(command, handoff),
 	})
 }
 
-func (*fakeVariant) RequiredServices() []string {
-	return []string{daemonName, workloadName, ShimName}
+func (*fakeVariant) Services() []Service {
+	return []Service{BootService(), ShimService(hardening.ShimPolicy()),
+		{Service: supervisor.Service{Name: daemonName, Required: true, Command: Command(daemonName, "/usr/bin/daemon")}},
+		{Service: supervisor.Service{Name: workloadName, Required: true, Command: Command(workloadName, "/usr/bin/workload")}},
+	}
 }
 
 func (*fakeVariant) ShutdownGroups() [][]string {
@@ -104,10 +107,9 @@ func (*fakeVariant) ShutdownGroups() [][]string {
 type lifecycleHarness struct {
 	services  *fakeServices
 	variant   *fakeVariant
-	deps      Deps
+	deps      lifecycleDeps
 	readiness *readinessState
 	ready     chan bool
-	existing  map[string]bool
 }
 
 type fakeConsole struct{}
@@ -119,20 +121,19 @@ func newLifecycleHarness() *lifecycleHarness {
 		services: newFakeServices(),
 		variant:  &fakeVariant{},
 		ready:    make(chan bool, 16),
-		existing: map[string]bool{},
 	}
-	harness.readiness = newReadiness(harness.variant.RequiredServices(), func(ready bool) error {
+	harness.readiness = newReadiness((Spec{Services: harness.variant.Services()}).requiredServices(), func(ready bool) error {
 		harness.ready <- ready
 		return nil
 	})
 	harness.services.observe = harness.readiness.Update
 	noSetup := func(pidruntime.LogFunc) error { return nil }
-	harness.deps = Deps{
-		Services: harness.services,
-		OneShot:  func(context.Context, supervisor.Command) error { return nil },
+	harness.deps = lifecycleDeps{
+		Runtime: Runtime{Services: harness.services, OneShot: func(context.Context, supervisor.Command) error { return nil }},
+		drain:   harness.services.Drain,
 		spec: Spec{
 			BootstrapDevices: harness.variant.BootstrapDevices, StartDaemons: harness.variant.StartDaemons,
-			StartWorkload: harness.variant.StartWorkload, RequiredServices: harness.variant.RequiredServices(),
+			StartWorkload: harness.variant.StartWorkload, Services: harness.variant.Services(),
 			ShutdownGroups: harness.variant.ShutdownGroups(), BootStages: testBootStages,
 		},
 		startConsole: func(context.Context) (consoleControl, error) {
@@ -145,9 +146,6 @@ func newLifecycleHarness() *lifecycleHarness {
 		ramdisk:      noSetup,
 		limits:       func() error { return nil },
 		syslog:       func(context.Context) {},
-		exists: func(path string) (bool, error) {
-			return harness.existing[path], nil
-		},
 	}
 	return harness
 }

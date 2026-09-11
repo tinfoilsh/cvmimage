@@ -11,13 +11,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"tinfoil/inference/internal/variant"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	"gopkg.in/yaml.v3"
 
+	"tinfoil/inference/internal/variant"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
 )
 
 const (

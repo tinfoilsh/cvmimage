@@ -1,0 +1,381 @@
+package shim
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"math/big"
+	"net/http"
+	"net/url"
+	"os"
+	"sync/atomic"
+	"time"
+
+	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	"golang.org/x/time/rate"
+
+	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/bootstate"
+	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/key"
+	localjwt "tinfoil/internal/key/jwt"
+	"tinfoil/internal/key/online"
+	verifier "tinfoil/internal/legacy"
+	tlsutil "tinfoil/internal/tls"
+)
+
+const (
+	shimReadHeaderTimeout = 10 * time.Second
+	shimIdleTimeout       = 2 * time.Minute
+)
+
+// Observability declares the device providers and additional diagnostic routes.
+type Observability struct {
+	DeviceEvidence      tinfoilattestation.DeviceEvidenceProvider
+	EvidenceUnavailable string
+	Handlers            map[string]http.Handler
+}
+
+// Spec supplies proxy routing and observability for this workload.
+type Spec struct {
+	UpstreamHost   string
+	PublishedPorts func() (map[string]bool, error)
+	Observability  func(*shimconfig.Config, *shimconfig.ExternalConfig) (Observability, error)
+}
+
+type Options struct {
+	ConfigFile         string
+	ExternalConfigFile string
+}
+
+// Run serves TLS until ctx is canceled or the listener fails.
+func Run(ctx context.Context, options Options, spec Spec) error {
+	if spec.UpstreamHost == "" || spec.PublishedPorts == nil || spec.Observability == nil {
+		return fmt.Errorf("incomplete shim spec")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var handler atomic.Value
+	var cert atomic.Pointer[tls.Certificate]
+
+	// Start with an ephemeral self-signed cert and a minimal handler that
+	// serves only boot-stages. This lets the backend poll boot progress before
+	// boot has provisioned the real TLS cert and other artifacts.
+	ephemeral, err := generateEphemeralCert()
+	if err != nil {
+		return fmt.Errorf("generate ephemeral certificate: %w", err)
+	}
+	cert.Store(&ephemeral)
+
+	handler.Store(http.HandlerFunc(bootStagesHandler().ServeHTTP))
+
+	tlsConfig := &tls.Config{
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return cert.Load(), nil
+		},
+	}
+
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", bootstate.ShimListenPort),
+		ReadHeaderTimeout: shimReadHeaderTimeout,
+		IdleTimeout:       shimIdleTimeout,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if h, ok := handler.Load().(http.Handler); ok {
+				h.ServeHTTP(w, r)
+			} else {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+		}),
+		TLSConfig: tlsConfig,
+	}
+
+	// Wait for boot to provision artifacts, then upgrade to the full handler.
+	upgradeDone := make(chan struct{})
+	go func() {
+		defer close(upgradeDone)
+		upgradeWhenReady(ctx, &handler, &cert, options, spec)
+	}()
+	defer func() {
+		cancel()
+		<-upgradeDone
+	}()
+	stop := context.AfterFunc(ctx, func() { _ = srv.Close() })
+	defer stop()
+
+	log.Printf("Starting tinfoil shim (waiting for boot)")
+	err = srv.ListenAndServeTLS("", "")
+	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
+// bootStagesHandler returns a minimal handler that only serves the
+// boot-stages endpoint, returning 503 for everything else.
+func bootStagesHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
+		state, err := bootstate.Load()
+		if err != nil {
+			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(state)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "shim is starting, waiting for boot to complete", http.StatusServiceUnavailable)
+	})
+	return mux
+}
+
+const artifactPollInterval = 1 * time.Second
+
+// upgradeWhenReady advances the public handler through three explicit phases:
+// boot stages only, observability only, and finally workload proxying.
+func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.Pointer[tls.Certificate], options Options, spec Spec) {
+	start := time.Now()
+
+	err := func() error {
+		type configPair struct {
+			config   *shimconfig.Config
+			external *shimconfig.ExternalConfig
+		}
+		cfgPair, err := waitForArtifact(ctx, "Shim config", func() (configPair, error) {
+			c, e, err := shimconfig.Load(options.ConfigFile, options.ExternalConfigFile)
+			return configPair{c, e}, err
+		})
+		if err != nil {
+			return err
+		}
+		config, externalConfig := cfgPair.config, cfgPair.external
+		log.Printf("Shim config loaded: upstream-port=%d tls-mode=%s paths=%d",
+			config.UpstreamPort, config.TLSMode, len(config.Paths))
+
+		realCert, err := waitForArtifact(ctx, "TLS certificate", func() (tls.Certificate, error) {
+			return tls.LoadX509KeyPair(bootstate.TLSCertPath, bootstate.TLSKeyPath)
+		})
+		if err != nil {
+			return err
+		}
+		cert.Store(&realCert)
+
+		att, err := waitForArtifact(ctx, "Attestation document", func() (*verifier.Document, error) {
+			return loadAttestation()
+		})
+		if err != nil {
+			return err
+		}
+		collateralRequest, err := waitForArtifact(ctx, "Collateral request", func() (wire.Request, error) {
+			return loadCollateralRequest(bootstate.CollateralRequestPath)
+		})
+		if err != nil {
+			return err
+		}
+
+		serverIdentity, err := waitForArtifact(ctx, "HPKE identity", func() (*identity.Identity, error) {
+			return identity.FromFile(bootstate.HPKEKeyPath)
+		})
+		if err != nil {
+			return err
+		}
+
+		collateralCache, err := newCollateralSource(collateralRequest, config)
+		if err != nil {
+			return err
+		}
+
+		// Build identity body for fresh attestation (binds TLS key + HPKE key to hardware)
+		realCertParsed := cert.Load()
+		tlsPub, ok := realCertParsed.PrivateKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("TLS key is not ECDSA")
+		}
+		identityBody := tinfoilattestation.BodyV2{
+			TLSKeyFP: tlsutil.KeyFPBytes(&tlsPub.PublicKey),
+		}
+		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
+
+		observability, err := spec.Observability(config, externalConfig)
+		if err != nil {
+			return fmt.Errorf("configure observability: %w", err)
+		}
+		if observability.DeviceEvidence == nil {
+			return fmt.Errorf("device evidence provider is required")
+		}
+
+		observabilityHandler := NewObservabilityServer(att, identityBody, serverIdentity, realCertParsed, collateralCache, config, observability)
+		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
+
+		log.Println("Shim observability ready")
+
+		// Wait for all boot stages (except shim) to resolve before proxying
+		// workload traffic. Well-known observability endpoints stay live while
+		// workloads load, restart, or fail.
+		if err := waitUntil(ctx, func() bool {
+			state, err := bootstate.Load()
+			if err != nil {
+				return false
+			}
+			for _, s := range state.Stages {
+				if s.Status == bootstate.StatusPending && s.Name != bootstate.StageShim {
+					return false
+				}
+			}
+			return true
+		}); err != nil {
+			return err
+		}
+
+		if state, err := bootstate.Load(); err == nil && state.HasFailed() {
+			return fmt.Errorf("boot stage failed, not enabling proxy")
+		}
+
+		// API key validator
+		var validator key.Validator
+		if config.ControlPlane != "" {
+			controlPlaneURL, err := url.Parse(config.ControlPlane)
+			if err != nil {
+				return fmt.Errorf("parsing control plane URL: %w", err)
+			}
+
+			if config.Authenticated {
+				onlineValidator, err := online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate-key").String())
+				if err != nil {
+					return fmt.Errorf("initializing API key verifier: %w", err)
+				}
+
+				// Verify OAuth JWT access tokens locally against the control
+				// plane's JWKS so they need no per-request round trip; opaque
+				// keys still fall through to the online validator. The JWKS
+				// loads best-effort and self-heals via refresh, so a
+				// control-plane blip at boot never disables local verification.
+				jwksURL := controlPlaneURL.JoinPath(".well-known", "jwks.json").String()
+				jwtValidator := localjwt.NewValidator(jwksURL, config.ControlPlane, localjwt.AccessTokenAudience, localjwt.RequiredScope)
+				log.Println("Local JWT validation enabled (OAuth access tokens verified in-enclave)")
+				validator = &metricsValidator{
+					online: onlineValidator,
+					chain:  key.NewChain(jwtValidator, onlineValidator),
+				}
+			} else {
+				log.Println("Warning: API key verification disabled (unauthenticated endpoint)")
+			}
+		} else {
+			log.Println("Warning: API key verification disabled (no control plane)")
+		}
+
+		var rateLimiter *RateLimiter
+		if config.RateLimit > 0 {
+			rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
+		}
+
+		upstreamHost := spec.UpstreamHost
+		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
+		log.Printf("Shim upstream: %s", upstreamAddr)
+
+		targets, err := spec.PublishedPorts()
+		if err != nil {
+			return fmt.Errorf("loading published ports: %w", err)
+		}
+
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, serverIdentity, realCertParsed, collateralCache, config, externalConfig.Env["DOMAIN"], upstreamAddr, targets, observability)
+		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
+
+		log.Println("Shim fully operational")
+		return nil
+	}()
+
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		log.Printf("Shim upgrade failed: %v", err)
+		bootstate.RecordStage(bootstate.StageShim, bootstate.StatusFailed, time.Since(start), err.Error())
+	} else {
+		bootstate.RecordStage(bootstate.StageShim, bootstate.StatusOK, time.Since(start), "")
+	}
+	bootstate.Complete()
+}
+
+// waitForArtifact polls load until it succeeds or boot fails.
+func waitForArtifact[T any](ctx context.Context, name string, load func() (T, error)) (T, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			var zero T
+			return zero, err
+		}
+		state, _ := bootstate.Load()
+		if state != nil && state.HasFailed() {
+			var zero T
+			return zero, fmt.Errorf("boot failed before %s was provisioned", name)
+		}
+		val, err := load()
+		if err == nil {
+			log.Printf("%s loaded", name)
+			return val, nil
+		}
+		select {
+		case <-ctx.Done():
+			var zero T
+			return zero, ctx.Err()
+		case <-time.After(artifactPollInterval):
+		}
+	}
+}
+
+func waitUntil(ctx context.Context, cond func() bool) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if cond() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(artifactPollInterval):
+		}
+	}
+}
+
+func generateEphemeralCert() (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  key,
+	}, nil
+}
+
+func loadAttestation() (*verifier.Document, error) {
+	data, err := os.ReadFile(bootstate.AttestationPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", bootstate.AttestationPath, err)
+	}
+	var att verifier.Document
+	if err := json.Unmarshal(data, &att); err != nil {
+		return nil, fmt.Errorf("parsing attestation document: %w", err)
+	}
+	return &att, nil
+}

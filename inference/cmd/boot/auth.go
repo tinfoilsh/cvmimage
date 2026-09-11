@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
 	"tinfoil/inference/internal/variant"
-	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/secretstore"
 )
 
 const (
@@ -26,17 +27,17 @@ type DockerAuth struct {
 	Auth string `json:"auth"`
 }
 
-// setupRegistryAuth configures Docker auth from external-config secrets.
+// setupRegistryAuth configures Docker auth from the supplied credentials.
 // Supports:
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
-func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
+func setupRegistryAuth(credentials secretstore.Store) error {
 	os.Setenv("DOCKER_CONFIG", variant.DockerConfigDir)
-	return writeRegistryAuth(ext, variant.DockerConfigPath, variant.GCloudKeyPath)
+	return writeRegistryAuth(credentials, variant.DockerConfigPath, variant.GCloudKeyPath)
 }
 
-func writeRegistryAuth(ext *shimconfig.ExternalConfig, configPath, gcloudKeyPath string) error {
-	if ext == nil || ext.Secrets == nil {
+func writeRegistryAuth(credentials secretstore.Store, configPath, gcloudKeyPath string) error {
+	if credentials == nil {
 		log.Println("No external config, skipping registry auth")
 		return nil
 	}
@@ -54,7 +55,7 @@ func writeRegistryAuth(ext *shimconfig.ExternalConfig, configPath, gcloudKeyPath
 
 	// Generic registry auth: REGISTRY_<HOST>_TOKEN (user optional)
 	// Host format: underscores become dots (GHCR_IO -> ghcr.io)
-	for key, token := range ext.Secrets {
+	for key, token := range credentials {
 		if !strings.HasPrefix(key, "REGISTRY_") || !strings.HasSuffix(key, "_TOKEN") {
 			continue
 		}
@@ -64,7 +65,7 @@ func writeRegistryAuth(ext *shimconfig.ExternalConfig, configPath, gcloudKeyPath
 		if host == "" || token == "" || !registryPattern.MatchString(host) {
 			continue
 		}
-		user := ext.Secrets["REGISTRY_"+hostPart+"_USER"]
+		user := credentials["REGISTRY_"+hostPart+"_USER"]
 		if user == "" {
 			user = "token"
 		}
@@ -73,13 +74,13 @@ func writeRegistryAuth(ext *shimconfig.ExternalConfig, configPath, gcloudKeyPath
 	}
 
 	// GCP Artifact Registry auth via service account JSON key
-	gcloudKey := ext.GetSecret(secretGCloudKey)
+	gcloudKey := credentials.GetSecret(secretGCloudKey)
 	if gcloudKey == "" {
-		gcloudKey = ext.GetSecret("gcloud-key")
+		gcloudKey = credentials.GetSecret("gcloud-key")
 	}
-	gcloudRegistry := ext.GetSecret(secretGCloudRegistry)
+	gcloudRegistry := credentials.GetSecret(secretGCloudRegistry)
 	if gcloudRegistry == "" {
-		gcloudRegistry = ext.GetSecret("gcloud-registry")
+		gcloudRegistry = credentials.GetSecret("gcloud-registry")
 	}
 	if gcloudKey != "" {
 		// Write key file for containers that mount it directly (e.g., Pollux)

@@ -5,10 +5,11 @@ import (
 	"log"
 	"sort"
 	"strings"
-	nft "tinfoil/internal/firewall"
 
 	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
+
 	"tinfoil/inference/internal/containernet"
+	nft "tinfoil/internal/firewall"
 )
 
 const (

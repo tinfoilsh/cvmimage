@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
+
 	shimconfig "tinfoil/internal/config"
 )
 

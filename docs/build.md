@@ -60,23 +60,50 @@ those builders.
 
 The Go modules follow the same ownership. `tinfoil/` owns CPU boot, PID 1
 supervision, and the TLS shim. Each takes a `Spec` with declared policy and
-focused hooks. `inference/` owns GPU bootstrap, attestation and metrics, Docker,
+focused hooks. Command entry points parse arguments and own process exits;
+the shared `Run` functions return errors. PID 1 derives readiness requirements
+and hardening policy lookup from the service declarations, while each variant
+keeps its startup and shutdown order explicit.
+
+`inference/` owns GPU bootstrap, attestation and metrics, Docker,
 containers, registry credentials, container networking, and diagnostics. `sandbox/` owns workspace
 setup, SSH, its daemon, and its CPU-only configuration rules. Each module has
 its own `go.mod` and checks; the two variants depend on `tinfoil/` through a
 local module replacement.
 
-Shared code applies policy supplied by each variant. `internal/bootstate`
-contains the stage tracker and common boot artifacts; inference's runtime
-paths live in `inference/internal/variant/paths.go`. Shared boot resolves
-model secrets plus the secret names selected by the variant. Inference
-prepares registry credentials and the public directories for isolated models.
-Shared hardening applies each service's declared device paths, and the shim
-accepts configured evidence providers and HTTP handlers.
-Boot publishes the initial shim config so observability can start before the
-workload. The inference container manager replaces it when applying a reload.
+Boot compiles a workload declaration from verified configuration once. Each
+variant chooses pack mount destinations, compatibility aliases, workload secret
+names, and its device-evidence provider. Inference also supplies GPU attestation
+and registry preparation hooks. Shared boot keeps the execution order, stage
+reporting, and publication of configuration, certificate, and attestation files.
 
-The configuration aliases still use the common `tinfoil-config` wire schema,
+The implementation lives in focused internal packages:
+
+| Package | Responsibility |
+| --- | --- |
+| `internal/modelpack` | Verified pack mounts, key derivation, and mapping cleanup |
+| `internal/keyserver` | Attested challenge/fetch protocol using the provisioned certificate |
+| `internal/secretstore` | Secret source rules, resolved values, subsets, and sealed handoff |
+| `internal/identity` | Node keys and their attestation binding |
+| `internal/attestation` | CPU evidence and attestation documents |
+| `internal/tls` | Certificate provisioning and challenge handling |
+| `internal/guestnet` | Guest interface configuration and resolver checks |
+| `internal/runtimeconfig`, `internal/config` | Measured and external configuration loading |
+
+Secret resolution returns a store without modifying external configuration.
+Model keys stay available to boot; the child handoff contains only the variant's
+requested workload secrets. Inference combines host and resolved credentials
+locally for registry preparation and creates public bind-mount points for its
+private packs.
+
+`internal/bootstate` contains the stage tracker and common boot artifact paths;
+inference's runtime paths live in `inference/internal/variant/paths.go`. Shared
+hardening applies each service's declared device paths, and the shim accepts
+configured evidence providers and HTTP handlers. Boot publishes the initial
+shim config so observability can start before the workload. The inference
+container manager replaces it when applying a reload.
+
+All variants use the common `tinfoil-config` wire schema,
 including its container and GPU fields. External metadata and token audience
 and scope values also retain their existing protocol contracts. These are
 compatibility boundaries; workload behavior belongs to the variant. Container
@@ -194,7 +221,8 @@ and `sandbox-checks` vets and tests its Go module. `platform-checks` and
 `inference-checks` cover the other modules; `checks` builds all three. The
 platform checks also run the PID 1, boot-state, metrics, and shim race tests
 and the debug-console tests. Inference checks run the NVML, GPU metrics, and
-shim race tests, and both variants test their debug PID 1 builds. Dependency
+shim race tests. Sandbox checks race-test enrollment and workspace handling.
+Both variants test their debug PID 1 builds. Dependency
 checks inspect `go list -deps -test` for production and debug builds: shared
 code cannot import either variant, the variants cannot import each other,
 and shared code and sandbox cannot import the NVIDIA, Docker, Moby, or

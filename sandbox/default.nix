@@ -53,7 +53,10 @@ in
         ];
       };
     };
-    extraChecks = "go test -tags=tinfoil_debug_image ./cmd/pid1";
+    extraChecks = ''
+      go test -race ./cmd/sandbox
+      go test -tags=tinfoil_debug_image ./cmd/pid1
+    '';
   };
   rootfs = { kernel }: {
     outputs."sandbox-package-lock" = ubuntu.lock;

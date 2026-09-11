@@ -8,11 +8,13 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
 	"tinfoil/internal/pid1/hardening"
+	"tinfoil/internal/pid1/supervisor"
 )
 
 func TestSpecRejectsUnknownPolicyBeforeExec(t *testing.T) {
-	spec := Spec{Policies: map[hardening.Service]hardening.Policy{"worker": {NoNewPrivileges: true}}}
+	spec := Spec{}
 	err := execService([]string{"missing", "--", "/unused"}, spec.ApplyService,
 		func(string, []string, []string) error {
 			t.Fatal("executed an unknown policy")
@@ -40,14 +42,12 @@ func TestSpecReexecAppliesPolicyAndEnvironment(t *testing.T) {
 			"TINFOIL_SPEC_TEST_PHASE": "target",
 			"TINFOIL_SPEC_TEST_VALUE": "declared",
 		}
-		spec.Policies = map[hardening.Service]hardening.Policy{
-			hardening.ServiceBoot: hardening.BootPolicy(),
-			hardening.ServiceShim: hardening.ShimPolicy(),
-			"worker":              {NoNewPrivileges: true, DeniedSyscalls: []uint32{unix.SYS_GETPPID}},
-		}
+		policy := hardening.Policy{NoNewPrivileges: true, DeniedSyscalls: []uint32{unix.SYS_GETPPID}}
+		spec.Services = append(spec.Services, Service{Service: supervisor.Service{Name: "worker", Command: Command("worker", "/worker")}, Policy: &policy})
 		binary := os.Args[0]
-		os.Args = []string{binary, "--exec-service", "worker", "--", binary, "-test.run=^TestSpecReexecAppliesPolicyAndEnvironment$"}
-		Main(spec)
+		if err := ExecService([]string{"worker", "--", binary, "-test.run=^TestSpecReexecAppliesPolicyAndEnvironment$"}, spec); err != nil {
+			t.Fatal(err)
+		}
 		os.Exit(22)
 	}
 	command := exec.Command(os.Args[0], "-test.run=^TestSpecReexecAppliesPolicyAndEnvironment$")

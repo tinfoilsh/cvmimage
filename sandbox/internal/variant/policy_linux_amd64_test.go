@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
 	"tinfoil/internal/bootstate"
 	"tinfoil/internal/pid1/hardening"
 )
@@ -19,14 +20,14 @@ func TestSandboxPolicyPreservesRestrictions(t *testing.T) {
 		unix.SYS_IOPERM, unix.SYS_IOPL, unix.SYS_KEXEC_FILE_LOAD, unix.SYS_KEXEC_LOAD,
 		unix.SYS_REBOOT, unix.SYS_SWAPOFF, unix.SYS_SWAPON,
 	}}
-	policies := Policies()
-	if len(policies) != 3 || !reflect.DeepEqual(policies[ServiceSandbox], want) {
-		t.Fatalf("sandbox policies = %#v", policies)
+	if policy := SandboxPolicy(); !reflect.DeepEqual(policy, want) {
+		t.Fatalf("sandbox policy = %#v", policy)
 	}
+
 }
 
 func TestSandboxShimExposesOnlyCPUAttestationDevices(t *testing.T) {
-	policy := Policies()[hardening.ServiceShim]
+	policy := hardening.ShimPolicy()
 	want := []string{"null", "tdx_guest", "sev-guest"}
 	if !reflect.DeepEqual(policy.AttestationDevices, want) {
 		t.Fatalf("shim devices = %v, want %v", policy.AttestationDevices, want)
@@ -36,7 +37,7 @@ func TestSandboxShimExposesOnlyCPUAttestationDevices(t *testing.T) {
 func TestSandboxPolicyDeniesModuleLoading(t *testing.T) {
 	if os.Getenv("TINFOIL_SANDBOX_POLICY_TEST") == "1" {
 		runtime.LockOSThread()
-		if err := hardening.Apply(ServiceSandbox, Policies()[ServiceSandbox]); err != nil {
+		if err := hardening.Apply(ServiceSandbox, SandboxPolicy()); err != nil {
 			os.Exit(20)
 		}
 		_, _, errno := unix.RawSyscall(unix.SYS_FINIT_MODULE, ^uintptr(0), 0, 0)

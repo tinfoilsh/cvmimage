@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"tinfoil/boot"
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
+
 	"tinfoil/inference/internal/nvidia"
 	shimconfig "tinfoil/internal/config"
 )
@@ -16,7 +17,7 @@ func TestGPUAttestationBootstrapFailsClosedInRealAndDummyModes(t *testing.T) {
 		t.Run(map[bool]string{false: "real", true: "dummy"}[dummy], func(t *testing.T) {
 			directory := t.TempDir()
 			path := filepath.Join(directory, "status")
-			config := &boot.Config{GPUs: 8, ShimCfg: &shimconfig.Config{DummyAttestation: dummy}}
+			config := &runtimeconfig.Config{GPUs: 8, ShimCfg: &shimconfig.Config{DummyAttestation: dummy}}
 
 			if err := nvidia.WriteBootstrapStatus(path, nvidia.ReadyBootstrapStatus(8)); err != nil {
 				t.Fatal(err)
@@ -86,7 +87,7 @@ func TestGPUAttestationBootstrapFailsClosedInRealAndDummyModes(t *testing.T) {
 
 func TestGPUAttestationBootstrapRequiresExplicitNoGPUStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status")
-	config := &boot.Config{GPUs: 0, ShimCfg: &shimconfig.Config{DummyAttestation: true}}
+	config := &runtimeconfig.Config{GPUs: 0, ShimCfg: &shimconfig.Config{DummyAttestation: true}}
 	if err := nvidia.WriteBootstrapStatus(path, nvidia.NoGPUBootstrapStatus()); err != nil {
 		t.Fatal(err)
 	}

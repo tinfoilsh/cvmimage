@@ -2,7 +2,8 @@ package secrets
 
 import (
 	"slices"
-	"tinfoil/internal/runtimeconfig"
+
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 )
 
 // References selects the declared secrets passed to the container manager.

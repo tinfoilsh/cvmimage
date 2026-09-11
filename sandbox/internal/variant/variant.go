@@ -2,6 +2,7 @@ package variant
 
 import (
 	"golang.org/x/sys/unix"
+
 	"tinfoil/internal/bootstate"
 	"tinfoil/internal/pid1/hardening"
 )
@@ -20,16 +21,11 @@ func BootStages() []string {
 	}
 }
 
-func Policies() map[hardening.Service]hardening.Policy {
-	return map[hardening.Service]hardening.Policy{
-		hardening.ServiceBoot: hardening.BootPolicy(),
-		hardening.ServiceShim: hardening.ShimPolicy(),
-		// SSH sessions inherit this filter. Workspace owners retain their existing
-		// debugging capabilities; kernel replacement remains forbidden.
-		ServiceSandbox: {NoNewPrivileges: true, DeniedSyscalls: []uint32{
-			unix.SYS_ACCT, unix.SYS_DELETE_MODULE, unix.SYS_FINIT_MODULE, unix.SYS_INIT_MODULE,
-			unix.SYS_IOPERM, unix.SYS_IOPL, unix.SYS_KEXEC_FILE_LOAD, unix.SYS_KEXEC_LOAD,
-			unix.SYS_REBOOT, unix.SYS_SWAPOFF, unix.SYS_SWAPON,
-		}},
-	}
+// SandboxPolicy is inherited by SSH sessions, including the owner's debugging tools.
+func SandboxPolicy() hardening.Policy {
+	return hardening.Policy{NoNewPrivileges: true, DeniedSyscalls: []uint32{
+		unix.SYS_ACCT, unix.SYS_DELETE_MODULE, unix.SYS_FINIT_MODULE, unix.SYS_INIT_MODULE,
+		unix.SYS_IOPERM, unix.SYS_IOPL, unix.SYS_KEXEC_FILE_LOAD, unix.SYS_KEXEC_LOAD,
+		unix.SYS_REBOOT, unix.SYS_SWAPOFF, unix.SYS_SWAPON,
+	}}
 }

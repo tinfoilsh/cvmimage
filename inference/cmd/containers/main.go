@@ -15,15 +15,16 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	containersecrets "tinfoil/inference/internal/secrets"
-	"tinfoil/inference/internal/variant"
 
-	sharedconfig "github.com/tinfoilsh/tinfoil-config"
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
+
 	"tinfoil/inference/internal/containers"
 	"tinfoil/inference/internal/firewall"
+	containersecrets "tinfoil/inference/internal/secrets"
+	"tinfoil/inference/internal/variant"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
+	configdecode "tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
 
@@ -85,7 +86,7 @@ func run(ctx context.Context, invocation invocation) error {
 	if err != nil {
 		return fmt.Errorf("reading verified config: %w", err)
 	}
-	config, err := runtimeconfig.Decode(verifiedConfig, invocation.debug)
+	config, err := configdecode.Decode(verifiedConfig, invocation.debug)
 	if err != nil {
 		return err
 	}
@@ -202,7 +203,7 @@ func (m *manager) boot(override []byte) (result error) {
 	if len(source) == 0 {
 		source = m.verifiedConfig
 	}
-	config, err := runtimeconfig.Decode(source, m.debug)
+	config, err := configdecode.Decode(source, m.debug)
 	if err != nil {
 		return err
 	}
@@ -229,11 +230,11 @@ func (m *manager) boot(override []byte) (result error) {
 		return fmt.Errorf("reading installed config: %w", err)
 	}
 	preserved := map[string]bool{}
-	if previous != nil && sharedconfig.HasReservedDebugContainer(previous) {
-		if !sharedconfig.HasReservedDebugContainer(config) {
+	if previous != nil && runtimeconfig.HasReservedDebugContainer(previous) {
+		if !runtimeconfig.HasReservedDebugContainer(config) {
 			return errors.New("debug config must retain tinfoil-debug-toolbox")
 		}
-		preserved[sharedconfig.ReservedDebugContainerName] = true
+		preserved[runtimeconfig.ReservedDebugContainerName] = true
 	}
 	frozenEgress, err := freezeFromPIDFile(variant.EgressPIDPath)
 	if err != nil {

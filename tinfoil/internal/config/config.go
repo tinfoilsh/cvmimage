@@ -8,6 +8,8 @@ import (
 	"github.com/creasty/defaults"
 	sharedconfig "github.com/tinfoilsh/tinfoil-config"
 	"gopkg.in/yaml.v3"
+
+	"tinfoil/internal/guestnet"
 )
 
 type Config = sharedconfig.ShimConfig
@@ -28,10 +30,7 @@ type Metadata struct {
 	Extra map[string]yaml.Node `yaml:",inline"`
 }
 
-type ExternalNetworkConfig struct {
-	Address string `yaml:"address"`
-	Gateway string `yaml:"gateway"`
-}
+type ExternalNetworkConfig = guestnet.Config
 
 type ExternalConfig struct {
 	MetricsAPIKey string                 `yaml:"-"`

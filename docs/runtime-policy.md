@@ -13,10 +13,11 @@ field, which sshd does not treat as locked. Its other account is sshd's
 privilege-separation user. Both variants use the same fixed resolver contract
 as `tinfoil-boot`.
 
-Each variant declares its service hardening policies in `internal/variant/`.
-PID 1's self-exec child selects from that map and rejects undeclared services
-before executing them. The shared hardening package applies the selected
-capability, filesystem, and syscall restrictions in a fixed order. A nil
+Each variant declares its services in `cmd/pid1/`, with their commands,
+readiness checks, and hardening policies. Required-service tracking uses those
+same declarations. PID 1's self-exec child selects the declared policy and
+rejects undeclared services before executing them. The shared hardening package
+applies the selected capability, filesystem, and syscall restrictions in a fixed order. A nil
 capability list preserves the inherited set; an empty list drops all
 capabilities. Only inference declares Docker's environment and the container
 and egress service policies.

@@ -4,14 +4,12 @@ import (
 	"os"
 	"slices"
 	"testing"
-
-	shimconfig "tinfoil/internal/config"
 )
 
 func TestSelectOnlyRequestedSecrets(t *testing.T) {
-	external := &shimconfig.ExternalConfig{Secrets: map[string]string{
+	external := Store{
 		"API_KEY": "api", "SHARED": "shared", "MODEL_KEY": "model",
-	}}
+	}
 	if got := MissingReferences([]string{"API_KEY", "MISSING"}, external); !slices.Equal(got, []string{"MISSING"}) {
 		t.Fatalf("MissingReferences() = %v", got)
 	}

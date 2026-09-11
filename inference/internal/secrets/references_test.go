@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"tinfoil/internal/runtimeconfig"
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 )
 
 func TestReferencesSelectsOnlyContainerSecrets(t *testing.T) {

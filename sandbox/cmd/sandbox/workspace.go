@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/hkdf"
 	"crypto/sha256"
+	"crypto/sha512"
 	"errors"
 	"fmt"
 	"io"
@@ -14,15 +15,22 @@ import (
 	"strings"
 	"syscall"
 
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/bootstate"
 	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
-	"tinfoil/internal/runtimeconfig"
 )
 
 const (
+	workspace   = "/workspace"
+	home        = workspace + "/home"
+	packProfile = "nix/var/nix/profiles/default"
+	nixRoot     = "/nix"
+	profiles    = nixRoot + "/var/nix/profiles"
+	profile     = profiles + "/default"
+
 	mapperRoot = "tinfoil-volume-"
 	mkfsPath   = "/usr/sbin/mkfs.ext4"
 	formatMode = "--format"
@@ -180,22 +188,26 @@ func extendSeal(digest []byte) error {
 	return file.Close()
 }
 
-func (v *volume) mountOverlays() (result error) {
-	merged := make([]string, 0, len(v.spec.Overlays))
+func (v *volume) mountOverlays() error {
+	return mountOverlays(v.spec.Overlays, v.overlay, func(path string) error { return unix.Unmount(path, 0) })
+}
+
+// Undo completed mounts in reverse order if a later overlay fails.
+func mountOverlays(overlays []runtimeconfig.VolumeOverlay, mount func(runtimeconfig.VolumeOverlay) (string, error), unmount func(string) error) (result error) {
+	var mounted []string
 	defer func() {
-		if result == nil {
-			return
-		}
-		for index := len(merged) - 1; index >= 0; index-- {
-			result = errors.Join(result, unix.Unmount(merged[index], 0))
+		if result != nil {
+			for index := len(mounted) - 1; index >= 0; index-- {
+				result = errors.Join(result, unmount(mounted[index]))
+			}
 		}
 	}()
-	for _, spec := range v.spec.Overlays {
-		mountPoint, err := v.overlay(spec)
+	for _, overlay := range overlays {
+		path, err := mount(overlay)
 		if err != nil {
 			return err
 		}
-		merged = append(merged, mountPoint)
+		mounted = append(mounted, path)
 	}
 	return nil
 }
@@ -325,4 +337,23 @@ func blockDeviceBlank(source *os.File) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// open unlocks the workspace and binds its toolchain store at the Nix paths.
+func (s *sandbox) open(key []byte, owner string) error {
+	seal := sha512.Sum384([]byte(owner))
+	if err := s.volume.open(key, seal[:]); err != nil {
+		return err
+	}
+	if err := unix.Mount(workspace, nixRoot, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("binding %s at %s: %w", workspace, nixRoot, err)
+	}
+	if err := os.MkdirAll(profiles, 0o755); err != nil {
+		return err
+	}
+	pack := filepath.Join(bootstate.PrivateModelsDir, s.volume.spec.Overlays[0].Model, packProfile)
+	if err := os.Symlink(pack, profile); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return nil
 }

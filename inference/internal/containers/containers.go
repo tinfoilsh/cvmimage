@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"tinfoil/inference/internal/variant"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/distribution/reference"
@@ -21,9 +20,10 @@ import (
 	"github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
-
 	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
+
 	"tinfoil/inference/internal/containernet"
+	"tinfoil/inference/internal/variant"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/secretstore"

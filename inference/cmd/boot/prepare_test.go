@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"tinfoil/boot"
+	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
+
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/runtimeconfig"
+	"tinfoil/internal/modelpack"
+	"tinfoil/internal/secretstore"
 )
 
 func TestRegistryAuthUsesProvidedSecrets(t *testing.T) {
@@ -22,7 +24,7 @@ func TestRegistryAuthUsesProvidedSecrets(t *testing.T) {
 		"GCLOUD_KEY":             "resolved-gcloud-key",
 		"GCLOUD_REGISTRY":        "us-docker.pkg.dev",
 	}}
-	if err := writeRegistryAuth(provided, configPath, keyPath); err != nil {
+	if err := writeRegistryAuth(secretstore.Store(provided.Secrets), configPath, keyPath); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(configPath)
@@ -49,11 +51,12 @@ func TestRegistryAuthUsesProvidedSecrets(t *testing.T) {
 
 func TestPrepareModelDirectoriesOnlyCreatesGrantedMountPoints(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "models")
-	config := &boot.Config{
-		Models:     []boot.ModelSpec{{Name: "private"}, {Name: "public"}},
-		Containers: []runtimeconfig.Container{{Models: []string{"private"}}},
+	mounts := []modelpack.Mount{
+		{Model: runtimeconfig.ModelSpec{Name: "private"}},
+		{Model: runtimeconfig.ModelSpec{Name: "public"}, LegacyAlias: true},
 	}
-	if err := prepareModelDirectories(config, directory); err != nil {
+
+	if err := prepareModelDirectories(mounts, directory); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(directory, "private"))
@@ -62,5 +65,18 @@ func TestPrepareModelDirectoriesOnlyCreatesGrantedMountPoints(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(directory, "public")); !os.IsNotExist(err) {
 		t.Fatalf("created an unused public model mount point: %v", err)
+	}
+}
+
+func TestRegistryCredentialsDoNotMutateHostInputs(t *testing.T) {
+	host := &shimconfig.ExternalConfig{Secrets: map[string]string{"REGISTRY_GHCR_IO_USER": "user", "API_KEY": "host"}}
+	resolved := secretstore.Store{"API_KEY": "resolved", "REGISTRY_GHCR_IO_TOKEN": "token"}
+	values := registryCredentials(host, resolved)
+	if values["API_KEY"] != "resolved" || values["REGISTRY_GHCR_IO_USER"] != "user" || values["REGISTRY_GHCR_IO_TOKEN"] != "token" {
+		t.Fatal("registry credentials lost host or resolved values")
+	}
+	values["REGISTRY_GHCR_IO_TOKEN"] = "changed"
+	if len(host.Secrets) != 2 || host.Secrets["API_KEY"] != "host" || resolved["REGISTRY_GHCR_IO_TOKEN"] != "token" {
+		t.Fatal("registry preparation mutated its inputs")
 	}
 }

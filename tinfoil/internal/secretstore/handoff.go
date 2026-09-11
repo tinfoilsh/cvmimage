@@ -10,8 +10,6 @@ import (
 	"slices"
 
 	"golang.org/x/sys/unix"
-
-	shimconfig "tinfoil/internal/config"
 )
 
 const (
@@ -21,6 +19,14 @@ const (
 )
 
 type Store map[string]string
+
+func (s Store) GetSecret(name string) string {
+	value := s[name]
+	if value == "null" {
+		return ""
+	}
+	return value
+}
 
 type handoff struct {
 	Version      int               `json:"version"`
@@ -41,20 +47,20 @@ func ConfigDigest(source []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func MissingReferences(names []string, external *shimconfig.ExternalConfig) []string {
+func MissingReferences(names []string, values Store) []string {
 	var missing []string
 	for _, name := range names {
-		if external.GetSecret(name) == "" {
+		if values.GetSecret(name) == "" {
 			missing = append(missing, name)
 		}
 	}
 	return missing
 }
 
-func Select(names []string, external *shimconfig.ExternalConfig) (Store, error) {
+func Select(names []string, values Store) (Store, error) {
 	store := make(Store)
 	for _, name := range names {
-		value := external.GetSecret(name)
+		value := values.GetSecret(name)
 		if value == "" {
 			return nil, fmt.Errorf("declared secret %q is unresolved", name)
 		}

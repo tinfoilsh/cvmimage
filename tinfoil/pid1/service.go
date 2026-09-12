@@ -1,18 +1,24 @@
 package pid1
 
 import (
+	"context"
 	"fmt"
 	"slices"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/bootstate"
 	"tinfoil/internal/pid1/hardening"
 	"tinfoil/internal/pid1/supervisor"
+	"tinfoil/internal/volume"
 )
 
 // Service declares a process and, when needed, its self-exec hardening policy.
 type Service struct {
 	supervisor.Service
 	Policy *hardening.Policy
+	Fatal  bool // Stop the guest lifecycle if this service exits; it cannot be restarted.
 }
 
 // Process prepares a fresh command using the environment established by PID 1.
@@ -106,4 +112,28 @@ func (s Spec) validate() error {
 		}
 	}
 	return nil
+}
+
+const VolumesName = "tinfoil-volumes"
+
+func VolumesService() Service {
+	policy := hardening.BootPolicy()
+	policy.BoundCapabilities = []int{unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE}
+	policy.AllowedSocketDomains = []uint32{unix.AF_UNIX}
+	return Service{Service: supervisor.Service{Name: VolumesName, Required: true, Restart: false,
+		Command: supervisor.Command{Path: volume.Binary}, Ready: func(ctx context.Context) error {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				state, err := (volume.Client{}).Status(ctx)
+				if err == nil && state.Initialized {
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+				}
+			}
+		}}, Policy: &policy, Fatal: true}
 }

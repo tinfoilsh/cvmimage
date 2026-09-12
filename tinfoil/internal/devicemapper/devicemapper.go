@@ -38,11 +38,14 @@ const (
 	cryptSectorSizeBytes   = 4096
 
 	// The workspace volume is authenticated: dm-crypt MACs each sector and the
-	// dm-integrity device below it stores the tag.
+	// dm-integrity device below it stores the tag and the IV drawn for the write.
 	integrityMAC             = "hmac(sha256)"
-	authenticatedCipher      = "capi:authenc(" + integrityMAC + ",xts(aes))-plain64"
+	authenticatedCipher      = "capi:authenc(" + integrityMAC + ",xts(aes))-random"
+	integrityProfile         = "aead"
 	authenticatedMACKeyBytes = 32
-	integrityTagBytes        = 32
+	authenticatedTagBytes    = 32
+	authenticatedIVBytes     = 16
+	integrityTagBytes        = authenticatedTagBytes + authenticatedIVBytes
 	integrityJournalMode     = "J"
 	integrityTarget          = "integrity"
 	integrityMagic           = "integrt\x00"
@@ -82,7 +85,7 @@ const (
 
 var (
 	sectorSizeOption = fmt.Sprintf("sector_size:%d", cryptSectorSizeBytes)
-	integrityOption  = fmt.Sprintf("integrity:%d:%s", integrityTagBytes, integrityMAC)
+	integrityOption  = fmt.Sprintf("integrity:%d:%s", integrityTagBytes, integrityProfile)
 )
 
 // Version is the device-mapper ioctl protocol version reported by the kernel.
@@ -339,6 +342,13 @@ func Lookup(control *os.File, name string) (Info, bool, error) {
 
 // Remove deletes a device-mapper device and its userspace block node.
 func Remove(control *os.File, name string) error {
+	if err := removeDevice(control, name); err != nil {
+		return err
+	}
+	return removeMapperNode(name)
+}
+
+func removeDevice(control *os.File, name string) error {
 	if err := validateName(name); err != nil {
 		return err
 	}
@@ -350,6 +360,10 @@ func Remove(control *os.File, name string) error {
 	if err := ioctl(control, devRemoveIOCTL, buf, 0); err != nil {
 		return fmt.Errorf("device-mapper remove %s failed: %w", name, err)
 	}
+	return nil
+}
+
+func removeMapperNode(name string) error {
 	if err := os.Remove(MapperNode(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing mapper node %s: %w", MapperNode(name), err)
 	}
@@ -678,124 +692,90 @@ func IntegrityDataSectors(source *os.File) (uint64, bool, error) {
 	return binary.LittleEndian.Uint64(header[integrityDataSectorsAt:]), true, nil
 }
 
-// ActivateIntegrity opens the dm-integrity device that stores the tags for a
-// writable crypt mapping. The target formats a zeroed device as it builds its
-// first table, so a volume without a superblock is only accepted when
-// initialize is set.
-func ActivateIntegrity(control, source *os.File, name string, initialize bool) (result error) {
+// OpenIntegrity opens the authenticated disk's tag device. A partial mapping
+// remains owned by the caller when initialization or activation fails.
+func OpenIntegrity(control, source *os.File, name string, initialize, readOnly bool) (*Mapping, error) {
+	if readOnly && initialize {
+		return nil, errors.New("cannot initialize a read-only volume")
+	}
 	deviceNumber, deviceSectors, err := blockDeviceInfo(source)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	params := fmt.Sprintf("%s 0 %d %s 2 block_size:%d fix_padding",
-		deviceNumber, integrityTagBytes, integrityJournalMode, cryptSectorSizeBytes)
+	params := fmt.Sprintf("%s 0 %d %s 2 block_size:%d fix_padding", deviceNumber, integrityTagBytes, integrityJournalMode, cryptSectorSizeBytes)
 	dataSectors, formatted, err := IntegrityDataSectors(source)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !formatted {
 		if !initialize {
-			return fmt.Errorf("device %s carries no integrity superblock", deviceNumber)
+			return nil, fmt.Errorf("device %s carries no integrity superblock", deviceNumber)
 		}
-		// The capacity is published only once a table exists, and building one
-		// is what writes the superblock the zeroed device lacks.
-		if err := loadIntegrityTable(control, name, integrityProbeSectors, params); err != nil {
-			return err
+		// The temporary table writes the superblock that reports usable capacity.
+		probe, err := openIntegrityTable(control, name, integrityProbeSectors, params, false)
+		if err != nil {
+			return probe, err
 		}
-		if err := Remove(control, name); err != nil {
-			return err
+		if err := probe.Close(); err != nil {
+			return probe, err
 		}
-		if dataSectors, formatted, err = IntegrityDataSectors(source); err != nil {
-			return err
-		} else if !formatted {
-			return fmt.Errorf("device %s was not formatted", deviceNumber)
+		dataSectors, formatted, err = IntegrityDataSectors(source)
+		if err != nil {
+			return nil, err
+		}
+		if !formatted {
+			return nil, fmt.Errorf("device %s was not formatted", deviceNumber)
 		}
 	}
 	if dataSectors == 0 || dataSectors > deviceSectors {
-		return fmt.Errorf("integrity capacity %d sectors does not fit %s", dataSectors, deviceNumber)
+		return nil, fmt.Errorf("integrity capacity %d sectors does not fit %s", dataSectors, deviceNumber)
 	}
-	if err := loadIntegrityTable(control, name, dataSectors, params); err != nil {
-		return err
-	}
-	defer func() {
-		if result != nil {
-			result = errors.Join(result, Remove(control, name))
-		}
-	}()
-	if err := resume(control, name, 0); err != nil {
-		return err
-	}
-	info, err := Status(control, name)
+	m, err := openIntegrityTable(control, name, dataSectors, params, readOnly)
 	if err != nil {
-		return err
+		return m, err
 	}
-	if !info.Active() || info.ReadOnly() || info.TargetCount != 1 {
-		return fmt.Errorf(
-			"mapping %s has unexpected state: active=%t read-only=%t targets=%d",
-			name, info.Active(), info.ReadOnly(), info.TargetCount,
-		)
-	}
-	return EnsureBlockNode(MapperNode(name), info.Dev)
+	return m, finishMapping(control, m, readOnly)
 }
 
-func loadIntegrityTable(control *os.File, name string, lengthSectors uint64, params string) (result error) {
-	if _, err := create(control, name, 0); err != nil {
-		return err
+func openIntegrityTable(control *os.File, name string, lengthSectors uint64, params string, readOnly bool) (*Mapping, error) {
+	m, err := newMapping(control, name, readOnly)
+	if err != nil {
+		return nil, err
 	}
-	defer func() {
-		if result != nil {
-			result = errors.Join(result, Remove(control, name))
-		}
-	}()
 	buf, err := tableLoadBuffer(name, lengthSectors, integrityTarget, params)
 	if err != nil {
-		return err
+		return m, err
 	}
-	setFlags(buf, existsFlag)
+	setFlags(buf, existsFlag|mappingFlags(readOnly))
 	if err := ioctl(control, tableLoadIOCTL, buf, 1); err != nil {
-		return fmt.Errorf("device-mapper table load %s failed: %w", name, err)
+		return m, fmt.Errorf("device-mapper table load %s failed: %w", name, err)
 	}
-	return nil
+	return m, nil
 }
 
-func ActivateWritableCrypt(control, source *os.File, name string, key []byte) (device uint64, result error) {
+func mappingFlags(readOnly bool) uint32 {
+	if readOnly {
+		return readOnlyFlag
+	}
+	return 0
+}
+
+func OpenAuthenticatedCrypt(control, source *os.File, name string, key []byte, readOnly bool) (*Mapping, error) {
 	deviceNumber, lengthSectors, err := blockDeviceInfo(source)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	params, err := AuthenticatedCryptTable(deviceNumber, key, lengthSectors)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer zeroBytes(params)
-	if _, err := create(control, name, 0); err != nil {
-		return 0, err
-	}
-	defer func() {
-		if result != nil {
-			if err := Remove(control, name); err != nil {
-				result = errors.Join(result, fmt.Errorf("removing incomplete mapping: %w", err))
-			}
-		}
-	}()
-	if err := loadCryptTable(control, name, lengthSectors, params, 0); err != nil {
-		return 0, err
-	}
-	if err := resume(control, name, 0); err != nil {
-		return 0, err
-	}
-	info, err := Status(control, name)
+	m, err := newMapping(control, name, readOnly)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	if !info.Active() || info.ReadOnly() || info.TargetCount != 1 {
-		return 0, fmt.Errorf(
-			"mapping %s has unexpected state: active=%t read-only=%t targets=%d",
-			name, info.Active(), info.ReadOnly(), info.TargetCount,
-		)
+	if err := loadCryptTable(control, name, lengthSectors, params, mappingFlags(readOnly)); err != nil {
+		return m, err
 	}
-	if err := EnsureBlockNode(MapperNode(name), info.Dev); err != nil {
-		return 0, err
-	}
-	return info.Dev, nil
+	return m, finishMapping(control, m, readOnly)
 }

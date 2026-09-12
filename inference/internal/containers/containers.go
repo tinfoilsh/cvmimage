@@ -27,6 +27,7 @@ import (
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/volume"
 )
 
 const (
@@ -275,9 +276,20 @@ func runContainer(
 	}
 	record("pull", bootstate.StatusOK, time.Since(pullStart), "")
 
+	// Storage must be mounted before Docker creates its private bind mounts.
+	dependencies, err := storageDependencies(c, debug)
+	if err != nil {
+		return err
+	}
+	record("start", bootstate.StatusPending, 0, "waiting for storage")
+	ready, err := (volume.Client{}).Wait(ctx, dependencies)
+	if err != nil {
+		finish(bootstate.StatusFailed, err.Error())
+		return err
+	}
 	// Create + start
 	startPhase := time.Now()
-	if err := createAndStartContainer(ctx, cli, c, cfg, extConfig, secrets, debug); err != nil {
+	if err := createAndStartContainer(ctx, cli, c, cfg, extConfig, secrets, ready, debug); err != nil {
 		detail := fmt.Sprintf("starting: %v", err)
 		record("start", bootstate.StatusFailed, time.Since(startPhase), detail)
 		finish(bootstate.StatusFailed, detail)
@@ -393,8 +405,8 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 	return first, rest
 }
 
-func createAndStartContainer(ctx context.Context, cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) error {
-	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, secrets, debug)
+func createAndStartContainer(ctx context.Context, cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, ready volume.ReadyVolumes, debug bool) error {
+	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, secrets, ready, debug)
 	if err != nil {
 		return err
 	}
@@ -429,7 +441,7 @@ func createAndStartContainer(ctx context.Context, cli *client.Client, c Containe
 	return nil
 }
 
-func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) (*container.Config, *container.HostConfig, *dockernetwork.NetworkingConfig, []string, error) {
+func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, ready volume.ReadyVolumes, debug bool) (*container.Config, *container.HostConfig, *dockernetwork.NetworkingConfig, []string, error) {
 	if c.Image == "" {
 		return nil, nil, nil, nil, fmt.Errorf("no image specified for container %s", c.Name)
 	}
@@ -480,11 +492,6 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{bootstate.PublicDir + ":/tinfoil:ro"},
 	}
-	for _, model := range c.Models {
-		hostConfig.Binds = append(hostConfig.Binds,
-			bootstate.PrivateModelsDir+"/"+model+":"+variant.ContainerModelsDir+"/"+model+":ro",
-		)
-	}
 	hostConfig.Resources.PidsLimit = pidsLimit
 	if first == "" {
 		hostConfig.NetworkMode = "none"
@@ -520,7 +527,11 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		})
 	}
 
-	hostConfig.Binds = append(hostConfig.Binds, c.Volumes...)
+	bindings, err := storageBindings(c, ready, debug)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	hostConfig.Binds = append(hostConfig.Binds, bindings...)
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
 	if debug && c.Name == reservedDebugContainerName {

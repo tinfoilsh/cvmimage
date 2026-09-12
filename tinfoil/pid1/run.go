@@ -122,13 +122,20 @@ type lifecycleDeps struct {
 }
 
 func run(parent context.Context, spec Spec) (result error) {
+	ctx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
 	cmdline, err := kernelcmdline.Read()
 	if err != nil {
 		return err
 	}
 	readiness := newReadiness(spec.requiredServices(), setReady)
 	manager := supervisor.NewManager(Logf)
-	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
+	services := supervisor.New(ctx, manager, supervisor.Config{Observe: func(state supervisor.State) {
+		readiness.Update(state)
+		if service, ok := spec.service(state.Name); ok && service.Fatal && !state.Ready && ctx.Err() == nil {
+			cancel(fmt.Errorf("required service %s stopped: %w", state.Name, errors.Join(errors.New("service unavailable"), state.Err)))
+		}
+	}})
 	deps := lifecycleDeps{
 		Runtime: Runtime{Services: services,
 			OneShot: func(ctx context.Context, command supervisor.Command) error {
@@ -151,7 +158,11 @@ func run(parent context.Context, spec Spec) (result error) {
 		term:         serviceTermGrace,
 		kill:         serviceKillGrace,
 	}
-	return runLifecycle(parent, deps, readiness)
+	err = runLifecycle(ctx, deps, readiness)
+	if parent.Err() == nil && context.Cause(ctx) != nil {
+		err = errors.Join(err, context.Cause(ctx))
+	}
+	return err
 }
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
@@ -202,6 +213,11 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 	defer secretHandoff.Close()
+	storageHandoff, err := secretstore.NewHandoffFile()
+	if err != nil {
+		return err
+	}
+	defer storageHandoff.Close()
 	if err := deps.OneShot(bootCtx, Command("loopback", "/usr/sbin/ip", "link", "set", "dev", "lo", "up")); err != nil {
 		return err
 	}
@@ -236,8 +252,19 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		fmt.Sprintf("--debug=%t", deps.Cmdline.Debug),
 	)
 	bootCommand = WithSecretHandoff(bootCommand, secretHandoff)
+	if _, ok := deps.spec.service(VolumesName); ok {
+		descriptor := bootCommand.AddExtraFile(storageHandoff)
+		bootCommand.Args = append(bootCommand.Args, fmt.Sprintf("--storage-fd=%d", descriptor))
+	}
 	if err := deps.OneShot(bootCtx, bootCommand); err != nil {
 		return err
+	}
+	if service, ok := deps.spec.service(VolumesName); ok {
+		process := service.Process()
+		process.Command = WithSecretHandoff(process.Command, storageHandoff)
+		if err := deps.Services.Start(bootCtx, process); err != nil {
+			return fmt.Errorf("volume service: %w", err)
+		}
 	}
 	if err := deps.spec.StartWorkload(bootCtx, deps.Runtime, secretHandoff); err != nil {
 		return err

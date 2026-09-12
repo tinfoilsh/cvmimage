@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 )
 
@@ -57,14 +56,9 @@ func (s *sandbox) enroll(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusConflict, failure{"sandbox is already enrolled"})
 		return
 	}
-	if err := s.open(volumeKey, line); err != nil {
+	if err := s.open(r.Context(), volumeKey, line, token); err != nil {
 		log.Printf("workspace refused the key: %v", err)
 		reply(w, http.StatusForbidden, failure{"workspace key refused"})
-		return
-	}
-	if err := os.Mkdir(home, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		log.Printf("workspace provisioning failed: %v", err)
-		reply(w, http.StatusInternalServerError, failure{"workspace could not be provisioned"})
 		return
 	}
 	if err := s.claim(line); err != nil {

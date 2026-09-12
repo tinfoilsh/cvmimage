@@ -104,14 +104,34 @@ reference and verifies Docker's inspected repository digests before creating
 the container; mutable tag-only references are always rejected during
 configuration validation.
 
-Encrypted models require an explicit `containers[].models` grant. Boot mounts
-granted models outside the shared public ramdisk and the container manager
-binds each model read-only at `/tinfoil/models/<name>` only in the named
-containers. Ungranted plaintext model packs retain the legacy shared layout
-for compatibility; adding a grant moves them to the isolated layout.
-Inference selects container secret names and creates the public mount
-directories for isolated models. Shared boot adds model-key references,
-resolves the combined secret set, and writes the sealed handoff bound to the
-measured config digest. Only workload secrets enter the handoff; model keys
-stay with boot. The container manager reads the handoff using inference's
-secret selection rules.
+Both variants run `tinfoil-volumes` after boot provisions identity and secrets.
+It owns pack verification, disk encryption, filesystems, overlays and mount cleanup.
+Boot supplies one normalized plan with common mount policy and fixed PCI, serial
+and partition selectors. Variants set placement and layout before overlay paths
+and dependencies are finalized. Pack and disk open operations retain their own
+resource handles, including partial setup, until cleanup succeeds.
+The service has mount/device capabilities and a root-only Unix socket; the shim
+can forward signed runtime unlock requests before workloads are ready. A service
+exit stops the guest lifecycle because runtime keys cannot be reconstructed.
+
+Encrypted packs require an explicit container grant when containers are declared.
+Legacy `containers[].models` grants mount privately at `/tinfoil/models/<name>`.
+New `containers[].volumes` grants name a measured volume and destination; Docker
+receives the ready guest path and access returned by the volume service. Each
+container waits only for its own grants. A read-only volume
+cannot receive a writable grant. Ungranted legacy plaintext model packs retain
+the public layout. New pack declarations always use private mount paths.
+
+Boot resolves the combined storage and workload secret references, then creates
+two sealed descriptors bound to the measured config digest. The volume service
+receives storage keys and the container manager receives only workload secrets.
+Runtime keys go directly to the volume service. The sandbox declares its existing
+workspace, Nix overlay and profile exports through the same plan; its enrollment
+service no longer performs mounts or invokes mkfs.
+Layout preparation precedes the owner extension, which precedes exports and
+readiness. An attempted extension remains irreversible state even when the write
+reports an error. Cleanup removes cloned overlay mounts before their export root
+and retains busy mounts and their backing devices for retry.
+
+See [Shared storage](storage.md) for the host attachment contract, supported
+filesystems, initialization policy and signed unlock protocol.

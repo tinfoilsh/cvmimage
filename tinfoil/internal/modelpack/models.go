@@ -2,450 +2,65 @@ package modelpack
 
 import (
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/tinfoilsh/modelwrap"
 	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
-	"golang.org/x/sys/unix"
-
-	"tinfoil/internal/bootstate"
-	"tinfoil/internal/device"
 	"tinfoil/internal/devicemapper"
-	"tinfoil/internal/secretstore"
 )
-
-var secretNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 const (
 	veritySaltSize = 32
 	sectorSize     = 512
 )
 
-// Mount declares a verified pack and its placement in the guest.
-// Disk is the pack's position in the measured configuration.
-type Mount struct {
-	Model       runtimeconfig.ModelSpec
-	Disk        int
-	Target      string
-	LegacyAlias bool
+// Source contains only the measured pack identity and protection mode.
+type Source struct {
+	Ref       string
+	Repo      string
+	Encrypted bool
 }
 
-// PublicTarget returns the historical public path derived from the pack identity.
-func PublicTarget(model runtimeconfig.ModelSpec) (string, error) {
-	ref, _, err := modelPackRefForModel(model)
-	if err != nil {
-		return "", err
-	}
-	return ref.mountPoint(), nil
-}
-
-func SecretReferences(mounts []Mount) []string {
-	var names []string
-	for _, mount := range mounts {
-		if mount.Model.KeySecret != "" {
-			names = append(names, mount.Model.KeySecret)
-		}
-	}
-	return names
-}
-
-// MountAll opens the declared packs with fixed read-only, nodev and nosuid flags.
-func MountAll(mounts []Mount, keys secretstore.Store) error {
-	if len(mounts) == 0 {
-		log.Println("No models to mount")
-		return nil
-	}
-	log.Printf("Mounting %d model packs", len(mounts))
-	if err := os.MkdirAll(bootstate.PublicModelsDir, 0755); err != nil {
-		return fmt.Errorf("creating public model directory: %w", err)
-	}
-	seen := map[string]bool{}
-	for _, mount := range mounts {
-		model := mount.Model
-		ref, kind, err := modelPackRefForModel(model)
-		if err != nil {
-			return err
-		}
-		if seen[ref.mapperName()] {
-			return fmt.Errorf("duplicate model pack root hash: %s", ref.RootHash)
-		}
-		seen[ref.mapperName()] = true
-		if !filepath.IsAbs(mount.Target) {
-			return fmt.Errorf("model %q requires an absolute mount target", model.Name)
-		}
-		switch kind {
-		case modelKindPlaintext:
-			salt, err := modelSalt(model)
-			if err != nil {
-				return err
-			}
-			source, err := device.ModelDisk(mount.Disk)
-			if err != nil {
-				return fmt.Errorf("finding model disk %d: %w", mount.Disk, err)
-			}
-			if err := mountModelPack(ref, salt, source, mount.Target, mount.LegacyAlias, model.Exec); err != nil {
-				return fmt.Errorf("mounting model pack %s: %w", ref.raw, err)
-			}
-		case modelKindEncrypted:
-			source, err := device.ModelPartition(mount.Disk, device.EMWPPayloadPartition)
-			if err != nil {
-				return fmt.Errorf("finding encrypted model partition %d: %w", mount.Disk, err)
-			}
-			if err := mountEncryptedModelPack(model, keys, source, mount.Target, model.Exec); err != nil {
-				return fmt.Errorf("mounting encrypted model pack %q: %w", model.Name, err)
-			}
-		}
-	}
-	return nil
-}
-
-// modelSalt re-derives the dm-verity salt from the attested model
-// identity (repo: name@revision). The salt is required so the artifact's
-// untrusted superblock never has to be read; a wrong repo fails closed
-// because nothing verifies against the attested root hash.
-func modelSalt(model runtimeconfig.ModelSpec) ([]byte, error) {
-	if model.Repo == "" {
-		return nil, fmt.Errorf("model %q must specify repo (name@revision) to derive the dm-verity salt", model.Name)
-	}
-	return modelwrap.VeritySalt(model.Repo), nil
-}
-
-// mountModelPack mounts a plaintext model wrap using dm-verity.
-func mountModelPack(spec *modelPackRef, salt []byte, sourceDevice, mountPoint string, legacyAlias, executable bool) error {
-	deviceName := spec.mapperName()
-
-	log.Printf("Opening verity device %s (uuid=%s)", deviceName, spec.UUID)
-	if legacyAlias {
-		if err := createLegacyModelPackAlias(spec); err != nil {
-			return err
-		}
-	}
-	if err := openAndMountVerity(sourceDevice, deviceName, spec.RootHash, spec.HashOffset, salt, mountPoint, executable); err != nil {
-		if legacyAlias {
-			removeLegacyModelPackAlias(spec)
-		}
-		return err
-	}
-
-	log.Printf("Mounted model pack %s at %s", deviceName, mountPoint)
-	return nil
-}
-
-// mountEncryptedModelPack mounts an encrypted model wrap using dm-crypt below
-// dm-verity. The decrypted mapper contains the same plaintext layout as an MWP:
-// a read-only filesystem followed by its dm-verity hash tree.
-func mountEncryptedModelPack(
-	model runtimeconfig.ModelSpec,
-	keys secretstore.Store,
-	sourceDevice, mountPoint string,
-	executable bool,
-) error {
-	spec, err := parseModelPackRef(model.EMWP)
-	if err != nil {
-		return fmt.Errorf("invalid EMWP format: %s: %w", model.EMWP, err)
-	}
-
-	salt, err := modelSalt(model)
-	if err != nil {
-		return err
-	}
-	key, err := encryptedModelKey(model.KeySecret, spec, keys)
-	if err != nil {
-		return err
-	}
-	defer zeroBytes(key)
-
-	cryptName := fmt.Sprintf("emwp-%s-crypt", spec.RootHash)
-	verityName := spec.mapperName()
-	log.Printf("Opening encrypted model pack %s (uuid=%s)", modelLogName(model.Name, spec.RootHash), spec.UUID)
-	if err := openEncryptedAndMount(
-		directModelVolumeOps{},
-		sourceDevice,
-		cryptName,
-		verityName,
-		spec.RootHash,
-		spec.HashOffset,
-		salt,
-		mountPoint,
-		key,
-		executable,
-	); err != nil {
-		return err
-	}
-
-	log.Printf("Mounted encrypted model pack %s at %s", modelLogName(model.Name, spec.RootHash), mountPoint)
-	return nil
-}
-
-func createLegacyModelPackAlias(spec *modelPackRef) error {
-	if err := os.MkdirAll(bootstate.MPKDir, 0755); err != nil {
-		return fmt.Errorf("creating legacy model pack alias directory: %w", err)
-	}
-	aliasPath := spec.legacyMountPoint()
-	if fi, err := os.Lstat(aliasPath); err == nil {
-		if fi.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("legacy model pack alias path exists and is not a symlink: %s", aliasPath)
-		}
-		if err := os.Remove(aliasPath); err != nil {
-			return fmt.Errorf("removing stale legacy model pack alias: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("checking legacy model pack alias: %w", err)
-	}
-	if err := os.Symlink("../mwp/"+spec.mapperName(), aliasPath); err != nil {
-		return fmt.Errorf("creating legacy model pack alias: %w", err)
-	}
-	return nil
-}
-
-func removeLegacyModelPackAlias(spec *modelPackRef) {
-	_ = os.Remove(spec.legacyMountPoint())
-}
-
-type modelKind string
-
-const (
-	modelKindPlaintext modelKind = "plaintext"
-	modelKindEncrypted modelKind = "encrypted"
-)
-
-func modelPackRefForModel(model runtimeconfig.ModelSpec) (*modelPackRef, modelKind, error) {
+// Compile resolves legacy reference spellings at the configuration boundary.
+func Compile(model runtimeconfig.ModelSpec) (Source, error) {
+	source := Source{Repo: model.Repo, Encrypted: model.EMWP != ""}
 	refs := 0
-	if model.MPK != "" {
-		refs++
-	}
-	if model.MWP != "" {
-		refs++
-	}
-	if model.EMWP != "" {
-		refs++
+	for _, ref := range []string{model.MPK, model.MWP, model.EMWP} {
+		if ref != "" {
+			source.Ref = ref
+			refs++
+		}
 	}
 	if refs != 1 {
-		return nil, "", fmt.Errorf("model %q must specify exactly one of mpk, mwp, or emwp", model.Name)
+		return Source{}, fmt.Errorf("model %q must specify exactly one of mpk, mwp, or emwp", model.Name)
 	}
-
-	if model.MPK != "" {
-		spec, err := parseModelPackRef(model.MPK)
-		if err != nil {
-			return nil, "", fmt.Errorf("invalid legacy MPK format: %s: %w", model.MPK, err)
-		}
-		return spec, modelKindPlaintext, nil
-	}
-	if model.MWP != "" {
-		spec, err := parseModelPackRef(model.MWP)
-		if err != nil {
-			return nil, "", fmt.Errorf("invalid MWP format: %s: %w", model.MWP, err)
-		}
-		return spec, modelKindPlaintext, nil
-	}
-
-	spec, err := parseModelPackRef(model.EMWP)
-	if err != nil {
-		return nil, "", fmt.Errorf("invalid EMWP format: %s: %w", model.EMWP, err)
-	}
-	return spec, modelKindEncrypted, nil
+	return source, source.Validate()
 }
 
-// modelPackRef wraps the shared artifact reference with cvmimage mount
-// layout policy (mapper names, mount points, legacy aliases).
-type modelPackRef struct {
-	*modelwrap.ArtifactRef
-	raw string
-}
-
-func (r *modelPackRef) mapperName() string {
-	return "mwp-" + r.RootHash
-}
-
-func (r *modelPackRef) mountPoint() string {
-	return bootstate.MWPDir + "/" + r.mapperName()
-}
-
-func (r *modelPackRef) legacyMountPoint() string {
-	return bootstate.MPKDir + "/mpk-" + r.RootHash
-}
-
-func parseModelPackRef(ref string) (*modelPackRef, error) {
-	parsed, err := modelwrap.ParseRef(ref)
-	if err != nil {
-		return nil, err
+func (s Source) Validate() error {
+	if s.Repo == "" {
+		return fmt.Errorf("pack requires a repo identity")
 	}
-	return &modelPackRef{ArtifactRef: parsed, raw: ref}, nil
-}
-
-func encryptedModelKey(keySecret string, spec *modelPackRef, keys secretstore.Store) ([]byte, error) {
-	if !secretNamePattern.MatchString(keySecret) {
-		return nil, fmt.Errorf("invalid key secret name: %s", keySecret)
-	}
-
-	secret := keys.GetSecret(keySecret)
-	if secret == "" {
-		return nil, fmt.Errorf("encrypted model key secret %q not found", keySecret)
-	}
-	key, err := modelwrap.ParseMasterKey(secret)
-	if err != nil {
-		return nil, fmt.Errorf("encrypted model key secret %q: %w", keySecret, err)
-	}
-	defer zeroBytes(key)
-	return modelwrap.DeriveKey(key, spec.ArtifactRef)
-}
-
-func openAndMountVerity(sourceDevice, deviceName, rootHash, hashOffset string, salt []byte, mountPoint string, executable bool) error {
-	return openAndMountVerityWithOps(directModelVolumeOps{}, sourceDevice, deviceName, rootHash, hashOffset, salt, mountPoint, executable)
-}
-
-type modelVolumeOps interface {
-	openVerity(sourceDevice, name, rootHash, hashOffset string, salt []byte) (string, error)
-	openCrypt(sourceDevice, name string, key []byte) (string, error)
-	remove(name string) error
-	mount(sourceDevice, mountPoint string, executable bool) error
-}
-
-type directModelVolumeOps struct{}
-
-func (directModelVolumeOps) openVerity(sourceDevice, name, rootHash, hashOffset string, salt []byte) (string, error) {
-	offset, err := strconv.ParseUint(hashOffset, 10, 64)
-	if err != nil {
-		return "", fmt.Errorf("invalid verity hash offset %q: %w", hashOffset, err)
-	}
-	lengthSectors, params, err := fixedVerityTable(sourceDevice, rootHash, offset, salt)
-	if err != nil {
-		return "", err
-	}
-	return activateReadOnlyMapping(name, lengthSectors, func(control *os.File) error {
-		return devicemapper.LoadReadOnlyVerityTable(control, name, lengthSectors, params)
-	})
-}
-
-func (directModelVolumeOps) openCrypt(sourceDevice, name string, key []byte) (string, error) {
-	deviceNumber, lengthSectors, err := devicemapper.BlockDeviceInfo(sourceDevice)
-	if err != nil {
-		return "", err
-	}
-	params, err := devicemapper.CryptTable(deviceNumber, key, lengthSectors)
-	if err != nil {
-		return "", err
-	}
-	defer zeroBytes(params)
-	return activateReadOnlyMapping(name, lengthSectors, func(control *os.File) error {
-		return devicemapper.LoadReadOnlyCryptTable(control, name, lengthSectors, params)
-	})
-}
-
-func (directModelVolumeOps) remove(name string) error {
-	control, err := devicemapper.OpenControl()
+	ref, err := modelwrap.ParseRef(s.Ref)
 	if err != nil {
 		return err
 	}
-	defer control.Close()
-	return devicemapper.Remove(control, name)
-}
-
-func (directModelVolumeOps) mount(sourceDevice, mountPoint string, executable bool) error {
-	if err := os.MkdirAll(mountPoint, 0755); err != nil {
-		return fmt.Errorf("creating model mount point: %w", err)
-	}
-	// No view stacked above the pack can launder this flag away.
-	flags := uintptr(unix.MS_RDONLY | unix.MS_NODEV | unix.MS_NOSUID)
-	if !executable {
-		flags |= unix.MS_NOEXEC
-	}
-	if err := unix.Mount(sourceDevice, mountPoint, "erofs", flags, ""); err != nil {
-		return fmt.Errorf("mounting verified model volume: %w", err)
-	}
-	return nil
-}
-
-func openAndMountVerityWithOps(
-	ops modelVolumeOps,
-	sourceDevice, deviceName, rootHash, hashOffset string,
-	salt []byte,
-	mountPoint string,
-	executable bool,
-) error {
-	mapperNode, err := ops.openVerity(sourceDevice, deviceName, rootHash, hashOffset, salt)
+	// Validate the verity layout without reading an untrusted device.
+	offset, err := parseHashOffset(ref.HashOffset)
 	if err != nil {
 		return err
 	}
-	if err := ops.mount(mapperNode, mountPoint, executable); err != nil {
-		if removeErr := ops.remove(deviceName); removeErr != nil {
-			return errors.Join(err, fmt.Errorf("removing failed verity mapping: %w", removeErr))
-		}
-		return err
-	}
-	return nil
+	_, _, err = verityTable("0:0", ref.RootHash, offset, modelwrap.VeritySalt(s.Repo))
+	return err
 }
 
-func openEncryptedAndMount(
-	ops modelVolumeOps,
-	sourceDevice, cryptName, verityName, rootHash, hashOffset string,
-	salt []byte,
-	mountPoint string,
-	key []byte,
-	executable bool,
-) error {
-	defer zeroBytes(key)
-	cryptDevice, err := ops.openCrypt(sourceDevice, cryptName, key)
-	if err != nil {
-		return err
+func (s Source) MapperName() string {
+	ref, _ := modelwrap.ParseRef(s.Ref)
+	if ref == nil {
+		return ""
 	}
-	if err := openAndMountVerityWithOps(ops, cryptDevice, verityName, rootHash, hashOffset, salt, mountPoint, executable); err != nil {
-		if removeErr := ops.remove(cryptName); removeErr != nil {
-			return errors.Join(err, fmt.Errorf("removing failed crypt mapping: %w", removeErr))
-		}
-		return err
-	}
-	return nil
-}
-
-func activateReadOnlyMapping(
-	name string,
-	lengthSectors uint64,
-	load func(control *os.File) error,
-) (mapperNode string, returnErr error) {
-	control, err := devicemapper.OpenControl()
-	if err != nil {
-		return "", err
-	}
-	defer control.Close()
-	if _, err := devicemapper.CheckVersion(control); err != nil {
-		return "", err
-	}
-	if _, err := devicemapper.CreateReadOnly(control, name); err != nil {
-		return "", err
-	}
-	defer func() {
-		if returnErr != nil {
-			if err := devicemapper.Remove(control, name); err != nil {
-				returnErr = errors.Join(returnErr, fmt.Errorf("removing incomplete mapping: %w", err))
-			}
-		}
-	}()
-	if err := load(control); err != nil {
-		return "", err
-	}
-	if err := devicemapper.ResumeReadOnly(control, name); err != nil {
-		return "", err
-	}
-	info, err := devicemapper.Status(control, name)
-	if err != nil {
-		return "", err
-	}
-	if !info.Active() || !info.ReadOnly() || info.TargetCount != 1 {
-		return "", fmt.Errorf("mapping %s has unexpected state: active=%t read-only=%t targets=%d", name, info.Active(), info.ReadOnly(), info.TargetCount)
-	}
-	mapperNode = devicemapper.MapperNode(name)
-	if err := devicemapper.EnsureBlockNode(mapperNode, info.Dev); err != nil {
-		return "", err
-	}
-	return mapperNode, nil
+	return "mwp-" + ref.RootHash
 }
 
 func fixedVerityTable(sourceDevice, rootHash string, hashOffset uint64, salt []byte) (uint64, string, error) {
@@ -496,17 +111,4 @@ func validateVerityHashOffset(hashOffset uint64) error {
 		return fmt.Errorf("verity hash offset %d is not a positive multiple of %d", hashOffset, modelwrap.VerityDataBlockSize)
 	}
 	return nil
-}
-
-func zeroBytes(buf []byte) {
-	for index := range buf {
-		buf[index] = 0
-	}
-}
-
-func modelLogName(name, rootHash string) string {
-	if name != "" {
-		return name
-	}
-	return "mwp-" + rootHash
 }

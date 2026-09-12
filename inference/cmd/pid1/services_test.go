@@ -22,7 +22,7 @@ func TestInferencePoliciesPreserveRestrictions(t *testing.T) {
 			policies[hardening.Service(service.Name)] = *service.Policy
 		}
 	}
-	if len(policies) != 4 {
+	if len(policies) != 5 {
 		t.Fatalf("policies = %#v", policies)
 	}
 	for _, service := range []hardening.Service{variant.ServiceContainers, variant.ServiceEgress} {

@@ -2,43 +2,26 @@ package modelpack
 
 import (
 	"bytes"
-	"encoding/base64"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/tinfoilsh/modelwrap"
 	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
-
-	"tinfoil/internal/bootstate"
-	"tinfoil/internal/secretstore"
 )
 
-// Reference syntax validation is covered by the modelwrap module tests;
-// this only checks the cvmimage mount layout policy built on top of it.
-func TestModelPackRefLayout(t *testing.T) {
+func TestCompiledPackIdentity(t *testing.T) {
 	ref := strings.Repeat("a", 64) + "_4096_0eefa619-50b7-588f-a072-d405fb439d36"
-	got, err := parseModelPackRef(ref)
+	got, err := Compile(runtimeconfig.ModelSpec{MWP: ref, Repo: "org/model@rev"})
 	if err != nil {
 		t.Fatalf("expected valid model pack ref: %v", err)
 	}
-	if got.RootHash != strings.Repeat("a", 64) || got.HashOffset != "4096" || got.UUID != "0eefa619-50b7-588f-a072-d405fb439d36" {
-		t.Fatalf("parsed ref mismatch: %+v", got)
+	if got.Ref != ref || got.Repo != "org/model@rev" || got.Encrypted {
+		t.Fatalf("pack identity changed: %+v", got)
 	}
-	if got.mapperName() != "mwp-"+strings.Repeat("a", 64) {
-		t.Fatalf("mapper name mismatch: %s", got.mapperName())
+	if got.MapperName() != "mwp-"+strings.Repeat("a", 64) {
+		t.Fatalf("mapper name mismatch: %s", got.MapperName())
 	}
-	if got.mountPoint() != bootstate.MWPDir+"/mwp-"+strings.Repeat("a", 64) {
-		t.Fatalf("mount point mismatch: %s", got.mountPoint())
-	}
-	if got.legacyMountPoint() != bootstate.MPKDir+"/mpk-"+strings.Repeat("a", 64) {
-		t.Fatalf("legacy mount point mismatch: %s", got.legacyMountPoint())
-	}
-	if got.ArtifactID() != strings.Repeat("a", 64)+"_0eefa619-50b7-588f-a072-d405fb439d36" {
-		t.Fatalf("artifact ID mismatch: %s", got.ArtifactID())
-	}
-	if _, err := parseModelPackRef("not-a-ref"); err == nil {
+	if _, err := Compile(runtimeconfig.ModelSpec{MWP: "not-a-ref", Repo: "org/model@rev"}); err == nil {
 		t.Fatal("expected validation error to propagate from modelwrap")
 	}
 }
@@ -75,156 +58,29 @@ func TestVerityTableUsesFixedModelwrapContract(t *testing.T) {
 	}
 }
 
-func TestModelSalt(t *testing.T) {
-	salt, err := modelSalt(runtimeconfig.ModelSpec{Name: "m", Repo: "org/model@rev"})
-	if err != nil {
-		t.Fatalf("modelSalt: %v", err)
-	}
-	if !bytes.Equal(salt, modelwrap.VeritySalt("org/model@rev")) {
-		t.Fatal("salt does not match the modelwrap identity derivation")
-	}
-	if _, err := modelSalt(runtimeconfig.ModelSpec{Name: "m"}); err == nil {
-		t.Fatal("missing repo accepted")
-	}
-}
-
-func TestOpenAndMountVerityCleansUpMountFailure(t *testing.T) {
-	ops := &fakeModelVolumeOps{mountErr: errors.New("mount failed")}
-	err := openAndMountVerityWithOps(ops, "/dev/source", "mwp-test", strings.Repeat("a", 64), "4096", testSalt(), "/mnt/model", false)
-	if err == nil || !strings.Contains(err.Error(), "mount failed") {
-		t.Fatalf("error = %v, want mount failure", err)
-	}
-	wantCalls := []string{"verity:mwp-test", "mount:/dev/mapper/mwp-test:exec=false", "remove:mwp-test"}
-	if fmt.Sprint(ops.calls) != fmt.Sprint(wantCalls) {
-		t.Fatalf("calls = %v, want %v", ops.calls, wantCalls)
-	}
-}
-
-func TestOpenEncryptedAndMountZeroesKeyAndCleansUp(t *testing.T) {
-	key := bytes.Repeat([]byte{0xa5}, modelwrap.EMWPKeyBytes)
-	ops := &fakeModelVolumeOps{verityErr: errors.New("verity failed")}
-	err := openEncryptedAndMount(
-		ops,
-		"/dev/source",
-		"emwp-test-crypt",
-		"mwp-test",
-		strings.Repeat("a", 64),
-		"4096",
-		testSalt(),
-		"/mnt/model",
-		key,
-		false,
-	)
-	if err == nil || !strings.Contains(err.Error(), "verity failed") {
-		t.Fatalf("error = %v, want verity failure", err)
-	}
-	if !bytes.Equal(ops.openCryptKey, bytes.Repeat([]byte{0xa5}, modelwrap.EMWPKeyBytes)) {
-		t.Fatal("dm-crypt did not receive the derived key")
-	}
-	if !bytes.Equal(key, make([]byte, modelwrap.EMWPKeyBytes)) {
-		t.Fatalf("derived key was not zeroed: %x", key)
-	}
-	wantCalls := []string{"crypt:emwp-test-crypt", "verity:mwp-test", "remove:emwp-test-crypt"}
-	if fmt.Sprint(ops.calls) != fmt.Sprint(wantCalls) {
-		t.Fatalf("calls = %v, want %v", ops.calls, wantCalls)
-	}
-}
-
-func TestOpenEncryptedAndMountCleansBothMappingsAfterMountFailure(t *testing.T) {
-	key := bytes.Repeat([]byte{0x3c}, modelwrap.EMWPKeyBytes)
-	ops := &fakeModelVolumeOps{mountErr: errors.New("mount failed")}
-	err := openEncryptedAndMount(
-		ops,
-		"/dev/source",
-		"emwp-test-crypt",
-		"mwp-test",
-		strings.Repeat("a", 64),
-		"4096",
-		testSalt(),
-		"/mnt/model",
-		key,
-		true,
-	)
-	if err == nil || !strings.Contains(err.Error(), "mount failed") {
-		t.Fatalf("error = %v, want mount failure", err)
-	}
-	wantCalls := []string{
-		"crypt:emwp-test-crypt",
-		"verity:mwp-test",
-		"mount:/dev/mapper/mwp-test:exec=true",
-		"remove:mwp-test",
-		"remove:emwp-test-crypt",
-	}
-	if fmt.Sprint(ops.calls) != fmt.Sprint(wantCalls) {
-		t.Fatalf("calls = %v, want %v", ops.calls, wantCalls)
-	}
-	if !bytes.Equal(key, make([]byte, modelwrap.EMWPKeyBytes)) {
-		t.Fatalf("derived key was not zeroed: %x", key)
-	}
-}
-
-func testSalt() []byte {
-	return bytes.Repeat([]byte{0x5a}, veritySaltSize)
-}
-
-type fakeModelVolumeOps struct {
-	calls        []string
-	openCryptKey []byte
-	cryptErr     error
-	verityErr    error
-	mountErr     error
-	removeErr    error
-}
-
-func (ops *fakeModelVolumeOps) openVerity(_ string, name, _, _ string, _ []byte) (string, error) {
-	ops.calls = append(ops.calls, "verity:"+name)
-	if ops.verityErr != nil {
-		return "", ops.verityErr
-	}
-	return "/dev/mapper/" + name, nil
-}
-
-func (ops *fakeModelVolumeOps) openCrypt(_ string, name string, key []byte) (string, error) {
-	ops.calls = append(ops.calls, "crypt:"+name)
-	ops.openCryptKey = append([]byte(nil), key...)
-	if ops.cryptErr != nil {
-		return "", ops.cryptErr
-	}
-	return "/dev/mapper/" + name, nil
-}
-
-func (ops *fakeModelVolumeOps) remove(name string) error {
-	ops.calls = append(ops.calls, "remove:"+name)
-	return ops.removeErr
-}
-
-func (ops *fakeModelVolumeOps) mount(sourceDevice, _ string, executable bool) error {
-	ops.calls = append(ops.calls, fmt.Sprintf("mount:%s:exec=%t", sourceDevice, executable))
-	return ops.mountErr
-}
-
-func TestModelPackRefForModel(t *testing.T) {
+func TestCompilePackReferences(t *testing.T) {
 	ref := strings.Repeat("a", 64) + "_4096_0eefa619-50b7-588f-a072-d405fb439d36"
 
 	for _, tt := range []struct {
-		name     string
-		model    runtimeconfig.ModelSpec
-		wantKind modelKind
+		name      string
+		model     runtimeconfig.ModelSpec
+		encrypted bool
 	}{
-		{name: "legacy mpk", model: runtimeconfig.ModelSpec{Name: "legacy", MPK: ref}, wantKind: modelKindPlaintext},
-		{name: "mwp", model: runtimeconfig.ModelSpec{Name: "plain", MWP: ref}, wantKind: modelKindPlaintext},
-		{name: "emwp", model: runtimeconfig.ModelSpec{Name: "encrypted", EMWP: ref}, wantKind: modelKindEncrypted},
+		{name: "legacy mpk", model: runtimeconfig.ModelSpec{Name: "legacy", MPK: ref}},
+		{name: "mwp", model: runtimeconfig.ModelSpec{Name: "plain", MWP: ref}},
+		{name: "emwp", model: runtimeconfig.ModelSpec{Name: "encrypted", EMWP: ref}, encrypted: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, kind, err := modelPackRefForModel(tt.model)
+			tt.model.Repo = "org/model@rev"
+			got, err := Compile(tt.model)
 			if err != nil {
 				t.Fatalf("expected model ref: %v", err)
 			}
-			if got.raw != ref {
-				t.Fatalf("raw ref mismatch: got %q want %q", got.raw, ref)
+			if got.Ref != ref {
+				t.Fatalf("raw ref mismatch: got %q want %q", got.Ref, ref)
 			}
-			if kind != tt.wantKind {
-				t.Fatalf("kind mismatch: got %q want %q", kind, tt.wantKind)
+			if got.Encrypted != tt.encrypted {
+				t.Fatalf("encryption mismatch: got %t want %t", got.Encrypted, tt.encrypted)
 			}
 		})
 	}
@@ -236,65 +92,14 @@ func TestModelPackRefForModel(t *testing.T) {
 		{name: "missing model ref", model: runtimeconfig.ModelSpec{Name: "missing"}},
 		{name: "both mpk and mwp", model: runtimeconfig.ModelSpec{Name: "both", MPK: ref, MWP: ref}},
 		{name: "both mwp and emwp", model: runtimeconfig.ModelSpec{Name: "both", MWP: ref, EMWP: ref}},
+		{name: "missing repo", model: runtimeconfig.ModelSpec{Name: "missing-repo", MWP: ref}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := modelPackRefForModel(tt.model); err == nil {
-				t.Fatal("expected model ref error")
+			if tt.name != "missing repo" {
+				tt.model.Repo = "org/model@rev"
 			}
-		})
-	}
-}
-
-func TestEncryptedModelKey(t *testing.T) {
-	key := strings.Repeat("k", modelwrap.EMWPMasterKeyBytes)
-	spec := &modelPackRef{
-		ArtifactRef: &modelwrap.ArtifactRef{
-			RootHash:   strings.Repeat("a", 64),
-			HashOffset: "4096",
-			UUID:       "0eefa619-50b7-588f-a072-d405fb439d36",
-		},
-	}
-	ext := secretstore.Store{"PRIVATE_MODEL_KEY": base64.StdEncoding.EncodeToString([]byte(key))}
-	got, err := encryptedModelKey("PRIVATE_MODEL_KEY", spec, ext)
-	if err != nil {
-		t.Fatalf("expected derived key: %v", err)
-	}
-	if len(got) != modelwrap.EMWPKeyBytes {
-		t.Fatalf("derived key length: got %d, want %d", len(got), modelwrap.EMWPKeyBytes)
-	}
-	if bytes.Equal(got, []byte(key)) {
-		t.Fatal("derived key should differ from external master key")
-	}
-	gotAgain, err := encryptedModelKey("PRIVATE_MODEL_KEY", spec, ext)
-	if err != nil {
-		t.Fatalf("expected repeat derived key: %v", err)
-	}
-	if !bytes.Equal(got, gotAgain) {
-		t.Fatal("derived key should be deterministic for the same artifact")
-	}
-	otherRef := *spec.ArtifactRef
-	otherRef.UUID = "1eefa619-50b7-588f-a072-d405fb439d36"
-	otherSpec := &modelPackRef{ArtifactRef: &otherRef}
-	otherGot, err := encryptedModelKey("PRIVATE_MODEL_KEY", otherSpec, ext)
-	if err != nil {
-		t.Fatalf("expected other derived key: %v", err)
-	}
-	if bytes.Equal(got, otherGot) {
-		t.Fatal("derived key should differ across artifacts")
-	}
-
-	for _, tc := range []struct {
-		name string
-		ext  secretstore.Store
-	}{
-		{name: "missing external config"},
-		{name: "missing secret", ext: secretstore.Store{}},
-		{name: "bad base64", ext: secretstore.Store{"PRIVATE_MODEL_KEY": "!"}},
-		{name: "short key", ext: secretstore.Store{"PRIVATE_MODEL_KEY": base64.StdEncoding.EncodeToString([]byte("short"))}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := encryptedModelKey("PRIVATE_MODEL_KEY", spec, tc.ext); err == nil {
-				t.Fatal("expected key decode error")
+			if _, err := Compile(tt.model); err == nil {
+				t.Fatal("expected model ref error")
 			}
 		})
 	}

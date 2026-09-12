@@ -27,11 +27,11 @@ func lifecycleSpec() pid1.Spec {
 		Policy: &policy,
 	}
 	return pid1.Spec{
-		Services: []pid1.Service{pid1.BootService(), pid1.ShimService(hardening.ShimPolicy()), worker},
+		Services: []pid1.Service{pid1.BootService(), pid1.VolumesService(), pid1.ShimService(hardening.ShimPolicy()), worker},
 		StartWorkload: func(ctx context.Context, runtime pid1.Runtime, _ *os.File) error {
 			return runtime.Services.Start(ctx, worker.Process())
 		},
-		ShutdownGroups: [][]string{{pid1.ShimName}, {sandboxName}},
+		ShutdownGroups: [][]string{{pid1.ShimName}, {sandboxName}, {pid1.VolumesName}},
 		BootStages:     variant.BootStages(),
 	}
 }

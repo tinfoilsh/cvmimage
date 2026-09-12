@@ -20,6 +20,7 @@ import (
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
+	"tinfoil/internal/volume"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
@@ -412,6 +413,8 @@ func registerObservabilityHandlers(
 		json.NewEncoder(w).Encode(state)
 	})
 
+	mux.Handle(volume.ManagementPath, volumeHandler(volume.Client{}))
+	mux.Handle(volume.ManagementPath+"/", volumeHandler(volume.Client{}))
 	for pattern, handler := range observability.Handlers {
 		mux.Handle(pattern, handler)
 	}

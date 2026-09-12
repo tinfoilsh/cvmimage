@@ -10,6 +10,7 @@ import (
 
 	"tinfoil/internal/modelpack"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/volume"
 )
 
 func newHandoff(t *testing.T) *os.File {
@@ -51,7 +52,7 @@ func TestPrepareSecretHandoffReportsHandoffFailure(t *testing.T) {
 }
 
 func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
-	workload := Workload{Secrets: []string{"API_KEY"}, Mounts: []modelpack.Mount{{Model: runtimeconfig.ModelSpec{Name: "model", KeySecret: "MODEL_KEY"}}}}
+	workload := Workload{Secrets: []string{"API_KEY"}, Volumes: volume.Plan{Volumes: []volume.Definition{{Name: "model", Pack: &modelpack.Source{Encrypted: true}, Unlock: runtimeconfig.VolumeUnlock{Secret: "MODEL_KEY"}}}}}
 	host := secretstore.Store{}
 	handoff := newHandoff(t)
 
@@ -70,7 +71,7 @@ func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
 	if detail != "handed off 1 workload secret(s); fetched 2 from keyserver" {
 		t.Fatalf("detail = %q", detail)
 	}
-	if values.modelKeys.GetSecret("MODEL_KEY") != "key" || len(values.modelKeys) != 1 || len(values.workload) != 1 || values.workload.GetSecret("API_KEY") != "secret" || len(host) != 0 {
+	if values.storageKeys.GetSecret("MODEL_KEY") != "key" || len(values.storageKeys) != 1 || len(values.workload) != 1 || values.workload.GetSecret("API_KEY") != "secret" || len(host) != 0 {
 		t.Fatal("model key must be returned without mutating host inputs")
 	}
 	store, err := secretstore.ReadHandoff(handoff, "config-digest", []string{"API_KEY"})
@@ -79,5 +80,35 @@ func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
 	}
 	if store["API_KEY"] != "secret" {
 		t.Fatalf("secret handoff = %#v", store)
+	}
+}
+
+func TestStorageKeysHaveSeparateHandoff(t *testing.T) {
+	workload := Workload{Secrets: []string{"API_KEY"}, Volumes: volume.Plan{Volumes: []volume.Definition{
+		{Name: "model", Pack: &modelpack.Source{Encrypted: true}, Unlock: runtimeconfig.VolumeUnlock{Secret: "PACK_KEY"}},
+		{Name: "state", Disk: &volume.DiskSource{}, Unlock: runtimeconfig.VolumeUnlock{Secret: "DISK_KEY"}},
+	}}}
+	handoff := newHandoff(t)
+	values, _, err := prepareSecretHandoff(t.Context(), workload, secretstore.Source{Host: secretstore.Store{"API_KEY": "api", "PACK_KEY": "pack", "DISK_KEY": "disk"}}, handoff, "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secretstore.ReadHandoff(handoff, "digest", []string{"API_KEY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store) != 1 || store["API_KEY"] != "api" || len(values.storageKeys) != 2 || values.storageKeys["DISK_KEY"] != "disk" || values.storageKeys["PACK_KEY"] != "pack" {
+		t.Fatal("secret handoffs crossed")
+	}
+	storageHandoff := newHandoff(t)
+	if err := secretstore.WriteHandoff(storageHandoff, "digest", values.storageKeys); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := secretstore.ReadHandoff(storageHandoff, "digest", []string{"DISK_KEY", "PACK_KEY"})
+	if err != nil || len(storage) != 2 || storage["PACK_KEY"] != "pack" || storage["DISK_KEY"] != "disk" {
+		t.Fatalf("storage handoff: %v", err)
+	}
+	if _, err := secretstore.ReadHandoff(storageHandoff, "other-digest", []string{"DISK_KEY", "PACK_KEY"}); err == nil {
+		t.Fatal("storage handoff accepted another config")
 	}
 }

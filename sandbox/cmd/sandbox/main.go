@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -18,17 +17,12 @@ import (
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	configdecode "tinfoil/internal/runtimeconfig"
+	"tinfoil/internal/volume"
 	"tinfoil/sandbox/internal/variant"
 )
 
 func main() {
 	log.SetFlags(0)
-	if len(os.Args) > 1 && os.Args[1] == formatMode {
-		if err := runFormatter(os.Args); err != nil {
-			log.Fatalf("tinfoil-sandbox: %v", err)
-		}
-		return
-	}
 	if err := run(); err != nil {
 		log.Fatalf("tinfoil-sandbox: %v", err)
 	}
@@ -56,11 +50,19 @@ func run() (result error) {
 	if err != nil {
 		return fmt.Errorf("permit key: %w", err)
 	}
+	state, err := (volume.Client{}).Status(context.Background())
+	if err != nil {
+		return err
+	}
+	workspaceName, _, err := runtimeconfig.WorkspaceRoles(config)
+	if err != nil {
+		return err
+	}
 	box := &sandbox{
-		domain: domain,
-		permit: permit,
-		nonce:  rand.Text(),
-		volume: volume{spec: config.Volumes[0], models: len(config.Models)},
+		domain:    domain,
+		permit:    permit,
+		nonce:     state.Nonce,
+		workspace: workspaceName,
 	}
 
 	if err := box.prepare(); err != nil {
@@ -108,8 +110,8 @@ func measuredConfig() (*runtimeconfig.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(config.Volumes) != 1 || len(config.Volumes[0].Overlays) == 0 {
-		return nil, errors.New("config must declare one workspace volume with a toolchain overlay")
+	if _, _, err := runtimeconfig.WorkspaceRoles(config); err != nil {
+		return nil, err
 	}
 	return config, nil
 }

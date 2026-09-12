@@ -12,7 +12,7 @@ type sandbox struct {
 	domain      string
 	permit      *ecdsa.PublicKey
 	nonce       string
-	volume      volume
+	workspace   string
 	fingerprint string
 
 	mu        sync.Mutex

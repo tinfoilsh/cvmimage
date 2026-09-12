@@ -14,6 +14,7 @@ import (
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/volume"
 )
 
 func TestParseGPUs(t *testing.T) {
@@ -209,7 +210,7 @@ func TestBuildContainerCreateSpec_DebugInstallerGetsFixedRuntime(t *testing.T) {
 		Volumes: []string{debugDockerSocketBind},
 	}
 
-	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, true)
+	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, nil, true)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 		Image: "example.invalid/installer",
 	}
 
-	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 		Models: []string{"private-model"},
 	}
 
-	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, volume.ReadyVolumes{"private-model": {Path: bootstate.PrivateModelsDir + "/private-model", Access: "ro"}}, false)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
@@ -293,7 +294,7 @@ func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 	_, ungrantedHostConfig, _, _, err := buildContainerCreateSpec(Container{
 		Name:  "sidecar",
 		Image: "example.invalid/sidecar",
-	}, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	}, cfg, &shimconfig.ExternalConfig{}, nil, volume.ReadyVolumes{"private-model": {Path: bootstate.PrivateModelsDir + "/private-model", Access: "ro"}}, false)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}
@@ -308,7 +309,7 @@ func TestBuildContainerCreateSpec_PublishesDeclaredPorts(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{"app": {Egress: "closed"}}}
 	c := Container{Name: "sandbox", Image: "example.invalid/sandbox", Networks: []string{"app"}, Ports: []string{"2022:22"}}
 
-	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	containerConfig, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildContainerCreateSpec: %v", err)
 	}

@@ -1,5 +1,6 @@
 {
   system ? "x86_64-linux",
+  schemaSource ? ../tinfoil-config,
 }:
 
 assert system == "x86_64-linux";
@@ -14,7 +15,7 @@ let
     config = { };
     overlays = [ ];
   };
-  go = import ./nix/go.nix { inherit pkgs; };
+  go = import ./nix/go.nix { inherit pkgs schemaSource; };
   platform = import ./nix/platform.nix { inherit pkgs go; };
   build =
     definition:

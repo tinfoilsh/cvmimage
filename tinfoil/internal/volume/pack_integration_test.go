@@ -1,17 +1,15 @@
 //go:build integration
 
-package modelpack
+package volume
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
 
-	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
-	"golang.org/x/sys/unix"
-
 	"tinfoil/internal/bootstate"
-	"tinfoil/internal/secretstore"
+	"tinfoil/internal/modelpack"
 )
 
 func TestMountEncryptedModelPackIntegration(t *testing.T) {
@@ -27,34 +25,37 @@ func TestMountEncryptedModelPackIntegration(t *testing.T) {
 		t.Fatal("TINFOIL_EMWP_REF, TINFOIL_EMWP_KEY_B64, TINFOIL_EMWP_REPO, and TINFOIL_EMWP_DEVICE are required")
 	}
 
-	spec, err := parseModelPackRef(ref)
+	masterKey, err := base64.StdEncoding.DecodeString(key)
 	if err != nil {
-		t.Fatalf("parsing EMWP ref: %v", err)
+		t.Fatal(err)
 	}
+	defer clear(masterKey)
 	mountPoint := bootstate.PrivateModelsDir + "/emwp-integration"
-	cleanupEMWPIntegration(spec, mountPoint)
-	t.Cleanup(func() {
-		cleanupEMWPIntegration(spec, mountPoint)
-	})
-
-	err = mountEncryptedModelPack(runtimeconfig.ModelSpec{
-		Name:      "emwp-integration",
-		Repo:      repo,
-		EMWP:      ref,
-		KeySecret: "PRIVATE_MODEL_KEY",
-	}, secretstore.Store{"PRIVATE_MODEL_KEY": key}, device, mountPoint, false)
-	if err != nil {
-		t.Fatalf("mounting EMWP: %v", err)
+	if err := os.MkdirAll(mountPoint, 0700); err != nil {
+		t.Fatal(err)
 	}
-
+	mounted := &mountedVolume{definition: Definition{Target: mountPoint, Filesystem: "erofs", Access: "ro"}}
+	t.Cleanup(func() {
+		if err := mounted.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	pack, err := modelpack.Open(modelpack.Source{Ref: ref, Repo: repo, Encrypted: true}, device, masterKey)
+	if pack != nil {
+		mounted.undo = append(mounted.undo, pack.Close)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := mountDevice(linuxMountKernel{}, pack.Path(), pack.DeviceNumber(), mounted.definition)
+	if tree != nil {
+		mounted.tree = tree
+		mounted.undo = append(mounted.undo, tree.Close)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(filepath.Join(mountPoint, "config.json")); err != nil {
 		t.Fatalf("checking mounted file: %v", err)
 	}
-}
-
-func cleanupEMWPIntegration(spec *modelPackRef, mountPoint string) {
-	_ = unix.Unmount(mountPoint, 0)
-	ops := directModelVolumeOps{}
-	_ = ops.remove(spec.mapperName())
-	_ = ops.remove("emwp-" + spec.RootHash + "-crypt")
 }

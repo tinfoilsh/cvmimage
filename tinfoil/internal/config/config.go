@@ -33,11 +33,12 @@ type Metadata struct {
 type ExternalNetworkConfig = guestnet.Config
 
 type ExternalConfig struct {
-	MetricsAPIKey string                 `yaml:"-"`
-	Env           map[string]string      `yaml:"env"`
-	Secrets       map[string]string      `yaml:"secrets"`
-	Metadata      Metadata               `yaml:"metadata"`
-	Network       *ExternalNetworkConfig `yaml:"network"`
+	MetricsAPIKey   string                 `yaml:"-"`
+	AttachedVolumes []string               `yaml:"attached-volumes,omitempty"`
+	Env             map[string]string      `yaml:"env"`
+	Secrets         map[string]string      `yaml:"secrets"`
+	Metadata        Metadata               `yaml:"metadata"`
+	Network         *ExternalNetworkConfig `yaml:"network"`
 
 	// tinfoild preserves operator-owned top-level external data. Keep accepting
 	// those unrelated keys while KnownFields rejects unknown network fields.

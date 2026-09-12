@@ -66,10 +66,15 @@ and hardening policy lookup from the service declarations, while each variant
 keeps its startup and shutdown order explicit.
 
 `inference/` owns GPU bootstrap, attestation and metrics, Docker,
-containers, registry credentials, container networking, and diagnostics. `sandbox/` owns workspace
-setup, SSH, its daemon, and its CPU-only configuration rules. Each module has
+containers, registry credentials, container networking, and diagnostics. `sandbox/` owns the workspace layout declaration, SSH, enrollment, and its CPU-only
+configuration rules. `tinfoil/cmd/volumes` owns storage service startup and HTTP
+handling. `tinfoil/internal/volume` owns activation, filesystem checks, formatting,
+mounts, and resource lifetimes for both variants. Each module has
 its own `go.mod` and checks; the two variants depend on `tinfoil/` through a
-local module replacement.
+local module replacement. The coordinated schema checkout must be available at
+`../tinfoil-config`; Go modules replace the schema dependency with that checkout.
+Nix assembles both sources and accepts `--arg schemaSource /path/to/tinfoil-config`.
+Update the platform vendor hash when schema implementation files change.
 
 Boot compiles a workload declaration from verified configuration once. Each
 variant chooses pack mount destinations, compatibility aliases, workload secret
@@ -81,7 +86,8 @@ The implementation lives in focused internal packages:
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/modelpack` | Verified pack mounts, key derivation, and mapping cleanup |
+| `internal/modelpack` | Verified pack devices, key derivation, and mapping cleanup |
+| `internal/volume` | Storage plans, activation, authenticated disks, filesystem checks, formatting, mounts, overlays, and cleanup |
 | `internal/keyserver` | Attested challenge/fetch protocol using the provisioned certificate |
 | `internal/secretstore` | Secret source rules, resolved values, subsets, and sealed handoff |
 | `internal/identity` | Node keys and their attestation binding |
@@ -116,8 +122,10 @@ contains only the BusyBox debug payload. Each variant owns its measured
 including the HTTP-01 rule used by boot.
 
 Inference includes the NVIDIA payload and container runtime. Sandbox includes
-`tinfoil-sandbox`, OpenSSH, and the ext4 and dm-integrity support its encrypted
-workspace needs. Both mount EROFS model packs on an EROFS root. The producer
+`tinfoil-sandbox` and OpenSSH. Both include `tinfoil-volumes`, the shared ext4
+tooling in `nix/storage.nix`, and the storage kernel fragment
+`kernel/config.d/15-storage.config`. Both can mount ext4 and EROFS volumes on an
+EROFS guest root. See [Shared storage](storage.md) for configuration and unlock flows. The producer
 outputs below exist for each variant, with sandbox outputs prefixed
 `sandbox-`; the initrd is shared.
 

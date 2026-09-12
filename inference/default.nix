@@ -11,9 +11,9 @@ let
       ../tinfoil
       ./.
     ];
-    modRoot = "inference";
+    modRoot = "cvmimage/inference";
     proxyVendor = true;
-    vendorHash = "sha256-H8xwmGGzSUoxpiY88DlFzfeKP/yvOhkh+lS12GSmr+A=";
+    vendorHash = "sha256-12C7hunI6ff8dLM81QDL7xptDFgpwYxOcRCjOcc95S0=";
   };
   docker = payload.archiveTree {
     name = "cvmimage-docker";
@@ -36,17 +36,19 @@ in
     name = "tinfoil-inference-checks";
     forbiddenDependencies = [ "tinfoil/sandbox" ];
     module = module // {
-      src = pkgs.lib.fileset.toSource {
-        root = ../.;
-        fileset = pkgs.lib.fileset.unions [
-          (go.fileset ../tinfoil)
-          (go.fileset ./.)
-          ./rootfs/etc/nftables.conf
-        ];
-      };
+      src = go.withSchema (
+        pkgs.lib.fileset.toSource {
+          root = ../.;
+          fileset = pkgs.lib.fileset.unions [
+            (go.fileset ../tinfoil)
+            (go.fileset ./.)
+            ./rootfs/etc/nftables.conf
+          ];
+        }
+      );
     };
     extraChecks = ''
-      go test -race ./internal/nvml ./internal/gpumetrics ./cmd/shim
+      go test -race ./internal/nvml ./internal/gpumetrics ./internal/containers ./cmd/containers ./cmd/shim
       go test -tags=tinfoil_debug_image ./cmd/pid1
     '';
   };
@@ -104,11 +106,11 @@ in
         files =
           payload.accounts ./rootfs/etc
           ++ [
-        {
-          source = ./rootfs/etc/nftables.conf;
-          target = "etc/nftables.conf";
-          mode = "0644";
-        }
+            {
+              source = ./rootfs/etc/nftables.conf;
+              target = "etc/nftables.conf";
+              mode = "0644";
+            }
 
             {
               source = ./rootfs/etc/containerd/config.toml;

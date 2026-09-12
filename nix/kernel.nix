@@ -12,6 +12,7 @@ let
   buildTimestamp = "Tue Jan  1 00:00:00 UTC 1980";
   policyConfigs = [
     ../kernel/config.d/10-tinfoil-cvm-policy.config
+    ../kernel/config.d/15-storage.config
   ] ++ kernelConfigs ++ [
     ../kernel/config.d/20-console-common.config
   ] ++ [

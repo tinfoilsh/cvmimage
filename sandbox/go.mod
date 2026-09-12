@@ -47,3 +47,5 @@ require (
 )
 
 replace tinfoil => ../tinfoil
+
+replace github.com/tinfoilsh/tinfoil-config => ../../tinfoil-config

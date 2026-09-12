@@ -16,7 +16,7 @@ func lifecycleSpec() pid1.Spec {
 	persistenced, fabric := nvidiaServices(control)
 	return pid1.Spec{
 		Services: []pid1.Service{
-			pid1.BootService(), pid1.ShimService(variant.ShimPolicy()),
+			pid1.BootService(), pid1.VolumesService(), pid1.ShimService(variant.ShimPolicy()),
 			containerd, docker, containers, egress, persistenced, fabric,
 		},
 		ShutdownGroups: shutdownGroups(),
@@ -53,5 +53,6 @@ func shutdownGroups() [][]string {
 		{fabricManagerName, persistencedName},
 		{dockerName},
 		{containerdName},
+		{pid1.VolumesName},
 	}
 }

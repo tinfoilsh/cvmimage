@@ -1,4 +1,7 @@
-{ pkgs }:
+{
+  pkgs,
+  schemaSource ? ../../tinfoil-config,
+}:
 
 let
   commonEnv = {
@@ -139,12 +142,26 @@ let
     pkgs.lib.fileset.fileFilter (
       file: file.hasExt "go" || file.hasExt "mod" || file.hasExt "sum"
     ) directory;
+  schema = pkgs.lib.fileset.toSource {
+    root = schemaSource;
+    fileset = fileset schemaSource;
+  };
+  withSchema =
+    source:
+    pkgs.runCommand "cvmimage-go-source" { } ''
+      mkdir -p "$out/cvmimage" "$out/tinfoil-config"
+      cp -r ${source}/. "$out/cvmimage/"
+      cp -r ${schema}/. "$out/tinfoil-config/"
+      rm -rf "$out/tinfoil-config/.git"
+    '';
   source =
     directories:
-    pkgs.lib.fileset.toSource {
-      root = ../.;
-      fileset = pkgs.lib.fileset.unions (map fileset directories);
-    };
+    withSchema (
+      pkgs.lib.fileset.toSource {
+        root = ../.;
+        fileset = pkgs.lib.fileset.unions (map fileset directories);
+      }
+    );
 in
 {
   inherit
@@ -153,6 +170,7 @@ in
     initrd
     checks
     source
+    withSchema
     fileset
     ;
 }

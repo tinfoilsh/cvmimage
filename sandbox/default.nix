@@ -10,15 +10,14 @@ let
       ../tinfoil
       ./.
     ];
-    modRoot = "sandbox";
+    modRoot = "cvmimage/sandbox";
     proxyVendor = true;
-    vendorHash = "sha256-1poiO6LBNJsPAjXAEXVaOq2hPT08G1yiNMBOTnziJUY=";
+    vendorHash = "sha256-TRDrJY0oyQwj0t5+arXAfyr2mKpOIScFVg7GAX0DH4g=";
   };
   ubuntu = import ../nix/runtime-packages.nix {
     inherit pkgs;
     name = "cvmimage-sandbox-packages-lock";
     packageNames = platform.packageNames ++ [
-      "e2fsprogs"
       "openssh-server"
     ];
     lockFile = ./packages-lock.nix;
@@ -33,7 +32,7 @@ in
     "shim"
     "sandbox"
   ];
-  kernelConfigs = [ ./kernel.config ];
+  kernelConfigs = [ ];
   checks = go.checks {
     name = "tinfoil-sandbox-checks";
     forbiddenDependencies = [
@@ -44,14 +43,16 @@ in
       "github.com/moby"
     ];
     module = module // {
-      src = pkgs.lib.fileset.toSource {
-        root = ../.;
-        fileset = pkgs.lib.fileset.unions [
-          (go.fileset ../tinfoil)
-          (go.fileset ./.)
-          ./rootfs/etc/nftables.conf
-        ];
-      };
+      src = go.withSchema (
+        pkgs.lib.fileset.toSource {
+          root = ../.;
+          fileset = pkgs.lib.fileset.unions [
+            (go.fileset ../tinfoil)
+            (go.fileset ./.)
+            ./rootfs/etc/nftables.conf
+          ];
+        }
+      );
     };
     extraChecks = ''
       go test -race ./cmd/sandbox
@@ -62,23 +63,6 @@ in
     outputs."sandbox-package-lock" = ubuntu.lock;
     manifest = {
       payloads = [
-        {
-          archive =
-            (payload.debTree "cvmimage-ext4" (
-              ubuntu.select [
-                "e2fsprogs"
-                "libext2fs2t64"
-                "libss2"
-                "logsave"
-              ]
-            )).archive;
-          paths = [
-            "etc/mke2fs.conf"
-            "usr/sbin/mke2fs"
-            "usr/sbin/mkfs.ext4"
-            "usr/lib/x86_64-linux-gnu"
-          ];
-        }
         {
           archive =
             (payload.debTree "cvmimage-openssh" (

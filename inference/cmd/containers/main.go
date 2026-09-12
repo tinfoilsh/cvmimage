@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
@@ -136,10 +137,10 @@ func run(ctx context.Context, invocation invocation) error {
 	} else if err != nil {
 		return fmt.Errorf("checking runtime boot marker: %w", err)
 	}
-	if err := atomicWrite(variant.ContainersReadyPath, []byte("ready\n"), 0o600); err != nil {
-		return fmt.Errorf("publishing readiness: %w", err)
-	}
 
+	if err := atomicWrite(variant.ContainersReadyPath, []byte("ready\n"), 0o600); err != nil {
+		return err
+	}
 	statusDone := make(chan error, 1)
 	go func() { statusDone <- containers.RunStatusPublisher(runtimeCtx) }()
 	if !invocation.debug {
@@ -206,6 +207,15 @@ func (m *manager) boot(override []byte) (result error) {
 	config, err := configdecode.Decode(source, m.debug)
 	if err != nil {
 		return err
+	}
+	if len(override) > 0 {
+		original, err := configdecode.Decode(m.verifiedConfig, m.debug)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(original.Volumes, config.Volumes) || !reflect.DeepEqual(original.Models, config.Models) || !reflect.DeepEqual(original.Sandbox, config.Sandbox) {
+			return errors.New("storage declarations are fixed until the VM reboots")
+		}
 	}
 	externalData, err := os.ReadFile(bootstate.ExternalConfigPath)
 	if err != nil {
@@ -274,6 +284,10 @@ func (m *manager) boot(override []byte) (result error) {
 		return fmt.Errorf("restarting egress policy: %w", err)
 	}
 	frozenEgress = nil
+	// The manager is ready to supervise while workloads await runtime keys.
+	if err := atomicWrite(variant.ContainersReadyPath, []byte("ready\n"), 0o600); err != nil {
+		return err
+	}
 	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, secretValues, m.debug, preserved); err != nil {
 		return err
 	}

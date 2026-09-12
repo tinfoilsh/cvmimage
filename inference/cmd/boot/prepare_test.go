@@ -7,11 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
-
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/modelpack"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/volume"
 )
 
 func TestRegistryAuthUsesProvidedSecrets(t *testing.T) {
@@ -51,12 +50,13 @@ func TestRegistryAuthUsesProvidedSecrets(t *testing.T) {
 
 func TestPrepareModelDirectoriesOnlyCreatesGrantedMountPoints(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "models")
-	mounts := []modelpack.Mount{
-		{Model: runtimeconfig.ModelSpec{Name: "private"}},
-		{Model: runtimeconfig.ModelSpec{Name: "public"}, LegacyAlias: true},
-	}
+	plan := volume.Plan{Volumes: []volume.Definition{
+		{Name: "private", Pack: &modelpack.Source{}},
+		{Name: "public", Pack: &modelpack.Source{}, LegacyAlias: true},
+		{Name: "disk", Disk: &volume.DiskSource{}},
+	}}
 
-	if err := prepareModelDirectories(mounts, directory); err != nil {
+	if err := prepareModelDirectories(plan, directory); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(directory, "private"))

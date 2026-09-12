@@ -20,7 +20,7 @@ nix-build -I . -A inference-image -o result
 nix-build -I . -A sandbox-image -o result-sandbox
 ```
 
-The inference image carries the NVIDIA stack and runs containers; the sandbox image carries no NVIDIA payload and no container runtime, and instead runs `tinfoil-sandbox`, which unlocks an encrypted workspace volume and opens SSH to its enrolled owner. Each produces the measured release artifacts `<name>.raw`, `<name>.vmlinuz`, `<name>.initrd`, `<name>.roothash`, with `tinfoilcvm` and `tinfoilcvm-sandbox` as the names.
+The inference image carries the NVIDIA stack and runs containers; the sandbox image carries no NVIDIA payload and no container runtime, and instead runs `tinfoil-sandbox`, which enrolls an owner and opens SSH after the shared `tinfoil-volumes` service unlocks its workspace. Both variants use the [same storage engine](docs/storage.md) for encrypted disks, verified packs, and overlays. Each produces the measured release artifacts `<name>.raw`, `<name>.vmlinuz`, `<name>.initrd`, `<name>.roothash`, with `tinfoilcvm` and `tinfoilcvm-sandbox` as the names.
 
 Each variant declares its binaries, packages, files, and kernel fragments in
 `inference/default.nix` or `sandbox/default.nix`. Their sibling Go modules

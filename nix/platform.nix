@@ -26,9 +26,11 @@ let
   ubuntuTree = payload.debTree "cvmimage-platform-ubuntu" ubuntu.packages;
   module = {
     src = go.source [ ../tinfoil ];
-    modRoot = "tinfoil";
-    vendorHash = "sha256-fN82EZ+6eI6c+ThhB0uCVxMGxm93sR7m9SADkj6B+Z4=";
+    modRoot = "cvmimage/tinfoil";
+    vendorHash = "sha256-PvnMc3CXsE5WMbFvT9WaUnBQ8cCoxsljwLeQmtrZM9s=";
   };
+  storageRuntime = go.runtime module [ "volumes" ];
+  storage = import ./storage.nix { inherit pkgs payload; };
   tinfoilInitrd = go.initrd module;
   initrd = import ./initrd.nix { inherit pkgs tinfoilInitrd; };
   checks = go.checks {
@@ -42,22 +44,24 @@ let
       "github.com/moby"
     ];
     module = module // {
-      src = pkgs.lib.fileset.toSource {
-        root = ../.;
-        fileset = pkgs.lib.fileset.unions [
-          (go.fileset ../tinfoil)
-          ../image
-          ../repart.d
-        ];
-      };
+      src = go.withSchema (
+        pkgs.lib.fileset.toSource {
+          root = ../.;
+          fileset = pkgs.lib.fileset.unions [
+            (go.fileset ../tinfoil)
+            ../image
+            ../repart.d
+          ];
+        }
+      );
     };
     extraChecks = ''
-      go test -race ./pid1 ./internal/bootstate/... ./internal/metrics ./shim
+      go test -race ./pid1 ./internal/bootstate/... ./internal/metrics ./cmd/volumes ./internal/volume ./internal/identity/permit ./shim
       go test -tags=tinfoil_debug_image ./pid1
     '';
   };
   manifest = {
-    payloads = [
+    payloads = storage.payloads ++ [
       {
         archive = ubuntuTree.archive;
         paths = [
@@ -80,7 +84,7 @@ let
         ];
       }
     ];
-    files = [
+    files = payload.binaries storageRuntime [ "volumes" ] ++ [
       {
         source = ../image/rootfs/etc/.pwd.lock;
         target = "etc/.pwd.lock";

@@ -2,6 +2,7 @@ package boot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -12,9 +13,9 @@ import (
 	"tinfoil/internal/guestnet"
 	"tinfoil/internal/identity"
 	"tinfoil/internal/keyserver"
-	"tinfoil/internal/modelpack"
 	"tinfoil/internal/secretstore"
 	tlsutil "tinfoil/internal/tls"
+	"tinfoil/internal/volume"
 )
 
 // Run provisions boot artifacts. The caller owns signal handling and exit status.
@@ -106,7 +107,7 @@ func Run(ctx context.Context, options Options, spec Spec) error {
 	}
 	tracker.Record(bootstate.StageCertificate, bootstate.StatusOK, time.Since(start), "")
 
-	// Resolve model keys and seal only the workload's requested secrets.
+	// Resolve storage and workload secrets into separate handoffs.
 	start = time.Now()
 	source := secretstore.Source{Host: secretstore.Store(externalConfig.Secrets), Debug: options.Debug}
 	if config.KeyserverURL != "" {
@@ -130,25 +131,36 @@ func Run(ctx context.Context, options Options, spec Spec) error {
 		}
 	}
 
-	// Models
-	start = time.Now()
-	log.Println("Mounting models")
-	if err := modelpack.MountAll(workload.Mounts, values.modelKeys); err != nil {
-		tracker.Record("models", bootstate.StatusFailed, time.Since(start), err.Error())
-		return fmt.Errorf("model mount failed: %w", err)
+	// The long-lived volume service receives only storage keys. It owns every
+	// mount, including packs, after boot has finished provisioning identity.
+	plan := workload.Volumes
+	plan.Digest = options.ConfigHash
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		return err
 	}
-	tracker.Record("models", bootstate.StatusOK, time.Since(start), "")
+	if err := os.WriteFile(volume.PlanPath, raw, 0600); err != nil {
+		return err
+	}
+	if options.StorageFD < 0 {
+		return fmt.Errorf("storage-secret descriptor is required")
+	}
+	storageHandoff := os.NewFile(uintptr(options.StorageFD), "tinfoil-storage-secrets")
+	defer storageHandoff.Close()
+	if err := secretstore.WriteHandoff(storageHandoff, options.ConfigHash, values.storageKeys); err != nil {
+		return err
+	}
 
 	return nil
 }
 
 type resolvedSecrets struct {
-	modelKeys secretstore.Store
-	workload  secretstore.Store
+	storageKeys secretstore.Store
+	workload    secretstore.Store
 }
 
 func prepareSecretHandoff(ctx context.Context, workload Workload, source secretstore.Source, handoff *os.File, digest string) (resolvedSecrets, string, error) {
-	names := append(modelpack.SecretReferences(workload.Mounts), workload.Secrets...)
+	names := append(workload.Volumes.SecretReferences(), workload.Secrets...)
 	values, detail, err := source.Resolve(ctx, names)
 	if err != nil {
 		return resolvedSecrets{}, "", err
@@ -157,12 +169,12 @@ func prepareSecretHandoff(ctx context.Context, workload Workload, source secrets
 	if err != nil {
 		return resolvedSecrets{}, "", fmt.Errorf("resolving workload secrets: %w", err)
 	}
-	keys, err := secretstore.Select(modelpack.SecretReferences(workload.Mounts), values)
-	if err != nil {
-		return resolvedSecrets{}, "", fmt.Errorf("resolving model keys: %w", err)
-	}
 	if err := secretstore.WriteHandoff(handoff, digest, selected); err != nil {
 		return resolvedSecrets{}, "", fmt.Errorf("creating sealed secret handoff: %w", err)
 	}
-	return resolvedSecrets{modelKeys: keys, workload: selected}, fmt.Sprintf("handed off %d workload secret(s); %s", len(selected), detail), nil
+	storageKeys, err := secretstore.Select(workload.Volumes.SecretReferences(), values)
+	if err != nil {
+		return resolvedSecrets{}, "", err
+	}
+	return resolvedSecrets{workload: selected, storageKeys: storageKeys}, fmt.Sprintf("handed off %d workload secret(s); %s", len(selected), detail), nil
 }

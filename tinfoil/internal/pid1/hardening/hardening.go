@@ -111,7 +111,7 @@ func BootPolicy() Policy {
 
 // ShimPolicy isolates the public TLS service while exposing attestation devices.
 func ShimPolicy() Policy {
-	policy := RestrictedPolicy([]int{unix.CAP_NET_BIND_SERVICE}, []uint32{unix.AF_INET, unix.AF_INET6})
+	policy := RestrictedPolicy([]int{unix.CAP_NET_BIND_SERVICE}, []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6})
 	policy.AttestationDevices = []string{"null", "tdx_guest", "sev-guest"}
 	return policy
 }

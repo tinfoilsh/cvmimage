@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"path/filepath"
 	"time"
 
 	runtimeconfig "github.com/tinfoilsh/tinfoil-config"
@@ -15,8 +14,8 @@ import (
 	"tinfoil/inference/internal/variant"
 	"tinfoil/internal/bootstate"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/modelpack"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/volume"
 )
 
 func bootSpec() boot.Spec {
@@ -27,26 +26,27 @@ func configureWorkload(config *runtimeconfig.Config) (boot.Workload, error) {
 	if err := validate(config); err != nil {
 		return boot.Workload{}, err
 	}
-	var mounts []modelpack.Mount
-	for index, model := range config.Models {
-		isolated := runtimeconfig.ModelIsIsolated(config, model.Name)
-		target := filepath.Join(bootstate.PrivateModelsDir, model.Name)
-		if !isolated {
-			var err error
-			target, err = modelpack.PublicTarget(model)
-			if err != nil {
-				return boot.Workload{}, err
-			}
+	// Only legacy, ungranted packs retain the public mount layout.
+	var publicPacks []string
+	for _, model := range config.Models {
+		if !runtimeconfig.ModelIsIsolated(config, model.Name) {
+			publicPacks = append(publicPacks, model.Name)
 		}
-		mounts = append(mounts, modelpack.Mount{Model: model, Disk: index, Target: target, LegacyAlias: !isolated})
+	}
+	plan, err := volume.Compile(config, publicPacks...)
+	if err != nil {
+		return boot.Workload{}, err
+	}
+	if err := plan.Validate(); err != nil {
+		return boot.Workload{}, err
 	}
 	return boot.Workload{
-		Mounts:         mounts,
+		Volumes:        plan,
 		Secrets:        containersecrets.References(config),
 		DeviceEvidence: gpuattestation.Provider(config.GPUs),
 		AttestDevices:  func(tracker *bootstate.Tracker) error { return attestDevices(tracker, config) },
 		Prepare: func(tracker *bootstate.Tracker, external *shimconfig.ExternalConfig, secrets secretstore.Store) error {
-			return prepareWorkload(tracker, mounts, external, secrets)
+			return prepareWorkload(tracker, plan, external, secrets)
 		},
 	}, nil
 }
@@ -55,8 +55,14 @@ func validate(config *runtimeconfig.Config) error {
 	if err := validateGPUCount(config.GPUs); err != nil {
 		return err
 	}
-	if len(config.Volumes) != 0 {
-		return fmt.Errorf("volumes are not supported by the inference image")
+
+	if config.Sandbox != nil {
+		return fmt.Errorf("sandbox roles require the sandbox image")
+	}
+	for _, v := range config.Volumes {
+		if v.Unlock.Runtime == "owner" {
+			return fmt.Errorf("volume %s: inference requires operator or secret unlock", v.Name)
+		}
 	}
 	return nil
 }

@@ -66,3 +66,5 @@ require (
 require tinfoil v0.0.0
 
 replace tinfoil => ../tinfoil
+
+replace github.com/tinfoilsh/tinfoil-config => ../../tinfoil-config

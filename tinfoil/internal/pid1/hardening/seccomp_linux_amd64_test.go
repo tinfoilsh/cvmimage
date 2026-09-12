@@ -69,7 +69,7 @@ func TestServiceSocketDomains(t *testing.T) {
 		{name: "containers-vsock", service: ServiceContainers, domain: unix.AF_VSOCK},
 		{name: "shim-inet", service: ServiceShim, domain: unix.AF_INET, allowed: true},
 		{name: "shim-inet6", service: ServiceShim, domain: unix.AF_INET6, allowed: true},
-		{name: "shim-unix", service: ServiceShim, domain: unix.AF_UNIX},
+		{name: "shim-unix", service: ServiceShim, domain: unix.AF_UNIX, allowed: true},
 		{name: "shim-packet", service: ServiceShim, domain: unix.AF_PACKET},
 		{name: "shim-vsock", service: ServiceShim, domain: unix.AF_VSOCK},
 		{name: "egress-inet", service: ServiceEgress, domain: unix.AF_INET, allowed: true},

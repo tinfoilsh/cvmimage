@@ -37,6 +37,7 @@ func parseInvocation(args []string) (boot.Options, error) {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&options.ConfigHash, "config-hash", "", "verified config hash from the kernel command line")
 	flags.BoolVar(&options.Debug, "debug", false, "enable the measured debug policy")
+	flags.IntVar(&options.StorageFD, "storage-fd", -1, "sealed storage-secret descriptor")
 	flags.IntVar(&options.SecretsFD, "secrets-fd", -1, "sealed workload-secret handoff descriptor")
 	if err := flags.Parse(args[1:]); err != nil {
 		return boot.Options{}, err

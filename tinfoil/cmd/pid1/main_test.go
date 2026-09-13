@@ -837,11 +837,20 @@ func TestHardeningWrapperAppliesPolicyBeforeExec(t *testing.T) {
 	}
 }
 
-func TestVolumeWorkersStartPerDeclaredVolume(t *testing.T) {
+func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 	harness := newLifecycleHarness()
+	harness.deps.oneShot = func(context.Context, supervisor.Command) error {
+		t.Fatal("PID 1 attempted to mount a volume already handled by boot")
+		return nil
+	}
 	harness.config = runtimeconfig.Config{
-		Models:  []runtimeconfig.ModelSpec{{Name: "one"}, {Name: "two"}},
-		Volumes: []runtimeconfig.VolumeSpec{{Name: "state"}, {Name: "workspace", Exec: true, Owner: 1000}},
+		Models: []runtimeconfig.ModelSpec{{Name: "one"}, {Name: "two"}},
+		Volumes: []runtimeconfig.VolumeSpec{
+			{Name: "boot-state", KeySecret: "STATE_KEY"},
+			{Name: "state"},
+			{Name: "boot-workspace", KeySecret: "WORKSPACE_KEY"},
+			{Name: "workspace", Exec: true, Owner: 1000},
+		},
 	}
 	if err := startVolumeWorkers(context.Background(), harness.deps); err != nil {
 		t.Fatal(err)
@@ -851,8 +860,8 @@ func TestVolumeWorkersStartPerDeclaredVolume(t *testing.T) {
 		t.Fatalf("started %d services, want 2", len(started))
 	}
 	want := [][]string{
-		{"tinfoil-volume-state", "--models=2", "--index=0", "--name=state", "--exec=false", "--owner=0"},
-		{"tinfoil-volume-workspace", "--models=2", "--index=1", "--name=workspace", "--exec=true", "--owner=1000"},
+		{"tinfoil-volume-state", "--models=2", "--index=1", "--name=state", "--exec=false", "--owner=0"},
+		{"tinfoil-volume-workspace", "--models=2", "--index=3", "--name=workspace", "--exec=true", "--owner=1000"},
 	}
 	for index, service := range started {
 		if service.Name != want[index][0] || service.Command.Name != want[index][0] {

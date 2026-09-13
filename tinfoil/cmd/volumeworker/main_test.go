@@ -3,6 +3,9 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"tinfoil/internal/runtimeconfig"
+	"tinfoil/internal/volume"
 )
 
 func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
@@ -19,7 +22,11 @@ func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
 		{"trailing arguments", []string{"worker", "--name=workspace", "extra"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := parseInvocation(test.args); err == nil {
+			parsed, err := parseInvocation(test.args)
+			if err == nil {
+				err = parsed.Validate()
+			}
+			if err == nil {
 				t.Fatalf("parseInvocation(%v) accepted the request", test.args)
 			}
 		})
@@ -31,7 +38,10 @@ func TestParseInvocationAcceptsDeclaredVolume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := invocation{models: 2, index: 1, name: "workspace", executable: true, owner: 1000}
+	want := volume.Spec{
+		VolumeSpec: runtimeconfig.VolumeSpec{Name: "workspace", Exec: true, Owner: 1000},
+		Models:     2, Index: 1,
+	}
 	if !reflect.DeepEqual(parsed, want) {
 		t.Fatalf("parsed = %+v, want %+v", parsed, want)
 	}
@@ -47,7 +57,11 @@ func TestParseInvocationOverlays(t *testing.T) {
 		"nix:nix/store,upperdir=/x:store", // option injection in source
 		"n/x:nix/store:store",             // model holds a separator
 	} {
-		if _, err := parseInvocation(append(base, "--overlay="+bad)); err == nil {
+		parsed, err := parseInvocation(append(base, "--overlay="+bad))
+		if err == nil {
+			err = parsed.Validate()
+		}
+		if err == nil {
 			t.Fatalf("parseInvocation accepted overlay %q", bad)
 		}
 	}
@@ -55,28 +69,8 @@ func TestParseInvocationOverlays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []overlay{{model: "nix", source: "nix/store", target: "store"}}
-	if !reflect.DeepEqual(parsed.overlays, want) {
-		t.Fatalf("overlays = %+v, want %+v", parsed.overlays, want)
-	}
-}
-
-func TestRunFormatterRejectsUnusableInvocations(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		args []string
-	}{
-		{"missing owner", []string{"worker", formatMode, "/dev/mapper/tinfoil-volume-workspace"}},
-		{"owner beyond range", []string{"worker", formatMode, "/dev/mapper/tinfoil-volume-workspace", "65535"}},
-		{"owner not a number", []string{"worker", formatMode, "/dev/mapper/tinfoil-volume-workspace", "sandbox"}},
-		{"device outside mapper", []string{"worker", formatMode, "/dev/sda1", "0"}},
-		{"device without the mapping prefix", []string{"worker", formatMode, "/dev/mapper/workspace", "0"}},
-		{"device name not a volume", []string{"worker", formatMode, "/dev/mapper/tinfoil-volume-Workspace", "0"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if err := runFormatter(test.args); err == nil {
-				t.Fatalf("runFormatter(%v) accepted the invocation", test.args)
-			}
-		})
+	want := []runtimeconfig.VolumeOverlay{{Model: "nix", Source: "nix/store", Target: "store"}}
+	if !reflect.DeepEqual(parsed.Overlays, want) {
+		t.Fatalf("overlays = %+v, want %+v", parsed.Overlays, want)
 	}
 }

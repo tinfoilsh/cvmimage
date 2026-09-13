@@ -13,6 +13,7 @@ import (
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/nvidia"
+	"tinfoil/internal/volume"
 )
 
 func init() {
@@ -188,6 +189,15 @@ func run(ctx context.Context, invocation invocation) error {
 		return fmt.Errorf("model mount failed: %w", err)
 	}
 	tracker.Record("models", boot.StatusOK, time.Since(start), "")
+
+	// 10. Volumes, after their model overlay sources are mounted.
+	start = time.Now()
+	log.Println("Mounting storage volumes")
+	if err := mountVolumes(ctx, config, externalConfig, volume.Mount); err != nil {
+		tracker.Record(boot.StageVolumes, boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("storage volume mount failed: %w", err)
+	}
+	tracker.Record(boot.StageVolumes, boot.StatusOK, time.Since(start), "")
 
 	return nil
 }

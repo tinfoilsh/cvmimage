@@ -126,9 +126,14 @@ func policyFor(service Service) (servicePolicy, bool) {
 	switch service {
 	case ServiceBoot:
 		return servicePolicy{
-			noNewPrivileges:   true,
-			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD},
-			deniedSyscalls:    kernelManagementSyscalls,
+			noNewPrivileges: true,
+			// Storage overlays need ownership changes and access to the
+			// volume's directories under the mounting process's credentials.
+			boundCapabilities: []int{
+				unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD,
+				unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER,
+			},
+			deniedSyscalls: kernelManagementSyscalls,
 		}, true
 	case ServiceContainers:
 		return restrictedServicePolicy(

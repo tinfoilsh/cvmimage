@@ -684,7 +684,7 @@ func IntegrityDataSectors(source *os.File) (uint64, bool, error) {
 // ActivateIntegrity opens the dm-integrity device that stores the tags for a
 // writable crypt mapping. The target formats a zeroed device as it builds its
 // first table, so a volume without a superblock is only accepted when
-// initialize is set.
+// initialize is set, and one with a superblock only when it is not.
 func ActivateIntegrity(control, source *os.File, name string, initialize bool) (result error) {
 	deviceNumber, deviceSectors, err := blockDeviceInfo(source)
 	if err != nil {
@@ -695,6 +695,9 @@ func ActivateIntegrity(control, source *os.File, name string, initialize bool) (
 	dataSectors, formatted, err := IntegrityDataSectors(source)
 	if err != nil {
 		return err
+	}
+	if formatted && initialize {
+		return fmt.Errorf("device %s already carries an integrity superblock", deviceNumber)
 	}
 	if !formatted {
 		if !initialize {

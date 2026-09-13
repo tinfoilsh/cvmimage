@@ -572,6 +572,9 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 		return nil
 	}
 	for index, volume := range config.Volumes {
+		if volume.KeySecret != "" {
+			continue // Boot has already mounted this volume.
+		}
 		args := []string{
 			"--models=" + strconv.Itoa(len(config.Models)),
 			"--index=" + strconv.Itoa(index),

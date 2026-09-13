@@ -49,6 +49,11 @@ func AllReferences(config *runtimeconfig.Config) []string {
 			seen[model.KeySecret] = struct{}{}
 		}
 	}
+	for _, volume := range config.Volumes {
+		if volume.KeySecret != "" {
+			seen[volume.KeySecret] = struct{}{}
+		}
+	}
 	for _, name := range WorkloadReferences(config) {
 		seen[name] = struct{}{}
 	}

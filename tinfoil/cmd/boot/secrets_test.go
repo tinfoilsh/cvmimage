@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
 
@@ -73,6 +74,7 @@ func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
 	config := &Config{
 		KeyserverURL: "https://keys.example",
 		Models:       []ModelSpec{{Name: "model", KeySecret: "MODEL_KEY"}},
+		Volumes:      []runtimeconfig.VolumeSpec{{Name: "state", KeySecret: "VOLUME_KEY"}},
 		Containers:   []Container{{Secrets: []string{"API_KEY"}}},
 	}
 	externalConfig := &shimconfig.ExternalConfig{}
@@ -81,20 +83,23 @@ func TestPrepareSecretHandoffKeyserverFetchesEveryDeclaredSecret(t *testing.T) {
 	var requested []string
 	fetch := func(_ context.Context, names []string) (map[string]string, error) {
 		requested = append(requested, names...)
-		return map[string]string{"API_KEY": "secret", "MODEL_KEY": "key"}, nil
+		return map[string]string{"API_KEY": "secret", "MODEL_KEY": "key", "VOLUME_KEY": "volume-key"}, nil
 	}
 	detail, err := prepareSecretHandoff(context.Background(), config, externalConfig, handoff, "config-digest", false, fetch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(requested, ",") != "API_KEY,MODEL_KEY" {
+	if strings.Join(requested, ",") != "API_KEY,MODEL_KEY,VOLUME_KEY" {
 		t.Fatalf("requested = %v, want every declared secret", requested)
 	}
-	if detail != "handed off 1 workload secret(s); fetched 2 from keyserver" {
+	if detail != "handed off 1 workload secret(s); fetched 3 from keyserver" {
 		t.Fatalf("detail = %q", detail)
 	}
 	if externalConfig.GetSecret("MODEL_KEY") != "key" {
 		t.Fatalf("model key not merged for boot: %#v", externalConfig.Secrets)
+	}
+	if externalConfig.GetSecret("VOLUME_KEY") != "volume-key" {
+		t.Fatal("volume key not merged for boot")
 	}
 	store, err := secretstore.ReadHandoff(handoff, "config-digest", []string{"API_KEY"})
 	if err != nil {

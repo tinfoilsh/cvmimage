@@ -25,16 +25,16 @@ func TestServiceSocketDomains(t *testing.T) {
 			os.Exit(21)
 		}
 		policy, ok := policyFor(service)
-		if !ok || policy.allowedSocketDomains == nil {
+		if !ok || policy.AllowedSocketDomains == nil {
 			os.Exit(22)
 		}
 		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 			os.Exit(23)
 		}
 		if err := (linuxServiceKernel{}).restrictSyscalls(
-			policy.deniedSyscalls,
-			policy.restrictNamespaceOps,
-			policy.allowedSocketDomains,
+			policy.DeniedSyscalls,
+			policy.RestrictNamespaceOps,
+			policy.AllowedSocketDomains,
 		); err != nil {
 			os.Exit(24)
 		}
@@ -111,9 +111,9 @@ func TestServiceDangerousSyscalls(t *testing.T) {
 			os.Exit(31)
 		}
 		if err := (linuxServiceKernel{}).restrictSyscalls(
-			policy.deniedSyscalls,
-			policy.restrictNamespaceOps,
-			policy.allowedSocketDomains,
+			policy.DeniedSyscalls,
+			policy.RestrictNamespaceOps,
+			policy.AllowedSocketDomains,
 		); err != nil {
 			os.Exit(32)
 		}

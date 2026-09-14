@@ -115,8 +115,8 @@ let
     checkPhase = ''
       runHook preCheck
       go test ./...
-      go test -race ./cmd/pid1 ./internal/boot/... ./internal/nvml
-      go test -tags=tinfoil_debug_image ./cmd/pid1
+      go test -race ./pid1 ./internal/boot/... ./internal/nvml
+      go test -tags=tinfoil_debug_image ./pid1
       go vet ./...
       runHook postCheck
     '';

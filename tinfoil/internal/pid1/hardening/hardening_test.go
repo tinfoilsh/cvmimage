@@ -11,46 +11,46 @@ import (
 )
 
 func TestServicePoliciesAreExact(t *testing.T) {
-	want := map[Service]servicePolicy{
+	want := map[Service]Policy{
 		ServiceBoot: {
-			noNewPrivileges:   true,
-			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER},
-			deniedSyscalls:    kernelManagementSyscalls,
+			NoNewPrivileges:   true,
+			BoundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER},
+			DeniedSyscalls:    kernelManagementSyscalls,
 		},
 		ServiceContainers: {
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
+			NoNewPrivileges:      true,
+			BoundCapabilities:    []int{unix.CAP_NET_ADMIN},
+			RestrictFilesystems:  true,
+			DeniedSyscalls:       restrictedServiceSyscalls,
+			RestrictNamespaceOps: true,
+			AllowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		},
 		ServiceEgress: {
-			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
-			restrictFilesystems:  true,
-			deniedSyscalls:       restrictedServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
+			NoNewPrivileges:      true,
+			BoundCapabilities:    []int{unix.CAP_NET_ADMIN},
+			RestrictFilesystems:  true,
+			DeniedSyscalls:       restrictedServiceSyscalls,
+			RestrictNamespaceOps: true,
+			AllowedSocketDomains: []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		},
 		ServiceShim: {
-			noNewPrivileges:          true,
-			boundCapabilities:        []int{unix.CAP_NET_BIND_SERVICE},
-			restrictFilesystems:      true,
-			exposeAttestationDevices: true,
-			deniedSyscalls:           restrictedServiceSyscalls,
-			restrictNamespaceOps:     true,
-			allowedSocketDomains:     []uint32{unix.AF_INET, unix.AF_INET6},
+			NoNewPrivileges:          true,
+			BoundCapabilities:        []int{unix.CAP_NET_BIND_SERVICE},
+			RestrictFilesystems:      true,
+			ExposeAttestationDevices: true,
+			DeniedSyscalls:           restrictedServiceSyscalls,
+			RestrictNamespaceOps:     true,
+			AllowedSocketDomains:     []uint32{unix.AF_INET, unix.AF_INET6},
 		},
 		ServiceVolumes: {
-			noNewPrivileges: true,
-			boundCapabilities: []int{
+			NoNewPrivileges: true,
+			BoundCapabilities: []int{
 				unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN,
 				unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER,
 			},
-			deniedSyscalls:       volumeServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX},
+			DeniedSyscalls:       volumeServiceSyscalls,
+			RestrictNamespaceOps: true,
+			AllowedSocketDomains: []uint32{unix.AF_UNIX},
 		},
 	}
 	for service, wantPolicy := range want {
@@ -126,8 +126,8 @@ func TestApplyServiceAppliesFilesystemsCapabilitiesAndSeccompInOrder(t *testing.
 	if want := []uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK}; !reflect.DeepEqual(kernel.socketDomains, want) {
 		t.Fatalf("socket domains = %v, want %v", kernel.socketDomains, want)
 	}
-	if !reflect.DeepEqual(kernel.deniedSyscalls, restrictedServiceSyscalls) || !kernel.restrictNamespaceOps {
-		t.Fatalf("seccomp policy = denied %v namespaces %t", kernel.deniedSyscalls, kernel.restrictNamespaceOps)
+	if !reflect.DeepEqual(kernel.DeniedSyscalls, restrictedServiceSyscalls) || !kernel.RestrictNamespaceOps {
+		t.Fatalf("seccomp policy = denied %v namespaces %t", kernel.DeniedSyscalls, kernel.RestrictNamespaceOps)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestApplyServiceBootUsesOnlyRequiredCapabilitiesAndKernelDenylist(t *testin
 	if got := kernel.calls[len(kernel.calls)-1]; got != "restrict-syscalls" {
 		t.Fatalf("last call = %q, want restrict-syscalls", got)
 	}
-	if !reflect.DeepEqual(kernel.deniedSyscalls, kernelManagementSyscalls) || kernel.restrictNamespaceOps {
-		t.Fatalf("boot seccomp policy = denied %v namespaces %t", kernel.deniedSyscalls, kernel.restrictNamespaceOps)
+	if !reflect.DeepEqual(kernel.DeniedSyscalls, kernelManagementSyscalls) || kernel.RestrictNamespaceOps {
+		t.Fatalf("boot seccomp policy = denied %v namespaces %t", kernel.DeniedSyscalls, kernel.RestrictNamespaceOps)
 	}
 }
 
@@ -322,8 +322,8 @@ type fakeServiceKernel struct {
 	calls                []string
 	dropped              []int
 	capabilityData       [2]unix.CapUserData
-	deniedSyscalls       []uint32
-	restrictNamespaceOps bool
+	DeniedSyscalls       []uint32
+	RestrictNamespaceOps bool
 	socketDomains        []uint32
 }
 
@@ -360,12 +360,12 @@ func (kernel *fakeServiceKernel) setNoNewPrivileges() error {
 
 func (kernel *fakeServiceKernel) restrictSyscalls(
 	denied []uint32,
-	restrictNamespaceOps bool,
+	RestrictNamespaceOps bool,
 	domains []uint32,
 ) error {
 	kernel.calls = append(kernel.calls, "restrict-syscalls")
-	kernel.deniedSyscalls = append([]uint32(nil), denied...)
-	kernel.restrictNamespaceOps = restrictNamespaceOps
+	kernel.DeniedSyscalls = append([]uint32(nil), denied...)
+	kernel.RestrictNamespaceOps = RestrictNamespaceOps
 	kernel.socketDomains = append([]uint32(nil), domains...)
 	return kernel.restrictSyscallsErr
 }

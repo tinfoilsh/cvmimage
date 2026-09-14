@@ -252,3 +252,9 @@ separate PID 1 package. `nix/rootfs.nix` can omit GPU and container payloads and
 accept another package closure, account files, payload paths, and file installs.
 `nix/kernel.nix` appends image policy fragments after the common policy.
 All defaults continue to build the inference image.
+
+The `tinfoil/boot`, `tinfoil/pid1`, and `tinfoil/shim` packages accept image
+specifications. Their command wrappers select inference defaults. Existing
+model, GPU, registry, networking, container, and volume helpers remain in this
+module. Boot publishes the initial shim config atomically; the container manager
+uses the same writer when applying a reload.

@@ -27,14 +27,14 @@ const (
 	ServiceVolumes    Service = "tinfoil-volume-worker"
 )
 
-type servicePolicy struct {
-	noNewPrivileges          bool
-	boundCapabilities        []int
-	restrictFilesystems      bool
-	exposeAttestationDevices bool
-	deniedSyscalls           []uint32
-	restrictNamespaceOps     bool
-	allowedSocketDomains     []uint32
+type Policy struct {
+	NoNewPrivileges          bool
+	BoundCapabilities        []int
+	RestrictFilesystems      bool
+	ExposeAttestationDevices bool
+	DeniedSyscalls           []uint32
+	RestrictNamespaceOps     bool
+	AllowedSocketDomains     []uint32
 }
 
 // kernelManagementSyscalls are denied for every hardened service, including
@@ -119,21 +119,21 @@ var volumeServiceSyscalls = append([]uint32{
 	unix.SYS_UNSHARE,
 }, kernelManagementSyscalls...)
 
-// A non-nil empty boundCapabilities list means that no capabilities are
+// A non-nil empty BoundCapabilities list means that no capabilities are
 // permitted. Boot is a one-shot privileged helper: its fixed set covers
 // device-mapper/mount operations, nftables, and mapper-node creation.
-func policyFor(service Service) (servicePolicy, bool) {
+func policyFor(service Service) (Policy, bool) {
 	switch service {
 	case ServiceBoot:
-		return servicePolicy{
-			noNewPrivileges: true,
+		return Policy{
+			NoNewPrivileges: true,
 			// Storage overlays need ownership changes and access to the
 			// volume's directories under the mounting process's credentials.
-			boundCapabilities: []int{
+			BoundCapabilities: []int{
 				unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD,
 				unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER,
 			},
-			deniedSyscalls: kernelManagementSyscalls,
+			DeniedSyscalls: kernelManagementSyscalls,
 		}, true
 	case ServiceContainers:
 		return restrictedServicePolicy(
@@ -150,34 +150,34 @@ func policyFor(service Service) (servicePolicy, bool) {
 			[]int{unix.CAP_NET_BIND_SERVICE},
 			[]uint32{unix.AF_INET, unix.AF_INET6},
 		)
-		policy.exposeAttestationDevices = true
+		policy.ExposeAttestationDevices = true
 		return policy, true
 	case ServiceVolumes:
-		return servicePolicy{
-			noNewPrivileges: true,
+		return Policy{
+			NoNewPrivileges: true,
 			// FOWNER because overlayfs applies upper-layer metadata changes
 			// under the credentials of whoever mounted it.
-			boundCapabilities: []int{
+			BoundCapabilities: []int{
 				unix.CAP_SYS_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN,
 				unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER,
 			},
-			deniedSyscalls:       volumeServiceSyscalls,
-			restrictNamespaceOps: true,
-			allowedSocketDomains: []uint32{unix.AF_UNIX},
+			DeniedSyscalls:       volumeServiceSyscalls,
+			RestrictNamespaceOps: true,
+			AllowedSocketDomains: []uint32{unix.AF_UNIX},
 		}, true
 	default:
-		return servicePolicy{}, false
+		return Policy{}, false
 	}
 }
 
-func restrictedServicePolicy(capabilities []int, socketDomains []uint32) servicePolicy {
-	return servicePolicy{
-		noNewPrivileges:      true,
-		boundCapabilities:    capabilities,
-		restrictFilesystems:  true,
-		deniedSyscalls:       restrictedServiceSyscalls,
-		restrictNamespaceOps: true,
-		allowedSocketDomains: socketDomains,
+func restrictedServicePolicy(capabilities []int, socketDomains []uint32) Policy {
+	return Policy{
+		NoNewPrivileges:      true,
+		BoundCapabilities:    capabilities,
+		RestrictFilesystems:  true,
+		DeniedSyscalls:       restrictedServiceSyscalls,
+		RestrictNamespaceOps: true,
+		AllowedSocketDomains: socketDomains,
 	}
 }
 
@@ -202,20 +202,32 @@ func applyService(kernel serviceKernel, service Service) error {
 		return fmt.Errorf("unknown service hardening policy %q", service)
 	}
 
-	if policy.restrictFilesystems {
-		if err := kernel.restrictFilesystems(policy.exposeAttestationDevices); err != nil {
+	return applyPolicy(kernel, service, policy)
+}
+
+func Apply(service Service, policy Policy) error {
+	return applyPolicy(linuxServiceKernel{}, service, policy)
+}
+
+func BootPolicy() Policy { p, _ := policyFor(ServiceBoot); return p }
+func ShimPolicy() Policy { p, _ := policyFor(ServiceShim); return p }
+
+func applyPolicy(kernel serviceKernel, service Service, policy Policy) error {
+
+	if policy.RestrictFilesystems {
+		if err := kernel.restrictFilesystems(policy.ExposeAttestationDevices); err != nil {
 			return fmt.Errorf("restrict filesystems for %s: %w", service, err)
 		}
 	}
 
-	if policy.boundCapabilities != nil {
-		data, err := packCapabilities(policy.boundCapabilities)
+	if policy.BoundCapabilities != nil {
+		data, err := packCapabilities(policy.BoundCapabilities)
 		if err != nil {
 			return fmt.Errorf("prepare capability set for %s: %w", service, err)
 		}
 
 		allowed := [maxCapability + 1]bool{}
-		for _, capability := range policy.boundCapabilities {
+		for _, capability := range policy.BoundCapabilities {
 			allowed[capability] = true
 		}
 		for capability := 0; capability <= maxCapability; capability++ {
@@ -232,16 +244,16 @@ func applyService(kernel serviceKernel, service Service) error {
 		}
 	}
 
-	if policy.noNewPrivileges {
+	if policy.NoNewPrivileges {
 		if err := kernel.setNoNewPrivileges(); err != nil {
 			return fmt.Errorf("set no_new_privileges for %s: %w", service, err)
 		}
 	}
-	if policy.deniedSyscalls != nil || policy.restrictNamespaceOps || policy.allowedSocketDomains != nil {
+	if policy.DeniedSyscalls != nil || policy.RestrictNamespaceOps || policy.AllowedSocketDomains != nil {
 		if err := kernel.restrictSyscalls(
-			policy.deniedSyscalls,
-			policy.restrictNamespaceOps,
-			policy.allowedSocketDomains,
+			policy.DeniedSyscalls,
+			policy.RestrictNamespaceOps,
+			policy.AllowedSocketDomains,
 		); err != nil {
 			return fmt.Errorf("restrict syscalls for %s: %w", service, err)
 		}

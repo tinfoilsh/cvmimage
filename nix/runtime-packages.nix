@@ -2,6 +2,10 @@
   pkgs,
   name ? "cvmimage-runtime-packages-lock",
   lockFile ? ./runtime-packages-lock.nix,
+  securitySnapshot ? {
+    timestamp = "20260615";
+    sha256 = "63d7fad5a61519948c6d47682e300b7d2f66038d42bcea8137c4d3477ed4aa09";
+  },
   packageNames ? [
     "ca-certificates"
     "e2fsprogs"
@@ -61,12 +65,10 @@ let
       component = "multiverse";
       sha256 = "649e6c37f2c1fa6b2d5081bc7714c9e2ad66083005bb80fab34c3c537781a1c9";
     })
-    (packageIndex {
-      timestamp = "20260615";
+    (packageIndex (securitySnapshot // {
       pocket = "resolute-security";
       component = "main";
-      sha256 = "63d7fad5a61519948c6d47682e300b7d2f66038d42bcea8137c4d3477ed4aa09";
-    })
+    }))
   ];
 
 

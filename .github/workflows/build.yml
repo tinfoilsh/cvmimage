@@ -36,4 +36,6 @@ jobs:
             --no-out-link -I . \
             -A checks \
             -A shipping-image \
-            -A debug-image
+            -A debug-image \
+            -A sandbox.shipping-image \
+            -A sandbox.debug-image

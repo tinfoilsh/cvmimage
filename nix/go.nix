@@ -40,7 +40,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-Q4sCP12QNOvUROwZMvysAwSMYXLctBJvWfN4rv1jIA0=";
+    vendorHash = "sha256-OAIGnw2ZJBm+BYj8y/Tyg49JCnlFtuVTznOsdq3yT5o=";
     ldflags = [
       "-s"
       "-w"
@@ -115,7 +115,7 @@ let
     checkPhase = ''
       runHook preCheck
       go test ./...
-      go test -race ./pid1 ./internal/boot/... ./internal/nvml
+      go test -race ./pid1 ./internal/boot/... ./internal/nvml ./cmd/sandbox
       go test -tags=tinfoil_debug_image ./pid1
       go vet ./...
       runHook postCheck

@@ -1,0 +1,45 @@
+# Measured workload definition: what tinfoild launches for one sandbox, and the
+# only thing a client attesting that sandbox is told it is running. Every byte
+# here is covered by the release measurement. The orchestrator allowed to enroll
+# this sandbox's owner is part of the image itself (sandbox/cmd/sandbox), as is
+# the list of loopback ports the shim tunnels to.
+cvm-version: 0.14.3
+
+cpus: 2
+memory: 2048
+
+# The shim terminates TLS on 443 with the CVM's attested certificate and is how
+# every credential this sandbox honours arrives. It is deliberately not
+# `authenticated`: the sandbox checks its own credentials, so no Tinfoil API key
+# stands between an owner and the enclave. /enroll is the single call
+# orchestrator's permit buys -- it names the key that owns this boot.
+#
+# Port 22 is the other door, and it is opened by the same key: the shell is
+# reachable only after /enroll has sealed that key into sshd's one
+# authorized_keys. The host key's fingerprint is reported by /healthz over this
+# attested channel, so a client never has to trust port 22 on first sight.
+shim:
+  upstream-port: 8080
+  authenticated: false
+  paths:
+    - /enroll
+    - /healthz
+
+volumes:
+  - name: workspace
+    # The shell runs from it, and the merged nix store lives on it.
+    exec: true
+    # The nix pack's store is stacked under a writable dir on this volume, so
+    # /nix/store is the attested toolchain until the session writes over it.
+    overlays:
+      - model: nix
+        source: nix/store
+        target: store
+
+# The toolchain, packed by nix-closure's pack.sh and pinned here by root hash.
+models:
+  - name: nix
+    # The pack holds programs, not weights.
+    exec: true
+    repo: "nix/sandbox-toolchain@kzqj4szd3hirm5yik5rf2ww7szfq84c5"
+    mwp: "9997bc8aaf52ef8bb53a61e1decbd89748f182f0b6c4bfa13c4a0db1f8298a66_17364475904_38b04538-4fe1-5437-a5f7-0740acc8d387"

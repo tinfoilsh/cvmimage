@@ -3,6 +3,7 @@ package volume
 import (
 	"bytes"
 	"crypto/sha512"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -115,5 +116,17 @@ func TestPersistentWorkspaceLayoutReopensAndRejectsSymlinks(t *testing.T) {
 	}
 	if err := workspaceLayout(root, "nix"); err == nil {
 		t.Fatal("accepted persistent symlink")
+	}
+}
+
+// This vector pins the pre-sandbox runtime-unlock contract used by clients.
+func TestRuntimeVolumeKeySealCompatibility(t *testing.T) {
+	digest, err := keySeal(bytes.Repeat([]byte{7}, KeyBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = "72fc640ae018d3527822ec4e8df4c6710d72e7950f9357e59ab3d3cf9cb75345890c56458261a708e567f7d33ab23cdb"
+	if hex.EncodeToString(digest[:]) != expected {
+		t.Fatal("runtime unlock no longer seals to the volume-key identity")
 	}
 }

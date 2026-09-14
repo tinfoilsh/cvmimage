@@ -22,3 +22,6 @@ nix-build -I . -A shipping-image -o result
 This will produce the measured release artifacts: `tinfoilcvm.raw`, `tinfoilcvm.vmlinuz`, `tinfoilcvm.initrd`, `tinfoilcvm.roothash`.
 
 See `docs/build.md` for more details.
+The [sandbox image](docs/sandbox.md) adds enrollment, SSH, and a persistent
+workspace using the shared authenticated-volume implementation. Build it with
+`nix-build -A sandbox.shipping-image`.

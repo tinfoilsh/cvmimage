@@ -68,4 +68,5 @@ go.packages
   "release-upload-cli" = pkgs.awscli2;
   "shipping-image" = shippingImage;
   "debug-image" = debugImage;
+  sandbox = import ./sandbox { inherit pkgs initrd repartSeed; };
 }

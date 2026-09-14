@@ -4,6 +4,7 @@ package devicemapper
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,6 +30,33 @@ func TestIntegrityKernelRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer image.Close()
+	t.Run("loop node repair", func(t *testing.T) {
+		// These temporary device nodes are checked with stat, never opened.
+		for _, mode := range []uint32{unix.S_IFCHR, unix.S_IFBLK} {
+			path := filepath.Join(t.TempDir(), "node")
+			for _, minor := range []uint32{3, 5, 5} { // missing, stale, already correct
+				dev := unix.Mkdev(1, minor)
+				if err := ensureLoopNode(path, mode, dev); err != nil {
+					t.Fatal(err)
+				}
+				if !deviceNodeMatches(path, mode == unix.S_IFCHR, dev) {
+					t.Fatal("loop node identity mismatch")
+				}
+			}
+		}
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(image.Name(), link); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{image.Name(), link} {
+			if err := ensureLoopNode(path, unix.S_IFCHR, unix.Mkdev(1, 3)); err == nil {
+				t.Fatal("non-device loop node accepted")
+			}
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("non-device was removed: %v", err)
+			}
+		}
+	})
 	const imageBytes = 64 * 1024 * 1024
 	if err := image.Truncate(imageBytes); err != nil {
 		t.Fatal(err)
@@ -58,7 +86,7 @@ func TestIntegrityKernelRoundTrip(t *testing.T) {
 	defer control.Close()
 	name := fmt.Sprintf("tinfoil-integrity-test-%d", os.Getpid())
 	cryptName := name + "-crypt"
-	integrityActive, cryptActive := false, false
+	integrityActive, cryptActive, reformatActive := false, false, false
 	settle := func() {
 		// The production CVM disables DM_UEVENT. A developer host may have
 		// udev briefly opening fresh devices for probing, so let it finish.
@@ -70,6 +98,11 @@ func TestIntegrityKernelRoundTrip(t *testing.T) {
 	}
 	defer func() {
 		settle()
+		if reformatActive {
+			if err := RemoveIntegrity(control, name+"-reformat"); err != nil {
+				t.Error(err)
+			}
+		}
 		if cryptActive {
 			if err := Remove(control, cryptName); err != nil {
 				t.Error(err)
@@ -142,7 +175,7 @@ func TestIntegrityKernelRoundTrip(t *testing.T) {
 	// Reinitialization must not silently overwrite an existing fixed-format
 	// volume, even though this implementation has no compatibility path.
 	if err := ActivateIntegrity(control, raw, name+"-reformat", metadataKey, true); err == nil {
-		RemoveIntegrity(control, name+"-reformat")
+		reformatActive = true
 		t.Fatal("reinitializing a nonblank volume was accepted")
 	}
 	payload := bytes.Repeat([]byte{0x57}, cryptSectorSizeBytes)
@@ -237,15 +270,28 @@ func TestIntegrityKernelRoundTrip(t *testing.T) {
 	}
 	deactivate()
 	if err := ActivateIntegrity(control, raw, name, bytes.Repeat([]byte{0x32}, 32), false); err == nil {
+		integrityActive = true
 		t.Fatal("wrong metadata key accepted")
 	}
 	activate(false)
 	readBlock(0)
 	readBlock(last)
-	deactivate()
+	settle()
+	if err := Remove(control, cryptName); err != nil {
+		t.Fatal(err)
+	}
+	cryptActive = false
+	if err := Remove(control, name); err != nil {
+		t.Fatal(err)
+	}
+	// An already-removed primary returns ENXIO, but must not skip the backing.
+	if err := RemoveIntegrity(control, name); !errors.Is(err, unix.ENXIO) {
+		t.Fatalf("expected missing primary error: %v", err)
+	}
 	for _, mapping := range []string{name, cryptName, IntegrityBackingName(name)} {
 		if _, exists, err := Lookup(control, mapping); err != nil || exists {
 			t.Fatalf("mapping leaked: %s: %v", mapping, err)
 		}
 	}
+	integrityActive = false
 }

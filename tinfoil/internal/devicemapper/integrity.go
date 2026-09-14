@@ -167,14 +167,10 @@ func ActivateIntegrity(control, source *os.File, name string, key []byte, initia
 		backing.source.Close()
 		backing.header.Close()
 		if result != nil {
-			var err error
 			if integrityCreated {
-				err = Remove(control, name)
+				result = errors.Join(result, Remove(control, name))
 			}
-			if err == nil {
-				err = Remove(control, name+integrityBackingSuffix)
-			}
-			result = errors.Join(result, err)
+			result = errors.Join(result, Remove(control, name+integrityBackingSuffix))
 		}
 	}()
 	backingNumber, _, err := blockDeviceInfo(backing.source)
@@ -253,10 +249,9 @@ func loadIntegrityTable(control *os.File, name string, lengthSectors uint64, par
 // The loop device uses autoclear and releases its anonymous tmpfs file when
 // the final mapping reference closes, including after the volume worker exits.
 func RemoveIntegrity(control *os.File, name string) error {
-	if err := Remove(control, name); err != nil {
-		return err
-	}
-	return Remove(control, name+integrityBackingSuffix)
+	// Remove may fail to unlink the node after deleting the kernel mapping.
+	// Still try the backing; the kernel rejects removal if it remains in use.
+	return errors.Join(Remove(control, name), Remove(control, name+integrityBackingSuffix))
 }
 
 func IntegrityBackingName(name string) string { return name + integrityBackingSuffix }

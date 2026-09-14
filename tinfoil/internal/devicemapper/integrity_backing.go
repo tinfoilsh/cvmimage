@@ -94,7 +94,7 @@ func privateHeaderFile(header []byte) (_ *os.File, result error) {
 		return nil, err
 	}
 	defer os.Remove(directory)
-	if err := unix.Mount("tmpfs", directory, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC, "mode=0700,size=4096,noswap"); err != nil {
+	if err := unix.Mount("tmpfs", directory, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC, fmt.Sprintf("mode=0700,size=%d,noswap", integrityHeaderBytes)); err != nil {
 		return nil, fmt.Errorf("mounting unswappable integrity header: %w", err)
 	}
 	var file *os.File
@@ -124,10 +124,8 @@ func attachHeaderLoop(file *os.File) (*os.File, error) {
 		return nil, err
 	}
 	const controlPath = "/dev/loop-control"
-	if !deviceNodeMatches(controlPath, true, unix.Mkdev(major, minor)) {
-		if err := unix.Mknod(controlPath, unix.S_IFCHR|0600, int(unix.Mkdev(major, minor))); err != nil {
-			return nil, err
-		}
+	if err := ensureLoopNode(controlPath, unix.S_IFCHR, unix.Mkdev(major, minor)); err != nil {
+		return nil, err
 	}
 	fd, err := unix.Open(controlPath, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -154,10 +152,8 @@ func attachHeaderLoop(file *os.File) (*os.File, error) {
 			return nil, err
 		}
 		dev := unix.Mkdev(loopMajor, loopMinor)
-		if !deviceNodeMatches(path, false, dev) {
-			if err := unix.Mknod(path, unix.S_IFBLK|0600, int(dev)); err != nil && !errors.Is(err, unix.EEXIST) {
-				return nil, err
-			}
+		if err := ensureLoopNode(path, unix.S_IFBLK, dev); err != nil {
+			return nil, err
 		}
 		loopFD, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if err != nil {
@@ -179,6 +175,27 @@ func attachHeaderLoop(file *os.File) (*os.File, error) {
 		}
 	}
 	return nil, errors.New("no free loop device for integrity header")
+}
+
+// Repair only device nodes. Callers also verify the identity of the opened FD.
+func ensureLoopNode(path string, mode uint32, dev uint64) error {
+	if info, err := os.Lstat(path); err == nil {
+		if deviceNodeMatches(path, mode == unix.S_IFCHR, dev) {
+			return nil
+		}
+		if info.Mode()&os.ModeDevice == 0 {
+			return fmt.Errorf("refusing to replace non-device loop node %s", path)
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := unix.Mknod(path, mode|0600, int(dev)); err != nil && !errors.Is(err, unix.EEXIST) {
+		return err
+	}
+	return nil
 }
 
 func validDeviceNumber(device string) bool {

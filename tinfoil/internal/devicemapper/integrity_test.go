@@ -5,9 +5,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
-	"strings"
+	"encoding/hex"
 	"testing"
 )
+
+func testIntegrityKey() []byte { return bytes.Repeat([]byte{0x32}, IntegrityKeyBytes) }
 
 func testIntegrityHeader(t *testing.T, sectors uint64, key []byte) ([]byte, integrityLayout) {
 	t.Helper()
@@ -36,7 +38,7 @@ func signTestIntegrityHeader(h, key []byte) {
 }
 
 func TestIntegrityHeaderAuthenticationAndPolicy(t *testing.T) {
-	key := bytes.Repeat([]byte{0x32}, IntegrityKeyBytes)
+	key := testIntegrityKey()
 	header, layout := testIntegrityHeader(t, 64*1024*1024/512, key)
 	got, err := fixedIntegrityHeader(header, key, layout)
 	if err != nil || !bytes.Equal(got, header) {
@@ -90,7 +92,7 @@ func TestIntegrityHeaderAuthenticationAndPolicy(t *testing.T) {
 }
 
 func TestIntegrityHeaderRetainsOnlyAuthenticatedSalt(t *testing.T) {
-	key := bytes.Repeat([]byte{0x32}, IntegrityKeyBytes)
+	key := testIntegrityKey()
 	for _, saltByte := range []byte{0, 0x53, 0xff} {
 		snapshot, layout := testIntegrityHeader(t, 131072, key)
 		copy(snapshot[48:64], bytes.Repeat([]byte{saltByte}, 16))
@@ -109,6 +111,11 @@ func TestIntegrityHeaderRetainsOnlyAuthenticatedSalt(t *testing.T) {
 }
 
 func TestFixedIntegrityLayoutCapacity(t *testing.T) {
+	// Pin the journal policy independently of production-derived expectations.
+	l, err := fixedIntegrityLayout(131072)
+	if err != nil || l != (integrityLayout{journalSectors: 1024, journalSections: 3, dataSectors: 128736, bitmapLog: 12}) {
+		t.Fatalf("unexpected 64 MiB layout: %+v: %v", l, err)
+	}
 	// Covers partial metadata runs, journal-size transitions and very large
 	// capacities. Validate maximal fit independently of the sizing algorithm.
 	for _, sectors := range []uint64{1024, 32767, 32768, 32769, 131072, 2 << 20, 32 << 20, 1 << 35, (1<<63 - 1) / 512} {
@@ -131,13 +138,13 @@ func TestFixedIntegrityLayoutCapacity(t *testing.T) {
 }
 
 func TestIntegrityTablesPinProfileAndExcludeRawHeader(t *testing.T) {
-	key := bytes.Repeat([]byte{0x32}, IntegrityKeyBytes)
+	key := testIntegrityKey()
 	_, l := testIntegrityHeader(t, 131072, key)
 	params, err := integrityTable("253:2", key, l)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "253:2 0 48 J 9 block_size:4096 fix_padding fix_hmac journal_sectors:1024 interleave_sectors:32768 buffer_sectors:128 journal_watermark:50 commit_time:10000 journal_mac:hmac(sha256):" + strings.Repeat("32", 32)
+	want := "253:2 0 48 J 9 block_size:4096 fix_padding fix_hmac journal_sectors:1024 interleave_sectors:32768 buffer_sectors:128 journal_watermark:50 commit_time:10000 journal_mac:hmac(sha256):" + hex.EncodeToString(key)
 	if string(params) != want {
 		t.Fatal("integrity table does not pin the expected profile")
 	}

@@ -67,3 +67,15 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+
+Sandbox enrollment uses `internal/volume.OpenWorkspace` directly. It keeps the
+inference volume format, authenticated mapping, formatter, and overlay mounts.
+The API accepts one root-owned executable workspace with a `nix/store` overlay,
+then exports it recursively at `/workspace` and `/nix`. Persistent layout checks
+and both exports finish before the runtime register is extended.
+
+Runtime volume unlock continues to seal to the identity derived from its volume
+key. Sandbox enrollment instead extends SHA-384 of the canonical SSH public-key
+line, including its trailing newline. A failed disk unlock never reaches this
+extend. On TDX, clients must verify the resulting RTMR3 against the enrolled
+owner. SNP and ordinary VMs have no RTMR3 owner seal.

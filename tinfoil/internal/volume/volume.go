@@ -250,7 +250,22 @@ func (w *volume) removeUnopened(name string) error {
 	return devicemapper.Remove(w.control, name)
 }
 
-func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool) (result error) {
+func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool) error {
+	return w.activateWith(ctx, key, initialize, func() error {
+		if !seal {
+			return nil
+		}
+		digest, err := keySeal(key)
+		if err != nil {
+			return err
+		}
+		return extendSeal(digest[:])
+	})
+}
+
+// finish runs after the authenticated filesystem and all overlays are mounted.
+// A failure still unwinds the mappings; no fallible work follows a successful seal.
+func (w *volume) activateWith(ctx context.Context, key []byte, initialize bool, finish func() error) (result error) {
 	tableKey, err := hkdf.Key(sha256.New, key, nil, tableKeyInfo, devicemapper.AuthenticatedKeyBytes)
 	if err != nil {
 		return err
@@ -332,23 +347,20 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool
 	if err != nil {
 		return err
 	}
-	if !seal {
-		return nil
-	}
-	// Here rather than before the mapping, because dm-crypt accepts any key: the
-	// mount is the only proof this one opened the volume, so a wrong key leaves
-	// the register untouched and the permit still worth retrying. Last of all
-	// because the extend cannot be undone: anything failing after it would leave
-	// the next attempt marking this boot a second time.
+	return finish()
+}
+
+// keySeal preserves runtime unlock's volume-key identity contract.
+func keySeal(key []byte) ([sha512.Size384]byte, error) {
 	seed, err := hkdf.Key(sha256.New, key, nil, sealKeyInfo, ed25519.SeedSize)
 	if err != nil {
-		return err
+		return [sha512.Size384]byte{}, err
 	}
 	defer clear(seed)
 	private := ed25519.NewKeyFromSeed(seed)
 	defer clear(private)
 	identity := sha512.Sum384(private.Public().(ed25519.PublicKey))
-	return extendSeal(identity[:])
+	return identity, nil
 }
 
 // extendSeal marks this boot with the identity of the opening key. The write is

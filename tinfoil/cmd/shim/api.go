@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -213,6 +214,15 @@ func NewShimServer(
 			req.Header.Set("Host", "localhost")
 			req.Host = "localhost"
 			req.Header.Del(ehbpProtocol.EncapsulatedKeyHeader)
+
+			// Forward the TLS peer certificate (if any) to the upstream so
+			// the app can perform attested-client verification itself.
+			//
+			// We use the standard X-Forwarded-Client-Cert (XFCC) header.
+			if req.TLS != nil && len(req.TLS.PeerCertificates) > 0 {
+				peerDER := req.TLS.PeerCertificates[0].Raw
+				req.Header.Set("X-Forwarded-Client-Cert", base64.StdEncoding.EncodeToString(peerDER))
+			}
 
 			// Forward original host and protocol to the upstream
 			req.Header.Del("Forwarded")

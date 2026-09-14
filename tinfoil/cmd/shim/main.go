@@ -64,6 +64,7 @@ func main() {
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return cert.Load(), nil
 		},
+		ClientAuth: tls.RequestClientCert,
 	}
 
 	srv := &http.Server{

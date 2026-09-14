@@ -1,6 +1,7 @@
 {
   pkgs,
   debugConsole ? false,
+  extraConfigs ? [ ],
 }:
 
 let
@@ -17,7 +18,7 @@ let
       ../kernel/config.d/20-debug-console.config
     else
       ../kernel/config.d/20-production-console.config)
-  ];
+  ] ++ extraConfigs;
   policyConfigArgs = lib.concatMapStringsSep " " (path: "${path}") policyConfigs;
 
   sourceDeb = pkgs.fetchurl {

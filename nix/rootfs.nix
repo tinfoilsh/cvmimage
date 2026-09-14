@@ -3,8 +3,16 @@
   ubuntuDebs,
   runtimeGo,
   debugPID1,
-  nvattest,
-  nvidiaModules,
+  nvattest ? null,
+  nvidiaModules ? [ ],
+  enableGPU ? true,
+  enableContainers ? true,
+  commands ? [ "boot" "containers" "egress" "pid1" "shim" "volume-worker" ],
+  extraPayloadPaths ? [ ],
+  files ? [ ],
+  replacements ? [ ],
+  extraInstall ? "",
+  accountRoot ? ../image/rootfs/etc,
 }:
 
 let
@@ -44,7 +52,7 @@ let
     "usr/sbin/mke2fs"
     "usr/sbin/mkfs.ext4"
     "usr/sbin/nft"
-  ];
+  ] ++ extraPayloadPaths;
 
   # The measured host owns CUDA, CDI, attestation, and fabric operation only.
   nvidiaPayloadPaths = [
@@ -83,25 +91,25 @@ let
 
   repositoryFiles = [
     { source = ../image/rootfs/etc/.pwd.lock; target = "etc/.pwd.lock"; mode = "0600"; }
-    { source = ../image/rootfs/etc/containerd/config.toml; target = "etc/containerd/config.toml"; mode = "0644"; }
-    { source = ../image/rootfs/etc/docker/daemon.json; target = "etc/docker/daemon.json"; mode = "0644"; }
-    { source = ../image/rootfs/etc/group; target = "etc/group"; mode = "0644"; }
-    { source = ../image/rootfs/etc/gshadow; target = "etc/gshadow"; mode = "0640"; }
+    { source = accountRoot + "/group"; target = "etc/group"; mode = "0644"; }
+    { source = accountRoot + "/gshadow"; target = "etc/gshadow"; mode = "0640"; }
     { source = ../image/rootfs/etc/hostname; target = "etc/hostname"; mode = "0644"; }
     { source = ../image/rootfs/etc/hosts; target = "etc/hosts"; mode = "0644"; }
     { source = ../image/rootfs/etc/nsswitch.conf; target = "etc/nsswitch.conf"; mode = "0644"; }
-    { source = ../image/rootfs/etc/nvidia-container-runtime/config.toml; target = "etc/nvidia-container-runtime/config.toml"; mode = "0644"; }
-    { source = ../image/rootfs/etc/passwd; target = "etc/passwd"; mode = "0644"; }
+    { source = accountRoot + "/passwd"; target = "etc/passwd"; mode = "0644"; }
     { source = ../image/rootfs/etc/resolv.conf; target = "etc/resolv.conf"; mode = "0644"; }
-    { source = ../image/rootfs/etc/shadow; target = "etc/shadow"; mode = "0640"; }
+    { source = accountRoot + "/shadow"; target = "etc/shadow"; mode = "0640"; }
     { source = ../image/rootfs/usr/lib/clock-epoch; target = "usr/lib/clock-epoch"; mode = "0644"; }
     { source = ../image/rootfs/usr/lib/os-release; target = "usr/lib/os-release"; mode = "0644"; }
-  ];
+  ]
+    ++ pkgs.lib.optional enableContainers { source = ../image/rootfs/etc/containerd/config.toml; target = "etc/containerd/config.toml"; mode = "0644"; }
+    ++ pkgs.lib.optional enableContainers { source = ../image/rootfs/etc/docker/daemon.json; target = "etc/docker/daemon.json"; mode = "0644"; }
+    ++ pkgs.lib.optional enableGPU { source = ../image/rootfs/etc/nvidia-container-runtime/config.toml; target = "etc/nvidia-container-runtime/config.toml"; mode = "0644"; };
 
   repositoryReplacements = [
     { source = ../image/rootfs/etc/nftables.conf; target = "etc/nftables.conf"; mode = "0644"; }
-    { source = ../image/rootfs/usr/share/nvidia/nvswitch/fabricmanager.cfg; target = "usr/share/nvidia/nvswitch/fabricmanager.cfg"; mode = "0644"; }
-  ];
+  ] ++ pkgs.lib.optional enableGPU
+    { source = ../image/rootfs/usr/share/nvidia/nvswitch/fabricmanager.cfg; target = "usr/share/nvidia/nvswitch/fabricmanager.cfg"; mode = "0644"; };
 
   stageDebs = debs: destination:
     pkgs.lib.concatMapStringsSep "\n" (deb: ''
@@ -119,11 +127,11 @@ let
 
   repositoryInstalls = pkgs.lib.concatMapStringsSep "\n" (file: ''
     install_new ${file.mode} ${file.source} "$root/${file.target}" -D
-  '') repositoryFiles;
+  '') (repositoryFiles ++ files);
 
   repositoryReplacementInstalls = pkgs.lib.concatMapStringsSep "\n" (file: ''
     install -D -m ${file.mode} ${file.source} "$root/${file.target}"
-  '') repositoryReplacements;
+  '') (repositoryReplacements ++ replacements);
 
   moduleInstalls = pkgs.lib.concatMapStringsSep "\n" (module: ''
     install_new 0644 ${module} \
@@ -174,11 +182,12 @@ let
     ${shellInstallHelpers}
 
     ${stageDebs ubuntuDebs "$ubuntu"}
-    ${stageDebs nvidiaDebs "$nvidia"}
+    ${pkgs.lib.optionalString enableGPU (stageDebs nvidiaDebs "$nvidia")}
     ${copyPayload "$ubuntu" ubuntuPayloadPaths}
-    ${copyPayload "$nvidia" nvidiaPayloadPaths}
+    ${pkgs.lib.optionalString enableGPU (copyPayload "$nvidia" nvidiaPayloadPaths)}
     chmod 0755 "$root"
 
+    ${pkgs.lib.optionalString enableContainers ''
     docker="$TMPDIR/docker"
     mkdir -p "$docker" "$root/usr/bin"
     ${pkgs.gnutar}/bin/tar --extract --gzip --file ${dockerArchive} \
@@ -187,16 +196,21 @@ let
       install_new 0755 "$docker/$command" "$root/usr/bin/$command"
     done
 
-    for command in boot containers egress pid1 shim volume-worker; do
+    ''}
+
+    for command in ${pkgs.lib.escapeShellArgs commands}; do
       install_new 0755 ${runtimeGo}/bin/tinfoil-$command \
         "$root/usr/bin/tinfoil-$command"
     done
 
+    ${pkgs.lib.optionalString enableGPU ''
     install_new 0755 ${nvattest}/usr/bin/nvattest "$root/usr/bin/nvattest" -D
     install_new 0644 ${nvattest}/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2 \
       "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2" -D
     link_new libnvat.so.1.2.2 \
       "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1"
+
+    ''}
 
     mkdir -p "$root/usr/lib/tinfoil/kernel-modules"
     ${moduleInstalls}
@@ -232,6 +246,7 @@ let
     install_new 0644 "$ca_output/ca-certificates.crt" \
       "$root/etc/ssl/certs/ca-certificates.crt"
 
+    ${extraInstall}
     ${deterministicTar "$root" "$out"}
   '';
 

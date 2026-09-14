@@ -1,4 +1,24 @@
-{ pkgs }:
+{
+  pkgs,
+  name ? "cvmimage-runtime-packages-lock",
+  lockFile ? ./runtime-packages-lock.nix,
+  packageNames ? [
+    "ca-certificates"
+    "e2fsprogs"
+    "iproute2"
+    "nftables"
+    "libc6"
+    "libc-bin"
+    "libcap2"
+    "libxml2-16"
+    "libstdc++6"
+    "libgcc-s1"
+    "zlib1g"
+    "libtirpc3t64"
+    "libtirpc-common"
+    "libseccomp2"
+  ],
+}:
 
 let
   packageUrlPrefix = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z";
@@ -49,30 +69,15 @@ let
     })
   ];
 
-  packageNames = [
-    "ca-certificates"
-    "e2fsprogs"
-    "iproute2"
-    "nftables"
-    "libc6"
-    "libc-bin"
-    "libcap2"
-    "libxml2-16"
-    "libstdc++6"
-    "libgcc-s1"
-    "zlib1g"
-    "libtirpc3t64"
-    "libtirpc-common"
-    "libseccomp2"
-  ];
+
 in
 {
   lock = pkgs.vmTools.debClosureGenerator {
-    name = "cvmimage-runtime-packages-lock";
+    inherit name;
     packagesLists = packageIndexes;
     urlPrefix = packageUrlPrefix;
     packages = packageNames;
   };
 
-  packages = pkgs.lib.flatten (import ./runtime-packages-lock.nix { inherit (pkgs) fetchurl; });
+  packages = pkgs.lib.flatten (import lockFile { inherit (pkgs) fetchurl; });
 }

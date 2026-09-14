@@ -246,3 +246,9 @@ kernel, NVIDIA modules, nvattest, initrd, runtime binaries, and rootfs without a
 second producer list. These workflows neither publish artifacts nor qualify a
 release. Derivation comparison only schedules CI work; it is not an integrity
 check or a release policy.
+The build helpers accept image-specific inputs without moving the inference
+runtime. `nix/go.nix` maps installed command names to Go packages and accepts a
+separate PID 1 package. `nix/rootfs.nix` can omit GPU and container payloads and
+accept another package closure, account files, payload paths, and file installs.
+`nix/kernel.nix` appends image policy fragments after the common policy.
+All defaults continue to build the inference image.

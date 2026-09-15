@@ -12,7 +12,7 @@ import (
 	"tinfoil/internal/boot"
 )
 
-func TestStatusOnlyShimServesTerminalFailureWithoutBootArtifacts(t *testing.T) {
+func TestShimServesTerminalFailureWithoutBootArtifacts(t *testing.T) {
 	// The host missed every intermediate poll; only the final snapshot remains.
 	state := &boot.State{
 		StartedAt: time.Now().Add(-time.Minute).UTC(), CompletedAt: time.Now().UTC(),
@@ -22,7 +22,7 @@ func TestStatusOnlyShimServesTerminalFailureWithoutBootArtifacts(t *testing.T) {
 			{Name: boot.StageShim, Status: boot.StatusSkipped, Detail: "not run because boot failed"},
 		},
 	}
-	srv, err := newShimServer(true, func() (*boot.State, error) { return state, nil })
+	srv, err := newShimServer(func() (*boot.State, error) { return state, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

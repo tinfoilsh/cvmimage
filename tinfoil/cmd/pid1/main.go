@@ -269,12 +269,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}
 	// The shim intentionally starts in its ephemeral boot-status phase before
 	// provisioning, then upgrades in place as boot publishes private artifacts.
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: shimName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
-		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile: boot.ShimPIDPath,
-	}); err != nil {
+	if err := deps.services.Start(bootCtx, shimService()); err != nil {
 		return err
 	}
 	bootCommand := hardenedCommand(
@@ -316,6 +311,15 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	return nil
 }
 
+func shimService() supervisor.Service {
+	return supervisor.Service{
+		Name: shimName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
+		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
+		PIDFile: boot.ShimPIDPath,
+	}
+}
+
 // serveBootFailure has its own supervisor so workload cleanup cannot stop the
 // terminal status endpoint. It never publishes readiness or starts workloads.
 func serveBootFailure(parent context.Context, services serviceControl, term, kill time.Duration) (result error) {
@@ -327,12 +331,7 @@ func serveBootFailure(parent context.Context, services serviceControl, term, kil
 			result = errors.Join(result, drainErr)
 		}
 	}()
-	if err := services.Start(parent, supervisor.Service{
-		Name: shimName, Restart: true,
-		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary, "--status-only"),
-		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile: boot.ShimPIDPath,
-	}); err != nil {
+	if err := services.Start(parent, shimService()); err != nil {
 		return err
 	}
 	<-parent.Done()

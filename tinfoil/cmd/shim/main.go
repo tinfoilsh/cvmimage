@@ -35,7 +35,6 @@ import (
 var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
-	statusOnly         = flag.Bool("status-only", false, "Serve only boot status without provisioning or proxying workloads")
 )
 
 const (
@@ -47,15 +46,15 @@ func main() {
 	flag.Parse()
 	log.SetFlags(0)
 
-	srv, err := newShimServer(*statusOnly, boot.Load)
+	srv, err := newShimServer(boot.Load)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("Starting tinfoil shim (status-only=%t)", *statusOnly)
+	log.Printf("Starting tinfoil shim (serving boot status)")
 	log.Fatal(srv.ListenAndServeTLS("", ""))
 }
 
-func newShimServer(onlyStatus bool, loadState func() (*boot.State, error)) (*http.Server, error) {
+func newShimServer(loadState func() (*boot.State, error)) (*http.Server, error) {
 	var handler atomic.Value
 	var cert atomic.Pointer[tls.Certificate]
 
@@ -90,8 +89,11 @@ func newShimServer(onlyStatus bool, loadState func() (*boot.State, error)) (*htt
 		TLSConfig: tlsConfig,
 	}
 
-	// Wait for boot to provision artifacts, then upgrade to the full handler.
-	if !onlyStatus {
+	// PID1 seals failures before restarting the shim after cleanup. Keep the
+	// existing boot-status handler in that case, without rewriting the result.
+	// Otherwise wait for boot artifacts and upgrade as usual.
+	state, err := loadState()
+	if err != nil || state.CompletedAt.IsZero() || !state.HasFailed() {
 		go upgradeWhenReady(&handler, &cert)
 	}
 	return srv, nil

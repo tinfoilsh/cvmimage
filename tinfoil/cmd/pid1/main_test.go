@@ -701,10 +701,14 @@ func TestBootFailureReportsAfterCleanupUntilShutdown(t *testing.T) {
 		t.Fatalf("failure reporter started %s", name)
 	}
 	service := reporter.started[0]
-	if service.Required || !service.Restart || !slices.Contains(service.Command.Args, "--status-only") {
-		t.Fatalf("failure reporter is not an independent status-only service: %+v", service)
+	for _, started := range harness.services.started {
+		if started.Name == shimName && !reflect.DeepEqual(started.Command, service.Command) {
+			t.Fatalf("failure reporter changed the shim command: %+v", service.Command)
+		}
 	}
 	select {
+	case ready := <-harness.ready:
+		t.Fatalf("failure reporter changed readiness: %v", ready)
 	case err := <-result:
 		t.Fatalf("failure reporter exited before shutdown: %v", err)
 	case <-reporter.drained:

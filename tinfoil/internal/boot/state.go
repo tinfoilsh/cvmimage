@@ -183,7 +183,7 @@ func loadState(path string) (*State, error) {
 }
 
 // CompleteFailure seals a recorded boot failure after all state writers have
-// stopped. The status-only shim can then report it without modifying the state.
+// stopped. The shim can then report it without modifying the state.
 func CompleteFailure() error {
 	return completeFailure(StatePath)
 }

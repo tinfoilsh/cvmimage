@@ -41,7 +41,7 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config,
 			return err
 		}
 	}
-	if runtimeconfig.ShimNetworkRequired(cfg) {
+	if runtimeconfig.ShimUpstreamSet(cfg) {
 		if err := ensureShimNetwork(ctx, cli, cfg.ShimCfg.UpstreamContainer); err != nil {
 			return err
 		}
@@ -367,9 +367,6 @@ func lastHealthLog(h *container.Health) string {
 // The egress-capable network (if any) goes first; shim-net is appended
 // last for the shim's upstream.
 func attachOrder(c Container, cfg *Config) (first string, rest []string) {
-	if c.CVMAdmin {
-		return "", nil
-	}
 	var egress string
 	var closed []string
 	for _, n := range c.Networks {
@@ -386,7 +383,7 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 		first = closed[0]
 		rest = append(rest, closed[1:]...)
 	}
-	if runtimeconfig.ShimNetworkRequired(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
+	if runtimeconfig.ShimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
 		if first == "" {
 			first = containernet.ShimNetName
 		} else {
@@ -498,9 +495,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		)
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit
-	if c.CVMAdmin {
-		hostConfig.NetworkMode = "host"
-	} else if first == "" {
+	if first == "" {
 		hostConfig.NetworkMode = "none"
 	} else {
 		hostConfig.NetworkMode = container.NetworkMode(first)

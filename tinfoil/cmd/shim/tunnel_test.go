@@ -19,7 +19,6 @@ import (
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
-	"tinfoil/internal/containernet"
 	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
 )
@@ -36,39 +35,15 @@ func writeRuntimeConfig(t *testing.T, body string) string {
 }
 
 func TestPublishedPorts(t *testing.T) {
-	host, targets, err := containerRoutes(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['2300:25565', '2301:8080']\n  - name: quiet\n"), "sandbox")
+	targets, err := publishedPorts(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['2300:25565', '2301:8080']\n  - name: quiet\n"))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(targets) != 2 || !targets["2300"] || !targets["2301"] {
 		t.Fatalf("targets = %v", targets)
 	}
-	if host != containernet.ShimUpstreamIP {
-		t.Fatalf("ordinary upstream host = %q", host)
-	}
-	if _, _, err := containerRoutes(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['25565']\n"), "sandbox"); err == nil {
+	if _, err := publishedPorts(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['25565']\n")); err == nil {
 		t.Fatal("expected an error for a port without a mapping")
-	}
-}
-
-func TestCVMAdminRoutes(t *testing.T) {
-	path := writeRuntimeConfig(t, "containers:\n  - name: admin\n    cvm_admin: true\n  - name: app\n    ports: ['2300:8080']\ncvm-network:\n  inbound-ports: [2222]\n")
-	for _, test := range []struct{ upstream, host string }{
-		{"admin", containernet.PublishedHostIP},
-		{"app", containernet.ShimUpstreamIP},
-	} {
-		host, targets, err := containerRoutes(path, test.upstream)
-		if err != nil || host != test.host {
-			t.Fatalf("upstream %q: host=%q err=%v", test.upstream, host, err)
-		}
-		if len(targets) != 1 || !targets["2300"] {
-			t.Fatalf("admin must not broaden CONNECT targets: %v", targets)
-		}
-	}
-	for _, path := range []string{filepath.Join(t.TempDir(), "missing"), writeRuntimeConfig(t, "containers: [")} {
-		if _, _, err := containerRoutes(path, "admin"); err == nil {
-			t.Fatal("invalid runtime config accepted")
-		}
 	}
 }
 
@@ -96,7 +71,7 @@ func echoListener(t *testing.T) int {
 
 func tunnelServer(t *testing.T, port int, validator key.Validator) *httptest.Server {
 	t.Helper()
-	_, targets, err := containerRoutes(writeRuntimeConfig(t, fmt.Sprintf("containers:\n  - name: echo\n    ports: ['%d:9']\n", port)), "echo")
+	targets, err := publishedPorts(writeRuntimeConfig(t, fmt.Sprintf("containers:\n  - name: echo\n    ports: ['%d:9']\n", port)))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

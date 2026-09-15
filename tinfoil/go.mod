@@ -20,7 +20,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.3.2
 	github.com/tinfoilsh/modelwrap v0.2.1
-	github.com/tinfoilsh/tinfoil-config v0.1.12-0.20260915011124-9a68c6752113
+	github.com/tinfoilsh/tinfoil-config v0.1.12-0.20260915013656-fe33d2f8a17d
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/time v0.15.0

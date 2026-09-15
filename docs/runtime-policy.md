@@ -52,7 +52,7 @@ out-of-range selections are rejected.
 ## CVM administrator containers
 
 `cvm_admin: true` in the measured container config selects a fixed administrative
-profile: UID/GID `0:0`, Docker privileged mode, host PID/network namespaces,
+profile: UID/GID `0:0`, Docker privileged mode, the host PID namespace,
 no-new-privileges explicitly disabled, the Docker socket at
 `/var/run/docker.sock`, and the CVM filesystem at `/host`. Its container rootfs
 defaults to writable (`read_only: true` can still be requested). This is
@@ -60,13 +60,13 @@ administration of the **whole CVM**, including its workloads, secrets, and guest
 firewall, not a stronger form of isolated container root. Kernel module loading
 remains locked, and the verified CVM root disk is not made writable.
 
-Admin containers must omit `networks` and `ports`. They share the CVM's interfaces,
-routes, and loopback; listeners bind directly to CVM ports. Declare TCP ingress
-through `cvm-network.inbound-ports` and arrange any upstream forwarding separately.
-Avoid CVM service ports such as 443. The shim uses loopback instead of `shim-net`
-when its upstream is an admin container. Other containers and CONNECT allowlists
-retain their existing network policy. Guest egress rules are not a security
-boundary against the administrator.
+Networking is unchanged: admin containers use declared bridge `networks` and
+`ports` like ordinary workloads. An `egress: open` network provides Internet
+access; published ports remain loopback-only and reachable through the shim's
+authenticated, attested CONNECT tunnel. No host networking or direct SSH ingress
+is needed. Containers launched through Docker must join the declared network to
+use its egress policy. Guest network rules are not a security boundary against
+the CVM administrator.
 
 Persistence is unchanged: Docker's writable layers, downloaded images, and
 ordinary Docker volumes live in RAM and do not survive CVM reboot. Only an
@@ -81,8 +81,9 @@ the following fragment supplements the normal pinned-image, shim and SSH-key
 configuration (the image must supply an authenticated SSH server on port 2222):
 
 ```yaml
-cvm-network:
-  inbound-ports: [2222]
+networks:
+  dev:
+    egress: open
 volumes:
   - name: workspace
     owner: 0
@@ -91,6 +92,8 @@ containers:
   - name: sandbox
     image: <digest-pinned SSH image>
     cvm_admin: true
+    networks: [dev]
+    ports: ["2022:2222"]
     working_dir: /run/tinfoil/volumedata/workspace
     volumes: [workspace:/run/tinfoil/volumedata/workspace]
 ```

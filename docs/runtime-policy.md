@@ -52,9 +52,9 @@ out-of-range selections are rejected.
 ## CVM administrator containers
 
 `cvm_admin: true` in the measured container config selects a fixed administrative
-profile: UID/GID `0:0`, Docker privileged mode, the host PID namespace,
-no-new-privileges explicitly disabled, the Docker socket at
-`/var/run/docker.sock`, and the CVM filesystem at `/host`. Its container rootfs
+profile: UID/GID `0:0`, Docker privileged mode, and no-new-privileges explicitly
+disabled. It does not share host PID/network namespaces or mount host runtime
+sockets or the host filesystem. Its container rootfs
 defaults to writable (`read_only: true` can still be requested). This is
 administration of the **whole CVM**, including its workloads, secrets, and guest
 firewall, not a stronger form of isolated container root. Kernel module loading
@@ -64,9 +64,9 @@ Networking is unchanged: admin containers use declared bridge `networks` and
 `ports` like ordinary workloads. An `egress: open` network provides Internet
 access; published ports remain loopback-only and reachable through the shim's
 authenticated, attested CONNECT tunnel. No host networking or direct SSH ingress
-is needed. Containers launched through Docker must join the declared network to
-use its egress policy. Guest network rules are not a security boundary against
-the CVM administrator.
+is needed. Images may run an inner Docker daemon: nested containers use its own
+bridges/NAT and Unix socket, so `docker ps` does not show the SSH wrapper. Guest
+network rules are not a security boundary against the CVM administrator.
 
 Persistence is unchanged: Docker's writable layers, downloaded images, and
 ordinary Docker volumes live in RAM and do not survive CVM reboot. Only an
@@ -74,9 +74,10 @@ attached storage volume provides durable workspace data after reattachment and
 unlock. Container restart retains its writable layer; container recreation does
 not. No volume is required for an entirely ephemeral admin environment.
 
-Use the volume's canonical CVM path inside the admin container as well, so Docker
-bind mounts and Compose resolve the same files as the shell. A container-only
-`/workspace` alias is not a path in the Docker daemon's filesystem. For example,
+With Docker-in-Docker, bind-mount sources are paths inside the admin container,
+so a volume mounted at `/workspace` can be used directly by its inner daemon.
+The image owns that daemon's lifecycle and can reset its RAM-backed state on
+container restart too. For example,
 the following fragment supplements the normal pinned-image, shim and SSH-key
 configuration (the image must supply an authenticated SSH server on port 2222):
 
@@ -94,8 +95,8 @@ containers:
     cvm_admin: true
     networks: [dev]
     ports: ["2022:2222"]
-    working_dir: /run/tinfoil/volumedata/workspace
-    volumes: [workspace:/run/tinfoil/volumedata/workspace]
+    working_dir: /workspace
+    volumes: [workspace:/workspace]
 ```
 
 Admin permission does not enable debug mode, its config-reload API, console, or

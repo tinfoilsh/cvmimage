@@ -483,11 +483,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	if c.CVMAdmin {
 		containerConfig.User = "0:0"
 		hostConfig.Privileged = true
-		hostConfig.PidMode = "host"
 		hostConfig.CapDrop = nil
 		// Explicitly override the daemon-wide NNP default for this profile only.
 		hostConfig.SecurityOpt = []string{"no-new-privileges:false"}
-		hostConfig.Binds = append(hostConfig.Binds, debugDockerSocketBind, "/:/host")
 	}
 	for _, model := range c.Models {
 		hostConfig.Binds = append(hostConfig.Binds,

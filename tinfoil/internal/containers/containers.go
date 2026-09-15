@@ -476,9 +476,16 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		CapAdd:         c.CapAdd,
 		CapDrop:        []string{"ALL"},
 		SecurityOpt:    []string{"no-new-privileges:true"},
-		ReadonlyRootfs: c.ReadOnly == nil || *c.ReadOnly,
+		ReadonlyRootfs: c.ReadOnly == nil && !c.CVMAdmin || c.ReadOnly != nil && *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
+	}
+	if c.CVMAdmin {
+		containerConfig.User = "0:0"
+		hostConfig.Privileged = true
+		hostConfig.CapDrop = nil
+		// Explicitly override the daemon-wide NNP default for this profile only.
+		hostConfig.SecurityOpt = []string{"no-new-privileges:false"}
 	}
 	for _, model := range c.Models {
 		hostConfig.Binds = append(hostConfig.Binds,
@@ -530,7 +537,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
-	if runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {
+	if !c.CVMAdmin && runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {
 		hostConfig.NetworkMode = "bridge"
 		// Unset: tinctl ssh dials the toolbox from outside the CVM.
 		hostIP = netip.Addr{}

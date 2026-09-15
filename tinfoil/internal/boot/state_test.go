@@ -1,11 +1,89 @@
 package boot
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCompleteFailurePreservesModelFailureAfterCertificateSuccess(t *testing.T) {
+	state := NewTracker(InitialStages).state
+	certificate := Stage{Name: StageCertificate, Status: StatusOK, Duration: 20 * time.Second}
+	models := Stage{
+		Name: StageModels, Status: StatusFailed, Duration: 25 * time.Millisecond,
+		Detail: "mount model: input/output error",
+		Stages: []Stage{{Name: "glm", Status: StatusFailed, Detail: "dm-verity corruption"}},
+	}
+	state.Stages[fixedStageIndex(t, StageCertificate)] = certificate
+	state.Stages[fixedStageIndex(t, StageModels)] = models
+	path := filepath.Join(t.TempDir(), "boot-state.json")
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := completeFailure(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasFailed() || !got.IsComplete() || got.CompletedAt.IsZero() {
+		t.Fatalf("failure was not finalized: %+v", got)
+	}
+	if !got.StartedAt.Equal(state.StartedAt) {
+		t.Fatalf("started_at changed: %v", got.StartedAt)
+	}
+	for _, stage := range got.Stages {
+		switch stage.Name {
+		case StageCertificate:
+			if !reflect.DeepEqual(stage, certificate) {
+				t.Fatalf("certificate result changed: %+v", stage)
+			}
+		case StageModels:
+			if !reflect.DeepEqual(stage, models) {
+				t.Fatalf("model failure changed: %+v", stage)
+			}
+		default:
+			if stage.Status != StatusSkipped || stage.Detail == "" {
+				t.Fatalf("unresolved stage was not skipped with a reason: %+v", stage)
+			}
+		}
+	}
+	if err := completeFailure(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := loadState(path)
+	if err != nil || !reflect.DeepEqual(got, again) {
+		t.Fatalf("finalizing twice changed state: %+v, %v", again, err)
+	}
+}
+
+func TestCompleteFailureRequiresRecordedFailure(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusOK} {
+		t.Run(status, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "boot-state.json")
+			payload := []byte(`{"stages":[{"name":"certificate","status":"` + status + `"}]}`)
+			if err := os.WriteFile(path, payload, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := completeFailure(path); err == nil {
+				t.Fatal("finalized boot without a recorded failure")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(payload) {
+				t.Fatalf("state changed: %s, %v", got, err)
+			}
+		})
+	}
+}
 
 func TestNetworkStagePrecedesIdentityAndAttestation(t *testing.T) {
 	positions := make(map[string]int, len(InitialStages))

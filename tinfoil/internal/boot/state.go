@@ -167,15 +167,49 @@ func (t *Tracker) flushLocked() error {
 
 // Load reads the boot state from the ramdisk.
 func Load() (*State, error) {
-	data, err := os.ReadFile(StatePath)
+	return loadState(StatePath)
+}
+
+func loadState(path string) (*State, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", StatePath, err)
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parsing boot state: %w", err)
 	}
 	return &state, nil
+}
+
+// CompleteFailure seals a recorded boot failure after all state writers have
+// stopped. The shim can then report it without modifying the state.
+func CompleteFailure() error {
+	return completeFailure(StatePath)
+}
+
+func completeFailure(path string) error {
+	state, err := loadState(path)
+	if err != nil {
+		return err
+	}
+	if !state.HasFailed() {
+		return fmt.Errorf("no failed boot stage recorded")
+	}
+	for i := range state.Stages {
+		if state.Stages[i].Status == StatusPending {
+			state.Stages[i].Status = StatusSkipped
+			state.Stages[i].Detail = "not run because boot failed"
+		}
+	}
+	if state.CompletedAt.IsZero() {
+		state.CompletedAt = time.Now()
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling boot state: %w", err)
+	}
+	return writeStateAtomic(path, data)
 }
 
 // IsComplete returns true if all stages have resolved (no pending stages).

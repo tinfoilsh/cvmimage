@@ -273,6 +273,72 @@ func TestBuildContainerCreateSpec_ProductionInstallerKeepsRuntimeClosed(t *testi
 	}
 }
 
+func TestBuildContainerCreateSpec_CVMAdmin(t *testing.T) {
+	for _, debug := range []bool{false, true} {
+		for _, name := range []string{"sandbox", reservedDebugContainerName} {
+			c := Container{
+				Name: name, Image: "example.invalid/admin", CVMAdmin: true,
+				Volumes: []string{"workspace:" + boot.VolumeDataDir + "/workspace", debugDockerSocketBind},
+			}
+			cfg := &Config{
+				ShimCfg: &shimconfig.Config{UpstreamContainer: name}, Containers: []Container{c},
+				Volumes: []runtimeconfig.VolumeSpec{{Name: "workspace"}},
+			}
+			cc, hc, network, rest, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, debug)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cc.User != "0:0" || !hc.Privileged || hc.PidMode != "host" || hc.NetworkMode != "host" || hc.ReadonlyRootfs {
+				t.Fatalf("admin profile: user=%q host=%+v", cc.User, hc)
+			}
+			if len(hc.CapDrop) != 0 || len(hc.SecurityOpt) != 1 || hc.SecurityOpt[0] != "no-new-privileges:false" {
+				t.Fatalf("admin privilege restrictions: caps=%v security=%v", hc.CapDrop, hc.SecurityOpt)
+			}
+			if network != nil || len(rest) != 0 || len(hc.PortBindings) != 0 || len(cc.ExposedPorts) != 0 || runtimeconfig.ShimNetworkRequired(cfg) {
+				t.Fatalf("admin must not attach bridges or publish ports: %+v, %v, %v", network, rest, hc.PortBindings)
+			}
+			for _, bind := range []string{debugDockerSocketBind, "/:/host", boot.VolumeDataDir + "/workspace:" + boot.VolumeDataDir + "/workspace:rslave"} {
+				count := 0
+				for _, actual := range hc.Binds {
+					if actual == bind {
+						count++
+					}
+				}
+				if count != 1 {
+					t.Fatalf("bind %q occurs %d times: %v", bind, count, hc.Binds)
+				}
+			}
+			readOnly := true
+			c.ReadOnly = &readOnly
+			_, hc, _, _, err = buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, debug)
+			if err != nil || !hc.ReadonlyRootfs {
+				t.Fatalf("explicit read_only lost: host=%+v err=%v", hc, err)
+			}
+		}
+	}
+}
+
+func TestCVMAdminDoesNotChangeOtherContainers(t *testing.T) {
+	c := Container{Name: "app", Image: "example.invalid/app"}
+	cfg := &Config{
+		ShimCfg:    &shimconfig.Config{UpstreamContainer: "app"},
+		Containers: []Container{c, {Name: "admin", CVMAdmin: true}},
+	}
+	cc, hc, network, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hc.Privileged || hc.PidMode == "host" || !hc.ReadonlyRootfs || cc.User != "" || !slices.Contains(hc.CapDrop, "ALL") || !slices.Contains(hc.SecurityOpt, "no-new-privileges:true") {
+		t.Fatalf("ordinary container privileges changed: user=%q host=%+v", cc.User, hc)
+	}
+	if !runtimeconfig.ShimNetworkRequired(cfg) || network == nil || hc.NetworkMode != containernet.ShimNetName {
+		t.Fatalf("ordinary upstream lost shim-net: host=%+v network=%+v", hc, network)
+	}
+	if slices.Contains(hc.Binds, debugDockerSocketBind) || slices.Contains(hc.Binds, "/:/host") {
+		t.Fatalf("ordinary container received admin binds: %v", hc.Binds)
+	}
+}
+
 func TestBuildContainerCreateSpec_BindsOnlyGrantedModels(t *testing.T) {
 	cfg := &Config{Networks: map[string]*NetworkSpec{}}
 	c := Container{

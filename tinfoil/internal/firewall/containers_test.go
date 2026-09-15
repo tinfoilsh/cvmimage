@@ -67,6 +67,17 @@ func TestContainerNetworkPolicyKeepsShimClosed(t *testing.T) {
 	}
 }
 
+func TestCVMAdminUpstreamDoesNotCreateShimBridgePolicy(t *testing.T) {
+	config := &runtimeconfig.Config{
+		ShimCfg:    &shimconfig.Config{UpstreamContainer: "admin"},
+		Containers: []runtimeconfig.Container{{Name: "admin", CVMAdmin: true}},
+	}
+	script := renderContainerNetworkScript(config, false)
+	if strings.Contains(script, "shim-net") || strings.Contains(script, "docker0") || !strings.Contains(script, dnatDrop) {
+		t.Fatalf("unexpected admin network policy:\n%s", script)
+	}
+}
+
 func TestContainerNetworkPolicyDebugForwarding(t *testing.T) {
 	config := &runtimeconfig.Config{Containers: []runtimeconfig.Container{{Name: runtimeconfig.ReservedDebugContainerName}}}
 	script := renderContainerNetworkScript(config, true)

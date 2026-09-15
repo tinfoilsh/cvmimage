@@ -1,6 +1,10 @@
 package runtimeconfig
 
-import sharedconfig "github.com/tinfoilsh/tinfoil-config"
+import (
+	"slices"
+
+	sharedconfig "github.com/tinfoilsh/tinfoil-config"
+)
 
 const (
 	ReservedDebugContainerName = sharedconfig.ReservedDebugContainerName
@@ -40,8 +44,10 @@ func ReservedDebugRuntimeEnabled(containerName string, debug bool) bool {
 	return sharedconfig.ReservedDebugRuntimeEnabled(containerName, options(debug))
 }
 
-func ShimUpstreamSet(config *Config) bool {
-	return sharedconfig.ShimUpstreamSet(config)
+func ShimNetworkRequired(config *Config) bool {
+	return sharedconfig.ShimUpstreamSet(config) && !slices.ContainsFunc(config.Containers, func(c Container) bool {
+		return c.Name == config.ShimCfg.UpstreamContainer && c.CVMAdmin
+	})
 }
 
 func HasReservedDebugContainer(config *Config) bool {

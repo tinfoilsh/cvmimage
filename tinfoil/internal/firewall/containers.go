@@ -23,7 +23,7 @@ func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
 	for name, network := range config.Networks {
 		log.Printf("Firewall: network %q egress=%s", name, network.Egress)
 	}
-	if runtimeconfig.ShimUpstreamSet(config) {
+	if runtimeconfig.ShimNetworkRequired(config) {
 		log.Printf("Firewall: network %q egress=closed (implicit shim channel)", containernet.ShimNetName)
 	}
 	return nil
@@ -46,7 +46,7 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) stri
 	for _, name := range names {
 		writeBridgeRules(&script, name, config.Networks[name])
 	}
-	if runtimeconfig.ShimUpstreamSet(config) {
+	if runtimeconfig.ShimNetworkRequired(config) {
 		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"})
 	}
 	return script.String()

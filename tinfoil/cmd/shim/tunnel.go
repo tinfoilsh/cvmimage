@@ -23,20 +23,26 @@ const (
 	maxOpenTunnels    = 128
 )
 
-func publishedPorts(path string) (map[string]bool, error) {
+// containerRoutes reads the manager's runtime config once for both HTTP upstream
+// routing and the CONNECT allowlist. Admin upstreams share the CVM's loopback.
+func containerRoutes(path, upstream string) (string, map[string]bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	var runtime runtimeconfig.Config
 	if err := yaml.Unmarshal(data, &runtime); err != nil {
-		return nil, err
+		return "", nil, err
 	}
+	host := containernet.ShimUpstreamIP
 	targets := map[string]bool{}
 	for _, container := range runtime.Containers {
+		if container.Name == upstream && container.CVMAdmin {
+			host = containernet.PublishedHostIP
+		}
 		mappings, err := runtimeconfig.ParsePorts(container.Ports)
 		if err != nil {
-			return nil, fmt.Errorf("container %s: %v", container.Name, err)
+			return "", nil, fmt.Errorf("container %s: %v", container.Name, err)
 		}
 		for _, mapping := range mappings {
 			port := strconv.Itoa(mapping.Host)
@@ -44,7 +50,7 @@ func publishedPorts(path string) (map[string]bool, error) {
 			log.Printf("Tunnel: CONNECT :%s → %s:%s (%s)", port, containernet.PublishedHostIP, port, container.Name)
 		}
 	}
-	return targets, nil
+	return host, targets, nil
 }
 
 func tunnels(targets map[string]bool, authorize func(http.ResponseWriter, *http.Request) bool, next http.Handler) http.Handler {

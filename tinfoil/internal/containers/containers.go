@@ -41,7 +41,7 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config,
 			return err
 		}
 	}
-	if runtimeconfig.ShimUpstreamSet(cfg) {
+	if runtimeconfig.ShimNetworkRequired(cfg) {
 		if err := ensureShimNetwork(ctx, cli, cfg.ShimCfg.UpstreamContainer); err != nil {
 			return err
 		}
@@ -367,6 +367,9 @@ func lastHealthLog(h *container.Health) string {
 // The egress-capable network (if any) goes first; shim-net is appended
 // last for the shim's upstream.
 func attachOrder(c Container, cfg *Config) (first string, rest []string) {
+	if c.CVMAdmin {
+		return "", nil
+	}
 	var egress string
 	var closed []string
 	for _, n := range c.Networks {
@@ -383,7 +386,7 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 		first = closed[0]
 		rest = append(rest, closed[1:]...)
 	}
-	if runtimeconfig.ShimUpstreamSet(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
+	if runtimeconfig.ShimNetworkRequired(cfg) && c.Name == cfg.ShimCfg.UpstreamContainer {
 		if first == "" {
 			first = containernet.ShimNetName
 		} else {
@@ -476,9 +479,18 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		CapAdd:         c.CapAdd,
 		CapDrop:        []string{"ALL"},
 		SecurityOpt:    []string{"no-new-privileges:true"},
-		ReadonlyRootfs: c.ReadOnly == nil || *c.ReadOnly,
+		ReadonlyRootfs: c.ReadOnly == nil && !c.CVMAdmin || c.ReadOnly != nil && *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
+	}
+	if c.CVMAdmin {
+		containerConfig.User = "0:0"
+		hostConfig.Privileged = true
+		hostConfig.PidMode = "host"
+		hostConfig.CapDrop = nil
+		// Explicitly override the daemon-wide NNP default for this profile only.
+		hostConfig.SecurityOpt = []string{"no-new-privileges:false"}
+		hostConfig.Binds = append(hostConfig.Binds, debugDockerSocketBind, "/:/host")
 	}
 	for _, model := range c.Models {
 		hostConfig.Binds = append(hostConfig.Binds,
@@ -486,7 +498,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		)
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit
-	if first == "" {
+	if c.CVMAdmin {
+		hostConfig.NetworkMode = "host"
+	} else if first == "" {
 		hostConfig.NetworkMode = "none"
 	} else {
 		hostConfig.NetworkMode = container.NetworkMode(first)
@@ -530,7 +544,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
-	if runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {
+	if !c.CVMAdmin && runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {
 		hostConfig.NetworkMode = "bridge"
 		// Unset: tinctl ssh dials the toolbox from outside the CVM.
 		hostIP = netip.Addr{}

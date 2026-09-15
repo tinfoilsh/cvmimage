@@ -42,12 +42,66 @@ The NVIDIA bootstrap publishes `/var/run/cdi/nvidia.yaml` atomically for the
 runtime's fixed `nvidia.com/gpu` CDI kind. Legacy, CSV, hook compatibility, and
 alternate OCI runtimes are not configured.
 
-Production container configuration is fail closed. Workloads cannot request
+Container configuration is fail closed by default. Non-admin workloads cannot request
 host IPC, host PID namespaces, raw host devices, arbitrary containerd runtime
 aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
 `SYS_NICE`. The NVIDIA runtime requires an explicit GPU selection bounded by
 the attested top-level GPU count; boolean, zero, negative, duplicate, and
 out-of-range selections are rejected.
+
+## CVM administrator containers
+
+`cvm_admin: true` in the measured container config selects a fixed administrative
+profile: UID/GID `0:0`, Docker privileged mode, host PID/network namespaces,
+no-new-privileges explicitly disabled, the Docker socket at
+`/var/run/docker.sock`, and the CVM filesystem at `/host`. Its container rootfs
+defaults to writable (`read_only: true` can still be requested). This is
+administration of the **whole CVM**, including its workloads, secrets, and guest
+firewall, not a stronger form of isolated container root. Kernel module loading
+remains locked, and the verified CVM root disk is not made writable.
+
+Admin containers must omit `networks` and `ports`. They share the CVM's interfaces,
+routes, and loopback; listeners bind directly to CVM ports. Declare TCP ingress
+through `cvm-network.inbound-ports` and arrange any upstream forwarding separately.
+Avoid CVM service ports such as 443. The shim uses loopback instead of `shim-net`
+when its upstream is an admin container. Other containers and CONNECT allowlists
+retain their existing network policy. Guest egress rules are not a security
+boundary against the administrator.
+
+Persistence is unchanged: Docker's writable layers, downloaded images, and
+ordinary Docker volumes live in RAM and do not survive CVM reboot. Only an
+attached storage volume provides durable workspace data after reattachment and
+unlock. Container restart retains its writable layer; container recreation does
+not. No volume is required for an entirely ephemeral admin environment.
+
+Use the volume's canonical CVM path inside the admin container as well, so Docker
+bind mounts and Compose resolve the same files as the shell. A container-only
+`/workspace` alias is not a path in the Docker daemon's filesystem. For example,
+the following fragment supplements the normal pinned-image, shim and SSH-key
+configuration (the image must supply an authenticated SSH server on port 2222):
+
+```yaml
+cvm-network:
+  inbound-ports: [2222]
+volumes:
+  - name: workspace
+    owner: 0
+    exec: true
+containers:
+  - name: sandbox
+    image: <digest-pinned SSH image>
+    cvm_admin: true
+    working_dir: /run/tinfoil/volumedata/workspace
+    volumes: [workspace:/run/tinfoil/volumedata/workspace]
+```
+
+Admin permission does not enable debug mode, its config-reload API, console, or
+host-supplied-secret exception. Existing debug-toolbox injection is unchanged.
+The hosting service must use a `tinfoil-config` version that accepts `cvm_admin`;
+older CVM images reject the field. Approve the new measured config before releasing
+keys to it, and bind SSH authorization to an owner-controlled source.
+
+## Ordinary workloads
 
 A container may publish TCP ports with `ports: ["<host>:<container>"]`, which
 requires an attached network for Docker to translate onto, a host port no other

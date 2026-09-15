@@ -112,6 +112,7 @@ type lifecycleDeps struct {
 	nvidia         func(context.Context) error
 	lockModules    func() error
 	debugFailure   func(context.Context, error)
+	reportFailure  func(context.Context, error) error
 	setupFS        func(pidruntime.LogFunc) error
 	sysctls        func(pidruntime.LogFunc) error
 	ramdisk        func(pidruntime.LogFunc) error
@@ -155,6 +156,13 @@ func run(parent context.Context) (result error) {
 			)
 		},
 		debugFailure: parkDebugFailure,
+		reportFailure: func(ctx context.Context, failure error) error {
+			initLogf("boot failed: %v; retaining boot status after cleanup", failure)
+			if err := boot.CompleteFailure(); err != nil {
+				return fmt.Errorf("finalizing boot failure: %w", err)
+			}
+			return serveBootFailure(ctx, supervisor.New(ctx, manager, supervisor.Config{}), serviceTermGrace, serviceKillGrace)
+		},
 		measuredConfig: func() (*runtimeconfig.Config, error) {
 			return readMeasuredConfig(cmdline.Debug)
 		},
@@ -189,6 +197,16 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 			result = drainErr
 		} else {
 			result = errors.Join(result, drainErr)
+		}
+		// Only restart the status endpoint once every old state writer and
+		// workload has stopped. Normal shutdown must not start new services.
+		if result != nil && drainErr == nil && parent.Err() == nil && deps.reportFailure != nil {
+			reportErr := deps.reportFailure(parent, result)
+			if parent.Err() != nil {
+				result = reportErr
+			} else {
+				result = errors.Join(result, reportErr)
+			}
 		}
 	}()
 	defer func() {
@@ -295,6 +313,29 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	initLogf("boot complete")
 	<-parent.Done()
 	initLogf("shutdown requested")
+	return nil
+}
+
+// serveBootFailure has its own supervisor so workload cleanup cannot stop the
+// terminal status endpoint. It never publishes readiness or starts workloads.
+func serveBootFailure(parent context.Context, services serviceControl, term, kill time.Duration) (result error) {
+	defer func() {
+		drainErr := services.Drain([][]string{{shimName}}, term, kill)
+		if parent.Err() != nil {
+			result = drainErr
+		} else {
+			result = errors.Join(result, drainErr)
+		}
+	}()
+	if err := services.Start(parent, supervisor.Service{
+		Name: shimName, Restart: true,
+		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary, "--status-only"),
+		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
+		PIDFile: boot.ShimPIDPath,
+	}); err != nil {
+		return err
+	}
+	<-parent.Done()
 	return nil
 }
 

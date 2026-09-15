@@ -35,6 +35,7 @@ import (
 var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
+	statusOnly         = flag.Bool("status-only", false, "Serve only boot status without provisioning or proxying workloads")
 )
 
 const (
@@ -46,6 +47,15 @@ func main() {
 	flag.Parse()
 	log.SetFlags(0)
 
+	srv, err := newShimServer(*statusOnly, boot.Load)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Starting tinfoil shim (status-only=%t)", *statusOnly)
+	log.Fatal(srv.ListenAndServeTLS("", ""))
+}
+
+func newShimServer(onlyStatus bool, loadState func() (*boot.State, error)) (*http.Server, error) {
 	var handler atomic.Value
 	var cert atomic.Pointer[tls.Certificate]
 
@@ -54,11 +64,11 @@ func main() {
 	// boot has provisioned the real TLS cert and other artifacts.
 	ephemeral, err := generateEphemeralCert()
 	if err != nil {
-		log.Fatalf("Failed to generate ephemeral cert: %v", err)
+		return nil, fmt.Errorf("generating ephemeral certificate: %w", err)
 	}
 	cert.Store(&ephemeral)
 
-	handler.Store(http.HandlerFunc(bootStagesHandler().ServeHTTP))
+	handler.Store(http.HandlerFunc(bootStagesHandler(loadState).ServeHTTP))
 
 	tlsConfig := &tls.Config{
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -81,18 +91,18 @@ func main() {
 	}
 
 	// Wait for boot to provision artifacts, then upgrade to the full handler.
-	go upgradeWhenReady(&handler, &cert)
-
-	log.Printf("Starting tinfoil shim (waiting for boot)")
-	log.Fatal(srv.ListenAndServeTLS("", ""))
+	if !onlyStatus {
+		go upgradeWhenReady(&handler, &cert)
+	}
+	return srv, nil
 }
 
 // bootStagesHandler returns a minimal handler that only serves the
 // boot-stages endpoint, returning 503 for everything else.
-func bootStagesHandler() http.Handler {
+func bootStagesHandler(loadState func() (*boot.State, error)) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
-		state, err := boot.Load()
+		state, err := loadState()
 		if err != nil {
 			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
 			return
@@ -101,7 +111,7 @@ func bootStagesHandler() http.Handler {
 		json.NewEncoder(w).Encode(state)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "shim is starting, waiting for boot to complete", http.StatusServiceUnavailable)
+		http.Error(w, "workload unavailable", http.StatusServiceUnavailable)
 	})
 	return mux
 }

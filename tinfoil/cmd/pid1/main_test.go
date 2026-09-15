@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type fakeServices struct {
 	started   []supervisor.Service
 	startedCh chan string
 	drained   chan [][]string
+	drainErr  error
 	fail      map[string]error
 	observe   func(supervisor.State)
 	onStart   func(string)
@@ -58,7 +60,7 @@ func (f *fakeServices) Start(_ context.Context, service supervisor.Service) erro
 
 func (f *fakeServices) Drain(groups [][]string, _, _ time.Duration) error {
 	f.drained <- groups
-	return nil
+	return f.drainErr
 }
 
 func (f *fakeServices) state(name string, ready bool) {
@@ -660,6 +662,95 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 	}
 }
 
+func TestBootFailureReportsAfterCleanupUntilShutdown(t *testing.T) {
+	harness := newLifecycleHarness()
+	failure := errors.New("model mount failed: input/output error")
+	harness.deps.oneShot = func(_ context.Context, command supervisor.Command) error {
+		if command.Name == string(hardening.ServiceBoot) {
+			return failure
+		}
+		return nil
+	}
+	reporter := newFakeServices()
+	reporter.observe = harness.readiness.Update
+	reporting := make(chan error, 1)
+	harness.deps.reportFailure = func(ctx context.Context, err error) error {
+		reporting <- err
+		return serveBootFailure(ctx, reporter, 0, 0)
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- runLifecycle(parent, harness.deps, harness.readiness) }()
+
+	if err := receiveTest(t, reporting); !errors.Is(err, failure) {
+		t.Fatalf("reported failure = %v", err)
+	}
+	select {
+	case groups := <-harness.services.drained:
+		if !reflect.DeepEqual(groups, shutdownGroups()) {
+			t.Fatalf("workload cleanup groups = %v", groups)
+		}
+	default:
+		t.Fatal("failure reporting started before workload cleanup")
+	}
+	if ready := receiveTest(t, harness.ready); ready {
+		t.Fatal("failed boot published readiness")
+	}
+	if name := receiveTest(t, reporter.startedCh); name != shimName {
+		t.Fatalf("failure reporter started %s", name)
+	}
+	service := reporter.started[0]
+	if service.Required || !service.Restart || !slices.Contains(service.Command.Args, "--status-only") {
+		t.Fatalf("failure reporter is not an independent status-only service: %+v", service)
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("failure reporter exited before shutdown: %v", err)
+	case <-reporter.drained:
+		t.Fatal("failure reporter stopped before shutdown")
+	default:
+	}
+	if slices.ContainsFunc(harness.services.started, func(service supervisor.Service) bool {
+		return service.Name == containersName || service.Name == egressName
+	}) {
+		t.Fatal("workloads started after model failure")
+	}
+	cancel()
+	if err := receiveTest(t, result); err != nil {
+		t.Fatalf("shutdown returned %v", err)
+	}
+	if groups := receiveTest(t, reporter.drained); !reflect.DeepEqual(groups, [][]string{{shimName}}) {
+		t.Fatalf("reporter cleanup groups = %v", groups)
+	}
+}
+
+func TestBootFailureDoesNotReportAfterIncompleteCleanup(t *testing.T) {
+	harness := newLifecycleHarness()
+	harness.services.fail[dockerName] = errors.New("dockerd start failed")
+	harness.services.drainErr = errors.New("child cgroup still populated")
+	harness.deps.reportFailure = func(context.Context, error) error {
+		t.Error("reporting started while old state writers might still be running")
+		return nil
+	}
+	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
+	if !errors.Is(err, harness.services.drainErr) || !errors.Is(err, harness.services.fail[dockerName]) {
+		t.Fatalf("cleanup lost the original failure: %v", err)
+	}
+}
+
+func TestBootFailurePreservesErrorWhenReporterCannotStart(t *testing.T) {
+	harness := newLifecycleHarness()
+	failure := errors.New("dockerd start failed")
+	reportFailure := errors.New("could not finalize boot status")
+	harness.services.fail[dockerName] = failure
+	harness.deps.reportFailure = func(context.Context, error) error { return reportFailure }
+	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
+	if !errors.Is(err, failure) || !errors.Is(err, reportFailure) {
+		t.Fatalf("failure reporting lost errors: %v", err)
+	}
+}
+
 func TestAnnotateOneShotFailureIncludesFixedBootStage(t *testing.T) {
 	failure := errors.New("boot child exited")
 	state := &boot.State{Stages: make([]boot.Stage, len(boot.InitialStages))}
@@ -724,6 +815,10 @@ func TestAnnotateOneShotFailureFallsBackToChildError(t *testing.T) {
 
 func TestRequiredServiceDeathFailsClosedDuringSupervision(t *testing.T) {
 	harness := newLifecycleHarness()
+	harness.deps.reportFailure = func(context.Context, error) error {
+		t.Error("normal shutdown started failure reporting")
+		return nil
+	}
 	parent, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {

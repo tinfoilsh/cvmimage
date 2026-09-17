@@ -60,9 +60,13 @@ const serviceStartingRetryAfterSeconds = 5
 
 // retryAfterSeconds converts a rate limiter delay into a Retry-After value,
 // rounding up so the client never retries inside the window it was just
-// rejected in.
+// rejected in. Dividing before rounding keeps rate.InfDuration (MaxInt64)
+// from overflowing into a misleadingly short hint.
 func retryAfterSeconds(delay time.Duration) int {
-	secs := int((delay + time.Second - 1) / time.Second)
+	secs := int(delay / time.Second)
+	if delay%time.Second != 0 {
+		secs++
+	}
 	if secs < 1 {
 		secs = 1
 	}
@@ -78,7 +82,6 @@ type apiError struct {
 	message string
 }
 
-// Predeclared errors.
 var (
 	errAPIKeyRequired = apiError{
 		status:  http.StatusUnauthorized,
@@ -99,7 +102,7 @@ var (
 		message: errMsgInsufficientPermissions,
 	}
 	errQuotaExceeded = apiError{
-		status:  http.StatusPaymentRequired,
+		status:  http.StatusTooManyRequests,
 		errType: errTypeInsufficientQuota,
 		code:    errCodeInsufficientQuota,
 		message: errMsgQuotaExceeded,
@@ -180,7 +183,6 @@ type errorBody struct {
 	Code    *string `json:"code"`
 }
 
-// errorEnvelope is the JSON body of an API error response.
 type errorEnvelope struct {
 	Error errorBody `json:"error"`
 }
@@ -200,7 +202,6 @@ func (e apiError) envelope() errorEnvelope {
 	}}
 }
 
-// writeAPIError writes the error as a JSON response with its status code.
 func writeAPIError(w http.ResponseWriter, e apiError) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(e.status)

@@ -113,6 +113,8 @@ func writeValidationFailure(w http.ResponseWriter, err error) {
 		return
 	}
 
+	// The control plane reports exhausted quota as 402; OpenAI reports it as
+	// 429 insufficient_quota, which is what SDKs expect.
 	switch validationErr.StatusCode {
 	case http.StatusUnauthorized:
 		writeAPIError(w, errInvalidAPIKey)

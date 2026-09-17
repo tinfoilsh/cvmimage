@@ -14,6 +14,7 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
@@ -431,22 +432,23 @@ func TestWriteAPIErrorEmitsFourFieldEnvelope(t *testing.T) {
 // regenerate a key that was fine.
 func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
 	cases := []struct {
-		name     string
-		status   int
-		wantCode string
-		wantType string
+		name       string
+		status     int
+		wantStatus int
+		wantCode   string
+		wantType   string
 	}{
-		{"unauthorized is invalid key", http.StatusUnauthorized, errCodeInvalidAPIKey, errTypeInvalidRequest},
-		{"forbidden is insufficient permissions", http.StatusForbidden, errCodeInsufficientPermissions, errTypeInvalidRequest},
-		{"payment required is quota", http.StatusPaymentRequired, errCodeInsufficientQuota, errTypeInsufficientQuota},
-		{"too many requests is rate limit", http.StatusTooManyRequests, errCodeRateLimitExceeded, errTypeRateLimit},
+		{"unauthorized is invalid key", http.StatusUnauthorized, http.StatusUnauthorized, errCodeInvalidAPIKey, errTypeInvalidRequest},
+		{"forbidden is insufficient permissions", http.StatusForbidden, http.StatusForbidden, errCodeInsufficientPermissions, errTypeInvalidRequest},
+		{"payment required maps to 429 quota", http.StatusPaymentRequired, http.StatusTooManyRequests, errCodeInsufficientQuota, errTypeInsufficientQuota},
+		{"too many requests is rate limit", http.StatusTooManyRequests, http.StatusTooManyRequests, errCodeRateLimitExceeded, errTypeRateLimit},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			writeValidationFailure(rec, &key.ValidationError{StatusCode: tc.status})
-			if rec.Code != tc.status {
-				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
 			}
 			body := decodeErrorEnvelope(t, rec)
 			if body.Code == nil || *body.Code != tc.wantCode || body.Type != tc.wantType {
@@ -514,6 +516,7 @@ func TestRetryAfterSecondsRoundsUp(t *testing.T) {
 		1 * time.Second:         1,
 		1500 * time.Millisecond: 2,
 		59 * time.Second:        59,
+		rate.InfDuration:        int(rate.InfDuration/time.Second) + 1,
 	}
 	for delay, want := range cases {
 		if got := retryAfterSeconds(delay); got != want {

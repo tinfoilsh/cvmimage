@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -123,7 +124,8 @@ func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) ht
 
 		metrics, err := collectMetrics(metadata)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("metrics collection failed: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"slices"
+	"strconv"
 	"strings"
 
 	tinfoilattestation "tinfoil/internal/attestation"
@@ -102,51 +103,27 @@ func extractBearerToken(header string) string {
 	return strings.TrimSpace(header[len(scheme):])
 }
 
-// OpenAI-compatible error type strings returned in API error responses.
-const (
-	errTypeInvalidRequest    = "invalid_request_error"
-	errTypeInsufficientQuota = "insufficient_quota"
-	errTypeServer            = "server_error"
-)
-
-// Client-facing error messages, aligned with OpenAI's standard error messages
-// where applicable. See https://platform.openai.com/docs/guides/error-codes
-const (
-	errMsgAPIKeyRequired = "API key is required."
-	errMsgInvalidAPIKey  = "Incorrect API key provided."
-	errMsgQuotaExceeded  = "Insufficient quota."
-	errMsgRateLimited    = "Rate limit reached for requests."
-	errMsgServerError    = "The server had an error while processing your request."
-)
-
-// writeJSONError writes an OpenAI-compatible JSON error response.
-func writeJSONError(w http.ResponseWriter, message string, errorType string, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]string{
-			"message": message,
-			"type":    errorType,
-		},
-	})
-}
-
+// writeValidationFailure maps a credential validation failure onto the
+// client-facing error for its status. A 403 is a valid credential that lacks
+// permission, which is distinct from a 401's bad or unknown credential.
 func writeValidationFailure(w http.ResponseWriter, err error) {
 	var validationErr *key.ValidationError
 	if !errors.As(err, &validationErr) {
-		writeJSONError(w, errMsgServerError, errTypeServer, http.StatusInternalServerError)
+		writeAPIError(w, errServer)
 		return
 	}
 
 	switch validationErr.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		writeJSONError(w, errMsgInvalidAPIKey, errTypeInvalidRequest, validationErr.StatusCode)
+	case http.StatusUnauthorized:
+		writeAPIError(w, errInvalidAPIKey)
+	case http.StatusForbidden:
+		writeAPIError(w, errInsufficientPermissions)
 	case http.StatusPaymentRequired:
-		writeJSONError(w, errMsgQuotaExceeded, errTypeInsufficientQuota, validationErr.StatusCode)
+		writeAPIError(w, errQuotaExceeded)
 	case http.StatusTooManyRequests:
-		writeJSONError(w, errMsgRateLimited, errTypeInsufficientQuota, validationErr.StatusCode)
+		writeAPIError(w, errRateLimited)
 	default:
-		writeJSONError(w, errMsgServerError, errTypeServer, http.StatusInternalServerError)
+		writeAPIError(w, errServer)
 	}
 }
 
@@ -157,7 +134,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 			// Allow only configured origins
 			if len(config.OriginDomains) > 0 && !slices.Contains(config.OriginDomains, origin) {
 				// CORS origin not allowed
-				writeJSONError(w, "CORS origin not allowed.", errTypeInvalidRequest, http.StatusForbidden)
+				writeAPIError(w, errOriginNotAllowed)
 				return
 			}
 
@@ -229,7 +206,7 @@ func NewShimServer(
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("proxy error: %v", err)
-			writeJSONError(w, errMsgServerError, errTypeServer, http.StatusBadGateway)
+			writeAPIError(w, errUpstreamUnreachable)
 		},
 	}
 
@@ -238,7 +215,7 @@ func NewShimServer(
 		apiKey := extractBearerToken(r.Header.Get("Authorization"))
 		if validator != nil && (r.Method == http.MethodConnect || requiresAuth(config.AuthenticatedEndpoints, r.URL.Path)) {
 			if len(apiKey) == 0 {
-				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
+				writeAPIError(w, errAPIKeyRequired)
 				return false
 			}
 
@@ -258,12 +235,17 @@ func NewShimServer(
 
 		if rateLimiter != nil {
 			if apiKey == "" {
-				writeJSONError(w, errMsgAPIKeyRequired, errTypeInvalidRequest, http.StatusUnauthorized)
+				writeAPIError(w, errAPIKeyRequired)
 				return false
 			}
 			limiter := rateLimiter.Limit(apiKey)
-			if !limiter.Allow() {
-				writeJSONError(w, errMsgRateLimited, errTypeInvalidRequest, http.StatusTooManyRequests)
+			if reservation := limiter.Reserve(); !reservation.OK() || reservation.Delay() > 0 {
+				// Reserve reports how long until a token frees up; cancel so
+				// the rejected request does not consume it.
+				delay := reservation.Delay()
+				reservation.Cancel()
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(delay)))
+				writeAPIError(w, errRateLimited)
 				return false
 			}
 		}
@@ -279,7 +261,7 @@ func NewShimServer(
 
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(config.Paths) > 0 && !pathAllowed(config.Paths, r.URL.Path) {
-			writeJSONError(w, "Not found.", errTypeInvalidRequest, http.StatusNotFound)
+			writeAPIError(w, errNotFound)
 			return
 		}
 		proxyHandler.ServeHTTP(w, r)
@@ -341,7 +323,7 @@ func registerObservabilityHandlers(
 		if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
 			nonce, err := hex.DecodeString(nonceHex)
 			if err != nil || len(nonce) != 32 {
-				writeJSONError(w, "Invalid nonce: must be exactly 32 bytes (64 hex chars)", errTypeInvalidRequest, http.StatusBadRequest)
+				writeAPIError(w, errInvalidNonce)
 				return
 			}
 			var nonce32 [32]byte
@@ -351,14 +333,14 @@ func registerObservabilityHandlers(
 				collateral, err = collateralSource.Current(r.Context())
 				if err != nil {
 					log.Printf("Attestation collateral unavailable: %v", err)
-					writeJSONError(w, "Attestation collateral unavailable", errTypeServer, http.StatusServiceUnavailable)
+					writeAPIError(w, errCollateralUnavailable)
 					return
 				}
 			}
 			deviceEvidence, err := tinfoilattestation.CollectDeviceEvidence(nonce32, expectedGPUs)
 			if err != nil {
 				log.Printf("Device evidence collection failed for %d expected GPU(s): %v", expectedGPUs, err)
-				writeJSONError(w, "GPU attestation evidence unavailable", errTypeServer, http.StatusInternalServerError)
+				writeAPIError(w, errGPUEvidenceUnavailable)
 				return
 			}
 
@@ -371,7 +353,7 @@ func registerObservabilityHandlers(
 			)
 			if err != nil {
 				log.Printf("Fresh attestation failed: %v", err)
-				writeJSONError(w, "Failed to build attestation", errTypeServer, http.StatusInternalServerError)
+				writeAPIError(w, errAttestationBuildFailed)
 				return
 			}
 
@@ -417,27 +399,28 @@ func registerObservabilityHandlers(
 	mux.HandleFunc(ehbpProtocol.KeysPath, ehbpIdentity.ConfigHandler)
 }
 
+// writeWorkloadUnavailable answers requests that arrive before the workload
+// proxy is serving. A failed boot is permanent for this VM and must not read
+// as a transient; a pending boot invites a retry. The boot state is attached
+// so operators can see which stage is at fault.
 func writeWorkloadUnavailable(w http.ResponseWriter) {
-	status := "pending"
+	apiErr := errServiceStarting
 	var state any
 	if s, err := boot.Load(); err == nil {
 		state = s
 		if s.HasFailed() {
-			status = "failed"
+			apiErr = errServiceFailed
 		}
 	}
-	body := map[string]any{
-		"error": map[string]any{
-			"message": "Workload proxy is not ready.",
-			"type":    errTypeServer,
-			"status":  status,
-		},
-	}
+	body := map[string]any{"error": apiErr.envelope().Error}
 	if state != nil {
 		body["boot"] = state
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
+	if apiErr.code == errCodeServiceStarting {
+		w.Header().Set("Retry-After", strconv.Itoa(serviceStartingRetryAfterSeconds))
+	}
+	w.WriteHeader(apiErr.status)
 	json.NewEncoder(w).Encode(body)
 }

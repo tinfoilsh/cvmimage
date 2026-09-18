@@ -102,7 +102,6 @@ func serveUntilShutdown(ctx context.Context, srv *http.Server) error {
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		active.Add(1)
 		defer active.Done()
-		w.Header().Set("Tinfoil-Drain", "1")
 		handler.ServeHTTP(w, r)
 	})
 	served := make(chan error, 1)

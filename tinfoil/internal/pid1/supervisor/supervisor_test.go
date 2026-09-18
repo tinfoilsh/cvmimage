@@ -692,7 +692,6 @@ func TestStopWithNegativeGraceStillEscalates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { backend.exit(process.PID(), 0) })
 	done := make(chan error, 1)
 	go func() { done <- process.Stop(-time.Second, time.Second) }()
 	if got := receive(t, backend.signaled); got != "service:terminated" {

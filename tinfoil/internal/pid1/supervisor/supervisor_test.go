@@ -684,6 +684,28 @@ func TestDrainWaitsForIngressBeforeDependencies(t *testing.T) {
 	}
 }
 
+func TestStopWithNegativeGraceStillEscalates(t *testing.T) {
+	sigchld := make(chan os.Signal, 2)
+	backend := newFakeBackend(sigchld)
+	manager := newManager(backend, sigchld, nil)
+	process, err := manager.Start(Command{Name: "service", Path: "/service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.exit(process.PID(), 0) })
+	done := make(chan error, 1)
+	go func() { done <- process.Stop(-time.Second, time.Second) }()
+	if got := receive(t, backend.signaled); got != "service:terminated" {
+		t.Fatalf("first signal = %s", got)
+	}
+	if got := receive(t, backend.signaled); got != "service:cgroup.kill" {
+		t.Fatalf("escalation = %s", got)
+	}
+	if err := receive(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDrainKillsSurvivingCgroupAfterDirectChildExit(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)

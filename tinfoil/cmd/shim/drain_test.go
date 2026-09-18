@@ -12,6 +12,48 @@ import (
 	"time"
 )
 
+func startDrainServer(t *testing.T, handler http.Handler) (string, context.CancelFunc, <-chan error) {
+	t.Helper()
+	cert, err := generateEphemeralCert()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reserve a local address for the real ListenAndServeTLS path.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := &http.Server{Addr: addr, Handler: handler,
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}}}
+	done := make(chan error, 1)
+	go func() { done <- serveUntilShutdown(ctx, srv) }()
+	t.Cleanup(func() { cancel(); srv.Close() })
+
+	// Wait for both guests to accept TLS before testing cutover. Application
+	// requests below must still fail the test on any connection error.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("server exited during startup: %v", err)
+		default:
+		}
+		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 100 * time.Millisecond}, "tcp", addr,
+			&tls.Config{InsecureSkipVerify: true})
+		if err == nil {
+			conn.Close()
+			return addr, cancel, done
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not start: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestShutdownPreservesStreamAndReconnects(t *testing.T) {
 	for _, h2 := range []bool{false, true} {
 		name := "http1"
@@ -19,37 +61,20 @@ func TestShutdownPreservesStreamAndReconnects(t *testing.T) {
 			name = "http2"
 		}
 		t.Run(name, func(t *testing.T) {
-			cert, err := generateEphemeralCert()
-			if err != nil {
-				t.Fatal(err)
-			}
 			finish := make(chan struct{})
 			defer close(finish)
 			start := func(label string) (string, context.CancelFunc, <-chan error) {
 				t.Helper()
-				// Reserve a local address for the real ListenAndServeTLS path.
-				ln, err := net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatal(err)
-				}
-				addr := ln.Addr().String()
-				ln.Close()
-				ctx, cancel := context.WithCancel(context.Background())
-				srv := &http.Server{Addr: addr, TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
-					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						if r.URL.Path == "/stream" {
-							io.WriteString(w, "begin\n")
-							w.(http.Flusher).Flush()
-							<-finish
-							io.WriteString(w, "complete\n")
-							return
-						}
-						io.WriteString(w, label)
-					})}
-				done := make(chan error, 1)
-				go func() { done <- serveUntilShutdown(ctx, srv) }()
-				t.Cleanup(func() { cancel(); srv.Close() })
-				return addr, cancel, done
+				return startDrainServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/stream" {
+						io.WriteString(w, "begin\n")
+						w.(http.Flusher).Flush()
+						<-finish
+						io.WriteString(w, "complete\n")
+						return
+					}
+					io.WriteString(w, label)
+				}))
 			}
 			oldAddr, drain, drained := start("old")
 			newAddr, _, _ := start("new")
@@ -61,15 +86,7 @@ func TestShutdownPreservesStreamAndReconnects(t *testing.T) {
 				}}
 			defer tr.CloseIdleConnections()
 			client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
-			var stream *http.Response
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				stream, err = client.Get("https://drain.test/stream")
-				if err == nil || time.Now().After(deadline) {
-					break
-				}
-				time.Sleep(time.Millisecond)
-			}
+			stream, err := client.Get("https://drain.test/stream")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -100,7 +117,7 @@ func TestShutdownPreservesStreamAndReconnects(t *testing.T) {
 			}
 			target.Store(newAddr)
 			drain()
-			deadline = time.Now().Add(3 * time.Second)
+			deadline := time.Now().Add(3 * time.Second)
 			for get() != "new" {
 				if time.Now().After(deadline) {
 					t.Fatal("client did not reconnect while stream was active")
@@ -129,47 +146,23 @@ func TestShutdownPreservesStreamAndReconnects(t *testing.T) {
 }
 
 func TestShutdownWaitsForHijackedStream(t *testing.T) {
-	cert, err := generateEphemeralCert()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
 	finish := make(chan struct{})
 	defer close(finish)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	srv := &http.Server{Addr: addr, TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			conn, rw, err := w.(http.Hijacker).Hijack()
-			if err != nil {
-				return
-			}
-			defer conn.Close()
-			rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n")
-			rw.Flush()
-			<-finish
-			rw.WriteString("complete\n")
-			rw.Flush()
-		})}
-	defer srv.Close()
-	done := make(chan error, 1)
-	go func() { done <- serveUntilShutdown(ctx, srv) }()
+	addr, cancel, done := startDrainServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n")
+		rw.Flush()
+		<-finish
+		rw.WriteString("complete\n")
+		rw.Flush()
+	}))
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 	defer client.CloseIdleConnections()
-	var resp *http.Response
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		resp, err = client.Get("https://" + addr)
-		if err == nil || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	resp, err := client.Get("https://" + addr)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -650,6 +650,40 @@ func TestDrainOrdersGroupsAndEscalatesTermToKill(t *testing.T) {
 	}
 }
 
+func TestDrainWaitsForIngressBeforeDependencies(t *testing.T) {
+	sigchld := make(chan os.Signal, 16)
+	backend := newFakeBackend(sigchld)
+	backend.exitOnTERM["upstream"] = true
+	manager := newManager(backend, sigchld, nil)
+	s := New(context.Background(), manager, Config{})
+	for _, name := range []string{"shim", "upstream"} {
+		if err := s.Start(context.Background(), Service{
+			Name: name, Restart: true, Command: Command{Name: name, Path: "/" + name}, DrainUntilExit: name == "shim",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shimPID := receive(t, backend.started)
+	_ = receive(t, backend.started)
+	done := make(chan error, 1)
+	go func() { done <- s.Drain([][]string{{"shim"}, {"upstream"}}, time.Millisecond, time.Millisecond) }()
+	if got := receive(t, backend.signaled); got != "shim:terminated" {
+		t.Fatalf("first signal = %s", got)
+	}
+	select {
+	case got := <-backend.signaled:
+		t.Fatalf("interrupted drain: %s", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+	backend.exit(shimPID, 0)
+	if got := receive(t, backend.signaled); got != "upstream:terminated" {
+		t.Fatalf("after drain = %s", got)
+	}
+	if err := receive(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDrainKillsSurvivingCgroupAfterDirectChildExit(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)

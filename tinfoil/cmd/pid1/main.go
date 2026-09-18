@@ -253,9 +253,10 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	// provisioning, then upgrades in place as boot publishes private artifacts.
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: shimName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
-		Ready:   endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile: boot.ShimPIDPath,
+		DrainUntilExit: true,
+		Command:        hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
+		Ready:          endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
+		PIDFile:        boot.ShimPIDPath,
 	}); err != nil {
 		return err
 	}
@@ -604,8 +605,9 @@ func requiredServiceNames() []string {
 
 func shutdownGroups() [][]string {
 	return [][]string{
-		{egressName, shimName},
+		{shimName},
 		{containersName},
+		{egressName},
 		{fabricManagerName, persistencedName},
 		{dockerName},
 		{containerdName},

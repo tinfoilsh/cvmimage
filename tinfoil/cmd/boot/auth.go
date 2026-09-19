@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"tinfoil/internal/boot"
@@ -25,12 +27,22 @@ type DockerAuth struct {
 	Auth string `json:"auth"`
 }
 
+// dockerHubAuthKey is the key Docker clients use for Docker Hub credentials;
+// a plain "docker.io" entry is never matched by docker/cli lookups.
+const dockerHubAuthKey = "https://index.docker.io/v1/"
+
+func dockerAuthKey(host string) string {
+	if host == "docker.io" || host == "index.docker.io" {
+		return dockerHubAuthKey
+	}
+	return host
+}
+
 // setupRegistryAuth configures Docker auth from external-config secrets.
 // Supports:
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
 func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
-	os.Setenv("DOCKER_CONFIG", boot.DockerConfigDir)
 	if ext == nil || ext.Secrets == nil {
 		log.Println("No external config, skipping registry auth")
 		return nil
@@ -49,7 +61,11 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 
 	// Generic registry auth: REGISTRY_<HOST>_TOKEN (user optional)
 	// Host format: underscores become dots (GHCR_IO -> ghcr.io)
-	for key, token := range ext.Secrets {
+	// Sorted so that aliases mapping to one key (docker.io, index.docker.io)
+	// resolve the same way on every boot.
+	configured := make(map[string]string)
+	for _, key := range slices.Sorted(maps.Keys(ext.Secrets)) {
+		token := ext.Secrets[key]
 		if !strings.HasPrefix(key, "REGISTRY_") || !strings.HasSuffix(key, "_TOKEN") {
 			continue
 		}
@@ -59,11 +75,17 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		if host == "" || token == "" || !registryPattern.MatchString(host) {
 			continue
 		}
+		authKey := dockerAuthKey(host)
+		if prev, dup := configured[authKey]; dup {
+			log.Printf("Warning: registry auth for %s ignored, %s already configured", host, prev)
+			continue
+		}
+		configured[authKey] = host
 		user := ext.Secrets["REGISTRY_"+hostPart+"_USER"]
 		if user == "" {
 			user = "token"
 		}
-		cfg.Auths[host] = DockerAuth{Auth: base64.StdEncoding.EncodeToString([]byte(user + ":" + token))}
+		cfg.Auths[authKey] = DockerAuth{Auth: base64.StdEncoding.EncodeToString([]byte(user + ":" + token))}
 		log.Printf("Auth configured: %s", host)
 	}
 

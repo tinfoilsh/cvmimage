@@ -609,21 +609,35 @@ func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettin
 	return ep
 }
 
-// pullImage pulls an image using the Docker SDK with auth from Docker config
-func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
-	opts := client.ImagePullOptions{}
+// dockerConfigDir is where tinfoil-boot writes registry credentials. It is a
+// variable only so tests can point it at a temporary directory.
+var dockerConfigDir = boot.DockerConfigDir
 
-	// Extract registry host and get auth
-	host := "docker.io"
-	if parts := strings.Split(imageName, "/"); len(parts) > 1 && strings.Contains(parts[0], ".") {
-		host = parts[0]
+// registryAuth returns the encoded RegistryAuth header for imageName from the
+// Docker config file tinfoil-boot writes, or "" when no credential applies.
+// tinfoil-boot runs in a separate process, so the path is fixed here rather
+// than resolved from DOCKER_CONFIG.
+func registryAuth(imageName string) string {
+	named, err := reference.ParseNormalizedNamed(imageName)
+	if err != nil {
+		return ""
 	}
-	if cfg, err := dockerconfig.Load(dockerconfig.Dir()); err == nil {
-		if auth, err := cfg.GetAuthConfig(host); err == nil && auth.Username != "" {
-			encoded, _ := json.Marshal(auth)
-			opts.RegistryAuth = base64.URLEncoding.EncodeToString(encoded)
-		}
+	cfg, err := dockerconfig.Load(dockerConfigDir)
+	if err != nil {
+		log.Printf("Warning: failed to load registry auth from %s: %v", dockerConfigDir, err)
+		return ""
 	}
+	auth, err := cfg.GetAuthConfig(reference.Domain(named))
+	if err != nil || auth.Username == "" {
+		return ""
+	}
+	encoded, _ := json.Marshal(auth)
+	return base64.URLEncoding.EncodeToString(encoded)
+}
+
+// pullImage pulls an image using the Docker SDK with auth from the boot-written Docker config
+func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
+	opts := client.ImagePullOptions{RegistryAuth: registryAuth(imageName)}
 
 	reader, err := cli.ImagePull(ctx, imageName, opts)
 	if err != nil {

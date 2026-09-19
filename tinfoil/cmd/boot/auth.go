@@ -25,6 +25,17 @@ type DockerAuth struct {
 	Auth string `json:"auth"`
 }
 
+// dockerHubAuthKey is the key Docker clients use for Docker Hub credentials;
+// a plain "docker.io" entry is never matched by docker/cli lookups.
+const dockerHubAuthKey = "https://index.docker.io/v1/"
+
+func dockerAuthKey(host string) string {
+	if host == "docker.io" || host == "index.docker.io" {
+		return dockerHubAuthKey
+	}
+	return host
+}
+
 // setupRegistryAuth configures Docker auth from external-config secrets.
 // Supports:
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
@@ -62,7 +73,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		if user == "" {
 			user = "token"
 		}
-		cfg.Auths[host] = DockerAuth{Auth: base64.StdEncoding.EncodeToString([]byte(user + ":" + token))}
+		cfg.Auths[dockerAuthKey(host)] = DockerAuth{Auth: base64.StdEncoding.EncodeToString([]byte(user + ":" + token))}
 		log.Printf("Auth configured: %s", host)
 	}
 

@@ -609,20 +609,32 @@ func endpointSettings(name string, gwPriority int) *dockernetwork.EndpointSettin
 	return ep
 }
 
-// pullImage pulls an image using the Docker SDK with auth from Docker config
-func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
-	opts := client.ImagePullOptions{}
-
-	// Extract registry host and get auth
+// registryAuth returns the encoded RegistryAuth header for imageName from the
+// Docker config file at configDir, or "" when no credential is configured.
+// tinfoil-boot writes that file to boot.DockerConfigDir in a separate process,
+// so the path is fixed here rather than taken from DOCKER_CONFIG.
+func registryAuth(configDir, imageName string) string {
 	host := "docker.io"
 	if parts := strings.Split(imageName, "/"); len(parts) > 1 && strings.Contains(parts[0], ".") {
 		host = parts[0]
 	}
-	if cfg, err := dockerconfig.Load(dockerconfig.Dir()); err == nil {
-		if auth, err := cfg.GetAuthConfig(host); err == nil && auth.Username != "" {
-			encoded, _ := json.Marshal(auth)
-			opts.RegistryAuth = base64.URLEncoding.EncodeToString(encoded)
-		}
+	cfg, err := dockerconfig.Load(configDir)
+	if err != nil {
+		log.Printf("Warning: failed to load registry auth from %s: %v", configDir, err)
+		return ""
+	}
+	auth, err := cfg.GetAuthConfig(host)
+	if err != nil || auth.Username == "" {
+		return ""
+	}
+	encoded, _ := json.Marshal(auth)
+	return base64.URLEncoding.EncodeToString(encoded)
+}
+
+// pullImage pulls an image using the Docker SDK with auth from the boot-written Docker config
+func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
+	opts := client.ImagePullOptions{
+		RegistryAuth: registryAuth(boot.DockerConfigDir, imageName),
 	}
 
 	reader, err := cli.ImagePull(ctx, imageName, opts)

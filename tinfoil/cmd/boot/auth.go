@@ -30,7 +30,6 @@ type DockerAuth struct {
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
 func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
-	os.Setenv("DOCKER_CONFIG", boot.DockerConfigDir)
 	if ext == nil || ext.Secrets == nil {
 		log.Println("No external config, skipping registry auth")
 		return nil

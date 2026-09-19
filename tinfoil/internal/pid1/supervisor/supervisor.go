@@ -26,6 +26,8 @@ const (
 	initialCleanupGrace    = 5 * time.Second
 )
 
+const waitUntilExit time.Duration = -1
+
 // Command describes a direct child of PID 1.
 type Command struct {
 	Name       string
@@ -483,6 +485,8 @@ type Service struct {
 	Forking  bool
 	Ready    func(context.Context) error
 	PIDFile  string
+	// Wait for ingress to finish before stopping any of its dependencies.
+	DrainUntilExit bool
 }
 
 type Clock interface {
@@ -795,8 +799,8 @@ func (s *Supervisor) emit(state State) {
 	}
 }
 
-// Drain prevents new starts, then stops each dependency group with TERM and a
-// bounded wait before recursively killing each remaining child cgroup.
+// Drain prevents new starts, then stops each dependency group with TERM.
+// Groups containing a DrainUntilExit service wait without escalating to KILL.
 func (s *Supervisor) Drain(groups [][]string, termGrace, killGrace time.Duration) error {
 	s.mu.Lock()
 	s.draining = true
@@ -830,6 +834,9 @@ func (s *Supervisor) drainGroup(names []string, termGrace, killGrace time.Durati
 	for _, name := range names {
 		if record := s.services[name]; record != nil && record.process != nil {
 			processes = append(processes, record.process)
+			if record.spec.DrainUntilExit {
+				termGrace = waitUntilExit
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -874,6 +881,8 @@ func stopProcesses(processes []*Process, termGrace, killGrace time.Duration, clo
 	return errors.Join(errs...)
 }
 
+// waitCgroups waits up to grace for empty cgroups. Only waitUntilExit disables
+// the deadline; all other nonpositive durations perform a single state check.
 func waitCgroups(processes []*Process, grace time.Duration, clock Clock) ([]*Process, []error) {
 	pending := make(map[*Process]bool, len(processes))
 	check := func() []error {
@@ -898,11 +907,14 @@ func waitCgroups(processes []*Process, grace time.Duration, clock Clock) ([]*Pro
 		pending[process] = true
 	}
 	errs := check()
-	if len(pending) == 0 || grace <= 0 {
+	if len(pending) == 0 || (grace <= 0 && grace != waitUntilExit) {
 		return processSlice(pending), errs
 	}
 
-	timeout := clock.After(grace)
+	var timeout <-chan time.Time
+	if grace > 0 {
+		timeout = clock.After(grace)
+	}
 	ticker := time.NewTicker(cgroupPollInterval)
 	defer ticker.Stop()
 	for len(pending) > 0 {

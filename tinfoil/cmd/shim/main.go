@@ -1,19 +1,24 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"log"
@@ -45,6 +50,8 @@ const (
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	var handler atomic.Value
 	var cert atomic.Pointer[tls.Certificate]
@@ -84,7 +91,40 @@ func main() {
 	go upgradeWhenReady(&handler, &cert)
 
 	log.Printf("Starting tinfoil shim (waiting for boot)")
-	log.Fatal(srv.ListenAndServeTLS("", ""))
+	if err := serveUntilShutdown(ctx, srv); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func serveUntilShutdown(ctx context.Context, srv *http.Server) error {
+	var active sync.WaitGroup
+	handler := srv.Handler
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		active.Add(1)
+		defer active.Done()
+		handler.ServeHTTP(w, r)
+	})
+	served := make(chan error, 1)
+	go func() { served <- srv.ListenAndServeTLS("", "") }()
+	select {
+	case err := <-served:
+		return err
+	case <-ctx.Done():
+	}
+	log.Print("Draining TLS connections; waiting for in-flight requests")
+	// Shutdown closes idle HTTP/1 connections and sends HTTP/2 GOAWAY.
+	// Keep the process (and its upstream dependencies) alive until it finishes.
+	if err := srv.Shutdown(context.Background()); err != nil {
+		return err
+	}
+	// ReverseProxy keeps upgraded handlers alive, but Shutdown does not wait
+	// for hijacked connections. Preserve those streams until their peers finish.
+	active.Wait()
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	log.Print("TLS drain complete")
+	return nil
 }
 
 // bootStagesHandler returns a minimal handler that only serves the

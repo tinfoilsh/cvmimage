@@ -9,21 +9,23 @@ import (
 )
 
 // useDockerConfig points the pull auth lookup at a temporary config dir holding
-// one credential per host, and poisons DOCKER_CONFIG so a lookup that falls
-// back to the environment finds nothing.
+// one credential per host (none when creds is nil), and poisons DOCKER_CONFIG so
+// a lookup that falls back to the environment finds nothing.
 func useDockerConfig(t *testing.T, creds map[string]string) {
 	t.Helper()
-	auths := make(map[string]map[string]string, len(creds))
-	for host, userAndToken := range creds {
-		auths[host] = map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(userAndToken))}
-	}
-	raw, err := json.Marshal(map[string]any{"auths": auths})
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
+	if creds != nil {
+		auths := make(map[string]map[string]string, len(creds))
+		for host, userAndToken := range creds {
+			auths[host] = map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(userAndToken))}
+		}
+		raw, err := json.Marshal(map[string]any{"auths": auths})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 	previous := dockerConfigDir
@@ -94,10 +96,7 @@ func TestRegistryAuthAnonymousWithoutCredential(t *testing.T) {
 }
 
 func TestRegistryAuthMissingConfigIsAnonymous(t *testing.T) {
-	t.Setenv("DOCKER_CONFIG", t.TempDir())
-	previous := dockerConfigDir
-	dockerConfigDir = t.TempDir()
-	t.Cleanup(func() { dockerConfigDir = previous })
+	useDockerConfig(t, nil)
 
 	if got := registryAuth("ghcr.io/org/app:latest"); got != "" {
 		t.Fatalf("expected anonymous pull without config, got %q", got)

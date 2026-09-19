@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"tinfoil/internal/boot"
@@ -59,7 +61,11 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 
 	// Generic registry auth: REGISTRY_<HOST>_TOKEN (user optional)
 	// Host format: underscores become dots (GHCR_IO -> ghcr.io)
-	for key, token := range ext.Secrets {
+	// Sorted so that aliases mapping to one key (docker.io, index.docker.io)
+	// resolve the same way on every boot.
+	configured := make(map[string]string)
+	for _, key := range slices.Sorted(maps.Keys(ext.Secrets)) {
+		token := ext.Secrets[key]
 		if !strings.HasPrefix(key, "REGISTRY_") || !strings.HasSuffix(key, "_TOKEN") {
 			continue
 		}
@@ -69,11 +75,17 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		if host == "" || token == "" || !registryPattern.MatchString(host) {
 			continue
 		}
+		authKey := dockerAuthKey(host)
+		if prev, dup := configured[authKey]; dup {
+			log.Printf("Warning: registry auth for %s ignored, %s already configured", host, prev)
+			continue
+		}
+		configured[authKey] = host
 		user := ext.Secrets["REGISTRY_"+hostPart+"_USER"]
 		if user == "" {
 			user = "token"
 		}
-		cfg.Auths[dockerAuthKey(host)] = DockerAuth{Auth: base64.StdEncoding.EncodeToString([]byte(user + ":" + token))}
+		cfg.Auths[authKey] = DockerAuth{Auth: base64.StdEncoding.EncodeToString([]byte(user + ":" + token))}
 		log.Printf("Auth configured: %s", host)
 	}
 

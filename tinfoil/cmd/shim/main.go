@@ -101,7 +101,7 @@ func bootStagesHandler() http.Handler {
 		json.NewEncoder(w).Encode(state)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "shim is starting, waiting for boot to complete", http.StatusServiceUnavailable)
+		writeWorkloadUnavailable(w)
 	})
 	return mux
 }

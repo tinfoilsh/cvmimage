@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
@@ -354,8 +356,15 @@ func TestObservabilityServer_WorkloadReturns503BeforeReady(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 before proxy ready, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Workload proxy is not ready.") {
-		t.Fatalf("expected proxy readiness error, got: %s", rec.Body.String())
+	var envelope errorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("body is not an error envelope: %s", rec.Body.String())
+	}
+	if envelope.Error.Type != errTypeServiceUnavailable || envelope.Error.Code == nil || *envelope.Error.Code != errCodeServiceStarting {
+		t.Fatalf("expected service_starting error, got: %s", rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("pending boot must send Retry-After")
 	}
 }
 
@@ -366,7 +375,7 @@ func TestObservabilityServer_WellKnownEndpointsBypassProxyReadiness(t *testing.T
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), "Workload proxy is not ready.") {
+	if rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), errCodeServiceStarting) {
 		t.Fatalf("well-known endpoint should bypass proxy readiness gate: %s", rec.Body.String())
 	}
 }
@@ -378,7 +387,140 @@ func TestFullServer_WorkloadReachesProxyPath(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), "Workload proxy is not ready.") {
+	if rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), errCodeServiceStarting) {
 		t.Fatalf("ready proxy gate should not block workload path: %s", rec.Body.String())
+	}
+}
+
+func decodeErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
+	t.Helper()
+	var envelope errorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("body is not an error envelope: %s", rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	return envelope.Error
+}
+
+func TestWriteAPIErrorEmitsFourFieldEnvelope(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeAPIError(rec, errServer)
+
+	var raw map[string]map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	inner := raw["error"]
+	for _, key := range []string{"message", "type", "param", "code"} {
+		if _, ok := inner[key]; !ok {
+			t.Errorf("missing %q in %v", key, inner)
+		}
+	}
+	if len(inner) != 4 {
+		t.Fatalf("envelope has %d fields, want 4: %v", len(inner), inner)
+	}
+	if inner["code"] != nil || inner["param"] != nil {
+		t.Fatalf("unset code/param must be null: %v", inner)
+	}
+}
+
+// TestValidationFailureDistinguishesForbiddenFromUnauthorized pins that a
+// credential the validator accepted but refused for lack of permission is
+// not reported as an incorrect key, which would send the user off to
+// regenerate a key that was fine.
+func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		wantStatus int
+		wantCode   string
+		wantType   string
+	}{
+		{"unauthorized is invalid key", http.StatusUnauthorized, http.StatusUnauthorized, errCodeInvalidAPIKey, errTypeInvalidRequest},
+		{"forbidden is insufficient permissions", http.StatusForbidden, http.StatusForbidden, errCodeInsufficientPermissions, errTypeInvalidRequest},
+		{"payment required maps to 429 quota", http.StatusPaymentRequired, http.StatusTooManyRequests, errCodeInsufficientQuota, errTypeInsufficientQuota},
+		{"too many requests is rate limit", http.StatusTooManyRequests, http.StatusTooManyRequests, errCodeRateLimitExceeded, errTypeRateLimit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeValidationFailure(rec, &key.ValidationError{StatusCode: tc.status})
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
+			}
+			body := decodeErrorEnvelope(t, rec)
+			if body.Code == nil || *body.Code != tc.wantCode || body.Type != tc.wantType {
+				t.Fatalf("code/type = %v/%s, want %s/%s", body.Code, body.Type, tc.wantCode, tc.wantType)
+			}
+		})
+	}
+}
+
+func TestMissingAPIKeyReportsOpenAICode(t *testing.T) {
+	handler := testAuthServer(t, &fakeValidator{}, []string{"/v1/chat/completions"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: %s", rec.Code, rec.Body.String())
+	}
+	body := decodeErrorEnvelope(t, rec)
+	if body.Code == nil || *body.Code != errCodeMissingAPIKey {
+		t.Fatalf("code = %v, want %s", body.Code, errCodeMissingAPIKey)
+	}
+}
+
+// TestLocalRateLimitSendsRetryAfter pins that the shim's own token bucket
+// rejects with rate_limit_error and a Retry-After the client can honor.
+func TestLocalRateLimitSendsRetryAfter(t *testing.T) {
+	id, err := identity.NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{UpstreamPort: 9999}
+	att := &legacy.Document{Format: "https://tinfoil.sh/predicate/dummy/v2", Body: "deadbeef"}
+	// One token per minute with a burst of one: the second request is over budget.
+	limiter := NewRateLimiter(1.0/60, 1)
+	handler := NewShimServer(nil, limiter, att, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, &config.ExternalConfig{}, "127.0.0.1:9999", nil)
+
+	send := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+		req.Header.Set("Authorization", "Bearer key-1")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if first := send(); first.Code == http.StatusTooManyRequests {
+		t.Fatalf("first request should be admitted, got 429: %s", first.Body.String())
+	}
+	second := send()
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request status = %d, want 429: %s", second.Code, second.Body.String())
+	}
+	body := decodeErrorEnvelope(t, second)
+	if body.Type != errTypeRateLimit || body.Code == nil || *body.Code != errCodeRateLimitExceeded {
+		t.Fatalf("envelope = %+v", body)
+	}
+	if second.Header().Get("Retry-After") == "" {
+		t.Fatal("rate limited response must carry Retry-After")
+	}
+}
+
+func TestRetryAfterSecondsRoundsUp(t *testing.T) {
+	cases := map[time.Duration]int{
+		0:                       1,
+		300 * time.Millisecond:  1,
+		1 * time.Second:         1,
+		1500 * time.Millisecond: 2,
+		59 * time.Second:        59,
+		rate.InfDuration:        int(rate.InfDuration/time.Second) + 1,
+	}
+	for delay, want := range cases {
+		if got := retryAfterSeconds(delay); got != want {
+			t.Errorf("retryAfterSeconds(%s) = %d, want %d", delay, got, want)
+		}
 	}
 }

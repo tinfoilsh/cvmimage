@@ -16,6 +16,66 @@ import (
 	"tinfoil/internal/secretstore"
 )
 
+func TestAttestedKeyMountsAreExclusiveReadOnly(t *testing.T) {
+	cfg := &Config{CVMVersion: "0.15.0", AttestedKeys: []runtimeconfig.AttestedKey{
+		{ID: "ssh", Key: "ecdsa-p256"}, {ID: "vpn", Key: "x25519"},
+	}, Containers: []Container{
+		{Name: "ssh-app", Image: "app", Keys: []string{"ssh"}, Tmpfs: map[string]string{"/run": ""}},
+		{Name: "vpn-app", Image: "app", Keys: []string{"vpn"}},
+		{Name: "ungranted", Image: "app"},
+	}}
+	for _, c := range cfg.Containers {
+		_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var private []string
+		for _, mount := range host.Binds {
+			if strings.HasPrefix(mount, boot.PrivateDir) {
+				private = append(private, mount)
+			}
+		}
+		if len(private) != len(c.Keys) {
+			t.Fatalf("container %s received unrelated private mounts: %v", c.Name, private)
+		}
+		for _, id := range c.Keys {
+			want := boot.AttestedKeysDir + "/" + id + ":" + runtimeconfig.AttestedKeysContainerDir + "/" + id + ":ro"
+			if !slices.Contains(private, want) {
+				t.Fatalf("missing read-only grant %s", want)
+			}
+		}
+	}
+}
+
+func TestOnlyOptedInAdminSSHBecomesDirect(t *testing.T) {
+	for _, test := range []struct {
+		name                          string
+		admin, inbound, debug, direct bool
+	}{
+		{"opt in", true, true, false, true},
+		{"no inbound", true, false, false, false},
+		{"ordinary container", false, true, false, false},
+		{"debug suppresses production mapping", true, true, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := Container{Name: "workspace", Image: "app", CVMAdmin: test.admin, Networks: []string{"dev"}, Ports: []string{"22:22", "3000:3000"}}
+			cfg := &Config{CVMVersion: "0.15.0", Containers: []Container{c}, Networks: map[string]*runtimeconfig.NetworkSpec{"dev": {Egress: "closed"}}}
+			if test.inbound {
+				cfg.CVMNetwork.InboundPorts = []int{22}
+			}
+			_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, test.debug)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ssh := host.PortBindings[dockernetwork.MustParsePort("22/tcp")][0]
+			app := host.PortBindings[dockernetwork.MustParsePort("3000/tcp")][0]
+			if ssh.HostIP.IsValid() == test.direct || app.HostIP.String() != containernet.PublishedHostIP {
+				t.Fatalf("wrong exposure: ssh=%+v app=%+v", ssh, app)
+			}
+		})
+	}
+}
+
 func TestParseGPUs(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -16,7 +16,10 @@ const (
 )
 
 func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
-	script := renderContainerNetworkScript(config, debug)
+	script, err := renderContainerNetworkScript(config, debug)
+	if err != nil {
+		return err
+	}
 	if err := Apply(script); err != nil {
 		return fmt.Errorf("installing container-network firewall rules: %w", err)
 	}
@@ -29,7 +32,11 @@ func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
 	return nil
 }
 
-func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) string {
+func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (string, error) {
+	adminSSH, err := runtimeconfig.AdminSSH(config, debug)
+	if err != nil {
+		return "", err
+	}
 	names := make([]string, 0, len(config.Networks))
 	for name := range config.Networks {
 		names = append(names, name)
@@ -41,7 +48,20 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) stri
 	if debug && runtimeconfig.HasReservedDebugContainer(config) {
 		writeReservedDebugForwardRules(&script)
 	}
-	// Every other published port is reachable only over the shim's CONNECT tunnel.
+	if adminSSH != nil {
+		for _, container := range config.Containers {
+			if container.Name != adminSSH.Container {
+				continue
+			}
+			// Docker may select an endpoint on any attached bridge. Bound both
+			// directions to the declared guest port, never all admin traffic.
+			for _, bridge := range container.Networks {
+				fmt.Fprintf(&script, "add rule inet tinfoil container_forward oifname %q ct status dnat ct original proto-dst %d tcp dport %d accept\n", bridge, adminSSH.GuestPort, adminSSH.ContainerPort)
+				fmt.Fprintf(&script, "add rule inet tinfoil container_forward iifname %q ct status dnat ct direction reply ct original proto-dst %d ct state established,related accept\n", bridge, adminSSH.GuestPort)
+			}
+		}
+	}
+	// Every other published port remains reachable only via the shim tunnel.
 	script.WriteString("add rule inet tinfoil container_forward ct status dnat drop\n")
 	for _, name := range names {
 		writeBridgeRules(&script, name, config.Networks[name])
@@ -49,7 +69,7 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) stri
 	if runtimeconfig.ShimUpstreamSet(config) {
 		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"})
 	}
-	return script.String()
+	return script.String(), nil
 }
 
 func writeReservedDebugForwardRules(script *strings.Builder) {

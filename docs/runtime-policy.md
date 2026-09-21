@@ -49,6 +49,39 @@ aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
 the attested top-level GPU count; boolean, zero, negative, duplicate, and
 out-of-range selections are rejected.
 
+## Attested workload keys
+
+The measured `attested-keys` list declares `{id, key, uid?, gid?}` and each
+`containers[].keys` list grants declared IDs to that container. Initial algorithms
+are `ecdsa-p256`, `ed25519`, and `x25519` (key agreement only). Each declaration
+requires exactly one container grant. IDs, ownership, grants, and conflicting
+mount destinations are validated before boot derives filesystem paths.
+
+Boot generates the complete set under `/mnt/ramdisk/private/attested-keys` and
+publishes it with one directory rename. Same-boot retries validate and reuse the
+existing set; an incomplete or mismatched set fails without repair. Shim and
+container restarts retain it, while a CVM reboot loses the private tmpfs and
+generates new keys. Container grants bind only the named directories read-only
+at `/run/tinfoil/keys/<id>`, including below a container's `/run` tmpfs. The fixed
+files are `private_key.pem` (PKCS#8, mode 0600) and `public_key.pem` (SPKI, mode
+0644), inside a mode 0700 directory owned by the measured UID/GID (default 0:0).
+Private material is never placed in the shared `/tinfoil` mount, environment,
+external config, logs, or platform-managed persistence. A receiving application
+can use or copy its private bytes; the grant does not constrain key operations.
+
+The early and full shim handlers load the same complete public inventory, without
+reading private key bytes or generating keys. Every fresh v3 quote, including
+boot's keyserver challenge, binds the built-in TLS/HPKE entries plus all declared
+keys. Workload entries use their declared ID and `https://tinfoil.sh/key/spki/v1`,
+carrying full SPKI DER as lowercase hex. Legacy v2 evidence cannot endorse these
+additional keys. SSH, WireGuard, and other application encodings stay with their
+consumers; the runtime does not create OpenSSH keys or certificates.
+
+The config schema reserves **0.15.0** as the planned first official CVM version
+for these keys and direct admin SSH. This is a compatibility floor, not a claim
+that that version has been released. Custom measured CVM sources have their own
+version namespace and must implement the same contract.
+
 ## CVM administrator containers
 
 `cvm_admin: true` in the measured container config selects a fixed administrative
@@ -60,11 +93,21 @@ administration of the **whole CVM**, including its workloads, secrets, and guest
 firewall, not a stronger form of isolated container root. Kernel module loading
 remains locked, and the verified CVM root disk is not made writable.
 
-Networking is unchanged: admin containers use declared bridge `networks` and
-`ports` like ordinary workloads. An `egress: open` network provides Internet
-access; published ports remain loopback-only and reachable through the shim's
-authenticated, attested CONNECT tunnel. No host networking or direct SSH ingress
-is needed. Images may run an inner Docker daemon: nested containers use its own
+Admin containers use declared bridge `networks` and `ports` like ordinary
+workloads. An `egress: open` network provides Internet access. Published ports
+default to loopback and the shim's authenticated CONNECT tunnel. Production
+direct SSH requires all three measured settings: `cvm_admin: true`,
+`ports: ["22:22"]`, and `cvm-network.inbound-ports: [22]`. Only that SSH mapping
+binds externally; the guest firewall admits its DNAT and reply traffic before
+the general DNAT drop. Other admin ports remain private. The debug toolbox
+retains port 2222 and suppresses this production exception.
+
+Host-side port allocation/forwarding and endpoint metadata must also support
+production guest port 22 before external clients can connect. These guest changes
+alone do not provide a public endpoint or install a native SSH profile. The
+workload must consume its granted host key and configure its SSH server; clients
+must verify the expected workload and pin the endorsed public key. Images may
+run an inner Docker daemon: nested containers use its own
 bridges/NAT and Unix socket, so `docker ps` does not show the SSH wrapper. Guest
 network rules are not a security boundary against the CVM administrator.
 
@@ -79,9 +122,16 @@ so a volume mounted at `/workspace` can be used directly by its inner daemon.
 The image owns that daemon's lifecycle and can reset its RAM-backed state on
 container restart too. For example,
 the following fragment supplements the normal pinned-image, shim and SSH-key
-configuration (the image must supply an authenticated SSH server on port 2222):
+configuration (the image must consume the key and supply an authenticated SSH
+server on port 22):
 
 ```yaml
+cvm-version: 0.15.0
+attested-keys:
+  - id: host-ssh
+    key: ecdsa-p256
+cvm-network:
+  inbound-ports: [22]
 networks:
   dev:
     egress: open
@@ -94,7 +144,8 @@ containers:
     image: <digest-pinned SSH image>
     cvm_admin: true
     networks: [dev]
-    ports: ["2022:2222"]
+    ports: ["22:22"]
+    keys: [host-ssh]
     working_dir: /workspace
     volumes: [workspace:/workspace]
 ```

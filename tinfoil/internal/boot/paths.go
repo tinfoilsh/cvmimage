@@ -15,7 +15,8 @@ const (
 	ContainerModelsDir  = "/tinfoil/models"
 
 	// Private — not globally mounted into containers (mode 0700). Explicitly
-	// granted model directories are the only read-only container exception.
+	// granted model and attested key directories are read-only exceptions.
+	AttestedKeysDir       = PrivateDir + "/attested-keys"
 	TLSDir                = PrivateDir + "/tls"
 	TLSCertPath           = TLSDir + "/cert.pem"
 	TLSKeyPath            = TLSDir + "/key.pem"

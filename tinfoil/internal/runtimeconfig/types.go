@@ -16,6 +16,19 @@ type VolumeSpec = sharedconfig.VolumeSpec
 type VolumeOverlay = sharedconfig.VolumeOverlay
 type Container = sharedconfig.Container
 type Healthcheck = sharedconfig.Healthcheck
+type AttestedKey = sharedconfig.AttestedKey
+
+const AttestedKeysContainerDir = sharedconfig.AttestedKeysContainerDir
+
+func ValidateAttestedKeys(config *Config) error { return sharedconfig.ValidateAttestedKeys(config) }
+
+// AdminSSH keeps the production exception separate from the debug toolbox.
+func AdminSSH(config *Config, debug bool) (*sharedconfig.AdminSSHMapping, error) {
+	if debug {
+		return nil, nil
+	}
+	return sharedconfig.AdminSSH(config)
+}
 
 func options(debug bool) sharedconfig.Options {
 	if debug {

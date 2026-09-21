@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	sevabi "github.com/google/go-sev-guest/abi"
@@ -19,6 +21,7 @@ import (
 	tdxclient "github.com/google/go-tdx-guest/client"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 
+	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/legacy"
 
 	"tinfoil/internal/compress"
@@ -33,6 +36,16 @@ const (
 type BodyV2 struct {
 	TLSKeyFP [32]byte
 	HPKEKey  [32]byte
+}
+
+// CryptoMaterial combines the unchanged built-in identities with the complete
+// boot inventory. Every v3 quote producer must supply that same inventory.
+func (a BodyV2) CryptoMaterial(workload []envelope.CryptoMaterialItem) []envelope.CryptoMaterialItem {
+	items := []envelope.CryptoMaterialItem{
+		{ID: envelope.CryptoMaterialIDTLS, Format: envelope.KeySPKIFPSHA256V1Format, Data: hex.EncodeToString(a.TLSKeyFP[:])},
+		{ID: envelope.CryptoMaterialIDHPKE, Format: envelope.KeyX25519HPKEV1Format, Data: hex.EncodeToString(a.HPKEKey[:])},
+	}
+	return append(items, workload...)
 }
 
 func (a BodyV2) Marshal() [64]byte {
@@ -143,11 +156,20 @@ func DummyReport(userData [64]byte) *legacy.Document {
 // base64-encoded so verifiers recover the exact hashed bytes with a plain
 // decode.
 func BuildAttestation(
-	tlsKeyFP [32]byte,
-	hpkeKey [32]byte,
+	material []envelope.CryptoMaterialItem,
 	nonce []byte,
 	deviceEvidence []envelope.DeviceEvidenceItem,
 	collateral []envelope.CollateralEntry,
+) (*envelope.Document, error) {
+	return buildAttestation(material, nonce, deviceEvidence, collateral, reportWithRetry)
+}
+
+func buildAttestation(
+	material []envelope.CryptoMaterialItem,
+	nonce []byte,
+	deviceEvidence []envelope.DeviceEvidenceItem,
+	collateral []envelope.CollateralEntry,
+	quote func([64]byte) ([]byte, string, error),
 ) (*envelope.Document, error) {
 	if len(nonce) != envelope.NonceSize {
 		return nil, fmt.Errorf("nonce must be %d bytes, got %d", envelope.NonceSize, len(nonce))
@@ -158,21 +180,13 @@ func BuildAttestation(
 	if collateral == nil {
 		collateral = []envelope.CollateralEntry{}
 	}
+	if err := validateCryptoMaterial(material); err != nil {
+		return nil, err
+	}
 
 	cryptoMaterial := envelope.CryptoMaterialSection{
 		Format: envelope.CryptoMaterialV1Format,
-		Items: []envelope.CryptoMaterialItem{
-			{
-				ID:     envelope.CryptoMaterialIDTLS,
-				Format: envelope.KeySPKIFPSHA256V1Format,
-				Data:   hex.EncodeToString(tlsKeyFP[:]),
-			},
-			{
-				ID:     envelope.CryptoMaterialIDHPKE,
-				Format: envelope.KeyX25519HPKEV1Format,
-				Data:   hex.EncodeToString(hpkeKey[:]),
-			},
-		},
+		Items:  material,
 	}
 	deviceSection := envelope.DeviceEvidenceSection{
 		Format: envelope.DeviceEvidenceV1Format,
@@ -198,7 +212,7 @@ func BuildAttestation(
 		return nil, err
 	}
 
-	rawQuote, platform, err := reportWithRetry(reportData)
+	rawQuote, platform, err := quote(reportData)
 	if err != nil {
 		return nil, fmt.Errorf("obtaining hardware quote: %w", err)
 	}
@@ -226,6 +240,43 @@ func BuildAttestation(
 		DeviceEvidence: base64.StdEncoding.EncodeToString(deviceBytes),
 		Collateral:     collateral,
 	}, nil
+}
+
+var materialID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+
+func validateCryptoMaterial(items []envelope.CryptoMaterialItem) error {
+	if len(items) < 2 || len(items) > 34 {
+		return fmt.Errorf("invalid crypto_material inventory size")
+	}
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		if !materialID.MatchString(item.ID) || seen[item.ID] {
+			return fmt.Errorf("invalid or duplicate crypto_material id %q", item.ID)
+		}
+		seen[item.ID] = true
+		switch item.ID {
+		case envelope.CryptoMaterialIDTLS, envelope.CryptoMaterialIDHPKE:
+			format := envelope.KeySPKIFPSHA256V1Format
+			if item.ID == envelope.CryptoMaterialIDHPKE {
+				format = envelope.KeyX25519HPKEV1Format
+			}
+			data, err := hex.DecodeString(item.Data)
+			if err != nil || len(data) != 32 || item.Data != strings.ToLower(item.Data) || item.Format != format {
+				return fmt.Errorf("invalid built-in crypto_material %q", item.ID)
+			}
+		default:
+			if item.Format != attestedkeys.SPKIFormat {
+				return fmt.Errorf("invalid workload key format for %q", item.ID)
+			}
+			if err := attestedkeys.ValidatePublic(item.Data, ""); err != nil {
+				return fmt.Errorf("crypto_material %q: %w", item.ID, err)
+			}
+		}
+	}
+	if !seen[envelope.CryptoMaterialIDTLS] || !seen[envelope.CryptoMaterialIDHPKE] {
+		return fmt.Errorf("missing built-in crypto_material")
+	}
+	return nil
 }
 
 // rejectInvalidItemIDs enforces the builder-side rules verifiers hold item

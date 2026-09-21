@@ -25,6 +25,7 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 
@@ -213,10 +214,17 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
 
+		workloadKeys, err := waitForArtifact("Attested workload keys", func() ([]envelope.CryptoMaterialItem, error) {
+			return loadWorkloadKeys(boot.ConfigPath, boot.AttestedKeysDir)
+		})
+		if err != nil {
+			return err
+		}
+
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
 
-		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig)
+		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, workloadKeys...)
 		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
 
 		log.Println("Shim observability ready")
@@ -288,7 +296,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return fmt.Errorf("loading published ports: %w", err)
 		}
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr, targets)
+		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr, targets, workloadKeys...)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

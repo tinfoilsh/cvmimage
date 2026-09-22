@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/netip"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -20,7 +19,6 @@ import (
 	dockerconfig "github.com/docker/cli/cli/config"
 	"github.com/docker/go-units"
 	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/mount"
 	dockernetwork "github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
@@ -538,11 +536,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		}
 	}
 	if name, _, ok := runtimeconfig.SealOwner(cfg); ok && name == c.Name {
-		if _, err := os.Stat(boot.SealRegisterPath); err == nil {
-			hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
-				Type: mount.TypeBind, Source: boot.SealRegisterPath, Target: boot.SealRegisterPath,
-			})
-		}
+		hostConfig.Binds = append(hostConfig.Binds, boot.SealRegisterPath+":"+boot.SealRegisterPath)
 	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)

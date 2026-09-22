@@ -269,8 +269,15 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
 		return err
 	}
-	if err := startVolumeWorkers(bootCtx, deps); err != nil {
+	config, err := deps.measuredConfig()
+	if err != nil {
+		return err
+	}
+	if err := startVolumeWorkers(bootCtx, deps, config); err != nil {
 		return fmt.Errorf("storage volumes: %w", err)
+	}
+	if err := ownSealRegister(config); err != nil {
+		return fmt.Errorf("seal register: %w", err)
 	}
 	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
 		fmt.Sprintf("--debug=%t", deps.cmdline.Debug))
@@ -564,11 +571,7 @@ func readMeasuredConfig(debug bool) (*runtimeconfig.Config, error) {
 	return runtimeconfig.Decode(verified, debug)
 }
 
-func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
-	config, err := deps.measuredConfig()
-	if err != nil {
-		return err
-	}
+func startVolumeWorkers(ctx context.Context, deps lifecycleDeps, config *runtimeconfig.Config) error {
 	if config == nil {
 		return nil
 	}
@@ -597,6 +600,14 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 		}
 	}
 	return nil
+}
+
+func ownSealRegister(config *runtimeconfig.Config) error {
+	_, owner, ok := runtimeconfig.SealOwner(config)
+	if !ok {
+		return nil
+	}
+	return os.Chown(boot.SealRegisterPath, owner, -1)
 }
 
 func requiredServiceNames() []string {

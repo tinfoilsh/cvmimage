@@ -535,6 +535,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 			}
 		}
 	}
+	if name, _, ok := runtimeconfig.SealOwner(cfg); ok && name == c.Name {
+		hostConfig.Binds = append(hostConfig.Binds, boot.SealRegisterPath+":"+boot.SealRegisterPath)
+	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
 	if !c.CVMAdmin && runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {

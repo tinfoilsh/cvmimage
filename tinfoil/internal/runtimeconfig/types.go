@@ -51,3 +51,9 @@ func HasReservedDebugContainer(config *Config) bool {
 func ParsePorts(ports []string) ([]sharedconfig.PortMapping, error) {
 	return sharedconfig.ParsePorts(ports)
 }
+
+// SealOwner names the container allowed to extend the seal register and its
+// uid. The shared config carries no field for this yet, so it is nobody.
+func SealOwner(config *Config) (string, int, bool) {
+	return "", 0, false
+}

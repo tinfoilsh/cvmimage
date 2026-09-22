@@ -852,7 +852,7 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 			{Name: "workspace", Exec: true, Owner: 1000},
 		},
 	}
-	if err := startVolumeWorkers(context.Background(), harness.deps); err != nil {
+	if err := startVolumeWorkers(context.Background(), harness.deps, &harness.config); err != nil {
 		t.Fatal(err)
 	}
 	started := harness.services.started

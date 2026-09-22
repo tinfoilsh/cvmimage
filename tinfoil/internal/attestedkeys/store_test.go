@@ -22,7 +22,7 @@ import (
 )
 
 func testConfig() *config.Config {
-	return &config.Config{CVMVersion: "0.15.0", AttestedKeys: []config.AttestedKey{
+	return &config.Config{AttestedKeys: []config.AttestedKey{
 		{ID: "ssh", Key: config.KeyECDSAP256, UID: os.Geteuid(), GID: os.Getegid()},
 		{ID: "signing", Key: config.KeyEd25519, UID: os.Geteuid(), GID: os.Getegid()},
 		{ID: "vpn", Key: config.KeyX25519, UID: os.Geteuid(), GID: os.Getegid()},

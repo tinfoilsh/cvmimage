@@ -77,11 +77,6 @@ carrying full SPKI DER as lowercase hex. Legacy v2 evidence cannot endorse these
 additional keys. SSH, WireGuard, and other application encodings stay with their
 consumers; the runtime does not create OpenSSH keys or certificates.
 
-The config schema reserves **0.15.0** as the planned first official CVM version
-for these keys and direct admin SSH. This is a compatibility floor, not a claim
-that that version has been released. Custom measured CVM sources have their own
-version namespace and must implement the same contract.
-
 ## CVM administrator containers
 
 `cvm_admin: true` in the measured container config selects a fixed administrative
@@ -126,7 +121,6 @@ configuration (the image must consume the key and supply an authenticated SSH
 server on port 22):
 
 ```yaml
-cvm-version: 0.15.0
 attested-keys:
   - id: host-ssh
     key: ecdsa-p256

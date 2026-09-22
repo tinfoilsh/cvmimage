@@ -14,7 +14,7 @@ import (
 func TestShimLoadsOnlyCompleteMeasuredKeyInventory(t *testing.T) {
 	dir := t.TempDir()
 	configPath, store := filepath.Join(dir, "config.yml"), filepath.Join(dir, "keys")
-	cfg := &runtimeconfig.Config{CVMVersion: "0.15.0", AttestedKeys: []runtimeconfig.AttestedKey{
+	cfg := &runtimeconfig.Config{AttestedKeys: []runtimeconfig.AttestedKey{
 		{ID: "host-ssh", Key: "ecdsa-p256", UID: os.Geteuid(), GID: os.Getegid()},
 	}, Containers: []runtimeconfig.Container{{Name: "ubuntu", Keys: []string{"host-ssh"}}}}
 	writeConfig := func() {

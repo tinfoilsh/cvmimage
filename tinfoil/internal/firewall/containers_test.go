@@ -12,7 +12,7 @@ import (
 )
 
 func adminSSHConfig() *runtimeconfig.Config {
-	return &runtimeconfig.Config{CVMVersion: "0.15.0", CVMNetwork: runtimeconfig.CVMNetworkConfig{InboundPorts: []int{22}},
+	return &runtimeconfig.Config{CVMNetwork: runtimeconfig.CVMNetworkConfig{InboundPorts: []int{22}},
 		Networks:   map[string]*runtimeconfig.NetworkSpec{"dev": {Egress: "closed"}},
 		Containers: []runtimeconfig.Container{{Name: "workspace", CVMAdmin: true, Networks: []string{"dev"}, Ports: []string{"22:22", "3000:3000"}}},
 	}

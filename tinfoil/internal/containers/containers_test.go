@@ -17,7 +17,7 @@ import (
 )
 
 func TestAttestedKeyMountsAreExclusiveReadOnly(t *testing.T) {
-	cfg := &Config{CVMVersion: "0.15.0", AttestedKeys: []runtimeconfig.AttestedKey{
+	cfg := &Config{AttestedKeys: []runtimeconfig.AttestedKey{
 		{ID: "ssh", Key: "ecdsa-p256"}, {ID: "vpn", Key: "x25519"},
 	}, Containers: []Container{
 		{Name: "ssh-app", Image: "app", Keys: []string{"ssh"}, Tmpfs: map[string]string{"/run": ""}},
@@ -59,7 +59,7 @@ func TestOnlyOptedInAdminSSHBecomesDirect(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			c := Container{Name: "workspace", Image: "app", CVMAdmin: test.admin, Networks: []string{"dev"}, Ports: []string{"22:22", "3000:3000"}}
-			cfg := &Config{CVMVersion: "0.15.0", Containers: []Container{c}, Networks: map[string]*runtimeconfig.NetworkSpec{"dev": {Egress: "closed"}}}
+			cfg := &Config{Containers: []Container{c}, Networks: map[string]*runtimeconfig.NetworkSpec{"dev": {Egress: "closed"}}}
 			if test.inbound {
 				cfg.CVMNetwork.InboundPorts = []int{22}
 			}

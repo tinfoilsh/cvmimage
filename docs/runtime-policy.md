@@ -75,13 +75,13 @@ remains locked, and the verified CVM root disk is not made writable.
 Admin containers use declared bridge `networks` and `ports` like ordinary
 workloads. An `egress: open` network provides Internet access; published ports
 remain loopback-only and reachable through the shim's authenticated, attested
-CONNECT tunnel. The one exception is direct SSH, which requires `cvm_admin: true`,
-`ports: ["22:22"]`, and `cvm-network.inbound-ports: [22]` together: that mapping
-binds on the guest interface and the firewall admits its DNAT traffic. The debug
-toolbox keeps port 2222 and suppresses this exception. The host must still
-forward a port to guest 22. Images may run an inner Docker daemon: nested containers use its own
-bridges/NAT and Unix socket, so `docker ps` does not show the SSH wrapper. Guest
-network rules are not a security boundary against the CVM administrator.
+CONNECT tunnel. The one exception is direct SSH: `cvm_admin: true`,
+`ports: ["22:22"]`, and `cvm-network.inbound-ports: [22]` together bind that
+mapping on the guest interface and admit its DNAT traffic through the firewall.
+The debug toolbox keeps port 2222 and suppresses this exception. Images may run
+an inner Docker daemon: nested containers use its own bridges/NAT and Unix
+socket, so `docker ps` does not show the SSH wrapper. Guest network rules are
+not a security boundary against the CVM administrator.
 
 Persistence is unchanged: Docker's writable layers, downloaded images, and
 ordinary Docker volumes live in RAM and do not survive CVM reboot. Only an

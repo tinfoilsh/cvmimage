@@ -20,7 +20,7 @@ func TestAttestedKeyMountsAreExclusiveReadOnly(t *testing.T) {
 	cfg := &Config{AttestedKeys: []runtimeconfig.AttestedKey{
 		{ID: "ssh", Key: "ecdsa-p256"}, {ID: "vpn", Key: "x25519"},
 	}, Containers: []Container{
-		{Name: "ssh-app", Image: "app", Keys: []string{"ssh"}, Tmpfs: map[string]string{"/run": ""}},
+		{Name: "ssh-app", Image: "app", Keys: []string{"ssh"}},
 		{Name: "vpn-app", Image: "app", Keys: []string{"vpn"}},
 		{Name: "ungranted", Image: "app"},
 	}}

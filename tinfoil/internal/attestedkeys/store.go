@@ -24,14 +24,16 @@ import (
 const SPKIFormat = "https://tinfoil.sh/key/spki/v1"
 
 const (
-	PrivateFile = "private_key.pem"
-	PublicFile  = "public_key.pem"
+	privateFile = "private_key.pem"
+	publicFile  = "public_key.pem"
 )
 
 // Generate writes every declared key pair under dir and returns the public
-// inventory. Key directories are world-traversable so the shim can read the
-// public file; the private file's own mode protects it.
+// inventory.
 func Generate(dir string, cfg *config.Config) ([]envelope.CryptoMaterialItem, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
 	for _, key := range cfg.AttestedKeys {
 		private, public, err := generate(key.Key)
 		if err != nil {
@@ -46,14 +48,11 @@ func Generate(dir string, cfg *config.Config) ([]envelope.CryptoMaterialItem, er
 			data       []byte
 			mode       os.FileMode
 		}{
-			{PrivateFile, "PRIVATE KEY", private, 0600},
-			{PublicFile, "PUBLIC KEY", public, 0644},
+			{privateFile, "PRIVATE KEY", private, 0600},
+			{publicFile, "PUBLIC KEY", public, 0644},
 		} {
 			path := filepath.Join(keyDir, file.name)
 			if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: file.kind, Bytes: file.data}), file.mode); err != nil {
-				return nil, err
-			}
-			if err := os.Chmod(path, file.mode); err != nil {
 				return nil, err
 			}
 			if err := os.Chown(path, key.UID, key.GID); err != nil {
@@ -64,22 +63,29 @@ func Generate(dir string, cfg *config.Config) ([]envelope.CryptoMaterialItem, er
 			return nil, err
 		}
 	}
-	return ReadPublic(dir, cfg)
+	return ReadPublic(dir)
 }
 
-// ReadPublic returns the endorsed inventory for every declared key.
-func ReadPublic(dir string, cfg *config.Config) ([]envelope.CryptoMaterialItem, error) {
-	items := make([]envelope.CryptoMaterialItem, 0, len(cfg.AttestedKeys))
-	for _, key := range cfg.AttestedKeys {
-		data, err := os.ReadFile(filepath.Join(dir, key.ID, PublicFile))
+// ReadPublic returns the endorsed inventory of every key stored under dir.
+func ReadPublic(dir string) ([]envelope.CryptoMaterialItem, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]envelope.CryptoMaterialItem, 0, len(entries))
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name(), publicFile))
 		if err != nil {
 			return nil, err
 		}
 		block, _ := pem.Decode(data)
 		if block == nil || block.Type != "PUBLIC KEY" {
-			return nil, fmt.Errorf("invalid public key for attested key %q", key.ID)
+			return nil, fmt.Errorf("invalid public key for attested key %q", entry.Name())
 		}
-		items = append(items, envelope.CryptoMaterialItem{ID: key.ID, Format: SPKIFormat, Data: hex.EncodeToString(block.Bytes)})
+		if _, err := x509.ParsePKIXPublicKey(block.Bytes); err != nil {
+			return nil, fmt.Errorf("attested key %q: %w", entry.Name(), err)
+		}
+		items = append(items, envelope.CryptoMaterialItem{ID: entry.Name(), Format: SPKIFormat, Data: hex.EncodeToString(block.Bytes)})
 	}
 	return items, nil
 }

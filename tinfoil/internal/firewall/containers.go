@@ -3,6 +3,7 @@ package firewall
 import (
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 
@@ -53,7 +54,11 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (str
 			if container.Name != adminSSH.Container {
 				continue
 			}
-			for _, bridge := range container.Networks {
+			bridges := container.Networks
+			if runtimeconfig.ShimUpstreamSet(config) && container.Name == config.ShimCfg.UpstreamContainer {
+				bridges = slices.Concat(bridges, []string{containernet.ShimNetName})
+			}
+			for _, bridge := range bridges {
 				fmt.Fprintf(&script, "add rule inet tinfoil container_forward oifname %q ct status dnat ct original proto-dst %d tcp dport %d accept\n", bridge, adminSSH.GuestPort, adminSSH.ContainerPort)
 				fmt.Fprintf(&script, "add rule inet tinfoil container_forward iifname %q ct status dnat ct direction reply ct original proto-dst %d ct state established,related accept\n", bridge, adminSSH.GuestPort)
 			}

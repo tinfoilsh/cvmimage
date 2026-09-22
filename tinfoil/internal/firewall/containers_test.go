@@ -32,8 +32,9 @@ func TestAdminSSHForwardPrecedesDNATDrop(t *testing.T) {
 	if accept < 0 || reply < 0 || accept > drop || reply > drop || strings.Contains(script, "dport 3000") {
 		t.Fatalf("SSH accept must precede the DNAT drop and open nothing else:\n%s", script)
 	}
-	if strings.Contains(mustContainerScript(t, cfg, true), "proto-dst 22") {
-		t.Fatal("debug profile must not expose production SSH")
+	cfg.ShimCfg = &shimconfig.Config{UpstreamContainer: "workspace"}
+	if !strings.Contains(mustContainerScript(t, cfg, false), `oifname "shim-net" ct status dnat ct original proto-dst 22 tcp dport 22 accept`) {
+		t.Fatal("SSH must also be admitted on shim-net when the admin container is the shim upstream")
 	}
 	cfg.CVMNetwork.InboundPorts = nil
 	if strings.Contains(mustContainerScript(t, cfg, false), "proto-dst 22") {

@@ -10,13 +10,45 @@ import (
 
 const dnatDrop = "add rule inet tinfoil container_forward ct status dnat drop"
 
+func mustContainerScript(t *testing.T, config *runtimeconfig.Config, debug bool) string {
+	t.Helper()
+	script, err := renderContainerNetworkScript(config, debug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+func TestAdminSSHForwardPrecedesDNATDrop(t *testing.T) {
+	cfg := &runtimeconfig.Config{
+		CVMNetwork: runtimeconfig.CVMNetworkConfig{InboundPorts: []int{22}},
+		Networks:   map[string]*runtimeconfig.NetworkSpec{"dev": {Egress: "closed"}},
+		Containers: []runtimeconfig.Container{{Name: "workspace", CVMAdmin: true, Networks: []string{"dev"}, Ports: []string{"22:22", "3000:3000"}}},
+	}
+	script := mustContainerScript(t, cfg, false)
+	accept := strings.Index(script, `oifname "dev" ct status dnat ct original proto-dst 22 tcp dport 22 accept`)
+	reply := strings.Index(script, `iifname "dev" ct status dnat ct direction reply ct original proto-dst 22 ct state established,related accept`)
+	drop := strings.Index(script, dnatDrop)
+	if accept < 0 || reply < 0 || accept > drop || reply > drop || strings.Contains(script, "dport 3000") {
+		t.Fatalf("SSH accept must precede the DNAT drop and open nothing else:\n%s", script)
+	}
+	cfg.ShimCfg = &shimconfig.Config{UpstreamContainer: "workspace"}
+	if !strings.Contains(mustContainerScript(t, cfg, false), `oifname "shim-net" ct status dnat ct original proto-dst 22 tcp dport 22 accept`) {
+		t.Fatal("SSH must also be admitted on shim-net when the admin container is the shim upstream")
+	}
+	cfg.CVMNetwork.InboundPorts = nil
+	if strings.Contains(mustContainerScript(t, cfg, false), "proto-dst 22") {
+		t.Fatal("SSH exposed without the inbound-ports opt-in")
+	}
+}
+
 func TestContainerNetworkPolicyModes(t *testing.T) {
 	config := &runtimeconfig.Config{Networks: map[string]*runtimeconfig.NetworkSpec{
 		"closed":  {Egress: "closed"},
 		"open":    {Egress: "open"},
 		"control": {Egress: "allowlist"},
 	}}
-	script := renderContainerNetworkScript(config, false)
+	script := mustContainerScript(t, config, false)
 	for _, fragment := range []string{
 		"flush chain inet tinfoil container_input",
 		"flush chain inet tinfoil container_forward",
@@ -48,7 +80,7 @@ func TestOpenEgressRejectsProtocolAssignments(t *testing.T) {
 	config := &runtimeconfig.Config{Networks: map[string]*runtimeconfig.NetworkSpec{
 		"open": {Egress: "open"},
 	}}
-	script := renderContainerNetworkScript(config, false)
+	script := mustContainerScript(t, config, false)
 	drop := strings.Index(script, `ip daddr { 0.0.0.0/8`)
 	accept := strings.Index(script, `iifname "open" meta nfproto ipv4 accept`)
 	if drop < 0 || accept < 0 || drop > accept || strings.Contains(script, "192.0.0.9") || strings.Contains(script, "192.0.0.10") {
@@ -61,7 +93,7 @@ func TestContainerNetworkPolicyKeepsShimClosed(t *testing.T) {
 		ShimCfg:  &shimconfig.Config{UpstreamContainer: "api"},
 		Networks: map[string]*runtimeconfig.NetworkSpec{},
 	}
-	script := renderContainerNetworkScript(config, false)
+	script := mustContainerScript(t, config, false)
 	if !strings.Contains(script, `iifname "shim-net" oifname "shim-net" accept`) || strings.Contains(script, `iifname "shim-net" ip daddr !`) {
 		t.Fatalf("unexpected shim policy:\n%s", script)
 	}
@@ -69,14 +101,14 @@ func TestContainerNetworkPolicyKeepsShimClosed(t *testing.T) {
 
 func TestContainerNetworkPolicyDebugForwarding(t *testing.T) {
 	config := &runtimeconfig.Config{Containers: []runtimeconfig.Container{{Name: runtimeconfig.ReservedDebugContainerName}}}
-	script := renderContainerNetworkScript(config, true)
+	script := mustContainerScript(t, config, true)
 	toolbox := strings.Index(script, `oifname "docker0" ct status dnat tcp dport 2222 accept`)
 	reply := strings.Index(script, `iifname "docker0" ct state established,related accept`)
 	drop := strings.Index(script, dnatDrop)
 	if toolbox < 0 || reply < 0 || drop < 0 || toolbox > reply || reply > drop {
 		t.Fatalf("toolbox accept must outrank the dnat drop:\n%s", script)
 	}
-	if script := renderContainerNetworkScript(config, false); strings.Contains(script, "docker0") {
+	if script := mustContainerScript(t, config, false); strings.Contains(script, "docker0") {
 		t.Fatalf("production policy opened docker0:\n%s", script)
 	}
 }
@@ -86,7 +118,7 @@ func TestContainerNetworkPolicyDropsPublishedPorts(t *testing.T) {
 		Networks:   map[string]*runtimeconfig.NetworkSpec{"app": {Egress: "closed"}},
 		Containers: []runtimeconfig.Container{{Name: "sandbox", Networks: []string{"app"}, Ports: []string{"2022:22"}}},
 	}
-	script := renderContainerNetworkScript(config, false)
+	script := mustContainerScript(t, config, false)
 	if drop, bridge := strings.Index(script, dnatDrop), strings.Index(script, `container_forward iifname "app"`); drop < 0 || drop > bridge {
 		t.Fatalf("dnat drop must precede the per-bridge rules:\n%s", script)
 	}

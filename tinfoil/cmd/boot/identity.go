@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
@@ -19,6 +20,7 @@ type NodeIdentity struct {
 	TLSKey       *ecdsa.PrivateKey
 	HPKEKeyBytes []byte
 	Domain       string
+	WorkloadKeys []envelope.CryptoMaterialItem
 }
 
 const x25519PublicKeySize = 32

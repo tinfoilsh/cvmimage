@@ -33,6 +33,16 @@ const (
 type BodyV2 struct {
 	TLSKeyFP [32]byte
 	HPKEKey  [32]byte
+	// Workload keys are endorsed by v3 quotes only; Marshal omits them.
+	Workload []envelope.CryptoMaterialItem
+}
+
+func (a BodyV2) CryptoMaterial() []envelope.CryptoMaterialItem {
+	items := []envelope.CryptoMaterialItem{
+		{ID: envelope.CryptoMaterialIDTLS, Format: envelope.KeySPKIFPSHA256V1Format, Data: hex.EncodeToString(a.TLSKeyFP[:])},
+		{ID: envelope.CryptoMaterialIDHPKE, Format: envelope.KeyX25519HPKEV1Format, Data: hex.EncodeToString(a.HPKEKey[:])},
+	}
+	return append(items, a.Workload...)
 }
 
 func (a BodyV2) Marshal() [64]byte {
@@ -143,8 +153,7 @@ func DummyReport(userData [64]byte) *legacy.Document {
 // base64-encoded so verifiers recover the exact hashed bytes with a plain
 // decode.
 func BuildAttestation(
-	tlsKeyFP [32]byte,
-	hpkeKey [32]byte,
+	material []envelope.CryptoMaterialItem,
 	nonce []byte,
 	deviceEvidence []envelope.DeviceEvidenceItem,
 	collateral []envelope.CollateralEntry,
@@ -161,18 +170,7 @@ func BuildAttestation(
 
 	cryptoMaterial := envelope.CryptoMaterialSection{
 		Format: envelope.CryptoMaterialV1Format,
-		Items: []envelope.CryptoMaterialItem{
-			{
-				ID:     envelope.CryptoMaterialIDTLS,
-				Format: envelope.KeySPKIFPSHA256V1Format,
-				Data:   hex.EncodeToString(tlsKeyFP[:]),
-			},
-			{
-				ID:     envelope.CryptoMaterialIDHPKE,
-				Format: envelope.KeyX25519HPKEV1Format,
-				Data:   hex.EncodeToString(hpkeKey[:]),
-			},
-		},
+		Items:  material,
 	}
 	deviceSection := envelope.DeviceEvidenceSection{
 		Format: envelope.DeviceEvidenceV1Format,

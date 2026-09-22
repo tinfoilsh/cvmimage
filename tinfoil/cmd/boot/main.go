@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
 	"tinfoil/internal/nvidia"
 	"tinfoil/internal/volume"
@@ -103,6 +104,9 @@ func run(ctx context.Context, invocation invocation) error {
 	start = time.Now()
 	log.Println("Generating node identity")
 	nodeID, err := generateIdentity(config.ShimCfg, externalConfig)
+	if err == nil {
+		nodeID.WorkloadKeys, err = attestedkeys.Generate(boot.AttestedKeysDir, config)
+	}
 	if err != nil {
 		tracker.Record("identity", boot.StatusFailed, time.Since(start), err.Error())
 		return err

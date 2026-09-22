@@ -433,6 +433,10 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	if c.Image == "" {
 		return nil, nil, nil, nil, fmt.Errorf("no image specified for container %s", c.Name)
 	}
+	adminSSH, err := runtimeconfig.AdminSSH(cfg, debug)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	// Build environment variables
 	env := buildEnv(c.Env, c.Secrets, extConfig, secrets)
@@ -491,6 +495,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		hostConfig.Binds = append(hostConfig.Binds,
 			boot.PrivateModelsDir+"/"+model+":"+boot.ContainerModelsDir+"/"+model+":ro",
 		)
+	}
+	for _, id := range c.Keys {
+		hostConfig.Binds = append(hostConfig.Binds, boot.AttestedKeysDir+"/"+id+":"+runtimeconfig.AttestedKeysContainerDir+"/"+id+":ro")
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit
 	if first == "" {
@@ -551,10 +558,14 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	containerConfig.ExposedPorts = dockernetwork.PortSet{}
 	hostConfig.PortBindings = dockernetwork.PortMap{}
 	for _, mapping := range ports {
+		bindingIP := hostIP
+		if adminSSH != nil && c.Name == adminSSH.Container && mapping.Host == adminSSH.GuestPort {
+			bindingIP = netip.Addr{}
+		}
 		port := dockernetwork.MustParsePort(fmt.Sprintf("%d/tcp", mapping.Container))
 		containerConfig.ExposedPorts[port] = struct{}{}
 		hostConfig.PortBindings[port] = append(hostConfig.PortBindings[port], dockernetwork.PortBinding{
-			HostIP:   hostIP,
+			HostIP:   bindingIP,
 			HostPort: fmt.Sprintf("%d", mapping.Host),
 		})
 	}

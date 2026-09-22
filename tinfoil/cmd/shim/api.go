@@ -347,8 +347,7 @@ func registerObservabilityHandlers(
 			}
 
 			fresh, err := tinfoilattestation.BuildAttestation(
-				identityBody.TLSKeyFP,
-				identityBody.HPKEKey,
+				identityBody.CryptoMaterial(),
 				nonce,
 				deviceEvidence,
 				collateral,

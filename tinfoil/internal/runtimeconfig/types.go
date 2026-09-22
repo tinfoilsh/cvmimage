@@ -16,6 +16,16 @@ type VolumeSpec = sharedconfig.VolumeSpec
 type VolumeOverlay = sharedconfig.VolumeOverlay
 type Container = sharedconfig.Container
 type Healthcheck = sharedconfig.Healthcheck
+type AttestedKey = sharedconfig.AttestedKey
+
+const AttestedKeysContainerDir = sharedconfig.AttestedKeysContainerDir
+
+func AdminSSH(config *Config, debug bool) (*sharedconfig.AdminSSHMapping, error) {
+	if debug {
+		return nil, nil
+	}
+	return sharedconfig.AdminSSH(config)
+}
 
 func options(debug bool) sharedconfig.Options {
 	if debug {

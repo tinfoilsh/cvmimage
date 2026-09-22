@@ -25,10 +25,12 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
@@ -212,6 +214,13 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			TLSKeyFP: tlsutil.KeyFPBytes(&tlsPub.PublicKey),
 		}
 		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
+
+		identityBody.Workload, err = waitForArtifact("Attested workload keys", func() ([]envelope.CryptoMaterialItem, error) {
+			return attestedkeys.ReadPublic(boot.AttestedKeysDir)
+		})
+		if err != nil {
+			return err
+		}
 
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)

@@ -87,8 +87,7 @@ func fetchKeyserverSecrets(
 
 	identityBody := nodeID.attestationBody()
 	document, err := attestation.BuildAttestation(
-		identityBody.TLSKeyFP,
-		identityBody.HPKEKey,
+		identityBody.CryptoMaterial(),
 		nonce,
 		deviceEvidence,
 		collateral,

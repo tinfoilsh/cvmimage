@@ -49,6 +49,18 @@ aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
 the attested top-level GPU count; boolean, zero, negative, duplicate, and
 out-of-range selections are rejected.
 
+## Attested workload keys
+
+The measured `attested-keys` list declares `{id, key, uid?, gid?}` and each
+`containers[].keys` list grants one declared ID to exactly one container.
+Algorithms are `ecdsa-p256`, `ed25519`, and `x25519`. Boot generates every key
+once per CVM boot in private tmpfs; shim and container restarts keep it and a
+reboot rotates it. A grant bind-mounts `/run/tinfoil/keys/<id>` read-only with
+`private_key.pem` (PKCS#8, mode 0600) and `public_key.pem` (SPKI) owned by the
+measured UID/GID. Every v3 quote endorses each key as a `crypto_material` entry
+using the declared ID and `https://tinfoil.sh/key/spki/v1` with full SPKI DER as
+lowercase hex. The runtime never emits SSH or other application encodings.
+
 ## CVM administrator containers
 
 `cvm_admin: true` in the measured container config selects a fixed administrative
@@ -60,13 +72,16 @@ administration of the **whole CVM**, including its workloads, secrets, and guest
 firewall, not a stronger form of isolated container root. Kernel module loading
 remains locked, and the verified CVM root disk is not made writable.
 
-Networking is unchanged: admin containers use declared bridge `networks` and
-`ports` like ordinary workloads. An `egress: open` network provides Internet
-access; published ports remain loopback-only and reachable through the shim's
-authenticated, attested CONNECT tunnel. No host networking or direct SSH ingress
-is needed. Images may run an inner Docker daemon: nested containers use its own
-bridges/NAT and Unix socket, so `docker ps` does not show the SSH wrapper. Guest
-network rules are not a security boundary against the CVM administrator.
+Admin containers use declared bridge `networks` and `ports` like ordinary
+workloads. An `egress: open` network provides Internet access; published ports
+remain loopback-only and reachable through the shim's authenticated, attested
+CONNECT tunnel. The one exception is direct SSH: `cvm_admin: true`,
+`ports: ["22:22"]`, and `cvm-network.inbound-ports: [22]` together bind that
+mapping on the guest interface and admit its DNAT traffic through the firewall.
+The debug toolbox keeps port 2222 and suppresses this exception. Images may run
+an inner Docker daemon: nested containers use its own bridges/NAT and Unix
+socket, so `docker ps` does not show the SSH wrapper. Guest network rules are
+not a security boundary against the CVM administrator.
 
 Persistence is unchanged: Docker's writable layers, downloaded images, and
 ordinary Docker volumes live in RAM and do not survive CVM reboot. Only an
@@ -79,9 +94,14 @@ so a volume mounted at `/workspace` can be used directly by its inner daemon.
 The image owns that daemon's lifecycle and can reset its RAM-backed state on
 container restart too. For example,
 the following fragment supplements the normal pinned-image, shim and SSH-key
-configuration (the image must supply an authenticated SSH server on port 2222):
+configuration (the image must serve SSH on port 22 with the granted host key):
 
 ```yaml
+attested-keys:
+  - id: host-ssh
+    key: ecdsa-p256
+cvm-network:
+  inbound-ports: [22]
 networks:
   dev:
     egress: open
@@ -94,7 +114,8 @@ containers:
     image: <digest-pinned SSH image>
     cvm_admin: true
     networks: [dev]
-    ports: ["2022:2222"]
+    ports: ["22:22"]
+    keys: [host-ssh]
     working_dir: /workspace
     volumes: [workspace:/workspace]
 ```

@@ -433,9 +433,6 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	if c.Image == "" {
 		return nil, nil, nil, nil, fmt.Errorf("no image specified for container %s", c.Name)
 	}
-	if err := runtimeconfig.ValidateAttestedKeys(cfg); err != nil {
-		return nil, nil, nil, nil, err
-	}
 	adminSSH, err := runtimeconfig.AdminSSH(cfg, debug)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -500,8 +497,6 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		)
 	}
 	for _, id := range c.Keys {
-		// Config validation prevents traversal, shared grants, and shadowing
-		// these nested read-only mounts with a workload volume or tmpfs.
 		hostConfig.Binds = append(hostConfig.Binds, boot.AttestedKeysDir+"/"+id+":"+runtimeconfig.AttestedKeysContainerDir+"/"+id+":ro")
 	}
 	hostConfig.Resources.PidsLimit = pidsLimit

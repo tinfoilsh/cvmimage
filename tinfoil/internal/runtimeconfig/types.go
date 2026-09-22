@@ -20,9 +20,6 @@ type AttestedKey = sharedconfig.AttestedKey
 
 const AttestedKeysContainerDir = sharedconfig.AttestedKeysContainerDir
 
-func ValidateAttestedKeys(config *Config) error { return sharedconfig.ValidateAttestedKeys(config) }
-
-// AdminSSH keeps the production exception separate from the debug toolbox.
 func AdminSSH(config *Config, debug bool) (*sharedconfig.AdminSSHMapping, error) {
 	if debug {
 		return nil, nil

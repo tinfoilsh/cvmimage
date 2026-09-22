@@ -53,15 +53,13 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (str
 			if container.Name != adminSSH.Container {
 				continue
 			}
-			// Docker may select an endpoint on any attached bridge. Bound both
-			// directions to the declared guest port, never all admin traffic.
 			for _, bridge := range container.Networks {
 				fmt.Fprintf(&script, "add rule inet tinfoil container_forward oifname %q ct status dnat ct original proto-dst %d tcp dport %d accept\n", bridge, adminSSH.GuestPort, adminSSH.ContainerPort)
 				fmt.Fprintf(&script, "add rule inet tinfoil container_forward iifname %q ct status dnat ct direction reply ct original proto-dst %d ct state established,related accept\n", bridge, adminSSH.GuestPort)
 			}
 		}
 	}
-	// Every other published port remains reachable only via the shim tunnel.
+	// Every other published port is reachable only over the shim's CONNECT tunnel.
 	script.WriteString("add rule inet tinfoil container_forward ct status dnat drop\n")
 	for _, name := range names {
 		writeBridgeRules(&script, name, config.Networks[name])

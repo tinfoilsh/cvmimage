@@ -179,7 +179,6 @@ func NewShimServer(
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
 	tunnelTargets map[string]bool,
-	workloadKeys ...envelope.CryptoMaterialItem,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
@@ -270,7 +269,7 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, workloadKeys...)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 
 	// Fail closed: an authenticated deployment with no validator must not tunnel.
 	if config.Authenticated && validator == nil {
@@ -288,11 +287,10 @@ func NewObservabilityServer(
 	collateralSource collateralSource,
 	config *config.Config,
 	externalConfig *config.ExternalConfig,
-	workloadKeys ...envelope.CryptoMaterialItem,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, workloadKeys...)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
@@ -319,10 +317,7 @@ func registerObservabilityHandlers(
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
 	externalConfig *config.ExternalConfig,
-	workloadKeys ...envelope.CryptoMaterialItem,
 ) {
-	// Capture an immutable public snapshot shared by early and full handlers.
-	material := identityBody.CryptoMaterial(workloadKeys)
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -352,7 +347,7 @@ func registerObservabilityHandlers(
 			}
 
 			fresh, err := tinfoilattestation.BuildAttestation(
-				material,
+				identityBody.CryptoMaterial(),
 				nonce,
 				deviceEvidence,
 				collateral,

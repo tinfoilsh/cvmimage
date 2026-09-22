@@ -70,6 +70,7 @@ func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
 	return attestation.BodyV2{
 		TLSKeyFP: tlsutil.KeyFPBytes(id.TLSKey.Public().(*ecdsa.PublicKey)),
 		HPKEKey:  hpkeKey,
+		Workload: id.WorkloadKeys,
 	}
 }
 

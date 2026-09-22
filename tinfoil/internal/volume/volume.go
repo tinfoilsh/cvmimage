@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/hkdf"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
@@ -31,13 +34,20 @@ const (
 	workSuffix      = ".work"
 	integritySuffix = "-integrity"
 
-	// A request carries one key, but the table needs a cipher key and a MAC key.
-	tableKeyInfo = "tinfoil volume table key v1"
+	VersionHKDF   byte = 1
+	VersionArgon2 byte = 2
+	tableKeyInfo       = "tinfoil volume table key v1"
 
 	maxOwner       = 65534
 	maxOverlays    = 8
-	KeyBytes       = 64
+	MinKeyBytes    = 16
 	blankProbeSize = 1 << 20
+
+	headerMagic    = "tinfoil-volume-1"
+	headerBytes    = 4096
+	argonTime      = 3
+	argonMemoryKiB = 256 << 10
+	argonThreads   = 4
 )
 
 var (
@@ -65,6 +75,15 @@ type volume struct {
 	control  *os.File
 	source   *os.File
 	unlocked bool
+}
+
+type diskHeader struct {
+	Magic   [len(headerMagic)]byte
+	Time    uint32
+	Memory  uint32
+	Threads uint8
+	_       [3]byte
+	Salt    [32]byte
 }
 
 func (parsed Spec) Validate() error {
@@ -104,8 +123,8 @@ func (parsed Spec) Validate() error {
 // Mount opens a volume during boot. A blank disk is initialized; any other
 // disk must open with this key.
 func Mount(ctx context.Context, spec Spec, key []byte) error {
-	if len(key) != KeyBytes {
-		return fmt.Errorf("key is %d bytes, want %d", len(key), KeyBytes)
+	if len(key) < MinKeyBytes {
+		return fmt.Errorf("key is %d bytes, want at least %d", len(key), MinKeyBytes)
 	}
 	instance, err := openVolume(spec)
 	if err != nil {
@@ -120,7 +139,7 @@ func Mount(ctx context.Context, spec Spec, key []byte) error {
 	if err != nil {
 		return err
 	}
-	return instance.activate(ctx, key, blank)
+	return instance.activate(ctx, key, blank, VersionArgon2)
 }
 
 func openVolume(parsed Spec) (*volume, error) {
@@ -242,23 +261,22 @@ func (w *volume) removeUnopened(name string) error {
 	return devicemapper.Remove(w.control, name)
 }
 
-func (w *volume) activate(ctx context.Context, key []byte, initialize bool) (result error) {
-	tableKey, err := hkdf.Key(sha256.New, key, nil, tableKeyInfo, devicemapper.AuthenticatedKeyBytes)
+func (w *volume) activate(ctx context.Context, key []byte, initialize bool, version byte) (result error) {
+	// Zeroing is safe only over a header and superblock this call wrote and before mkfs has finished behind it.
+	rollback := initialize
+	defer func() {
+		if result != nil && rollback {
+			result = errors.Join(result, w.writeStart(make([]byte, blankProbeSize)))
+		}
+	}()
+	tableKey, reserved, err := w.tableKey(key, initialize, version)
 	if err != nil {
 		return err
 	}
 	defer clear(tableKey)
-	// Zeroing is safe only over a superblock this call wrote and before mkfs has finished behind it.
-	rollback := false
-	defer func() {
-		if result != nil && rollback {
-			result = errors.Join(result, w.restoreBlank())
-		}
-	}()
-	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), initialize); err != nil {
+	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), reserved, initialize); err != nil {
 		return err
 	}
-	rollback = initialize
 	defer func() {
 		if result != nil {
 			result = errors.Join(result, devicemapper.Remove(w.control, w.integrityName()))
@@ -409,6 +427,52 @@ func readMountState(path string) (mountState, error) {
 	}, nil
 }
 
+func (w *volume) tableKey(key []byte, initialize bool, version byte) ([]byte, int64, error) {
+	switch version {
+	case VersionHKDF:
+		tableKey, err := hkdf.Key(sha256.New, key, nil, tableKeyInfo, devicemapper.AuthenticatedKeyBytes)
+		return tableKey, 0, err
+	case VersionArgon2:
+		h, err := w.header(initialize)
+		if err != nil {
+			return nil, 0, err
+		}
+		return argon2.IDKey(key, h.Salt[:], h.Time, h.Memory, h.Threads, devicemapper.AuthenticatedKeyBytes), headerBytes, nil
+	}
+	return nil, 0, fmt.Errorf("unsupported volume format %d", version)
+}
+
+func (w *volume) header(initialize bool) (diskHeader, error) {
+	var h diskHeader
+	if initialize {
+		copy(h.Magic[:], headerMagic)
+		h.Time, h.Memory, h.Threads = argonTime, argonMemoryKiB, argonThreads
+		rand.Read(h.Salt[:])
+		raw, err := binary.Append(nil, binary.LittleEndian, h)
+		if err != nil {
+			return h, err
+		}
+		return h, w.writeStart(raw)
+	}
+	if err := unix.IoctlSetInt(int(w.source.Fd()), unix.BLKFLSBUF, 0); err != nil {
+		return h, fmt.Errorf("invalidating the stale block cache: %w", err)
+	}
+	raw := make([]byte, binary.Size(h))
+	if _, err := w.source.ReadAt(raw, 0); err != nil {
+		return h, fmt.Errorf("reading volume header: %w", err)
+	}
+	if _, err := binary.Decode(raw, binary.LittleEndian, &h); err != nil {
+		return h, err
+	}
+	if string(h.Magic[:]) != headerMagic {
+		return h, errors.New("storage volume carries no header")
+	}
+	if h.Time != argonTime || h.Memory != argonMemoryKiB || h.Threads != argonThreads {
+		return h, fmt.Errorf("unsupported key derivation parameters %d/%d/%d", h.Time, h.Memory, h.Threads)
+	}
+	return h, nil
+}
+
 func blockDeviceBlank(source *os.File) (bool, error) {
 	if source == nil {
 		return false, errors.New("storage volume is unavailable")
@@ -440,13 +504,13 @@ func blockDeviceBlank(source *os.File) (bool, error) {
 	return true, nil
 }
 
-func (w *volume) restoreBlank() error {
+func (w *volume) writeStart(data []byte) error {
 	raw, err := os.OpenFile(w.source.Name(), os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}
 	defer raw.Close()
-	if _, err := raw.WriteAt(make([]byte, blankProbeSize), 0); err != nil {
+	if _, err := raw.WriteAt(data, 0); err != nil {
 		return err
 	}
 	return raw.Sync()

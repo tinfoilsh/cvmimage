@@ -4,7 +4,9 @@ package volume
 import (
 	"bytes"
 	"context"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -31,6 +33,10 @@ const (
 	upperSuffix     = ".upper"
 	workSuffix      = ".work"
 	integritySuffix = "-integrity"
+
+	VersionHKDF   byte = 1
+	VersionArgon2 byte = 2
+	tableKeyInfo       = "tinfoil volume table key v1"
 
 	maxOwner       = 65534
 	maxOverlays    = 8
@@ -133,7 +139,7 @@ func Mount(ctx context.Context, spec Spec, key []byte) error {
 	if err != nil {
 		return err
 	}
-	return instance.activate(ctx, key, blank)
+	return instance.activate(ctx, key, blank, VersionArgon2)
 }
 
 func openVolume(parsed Spec) (*volume, error) {
@@ -255,7 +261,7 @@ func (w *volume) removeUnopened(name string) error {
 	return devicemapper.Remove(w.control, name)
 }
 
-func (w *volume) activate(ctx context.Context, key []byte, initialize bool) (result error) {
+func (w *volume) activate(ctx context.Context, key []byte, initialize bool, version byte) (result error) {
 	// Zeroing is safe only over a header and superblock this call wrote and before mkfs has finished behind it.
 	rollback := initialize
 	defer func() {
@@ -263,13 +269,12 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize bool) (res
 			result = errors.Join(result, w.writeStart(make([]byte, blankProbeSize)))
 		}
 	}()
-	h, err := w.header(initialize)
+	tableKey, reserved, err := w.tableKey(key, initialize, version)
 	if err != nil {
 		return err
 	}
-	tableKey := argon2.IDKey(key, h.Salt[:], h.Time, h.Memory, h.Threads, devicemapper.AuthenticatedKeyBytes)
 	defer clear(tableKey)
-	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), headerBytes, initialize); err != nil {
+	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), reserved, initialize); err != nil {
 		return err
 	}
 	defer func() {
@@ -420,6 +425,21 @@ func readMountState(path string) (mountState, error) {
 		id:     info.Mnt_id,
 		device: unix.Mkdev(info.Dev_major, info.Dev_minor),
 	}, nil
+}
+
+func (w *volume) tableKey(key []byte, initialize bool, version byte) ([]byte, int64, error) {
+	switch version {
+	case VersionHKDF:
+		tableKey, err := hkdf.Key(sha256.New, key, nil, tableKeyInfo, devicemapper.AuthenticatedKeyBytes)
+		return tableKey, 0, err
+	case VersionArgon2:
+		h, err := w.header(initialize)
+		if err != nil {
+			return nil, 0, err
+		}
+		return argon2.IDKey(key, h.Salt[:], h.Time, h.Memory, h.Threads, devicemapper.AuthenticatedKeyBytes), headerBytes, nil
+	}
+	return nil, 0, fmt.Errorf("unsupported volume format %d", version)
 }
 
 func (w *volume) header(initialize bool) (diskHeader, error) {

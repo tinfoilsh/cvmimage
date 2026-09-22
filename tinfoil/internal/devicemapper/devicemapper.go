@@ -662,7 +662,7 @@ func readMajorMinor(path string) (uint32, uint32, error) {
 
 // IntegrityDataSectors reports the capacity dm-integrity publishes on source,
 // and whether source carries a superblock at all.
-func IntegrityDataSectors(source *os.File) (uint64, bool, error) {
+func IntegrityDataSectors(source *os.File, reservedBytes int64) (uint64, bool, error) {
 	if source == nil {
 		return 0, false, errors.New("nil block device")
 	}
@@ -672,7 +672,7 @@ func IntegrityDataSectors(source *os.File) (uint64, bool, error) {
 		return 0, false, fmt.Errorf("invalidating the stale block cache: %w", err)
 	}
 	var header [dmSectorSizeBytes]byte
-	if _, err := source.ReadAt(header[:], 0); err != nil {
+	if _, err := source.ReadAt(header[:], reservedBytes); err != nil {
 		return 0, false, fmt.Errorf("reading integrity superblock: %w", err)
 	}
 	if string(header[:len(integrityMagic)]) != integrityMagic {
@@ -685,14 +685,14 @@ func IntegrityDataSectors(source *os.File) (uint64, bool, error) {
 // writable crypt mapping. The target formats a zeroed device as it builds its
 // first table, so a volume without a superblock is only accepted when
 // initialize is set, and one with a superblock only when it is not.
-func ActivateIntegrity(control, source *os.File, name string, initialize bool) (result error) {
+func ActivateIntegrity(control, source *os.File, name string, reservedBytes int64, initialize bool) (result error) {
 	deviceNumber, deviceSectors, err := blockDeviceInfo(source)
 	if err != nil {
 		return err
 	}
-	params := fmt.Sprintf("%s 0 %d %s 2 block_size:%d fix_padding",
-		deviceNumber, integrityTagBytes, integrityJournalMode, cryptSectorSizeBytes)
-	dataSectors, formatted, err := IntegrityDataSectors(source)
+	params := fmt.Sprintf("%s %d %d %s 2 block_size:%d fix_padding",
+		deviceNumber, reservedBytes/dmSectorSizeBytes, integrityTagBytes, integrityJournalMode, cryptSectorSizeBytes)
+	dataSectors, formatted, err := IntegrityDataSectors(source, reservedBytes)
 	if err != nil {
 		return err
 	}
@@ -711,7 +711,7 @@ func ActivateIntegrity(control, source *os.File, name string, initialize bool) (
 		if err := Remove(control, name); err != nil {
 			return err
 		}
-		if dataSectors, formatted, err = IntegrityDataSectors(source); err != nil {
+		if dataSectors, formatted, err = IntegrityDataSectors(source, reservedBytes); err != nil {
 			return err
 		} else if !formatted {
 			return fmt.Errorf("device %s was not formatted", deviceNumber)

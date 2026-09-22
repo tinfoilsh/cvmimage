@@ -24,8 +24,8 @@ func TestMountVolumesUsesDeclaredLayoutAndClearsKeys(t *testing.T) {
 			{Name: "state", KeySecret: "STATE_KEY"},
 		},
 	}
-	workspaceKey := bytes.Repeat([]byte{0x5a}, volume.KeyBytes)
-	stateKey := bytes.Repeat([]byte{0xa5}, volume.KeyBytes)
+	workspaceKey := bytes.Repeat([]byte{0x5a}, volume.MinKeyBytes)
+	stateKey := bytes.Repeat([]byte{0xa5}, volume.MinKeyBytes)
 	external := &shimconfig.ExternalConfig{Secrets: map[string]string{
 		"WORKSPACE_KEY": " \n" + base64.StdEncoding.EncodeToString(workspaceKey) + "\n",
 		"STATE_KEY":     base64.StdEncoding.EncodeToString(stateKey),
@@ -52,7 +52,7 @@ func TestMountVolumesUsesDeclaredLayoutAndClearsKeys(t *testing.T) {
 		t.Fatalf("mounted layouts = %#v, want %#v", layouts, wantLayouts)
 	}
 	for _, key := range keys {
-		if !bytes.Equal(key, make([]byte, volume.KeyBytes)) {
+		if !bytes.Equal(key, make([]byte, volume.MinKeyBytes)) {
 			t.Fatal("decoded key retained after mount")
 		}
 	}
@@ -63,8 +63,7 @@ func TestMountVolumesRejectsUnusableKeysBeforeMounting(t *testing.T) {
 	for name, secret := range map[string]string{
 		"unresolved": "",
 		"malformed":  "not-base64",
-		"short":      base64.StdEncoding.EncodeToString(make([]byte, volume.KeyBytes-1)),
-		"long":       base64.StdEncoding.EncodeToString(make([]byte, volume.KeyBytes+1)),
+		"short":      base64.StdEncoding.EncodeToString(make([]byte, volume.MinKeyBytes-1)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			external := &shimconfig.ExternalConfig{Secrets: map[string]string{"VOLUME_KEY": secret}}

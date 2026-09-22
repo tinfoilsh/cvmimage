@@ -146,3 +146,8 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+
+Writable volumes use authenticated dm-crypt over dm-integrity with a protected
+RAM-backed superblock built from one fixed Go profile, and journal/superblock HMACs.
+See [writable volume integrity](writable-volume-integrity.md) for the trust
+boundary, key derivation, fixed format and integration checks.

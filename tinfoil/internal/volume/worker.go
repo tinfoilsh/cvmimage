@@ -142,7 +142,7 @@ func (w *volume) handle(ctx context.Context, packet []byte) (string, error) {
 			return statusRejected, errors.New("storage volume is not blank")
 		}
 	}
-	if err := w.activate(ctx, spec.Key, spec.Op == opInitialize, true); err != nil {
+	if err := w.activate(ctx, spec.Key, spec.Op == opInitialize); err != nil {
 		return statusFailed, err
 	}
 	w.unlocked = true

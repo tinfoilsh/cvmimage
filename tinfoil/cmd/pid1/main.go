@@ -272,6 +272,9 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := startVolumeWorkers(bootCtx, deps); err != nil {
 		return fmt.Errorf("storage volumes: %w", err)
 	}
+	if err := ownSealRegister(deps); err != nil {
+		return fmt.Errorf("seal register: %w", err)
+	}
 	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
 		fmt.Sprintf("--debug=%t", deps.cmdline.Debug))
 	containersCommand = withSecretHandoff(containersCommand, secretHandoff)
@@ -597,6 +600,22 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 		}
 	}
 	return nil
+}
+
+func ownSealRegister(deps lifecycleDeps) error {
+	config, err := deps.measuredConfig()
+	if err != nil {
+		return err
+	}
+	_, owner, ok := runtimeconfig.SealOwner(config)
+	if !ok {
+		return nil
+	}
+	err = os.Chown(boot.SealRegisterPath, owner, owner)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func requiredServiceNames() []string {

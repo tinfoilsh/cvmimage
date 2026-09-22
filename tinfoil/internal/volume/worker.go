@@ -16,6 +16,7 @@ import (
 const (
 	maxRequestBytes = 64 << 10
 	requestTimeout  = 5 * time.Second
+	requestVersion  = 1
 	opUnlock        = 'u'
 	opInitialize    = 'i'
 	statusOK        = "ok"
@@ -93,12 +94,15 @@ func (w *volume) serve(ctx context.Context, connection *net.UnixConn) error {
 	return requestErr
 }
 
-// A request is one datagram: an op byte followed by the raw key.
+// A request is one datagram: a version byte, an op byte, then the raw key.
 func (w *volume) handle(ctx context.Context, packet []byte) (string, error) {
-	if len(packet) == 0 || len(packet) > maxRequestBytes {
+	if len(packet) < 2 || len(packet) > maxRequestBytes {
 		return statusRejected, fmt.Errorf("request is %d bytes", len(packet))
 	}
-	op, key := packet[0], packet[1:]
+	if packet[0] != requestVersion {
+		return statusRejected, fmt.Errorf("unsupported request version %d", packet[0])
+	}
+	op, key := packet[1], packet[2:]
 	if op != opUnlock && op != opInitialize {
 		return statusRejected, fmt.Errorf("invalid request operation %q", op)
 	}

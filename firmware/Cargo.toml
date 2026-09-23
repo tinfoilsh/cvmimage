@@ -1,0 +1,11 @@
+[package]
+name = "tinfoil-firmware"
+version = "0.1.0"
+edition = "2021"
+description = "The measured initial state of a Tinfoil confidential guest"
+build = "build.rs"
+
+[dependencies]
+igvm = "=0.3.4"
+zerocopy = "=0.7.32"
+

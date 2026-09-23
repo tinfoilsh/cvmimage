@@ -95,7 +95,6 @@ func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimc
 		QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
 	}
 	if external != nil {
-		request.DeploymentID = external.Metadata.ID
 		request.Repo = external.Metadata.Repo
 		request.Tag = external.Metadata.Tag
 	}

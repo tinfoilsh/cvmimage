@@ -12,7 +12,10 @@ import (
 
 type Config = sharedconfig.ShimConfig
 
-const SecretMetricsAPIKey = "METRICS_API_KEY"
+const (
+	SecretMetricsAPIKey       = "METRICS_API_KEY"
+	SecretCollateralAuthToken = "COLLATERAL_AUTH_TOKEN"
+)
 
 type Metadata struct {
 	ID     string `yaml:"id"`

@@ -8,19 +8,26 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 )
 
-const maxResponseSize = 20 << 20
+const (
+	maxResponseSize       = 20 << 20
+	collateralTokenHeader = "X-Collateral-Token"
+)
 
 type Client struct {
-	endpoint string
-	http     *http.Client
+	endpoint  string
+	token     string
+	tokenPath string
+	http      *http.Client
 }
 
-func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
+func NewClient(baseURL, token, tokenPath string, httpClient *http.Client) (*Client, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing ATC URL: %w", err)
@@ -31,12 +38,27 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	if base.Hostname() == "" {
 		return nil, fmt.Errorf("ATC URL is missing a host")
 	}
+	if token != "" && base.Scheme != "https" {
+		return nil, fmt.Errorf("authenticated ATC requests require HTTPS")
+	}
+	if token != "" && tokenPath == "" {
+		return nil, fmt.Errorf("authenticated ATC requests require a token path")
+	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
+	if token != "" {
+		client := *httpClient
+		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		httpClient = &client
+	}
 	return &Client{
-		endpoint: base.JoinPath("attestation-collaterals").String(),
-		http:     httpClient,
+		endpoint:  base.JoinPath("attestation-collaterals").String(),
+		token:     token,
+		tokenPath: tokenPath,
+		http:      httpClient,
 	}, nil
 }
 
@@ -50,6 +72,16 @@ func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response
 		return wire.Response{}, fmt.Errorf("building collaterals request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		token := c.token
+		stored, err := os.ReadFile(c.tokenPath)
+		if err == nil {
+			token = string(stored)
+		} else if !os.IsNotExist(err) {
+			return wire.Response{}, fmt.Errorf("reading collateral token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -77,7 +109,28 @@ func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response
 	if !time.Now().Before(response.ExpiresAt) {
 		return wire.Response{}, fmt.Errorf("collaterals response is already expired at %s", response.ExpiresAt.Format(time.RFC3339))
 	}
+	if token := resp.Header.Get(collateralTokenHeader); c.token != "" && token != "" {
+		if err := c.saveToken(token); err != nil {
+			return wire.Response{}, fmt.Errorf("saving renewed collateral token: %w", err)
+		}
+	}
 	return response, nil
+}
+
+func (c *Client) saveToken(token string) error {
+	file, err := os.CreateTemp(filepath.Dir(c.tokenPath), ".collateral-token-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.WriteString(token); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), c.tokenPath)
 }
 
 func ParseResponse(data []byte) (wire.Response, error) {

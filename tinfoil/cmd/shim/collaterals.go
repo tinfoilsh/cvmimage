@@ -9,14 +9,15 @@ import (
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
+	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 )
 
-func newCollateralSource(request wire.Request, config *shimconfig.Config) (collateralSource, error) {
+func newCollateralSource(request wire.Request, config *shimconfig.Config, external *shimconfig.ExternalConfig) (collateralSource, error) {
 	if request.Platform == attestation.PlatformDummy {
 		return nil, nil
 	}
-	client, err := attestationmaterial.NewClient(config.ATC, nil)
+	client, err := attestationmaterial.NewClient(config.ATC, external.GetSecret(shimconfig.SecretCollateralAuthToken), boot.CollateralTokenPath, nil)
 	if err != nil {
 		return nil, err
 	}

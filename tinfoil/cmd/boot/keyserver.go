@@ -68,7 +68,7 @@ func fetchKeyserverSecrets(
 
 	// Fetch collateral before obtaining the short-lived challenge nonce. The
 	// final document carries this untrusted transport for offline verification.
-	collateral, err := prefetchKeyserverCollateral(ctx, config, collateralRequest)
+	collateral, err := prefetchKeyserverCollateral(ctx, config, collateralRequest, ext.GetSecret(shimconfig.SecretCollateralAuthToken))
 	if err != nil {
 		return nil, err
 	}
@@ -117,11 +117,12 @@ func prefetchKeyserverCollateral(
 	ctx context.Context,
 	config *Config,
 	request wire.Request,
+	token string,
 ) ([]envelope.CollateralEntry, error) {
 	if request.Repo == "" || request.Platform == "" || request.Platform == attestation.PlatformDummy || request.QuoteBase64 == "" {
 		return nil, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
 	}
-	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)
+	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, token, boot.CollateralTokenPath, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating ATC client: %w", err)
 	}

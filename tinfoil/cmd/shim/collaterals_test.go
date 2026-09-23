@@ -28,7 +28,7 @@ func TestLoadCollateralRequest(t *testing.T) {
 }
 
 func TestNewCollateralSourceSkipsDummy(t *testing.T) {
-	source, err := newCollateralSource(wire.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{})
+	source, err := newCollateralSource(wire.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

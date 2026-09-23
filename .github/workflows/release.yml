@@ -44,6 +44,14 @@ jobs:
           /nix/var/nix/profiles/default/bin/nix-build \
             -I . -A shipping-image -o result
 
+      - name: Build cvm-compiler
+        env:
+          PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -Eeuo pipefail
+          /nix/var/nix/profiles/default/bin/nix-build \
+            -I . -A cvm-compiler -o result-cvmc
+
       - name: Generate manifest
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -57,7 +65,8 @@ jobs:
             "root": "$(tr -d '\n' < result/tinfoilcvm.roothash)",
             "initrd": "$(sha256sum result/tinfoilcvm.initrd | awk '{print $1}')",
             "kernel": "$(sha256sum result/tinfoilcvm.vmlinuz | awk '{print $1}')",
-            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')"
+            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
+            "cvm_compiler": "$(sha256sum result-cvmc/bin/cvmc | awk '{print $1}')"
           }
           EOF
 
@@ -65,6 +74,7 @@ jobs:
           cp result/tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
           cp result/tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
           cp result/tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
+          cp result-cvmc/bin/cvmc "/tmp/out/cvmc-${REF_NAME}"
 
           # Generate checksums
           cd /tmp/out
@@ -78,6 +88,7 @@ jobs:
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
+            /tmp/out/cvmc-${{ github.ref_name }}
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
 
       - name: Upload attested artifacts to R2
@@ -116,6 +127,7 @@ jobs:
           - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.vmlinuz
           - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.initrd
           - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.raw
+          - CVM compiler (cvmc): https://images.tinfoil.sh/cvm/cvmc-${REF_NAME}
 
           ### Manifest
           \`\`\`json

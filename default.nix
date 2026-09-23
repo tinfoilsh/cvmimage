@@ -15,6 +15,7 @@ let
     overlays = [ ];
   };
   go = import ./nix/go.nix { inherit pkgs; };
+  cvmCompiler = import ./nix/compiler.nix { inherit pkgs; };
   initrd = import ./nix/initrd.nix {
     inherit pkgs;
     tinfoilInitrd = go.packages."tinfoil-initrd";
@@ -66,6 +67,7 @@ go.packages
   "debug-rootfs-layer" = rootfs.debugLayer;
   "runtime-package-lock" = runtimePackages.lock;
   "release-upload-cli" = pkgs.awscli2;
+  "cvm-compiler" = cvmCompiler;
   "shipping-image" = shippingImage;
   "debug-image" = debugImage;
 }

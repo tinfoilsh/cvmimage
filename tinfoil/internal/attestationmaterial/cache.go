@@ -47,6 +47,32 @@ func NewCache(request wire.Request, fetcher Fetcher) *Cache {
 	}
 }
 
+// Run keeps authenticated collateral access renewed even without client traffic.
+func (c *Cache) Run(ctx context.Context) {
+	for ctx.Err() == nil {
+		_, _ = c.Current(ctx)
+		c.mu.Lock()
+		refreshing := c.refreshing
+		delay := c.nextAttempt.Sub(c.now())
+		c.mu.Unlock()
+		if refreshing != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-refreshing:
+				continue
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
 func (c *Cache) Current(ctx context.Context) ([]envelope.CollateralEntry, error) {
 	for {
 		c.mu.Lock()

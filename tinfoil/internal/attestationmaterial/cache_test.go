@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
@@ -109,6 +111,41 @@ func TestCacheFailsClosedAfterExpiry(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("fetch calls = %d, want 2", calls)
 	}
+}
+
+func TestCacheRunRefreshesIdleEnclaveAndRetries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var calls atomic.Int32
+		cache := NewCache(wire.Request{Repo: "repo"}, fetchFunc(func(context.Context, wire.Request) (wire.Response, error) {
+			if calls.Add(1) == 2 {
+				return wire.Response{}, errors.New("temporary outage")
+			}
+			return response(time.Now().Add(48*time.Hour), "entry"), nil
+		}))
+		done := make(chan struct{})
+		go func() {
+			cache.Run(ctx)
+			close(done)
+		}()
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatalf("initial fetch calls = %d", calls.Load())
+		}
+		time.Sleep(24 * time.Hour)
+		synctest.Wait()
+		if calls.Load() != 2 {
+			t.Fatalf("idle refresh calls = %d", calls.Load())
+		}
+		time.Sleep(retryAfter)
+		synctest.Wait()
+		if calls.Load() != 3 {
+			t.Fatalf("retry calls = %d", calls.Load())
+		}
+		cancel()
+		<-done
+	})
 }
 
 func response(expiresAt time.Time, id string) wire.Response {

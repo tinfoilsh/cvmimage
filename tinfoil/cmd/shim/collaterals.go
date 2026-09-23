@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,7 +22,11 @@ func newCollateralSource(request wire.Request, config *shimconfig.Config, extern
 	if err != nil {
 		return nil, err
 	}
-	return attestationmaterial.NewCache(request, client), nil
+	cache := attestationmaterial.NewCache(request, client)
+	if external.GetSecret(shimconfig.SecretCollateralAuthToken) != "" {
+		go cache.Run(context.Background())
+	}
+	return cache, nil
 }
 
 func loadCollateralRequest(path string) (wire.Request, error) {

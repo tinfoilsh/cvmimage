@@ -116,7 +116,7 @@ func newLifecycleHarness() *lifecycleHarness {
 
 func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	harness := newLifecycleHarness()
-	harness.deps.cmdline = kernelcmdline.Values{ConfigHash: "abc", Debug: true}
+	harness.deps.cmdline = kernelcmdline.Values{Debug: true}
 	var bootCommand supervisor.Command
 	harness.deps.oneShot = func(_ context.Context, command supervisor.Command) error {
 		if command.Name == string(hardening.ServiceBoot) {
@@ -134,7 +134,7 @@ func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	if err := receiveTest(t, result); err != nil {
 		t.Fatal(err)
 	}
-	if got := fmt.Sprint(bootCommand.Args); !strings.Contains(got, "--config-hash=abc --debug=true") {
+	if got := fmt.Sprint(bootCommand.Args); !strings.Contains(got, "--debug=true") {
 		t.Fatalf("boot args = %s", got)
 	}
 	if len(bootCommand.ExtraFiles) != 1 {

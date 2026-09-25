@@ -16,13 +16,12 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-
-	"tinfoil/internal/boot"
 )
 
 func TestShimInheritedUnixListener(t *testing.T) {
 	const (
 		childEnvironment = "TINFOIL_INHERITED_LISTENER_CHILD"
+		listenerFD       = 3
 		requestTimeout   = 10 * time.Second
 		nonce            = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	)
@@ -46,7 +45,7 @@ func TestShimInheritedUnixListener(t *testing.T) {
 		if !errors.Is(err, unix.EAFNOSUPPORT) {
 			t.Fatalf("creating a Unix socket returned %v, want EAFNOSUPPORT", err)
 		}
-		file := os.NewFile(boot.ShimAttestationFD, "attestation-listener")
+		file := os.NewFile(listenerFD, "attestation-listener")
 		listener, err := net.FileListener(file)
 		file.Close()
 		if err != nil {

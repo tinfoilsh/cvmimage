@@ -49,9 +49,6 @@ const (
 	// ShimListenPort is the public TLS port served by tinfoil-shim.
 	ShimListenPort = 443
 
-	// ShimAttestationFD is the first ExtraFiles entry inherited from PID 1.
-	ShimAttestationFD = 3
-
 	// HTTPChallengePort is the plaintext-HTTP port served by tinfoil-boot
 	// during cert-proxy + tls-challenge.
 	HTTPChallengePort = 80

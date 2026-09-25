@@ -262,7 +262,8 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return fmt.Errorf("attestation socket: %w", err)
 	}
 	shimCommand := hardenedCommand(hardening.ServiceShim, boot.ShimBinary)
-	shimCommand.ExtraFiles = []*os.File{attestationSocket}
+	shimFD := shimCommand.AddExtraFile(attestationSocket)
+	shimCommand.Args = append(shimCommand.Args, fmt.Sprintf("--attestation-fd=%d", shimFD))
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: shimName, Required: true, Restart: true,
 		DrainUntilExit: true,

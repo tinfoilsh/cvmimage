@@ -161,6 +161,11 @@ fields this image fixes.
 
 `no5lvl` is appended because the image uses four-level page tables.
 
+`--config-hash` takes the whole field, hex-encoded: 32 bytes for SEV-SNP
+`HOST_DATA`, 48 for TDX `MRCONFIGID`. The guest reads the SHA-256 of its
+config out of it, so a TDX value is that hash followed by 16 zero bytes, and
+the guest refuses a nonzero tail rather than ignore a field the host chose.
+
 The processor ceiling is 255: the MADT Local APIC structure states an 8-bit
 APIC id and `0xff` is the xAPIC broadcast, so a larger count numbered two
 processors the same.
@@ -182,6 +187,9 @@ qemu-system-x86_64 -accel kvm -m 1G -smp 4 -cpu host \
 
 Do not pass `-bios`, `-kernel`, `-initrd` or `-append`. Add `console=ttyS0` to
 `--cmdline` for a serial console.
+
+`MRCONFIGID` reaches the guest through the `tdx-guest` object's `mrconfigid`
+property, base64-encoded like SEV-SNP's `host-data`.
 
 QEMU must be built with `--enable-igvm` against libigvm 0.3 or newer. Upstream
 supports IGVM for SEV, SEV-ES and SEV-SNP but not TDX, and implements

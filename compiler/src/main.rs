@@ -46,7 +46,7 @@ struct Common {
     #[arg(long, default_value_t = DEFAULT_VCPUS)]
     vcpus: u32,
     /// MRCONFIGID (TDX, 48 bytes) or HOST_DATA (SNP, 32 bytes) the host must
-    /// pass, hex-encoded.
+    /// pass, hex-encoded. A TDX value pads the config hash with 16 zero bytes.
     #[arg(long)]
     config_hash: Option<String>,
 }

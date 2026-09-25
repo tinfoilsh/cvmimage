@@ -163,8 +163,9 @@ fields this image fixes.
 
 `--config-hash` takes the whole field, hex-encoded: 32 bytes for SEV-SNP
 `HOST_DATA`, 48 for TDX `MRCONFIGID`. The guest reads the SHA-256 of its
-config out of it, so a TDX value is that hash followed by 16 zero bytes, and
-the guest refuses a nonzero tail rather than ignore a field the host chose.
+config out of it, so a TDX value is that hash followed by 16 zero bytes. Both
+ends refuse a nonzero tail rather than ignore a field the host chose: this
+tool at build time, the guest at boot.
 
 The processor ceiling is 255: the MADT Local APIC structure states an 8-bit
 APIC id and `0xff` is the xAPIC broadcast, so a larger count numbered two

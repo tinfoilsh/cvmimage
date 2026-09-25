@@ -73,6 +73,17 @@ pub fn config_field(hash: Option<&str>, bytes: usize) -> Result<String, String> 
     }
 }
 
+// The guest takes SHA-256(config) from MRCONFIGID's first 32 bytes and refuses
+// a nonzero tail, so refuse one here too: an image built with a tail the guest
+// will not accept stops a guest that has no console to say why.
+fn mrconfigid_field(hash: Option<&str>) -> Result<String, String> {
+    let field = config_field(hash, 48)?;
+    if field[64..].bytes().any(|b| b != b'0') {
+        return Err("--config-hash must be a 32-byte config hash padded with 16 zero bytes".into());
+    }
+    Ok(field)
+}
+
 #[derive(Serialize)]
 struct Manifest {
     format_version: u32,
@@ -105,7 +116,7 @@ pub fn build(
     params: &Params,
     config_hash: Option<&str>,
 ) -> Result<(), String> {
-    let mrconfigid = config_field(config_hash, 48)?;
+    let mrconfigid = mrconfigid_field(config_hash)?;
     let launch = tinfoil_firmware::tdx(kernel_path, initramfs_path, params)?;
 
     let pages = launch_pages(&launch.placed)?;
@@ -437,6 +448,17 @@ pub mod tests {
         );
         assert!(config_field(Some("abcd"), 32).is_err());
         assert!(config_field(Some(&"zz".repeat(32)), 32).is_err());
+    }
+
+    #[test]
+    fn mrconfigid_carries_the_hash_and_nothing_else() {
+        assert_eq!(mrconfigid_field(None), Ok(zeros(48)));
+        let padded = "ab".repeat(32) + &zeros(16);
+        assert_eq!(mrconfigid_field(Some(&padded)), Ok(padded.clone()));
+        // A tail the guest refuses must not reach an image or a manifest.
+        assert!(mrconfigid_field(Some(&("ab".repeat(32) + &zeros(15) + "01"))).is_err());
+        assert!(mrconfigid_field(Some(&("ab".repeat(32) + "01" + &zeros(15)))).is_err());
+        assert!(mrconfigid_field(Some(&"ab".repeat(32))).is_err());
     }
 
     #[test]

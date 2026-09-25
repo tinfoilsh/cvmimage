@@ -18,16 +18,12 @@ import (
 )
 
 const (
-	noAttestationFD          = -1
 	localAttestationPath     = "/.well-known/tinfoil-attestation"
 	localAttestationInterval = time.Second
 	localAttestationBurst    = 1
 )
 
 func inheritedAttestationListener(fd int) (net.Listener, error) {
-	if fd == noAttestationFD {
-		return nil, nil
-	}
 	if fd < 0 {
 		return nil, fmt.Errorf("invalid attestation listener descriptor %d", fd)
 	}
@@ -102,9 +98,6 @@ func (h *localAttestationHandler) reject(w http.ResponseWriter) {
 }
 
 func serveWithAttestation(ctx context.Context, public *http.Server, listener net.Listener) error {
-	if listener == nil {
-		return serveUntilShutdown(ctx, public)
-	}
 	defer listener.Close()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

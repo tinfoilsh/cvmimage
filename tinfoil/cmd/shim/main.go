@@ -42,7 +42,6 @@ import (
 var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
-	attestationFD      = flag.Int("attestation-fd", noAttestationFD, "Inherited attestation Unix listener")
 )
 
 const (
@@ -90,7 +89,7 @@ func main() {
 		TLSConfig: tlsConfig,
 	}
 
-	localListener, err := inheritedAttestationListener(*attestationFD)
+	localListener, err := inheritedAttestationListener(boot.ShimAttestationFD)
 	if err != nil {
 		log.Fatal(err)
 	}

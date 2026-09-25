@@ -316,12 +316,8 @@ func TestLocalAttestationFailureStopsPublicServer(t *testing.T) {
 	}
 }
 
-func TestInheritedAttestationListenerIsOptional(t *testing.T) {
-	listener, err := inheritedAttestationListener(noAttestationFD)
-	if listener != nil || err != nil {
-		t.Fatalf("disabled listener = %v, %v", listener, err)
-	}
-	if _, err := inheritedAttestationListener(noAttestationFD - 1); err == nil {
+func TestInheritedAttestationListenerRejectsInvalidDescriptor(t *testing.T) {
+	if _, err := inheritedAttestationListener(-1); err == nil {
 		t.Fatal("invalid descriptor was accepted")
 	}
 }

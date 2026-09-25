@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -30,14 +31,28 @@ func enforceCPUCount(root string, requested int) (string, error) {
 			return "", fmt.Errorf("offlining cpu%d: %w", id, err)
 		}
 	}
+	// The present list is shaped by the host, so counting it proves nothing
+	// about what came up: the kernel states separately which processors are
+	// running, and the config is met only if those are exactly the ones kept.
+	online, err := cpuList(root, "online")
+	if err != nil {
+		return "", err
+	}
+	if !slices.Equal(online, present[:requested]) {
+		return "", fmt.Errorf("config requests %d CPUs, %v are online", requested, online)
+	}
 	return fmt.Sprintf("%d of %d CPUs online", requested, len(present)), nil
 }
 
-// presentCPUs parses a sysfs CPU list ("0-7", "0,2-3") in ascending order.
 func presentCPUs(root string) ([]int, error) {
-	data, err := os.ReadFile(root + "/present")
+	return cpuList(root, "present")
+}
+
+// cpuList parses a sysfs CPU list ("0-7", "0,2-3") in ascending order.
+func cpuList(root, name string) ([]int, error) {
+	data, err := os.ReadFile(root + "/" + name)
 	if err != nil {
-		return nil, fmt.Errorf("reading present CPUs: %w", err)
+		return nil, fmt.Errorf("reading %s CPUs: %w", name, err)
 	}
 	var ids []int
 	for _, span := range strings.Split(strings.TrimSpace(string(data)), ",") {
@@ -58,7 +73,7 @@ func presentCPUs(root string) ([]int, error) {
 		}
 	}
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("no CPUs are present")
+		return nil, fmt.Errorf("no CPUs are %s", name)
 	}
 	return ids, nil
 }

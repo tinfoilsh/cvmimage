@@ -6,11 +6,13 @@ import (
 	"testing"
 )
 
-func fakeCPURoot(t *testing.T, present string, count int) string {
+func fakeCPURoot(t *testing.T, present, online string, count int) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "present"), []byte(present+"\n"), 0o644); err != nil {
-		t.Fatal(err)
+	for name, list := range map[string]string{"present": present, "online": online} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(list+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for id := 1; id < count; id++ {
 		dir := filepath.Join(root, "cpu"+string(rune('0'+id)))
@@ -25,7 +27,7 @@ func fakeCPURoot(t *testing.T, present string, count int) string {
 }
 
 func TestEnforceCPUCountOfflinesTheSurplus(t *testing.T) {
-	root := fakeCPURoot(t, "0-7", 8)
+	root := fakeCPURoot(t, "0-7", "0-1", 8)
 	detail, err := enforceCPUCount(root, 2)
 	if err != nil {
 		t.Fatalf("enforceCPUCount: %v", err)
@@ -49,11 +51,26 @@ func TestEnforceCPUCountOfflinesTheSurplus(t *testing.T) {
 }
 
 func TestEnforceCPUCountFailsClosed(t *testing.T) {
-	root := fakeCPURoot(t, "0-7", 8)
+	root := fakeCPURoot(t, "0-7", "0-7", 8)
 	for _, requested := range []int{0, -1, 9} {
 		if _, err := enforceCPUCount(root, requested); err == nil {
 			t.Fatalf("enforceCPUCount(%d) was accepted", requested)
 		}
+	}
+}
+
+// The processors the config asks for must be the ones actually running: a
+// count taken from host-shaped data would pass while the workload ran on fewer.
+func TestEnforceCPUCountRequiresTheProcessorsToBeOnline(t *testing.T) {
+	for _, online := range []string{"0", "0,2", "0-2"} {
+		root := fakeCPURoot(t, "0-7", online, 8)
+		if _, err := enforceCPUCount(root, 2); err == nil {
+			t.Fatalf("online %q was accepted for 2 CPUs", online)
+		}
+	}
+	root := fakeCPURoot(t, "0-7", "0-1", 8)
+	if _, err := enforceCPUCount(root, 2); err != nil {
+		t.Fatalf("enforceCPUCount: %v", err)
 	}
 }
 

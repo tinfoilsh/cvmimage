@@ -1,5 +1,6 @@
 .include "layout.inc"
 .include "madt.inc"
+.include "map.inc"
 .section .reset,"ax"
 
 .code32
@@ -37,18 +38,14 @@ snp_long_mode:
     mov %eax, %fs
     mov %eax, %gs
 
+    # The guest's own E820 map, which the measurement leaves to the shim because
+    # measuring it would bind this image to a machine size.
+    call host_regions
+    call merge_regions
+    mov $ZERO_PAGE, %edi
+    call e820_build
     # Linux finds unvalidated memory only through EFI, so guest RAM is validated here.
-    lea shim_data(%rip), %rbp
-    add $8, %rbp
-validate_next:
-    mov (%rbp), %r12
-    mov 8(%rbp), %r13
-    mov %r12, %rax
-    or %r13, %rax
-    jz wake_aps
-    add $16, %rbp
-    call validate_range
-    jmp validate_next
+    call accept_walk
 
     # Every application processor launched into KVM's wait-for-SIPI state, and
     # only an INIT leaves it. With no firmware to send one the boot processor
@@ -157,6 +154,13 @@ ghcb_msr:
     or %rdx, %rax
     ret
 
+map_code die_map, validate_range
+
+# A map this image will not run in, which is step 10 of the sequence below.
+die_map:
+    mov $10, %r15d
+    jmp die_wake
+
 # Terminate with reason set 0xf and the wake step in %r15d as the code.
 die_wake:
     mov %r15d, %eax
@@ -264,7 +268,8 @@ snp_ap_park:
 madt_template:
     madt_header
 
-    # The kernel entry point and the ranges to validate, written here by the builder.
+    # The entry point, the least memory this image runs in, and the spans it
+    # placed, all written here by the builder.
     .org SHIM_DATA
 shim_data:
     .fill SHIM_DATA_SIZE,1,0

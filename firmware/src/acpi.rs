@@ -135,31 +135,6 @@ mod tests {
         v.iter().fold(0u8, |x, y| x.wrapping_add(*y)) == 0
     }
 
-    /// The algorithm madt.inc assembles, over the template the shim carries.
-    fn shim_madt(shim: &[u8], cpus: u32, wakeup: bool) -> Vec<u8> {
-        let at = SHIM_MADT as usize;
-        let mut v = shim[at..at + MADT_HEADER_LEN as usize].to_vec();
-        for id in 0..cpus {
-            let entry = ((id & 0xff) * 0x0101_0000)
-                | ((MADT_LAPIC_LEN as u32) << 8)
-                | MADT_LOCAL_APIC as u32;
-            v.extend_from_slice(&entry.to_le_bytes());
-            v.extend_from_slice(&(LAPIC_ENABLED as u32).to_le_bytes());
-        }
-        if wakeup {
-            let at = v.len();
-            v.resize(at + MADT_WAKEUP_LEN as usize, 0);
-            v[at] = MADT_WAKEUP as u8;
-            v[at + 1] = MADT_WAKEUP_LEN as u8;
-            put64(&mut v, at + 8, MAILBOX);
-        }
-        let len = v.len() as u32;
-        put32(&mut v, 4, len);
-        v[9] = 0;
-        v[9] = checksum(&v);
-        v
-    }
-
     #[test]
     fn tables_have_valid_checksums() {
         let a = build();
@@ -213,19 +188,44 @@ mod tests {
     }
 
     /// Each shim carries the fixed half of the table in its own measured page,
-    /// and writing the rest around it reproduces the table this file states.
-    /// SNP launches every processor from its own measured save area, so only
-    /// the TDX shim writes a wakeup structure.
+    /// and the assembly that writes the rest around it -- run here, not
+    /// re-implemented -- reproduces the table this file states. SNP launches
+    /// every processor from its own measured save area, so only the TDX shim
+    /// writes a wakeup structure.
     #[test]
     fn each_shim_builds_the_madt_this_file_specifies() {
-        for (shim, wakeup) in [(RESET_SHIM, true), (SNP_SHIM, false)] {
-            let at = SHIM_MADT as usize;
+        let shim = crate::shim::shim();
+        let at = SHIM_MADT as usize;
+        for page in [RESET_SHIM, SNP_SHIM] {
             assert_eq!(
-                &shim[at..at + MADT_HEADER_LEN as usize],
+                &page[at..at + MADT_HEADER_LEN as usize],
                 &madt_template()[..]
             );
-            for cpus in [1, 2, 16, 255, MAX_VCPUS] {
-                assert_eq!(shim_madt(shim, cpus, wakeup), madt(cpus, wakeup));
+        }
+        // The assembly copies its own page's header, so the harness carries the
+        // same one, and the shims above are held to it.
+        assert_eq!(shim.madt_template(), &madt_template()[..]);
+        for cpus in [1, 2, 16, 64, 254, MAX_VCPUS] {
+            for wakeup in [false, true] {
+                shim.loader_vcpus(cpus);
+                assert_eq!(
+                    shim.madt(wakeup),
+                    Some(madt(cpus, wakeup)),
+                    "the table the shim built for {cpus} processors"
+                );
+            }
+        }
+    }
+
+    /// The count is unmeasured and the host writes it, so a shim that reads one
+    /// it cannot describe terminates rather than clamping or aliasing.
+    #[test]
+    fn a_processor_count_outside_the_table_is_refused() {
+        let shim = crate::shim::shim();
+        for cpus in [0, MAX_VCPUS + 1, 256, 344, u32::MAX] {
+            shim.loader_vcpus(cpus);
+            for wakeup in [false, true] {
+                assert_eq!(shim.madt(wakeup), None, "{cpus} processors was accepted");
             }
         }
     }

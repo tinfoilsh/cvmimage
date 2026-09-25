@@ -1,10 +1,10 @@
 # The measured launch: `firmware/` and `compiler/`
 
 - **`firmware/`** is what the guest executes and the state it starts from: the
-  reset stubs, the guest-physical map, the ACPI tables, the zero page and its
-  E820 map, the page tables, and on SEV-SNP one Virtual Machine Save Area
-  (VMSA) per processor. All of it is measured, except the one table that
-  depends on the processor count (see below).
+  reset stubs, the guest-physical map, the ACPI tables, the zero page, the page
+  tables, and on SEV-SNP one Virtual Machine Save Area (VMSA) per processor.
+  All of it is measured, except the tables that depend on how large a machine
+  the guest is given (see below).
 - **`compiler/`** is the `cvmc` command, which serializes that state into an
   Independent Guest Virtual Machine (IGVM) image and reports the launch digest
   it produces.
@@ -45,17 +45,57 @@ Pages already imported must not be accepted or validated again, so the build
 produces one placement map covering the E820 map handed to Linux, the pages
 imported from the IGVM file, and the ranges the reset shim initializes.
 
-The Multiple APIC Description Table (MADT) is the one table the measured image
-does not carry: it lists one entry per processor, so measuring it would bind
-every image to a processor count. Instead the image declares an IGVM parameter
-area, the loader deposits the processor count there, and the shim builds the
-MADT around a header that is measured inside its own page. The count is
-unmeasured and untrusted, so a shim that reads one outside 1..=`MAX_VCPUS`
-terminates rather than clamping. The area's address and type still enter the
-measurement; only its contents do not.
+Two things the image would otherwise carry depend on the size of the machine,
+and measuring either would bind every image to one machine:
+
+- the **Multiple APIC Description Table (MADT)**, which lists one entry per
+  processor, and
+- the **E820 map** in the zero page and the list of ranges the shim initializes,
+  both of which depend on how much RAM the guest has.
+
+So the image declares two IGVM parameter areas instead, one page each. A loader
+deposits the processor count in the first and its own memory map in the second,
+and the shim builds all three tables at boot. The measured ACPI page stops where
+the MADT begins, the zero page leaves its E820 table zero, and the shim's own
+page carries the fixed half of the MADT and the list of spans this image placed.
+Each area's address, size and parameter kind enter the measurement; only the
+contents do not.
+
+Both parameters are untrusted, because the host writes them after the
+measurement is closed. A processor count outside 1..=`MAX_VCPUS` terminates the
+shim rather than being clamped.
+
+The loader's memory map is not copied anywhere. What the shim takes from it is
+where the guest's RAM begins and ends and where it does not: the gaps between
+its extents are the windows the guest's devices are given, and anything the map
+marks as something other than memory is reserved. The shim merges those regions
+with the spans its own measured page lists, and builds the E820 table and the
+accept list from the merged list by the same rules `boot::e820` and
+`boot::accept_ranges` state. So nothing outside the RAM the host described is
+ever accepted as private memory, no aperture is claimed as RAM, and every page
+the image itself placed keeps its own entry -- including the reset page, which
+sits inside an aperture and must not be handed to a device.
+
+Every layout decision downstream of those extents stays the image's. The map
+itself has to be one this image can run in, and is refused rather than clamped
+if it is not: its extents must ascend without overlapping, must not wrap, must
+lie inside what the measured page tables reach, and the first of them must be
+the memory the loader loaded this image into, reaching at least as far as the
+last page it placed. A map longer than the shim reads is refused rather than
+described in part, and an E820 table that would overrun `boot_params` terminates
+the shim rather than being truncated.
+
+Taking the extents rather than assuming them is what lets one image run on a
+machine laid out differently from the usual q35 one -- QEMU restacks a large
+guest's memory above 1 TiB on AMD hosts, past the HyperTransport range it
+reserves (`hw/i386/pc.c`) -- and it is what keeps the accept list clear of the
+64-bit windows a passed-through device's BARs are assigned out of, which lie
+above the RAM the map describes.
 
 On SEV-SNP the digest covers one VMSA per processor, so the processor count
-still changes the launch measurement there whatever the tables say.
+still changes the launch measurement there whatever the tables say. The RAM does
+not, though the file still declares it as required memory: the loader has to
+make those pages private before the shim validates them.
 
 On TDX every image page contributes to the measurement register for the trust
 domain (MRTD). The shim enters long mode, parks
@@ -103,7 +143,7 @@ fields this image fixes.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--ram` | `1G` | Guest RAM, matching QEMU `-m` |
+| `--ram` | `1G` | Guest RAM, matching QEMU `-m`; leaves the measurement alone |
 | `--vcpus` | `4` | Processor count; SNP measures one VMSA per processor, TDX measures none |
 | `--cmdline` | `panic=-1` | Linux command line |
 | `--config-hash` | zero | TDX `MRCONFIGID` or SNP `HOST_DATA` |
@@ -127,7 +167,8 @@ Do not pass `-bios`, `-kernel`, `-initrd` or `-append`. Add `console=ttyS0` to
 `--cmdline` for a serial console.
 
 QEMU must be built with `--enable-igvm` against libigvm 0.3 or newer. Upstream
-supports IGVM for SEV, SEV-ES and SEV-SNP but not TDX.
+supports IGVM for SEV, SEV-ES and SEV-SNP but not TDX, and implements
+`IGVM_VHT_MEMORY_MAP` for SEV only, so a TDX host needs both added.
 
 ## SEV-SNP policy
 
@@ -149,11 +190,26 @@ match it.
 ## Memory map
 
 For q35 guests with at least 2816 MiB, 2 GiB goes below 4 GiB, the rest above,
-and the PCI aperture between them is derived from `--ram` alone. Pass QEMU the
-same `-m`.
+and the PCI aperture lies between them. Pass QEMU the same `-m`: on SEV-SNP the
+file declares that much required memory. The shim reads the map the machine
+actually has rather than assuming this one, so a host that lays memory out
+differently is described, not refused -- but one that describes a machine the
+image cannot run in terminates it.
 
-Private-memory initialization is linear in `--ram`; large SNP guests spend
-several seconds validating and clearing it.
+The measured page tables map the first 2 TiB with 1-GiB pages, whatever the
+guest turns out to have, because they are measured and so cannot depend on it.
+That bounds guest RAM at 2046 GiB.
+
+Private-memory initialization is linear in guest RAM, and the shim does all of
+it up front because Linux discovers unaccepted memory only through EFI, which
+this image does not provide. That time is spent before the kernel starts, and
+on both platforms it is around 2.5 seconds per GiB of one processor's work:
+a 64 GiB guest reaches Linux about 170 seconds after launch, a 512 GiB one
+about twenty minutes after, and the 2046 GiB the map now allows would be over
+an hour. Cutting that means either spreading the work over the application
+processors, or giving Linux a way to find unaccepted memory itself -- EFI, or
+the unaccepted-memory E820 type. Neither is part of this change, so the ceiling
+is what the page tables allow rather than what is worth booting.
 
 ## Linux requirements
 
@@ -259,3 +315,13 @@ so anyone asked to trust an `expected_mrtd` can rebuild what computed it.
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+`cargo test` links the shims' own assembly into the test binary and runs it:
+`firmware/src/harness.S` assembles the same `madt.inc` and `map.inc` macros the
+measured shims are built from, the test maps the pages they address at their
+guest-physical addresses, and `firmware/src/shim.rs` hands them a loader's
+parameters and diffs what they produce against the generators in `acpi.rs` and
+`boot.rs`. Nothing in those macros is privileged, and every address they name
+is this layout's own, which is what makes that possible -- and without it
+assembly reaches a guest having never been executed anywhere, where a
+misassembled macro is indistinguishable from a working one.

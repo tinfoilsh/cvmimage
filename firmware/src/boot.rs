@@ -33,21 +33,16 @@ const LOADER_TYPE_UNDEFINED: u8 = 0xff;
 const XLF_KERNEL_64: u8 = 1;
 
 const BP_ACPI_RSDP_ADDR: usize = 0x70;
-const BP_E820_ENTRIES: usize = 0x1e8;
-const BP_E820_TABLE: usize = 0x2d0;
-const E820_ENTRY_LEN: usize = 20;
-// boot_params has room for exactly this many E820 entries.
-const E820_MAX: usize = 128;
 
 // The Linux 64-bit boot protocol descriptors, addressed by the selectors above.
 const GDT_CODE32: u64 = 0x00cf_9b00_0000_ffff;
 const GDT_CODE64: u64 = 0x00af_9b00_0000_ffff;
 const GDT_DATA: u64 = 0x00cf_9300_0000_ffff;
 
-pub const RAM: u32 = 1;
-pub const RESERVED: u32 = 2;
-pub const ACPI: u32 = 3;
-pub const ABSENT: u32 = 0;
+pub const RAM: u32 = E820_RAM as u32;
+pub const RESERVED: u32 = E820_RESERVED as u32;
+pub const ACPI: u32 = E820_ACPI as u32;
+pub const ABSENT: u32 = E820_ABSENT as u32;
 
 #[derive(Clone, Copy)]
 pub struct KernelInfo {
@@ -98,20 +93,15 @@ pub fn parse_bzimage(image: &[u8]) -> Result<KernelInfo, String> {
     })
 }
 
+/// The zero page, minus the E820 map: that table depends on the RAM the guest
+/// turns out to have, so a shim writes it into the bytes left zero here.
 pub fn zero_page(
     setup: &[u8],
     info: KernelInfo,
     initramfs_len: usize,
     rsdp: u64,
-    e820: &[(u64, u64, u32)],
     setup_data: u64,
 ) -> Result<Vec<u8>, String> {
-    if e820.len() > E820_MAX {
-        return Err(format!(
-            "E820 map needs {} of {E820_MAX} entries",
-            e820.len()
-        ));
-    }
     let mut page = vec![0u8; PAGE as usize];
     page[SETUP_HEADER..SETUP_HEADER_END].copy_from_slice(&setup[SETUP_HEADER..SETUP_HEADER_END]);
     page[HDR_TYPE_OF_LOADER] = LOADER_TYPE_UNDEFINED;
@@ -124,15 +114,22 @@ pub fn zero_page(
     put64(&mut page, BP_ACPI_RSDP_ADDR, rsdp);
     // TDX chains nothing here; SNP chains one SETUP_CC_BLOB record.
     put64(&mut page, HDR_SETUP_DATA, setup_data);
-
-    page[BP_E820_ENTRIES] = e820.len() as u8;
-    for (index, entry) in e820.iter().enumerate() {
-        let at = BP_E820_TABLE + index * E820_ENTRY_LEN;
-        put64(&mut page, at, entry.0);
-        put64(&mut page, at + 8, entry.1);
-        put32(&mut page, at + 16, entry.2);
-    }
     Ok(page)
+}
+
+/// The E820 map a page carries, read back the way Linux reads it.
+pub fn read_e820(page: &[u8]) -> Vec<Region> {
+    (0..page[BP_E820_ENTRIES as usize] as u64)
+        .map(|n| {
+            let at = (BP_E820_TABLE + n * E820_ENTRY_LEN) as usize;
+            let word = |i: usize| u64::from_le_bytes(page[i..i + 8].try_into().unwrap());
+            (
+                word(at),
+                word(at + 8),
+                u32::from_le_bytes(page[at + 16..at + 20].try_into().unwrap()),
+            )
+        })
+        .collect()
 }
 
 // The measured GDT at the base of the BSP stack, which grows down from the far end.
@@ -241,7 +238,7 @@ pub fn fill(placed: &mut [Placed], base: u64, data: Vec<u8>) -> Result<(), Strin
     Ok(())
 }
 
-fn spans(placed: &[Placed]) -> Vec<(u64, u64, u32)> {
+pub fn spans(placed: &[Placed]) -> Vec<Region> {
     let mut v: Vec<_> = placed
         .iter()
         .map(|p| (p.base, p.base + p.span(), p.e820))
@@ -271,8 +268,80 @@ pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// The E820 map: each placed span under its own type, each gap RAM, adjacent runs coalesced.
-pub fn e820(placed: &[Placed], memory: u64) -> Vec<(u64, u64, u32)> {
+/// One region of a guest's map: where it starts, where it ends, and what E820
+/// calls it. A shim merges the measured spans and the loader's regions into
+/// one list of these and builds both tables from it.
+pub type Region = (u64, u64, u32);
+
+/// The map a shim builds its E820 table and accept list from: every span this
+/// image places at a fixed address. It is measured, so it is one list for
+/// every guest the image can run in, and it says nothing about how much RAM
+/// that guest has or where its apertures are -- the loader's map says that.
+pub fn shim_spans(placed: &[Placed]) -> Vec<Region> {
+    let mut v: Vec<Region> = placed
+        .iter()
+        .filter(|p| !matches!(p.fill, Fill::Mmio(_)))
+        .map(|p| (p.base, p.base + p.span(), p.e820))
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// The least memory a guest can be given and still hold what this image placed
+/// in it. The reset page is left out: it is the last page of the address space,
+/// not of the guest's RAM.
+pub fn min_memory(spans: &[Region]) -> u64 {
+    spans
+        .iter()
+        .filter(|(lo, _, _)| *lo != RESET_ALIAS)
+        .map(|(_, hi, _)| *hi)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The parts of the loader's map that are not RAM, and the top of the RAM that
+/// is: the gaps between its extents, which are where a guest's devices are
+/// given their windows, and anything it marks as something other than memory.
+/// This is what a shim derives at boot, and what the shim is held to.
+pub fn host_regions(extents: &[(u64, u64, bool)]) -> (u64, Vec<Region>) {
+    let (mut top, mut at) = (0, 0);
+    let mut out = Vec::new();
+    for (lo, hi, ram) in extents.iter().copied() {
+        if lo > at {
+            out.push((at, lo, ABSENT));
+        }
+        if ram {
+            top = hi;
+        } else {
+            out.push((lo, hi, RESERVED));
+        }
+        at = hi;
+    }
+    (top, out)
+}
+
+/// The measured spans and the loader's regions in one ascending list, a
+/// measured span first where the two begin together.
+pub fn merge(placed: &[Region], host: &[Region]) -> Vec<Region> {
+    let mut out = Vec::with_capacity(placed.len() + host.len());
+    let (mut p, mut h) = (0, 0);
+    while p < placed.len() || h < host.len() {
+        if p == placed.len() || (h < host.len() && host[h].0 < placed[p].0) {
+            out.push(host[h]);
+            h += 1;
+        } else {
+            out.push(placed[p]);
+            p += 1;
+        }
+    }
+    out
+}
+
+/// The E820 map: each region under its own type, each gap RAM, adjacent runs
+/// coalesced. A region the loader leaves out of its map is an aperture, and
+/// belongs in no entry at all; a span this image placed inside one still gets
+/// its own, so nothing is left for Linux to put a BAR on top of.
+pub fn e820(regions: &[Region], memory: u64) -> Vec<Region> {
     let mut out: Vec<(u64, u64, u32)> = Vec::new();
     let mut push = |base: u64, end: u64, kind: u32| {
         if base >= end {
@@ -284,13 +353,13 @@ pub fn e820(placed: &[Placed], memory: u64) -> Vec<(u64, u64, u32)> {
         }
     };
     let mut at = 0;
-    for (lo, hi, kind) in spans(placed) {
+    for (lo, hi, kind) in regions.iter().copied() {
         if lo >= memory {
             break;
         }
         push(at, lo, RAM);
         if kind != ABSENT {
-            push(lo.max(at), hi.min(memory), kind);
+            push(lo, hi.min(memory), kind);
         }
         at = at.max(hi);
     }
@@ -299,10 +368,10 @@ pub fn e820(placed: &[Placed], memory: u64) -> Vec<(u64, u64, u32)> {
 }
 
 /// The ranges a shim accepts: [0, memory) minus everything the loader already accepted.
-pub fn accept_ranges(placed: &[Placed], memory: u64) -> Vec<(u64, u64)> {
+pub fn accept_ranges(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
     let mut at = 0;
-    for (lo, hi, _) in spans(placed) {
+    for (lo, hi, _) in regions.iter().copied() {
         if lo > at {
             out.push((at, lo.min(memory)));
         }
@@ -345,7 +414,7 @@ mod tests {
     #[test]
     fn e820_tiles_the_whole_span_without_gaps() {
         let map = map();
-        let e = e820(&map, DEFAULT_RAM);
+        let e = e820(&spans(&map), DEFAULT_RAM);
         assert_eq!(e.first().unwrap().0, 0);
         assert_eq!(e.last().unwrap().0 + e.last().unwrap().1, DEFAULT_RAM);
         for pair in e.windows(2) {
@@ -358,7 +427,7 @@ mod tests {
     #[test]
     fn accept_ranges_are_exactly_the_complement_of_the_placed_map() {
         let map = map();
-        let ranges = accept_ranges(&map, DEFAULT_RAM);
+        let ranges = accept_ranges(&spans(&map), DEFAULT_RAM);
         let placed: Vec<_> = map.iter().map(|p| (p.base, p.base + p.span())).collect();
         // Nothing placed is ever accepted: that is the page-aliasing attack.
         for (lo, hi) in &ranges {
@@ -375,10 +444,10 @@ mod tests {
         let mut map = map();
         map.push(Placed::mmio(0x30_0000, 0x2_0000));
         // Linux assigns BARs out of gaps, so no entry of any type may cover the aperture.
-        assert!(e820(&map, DEFAULT_RAM)
+        assert!(e820(&spans(&map), DEFAULT_RAM)
             .iter()
             .all(|x| x.0 + x.1 <= 0x30_0000 || x.0 >= 0x32_0000));
-        assert!(accept_ranges(&map, DEFAULT_RAM)
+        assert!(accept_ranges(&spans(&map), DEFAULT_RAM)
             .iter()
             .all(|(l, h)| *h <= 0x30_0000 || *l >= 0x32_0000));
     }

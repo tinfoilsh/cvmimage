@@ -1,5 +1,6 @@
 .include "layout.inc"
 .include "madt.inc"
+.include "map.inc"
 .section .reset,"ax"
 
 .code32
@@ -37,21 +38,17 @@ long_mode:
     jnz ap_wait
     mov $BSP_STACK_TOP, %rsp
 
+    # The two tables the measurement leaves to the shim, because measuring
+    # either would bind this image to a machine size: the guest's own E820 map,
+    # and below it the MADT.
+    call host_regions
+    call merge_regions
+    mov $ZERO_PAGE, %edi
+    call e820_build
     # Linux finds unaccepted memory only through EFI, so guest RAM is accepted here.
-    lea shim_data(%rip), %rbp
-    add $8, %rbp
-accept_next:
-    mov (%rbp), %r12
-    mov 8(%rbp), %r13
-    mov %r12, %rax
-    or %r13, %rax
-    jz boot_kernel
-    add $16, %rbp
-    call accept_range
-    jmp accept_next
+    call accept_walk
 
 boot_kernel:
-    # The one table the measurement leaves to the shim, wakeup structure and all.
     madt_build die, 1
     mov $ZERO_PAGE, %rsi
     lea shim_data(%rip), %rax
@@ -89,6 +86,13 @@ accept_2m:
 accept_done:
     ret
 
+map_code die_map, accept_range
+
+# A map this image will not run in, reported as the top of RAM it refused.
+die_map:
+    mov %r8, %r12
+    jmp die
+
 # APs wait here until the OS claims them through the measured ACPI wakeup mailbox.
 ap_wait:
     mov $MAILBOX, %rbx
@@ -122,7 +126,8 @@ fatal:
 madt_template:
     madt_header
 
-    # The kernel entry point and the ranges to accept, written here by the builder.
+    # The entry point, the least memory this image runs in, and the spans it
+    # placed, all written here by the builder.
     .org SHIM_DATA
 shim_data:
     .fill SHIM_DATA_SIZE,1,0

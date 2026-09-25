@@ -27,28 +27,47 @@ fn write_layout(path: &Path) {
     fs::write(path, out).expect("write layout.inc");
 }
 
-fn assemble(out: &Path, name: &str) {
+fn assemble(out: &Path, name: &str) -> PathBuf {
     let object = out.join(format!("{name}.o"));
-    let binary = out.join(format!("{name}.bin"));
     run(Command::new("as")
         .args(["--64", "-I", "src", "-I"])
         .arg(out)
         .arg("-o")
         .arg(&object)
         .arg(format!("src/{name}.S")));
+    object
+}
+
+fn flatten(out: &Path, name: &str) {
+    let object = assemble(out, name);
     run(Command::new("objcopy")
         .args(["-O", "binary", "-j", ".reset"])
         .arg(&object)
-        .arg(&binary));
+        .arg(out.join(format!("{name}.bin"))));
+}
+
+/// The same macros, assembled into an ordinary object the crate's tests link
+/// against and call. Building it always, rather than only under cfg(test),
+/// keeps a shim that no longer assembles from reaching a release.
+fn harness(out: &Path) {
+    let object = assemble(out, "harness");
+    let archive = out.join("libcvmshim.a");
+    let _ = fs::remove_file(&archive);
+    run(Command::new("ar").arg("crs").arg(&archive).arg(&object));
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=cvmshim");
 }
 
 fn main() {
     println!("cargo:rerun-if-changed=src/reset.S");
     println!("cargo:rerun-if-changed=src/snp_reset.S");
     println!("cargo:rerun-if-changed=src/madt.inc");
+    println!("cargo:rerun-if-changed=src/map.inc");
+    println!("cargo:rerun-if-changed=src/harness.S");
     println!("cargo:rerun-if-changed=src/layout.rs");
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     write_layout(&out.join("layout.inc"));
-    assemble(&out, "reset");
-    assemble(&out, "snp_reset");
+    flatten(&out, "reset");
+    flatten(&out, "snp_reset");
+    harness(&out);
 }

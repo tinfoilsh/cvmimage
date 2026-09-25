@@ -15,9 +15,26 @@ use tinfoil_firmware::{
 
 // One compatibility mask bit: this file describes one platform.
 pub const COMPAT: u32 = 1;
-// The one parameter area, holding the vCPU count at its first byte.
+// Two parameter areas, one page each: the processor count in one and the
+// loader's memory map in the other. They do not share a page because QEMU
+// writes the memory map at the start of its area whatever byte offset the file
+// states (backends/igvm.c), which would land on anything placed before it.
 pub const PARAM_AREA: u32 = 0;
-pub const PARAM_VCPUS: u32 = 0;
+pub const PARAM_MAP_AREA: u32 = 1;
+pub const PARAM_OFFSET: u32 = 0;
+
+/// The page each area is inserted at. An area with another index, or one
+/// inserted anywhere else, is not the file this digest describes.
+pub fn param_gpa(index: u32) -> Option<u64> {
+    match index {
+        PARAM_AREA => Some(PARAM_PAGE),
+        PARAM_MAP_AREA => Some(PARAM_MAP_PAGE),
+        _ => None,
+    }
+}
+
+/// Both unmeasured pages, in the order a loader imports them.
+pub const PARAM_PAGES: [u64; 2] = [PARAM_PAGE, PARAM_MAP_PAGE];
 
 /// A page a loader imports at `gpa`: its contents when the launch digest
 /// covers them, and nothing when the loader is the one that fills the page.
@@ -165,25 +182,40 @@ pub fn launch_pages(placed: &[Placed]) -> Result<Vec<Page>, String> {
     Ok(out)
 }
 
-/// The area QEMU deposits the vCPU count in, and its insertion at `gpa`. The
-/// contents are unmeasured and untrusted; the address and the type are not.
-pub fn parameter_directives(gpa: u64) -> Vec<IgvmDirectiveHeader> {
-    vec![
+/// The area QEMU deposits one parameter in, and its insertion at `gpa`. The
+/// contents are unmeasured and untrusted; the address, the size and the kind
+/// of parameter are not.
+pub fn parameter_directives(gpa: u64) -> Result<Vec<IgvmDirectiveHeader>, String> {
+    let index = match gpa {
+        PARAM_PAGE => PARAM_AREA,
+        PARAM_MAP_PAGE => PARAM_MAP_AREA,
+        _ => {
+            return Err(format!(
+                "{gpa:#x} is not a parameter page this image asks for"
+            ))
+        }
+    };
+    let parameter = IGVM_VHS_PARAMETER {
+        parameter_area_index: index,
+        byte_offset: PARAM_OFFSET,
+    };
+    Ok(vec![
         IgvmDirectiveHeader::ParameterArea {
             number_of_bytes: PAGE,
-            parameter_area_index: PARAM_AREA,
+            parameter_area_index: index,
             initial_data: Vec::new(),
         },
-        IgvmDirectiveHeader::VpCount(IGVM_VHS_PARAMETER {
-            parameter_area_index: PARAM_AREA,
-            byte_offset: PARAM_VCPUS,
-        }),
+        if index == PARAM_AREA {
+            IgvmDirectiveHeader::VpCount(parameter)
+        } else {
+            IgvmDirectiveHeader::MemoryMap(parameter)
+        },
         IgvmDirectiveHeader::ParameterInsert(IGVM_VHS_PARAMETER_INSERT {
             gpa,
             compatibility_mask: COMPAT,
-            parameter_area_index: PARAM_AREA,
+            parameter_area_index: index,
         }),
-    ]
+    ])
 }
 
 /// A page a loader imports at `gpa`: 4 KiB, private and measured, which is flags of zero.
@@ -206,17 +238,17 @@ fn igvm(pages: &[Page]) -> Result<Vec<u8>, String> {
         // Nothing is loaded shared and the guest reads its own GPAW, so no boundary is stated.
         shared_gpa_boundary: 0,
     });
-    let directives = pages
-        .iter()
-        .flat_map(|p| match &p.data {
-            Some(data) => vec![page_directive(
+    let mut directives = Vec::new();
+    for p in pages {
+        match &p.data {
+            Some(data) => directives.push(page_directive(
                 p.gpa,
                 IgvmPageDataType::NORMAL,
                 data.clone(),
-            )],
-            None => parameter_directives(p.gpa),
-        })
-        .collect();
+            )),
+            None => directives.extend(parameter_directives(p.gpa)?),
+        }
+    }
     let file = IgvmFile::new(IgvmRevision::V1, vec![platform], vec![], directives)
         .map_err(|e| format!("construct TDX IGVM: {e}"))?;
     let mut out = Vec::new();
@@ -257,14 +289,17 @@ fn igvm_pages(file: &[u8]) -> Result<Vec<Page>, String> {
                 parameter_area_index,
                 initial_data,
             } if *number_of_bytes == PAGE
-                && *parameter_area_index == PARAM_AREA
+                && param_gpa(*parameter_area_index).is_some()
                 && initial_data.is_empty() => {}
             IgvmDirectiveHeader::VpCount(p)
-                if p.parameter_area_index == PARAM_AREA && p.byte_offset == PARAM_VCPUS => {}
+                if p.parameter_area_index == PARAM_AREA && p.byte_offset == PARAM_OFFSET => {}
+            IgvmDirectiveHeader::MemoryMap(p)
+                if p.parameter_area_index == PARAM_MAP_AREA && p.byte_offset == PARAM_OFFSET => {}
             IgvmDirectiveHeader::ParameterInsert(p)
-                if p.parameter_area_index == PARAM_AREA && p.compatibility_mask == COMPAT =>
+                if param_gpa(p.parameter_area_index) == Some(p.gpa)
+                    && p.compatibility_mask == COMPAT =>
             {
-                if !out.is_empty() {
+                if out.iter().any(|p| p.data.is_some()) {
                     return Err("TDX IGVM inserts a parameter area after page data".into());
                 }
                 out.push(Page {
@@ -274,6 +309,18 @@ fn igvm_pages(file: &[u8]) -> Result<Vec<Page>, String> {
             }
             _ => return Err("TDX IGVM carries a directive this image never emits".to_string()),
         }
+    }
+    // Every unmeasured page this image asks for, imported exactly once and
+    // before anything the digest covers.
+    let parameters: Vec<u64> = out
+        .iter()
+        .filter(|p| p.data.is_none())
+        .map(|p| p.gpa)
+        .collect();
+    if parameters != PARAM_PAGES {
+        return Err(format!(
+            "TDX IGVM inserts parameter areas at {parameters:#x?}, expected {PARAM_PAGES:#x?}"
+        ));
     }
     Ok(out)
 }
@@ -464,27 +511,49 @@ pub mod tests {
         assert_ne!(base, moved, "the command line left the measurement alone");
     }
 
-    /// The processor count is the one launch input the digest no longer
-    /// covers: the MADT it decides is written by the shim, out of a parameter
-    /// the loader fills after the measurement is closed. Holding the rest of
-    /// the image still, MRTD must not move with it -- that is the whole point
-    /// of taking the table out of the measured page.
+    /// The processor count and the guest's RAM are the two launch inputs the
+    /// digest no longer covers: the tables that depended on them are written by
+    /// the shim, out of parameters the loader fills after the measurement is
+    /// closed. Holding the rest of the image still, MRTD must not move with
+    /// either -- that is the whole point of taking those tables out of the
+    /// measured pages.
     #[test]
-    fn the_processor_count_leaves_the_measurement_alone() {
-        let mrtd = |vcpus| {
-            let params = Params::tdx(DEFAULT_RAM, vcpus, "").unwrap();
+    fn the_machine_size_leaves_the_measurement_alone() {
+        let mrtd = |ram, vcpus| {
+            let params = Params::tdx(ram, vcpus, "").unwrap();
             built(&params).1["expected_mrtd"]
                 .as_str()
                 .unwrap()
                 .to_owned()
         };
-        let base = mrtd(2);
-        assert_eq!(base, mrtd(4));
-        assert_eq!(base, mrtd(8));
-        assert_eq!(base, mrtd(MAX_VCPUS));
-        // ...while the RAM it is built for still does.
-        let other = Params::tdx(DEFAULT_RAM + PAGE, 2, "").unwrap();
-        assert_ne!(base, built(&other).1["expected_mrtd"].as_str().unwrap());
+        let base = mrtd(DEFAULT_RAM, 2);
+        for vcpus in [4, 8, MAX_VCPUS] {
+            assert_eq!(
+                base,
+                mrtd(DEFAULT_RAM, vcpus),
+                "{vcpus} processors moved MRTD"
+            );
+        }
+        for ram in [
+            DEFAULT_RAM + PAGE,
+            2 * GIB,
+            8 * GIB,
+            64 * GIB,
+            1024 * GIB,
+            MAX_RAM,
+        ] {
+            assert_eq!(base, mrtd(ram, 2), "{ram:#x} of RAM moved MRTD");
+        }
+    }
+
+    /// The image is byte-identical too, not merely equally measured: nothing a
+    /// TDX file states depends on the machine it is launched on.
+    #[test]
+    fn a_tdx_image_is_the_same_file_whatever_machine_it_is_built_for() {
+        let one = built(&Params::tdx(DEFAULT_RAM, 2, "").unwrap()).0;
+        for (ram, vcpus) in [(8 * GIB, 8u32), (MAX_RAM, MAX_VCPUS)] {
+            assert_eq!(one, built(&Params::tdx(ram, vcpus, "").unwrap()).0);
+        }
     }
 
     /// Builds from stub inputs and returns the IGVM file and the manifest beside it.
@@ -526,23 +595,37 @@ pub mod tests {
         assert_eq!(reset_page(&one)[PAGE as usize - 16], 0xe9);
     }
 
-    pub fn shim_ranges(page: &[u8]) -> (u64, Vec<(u64, u64)>) {
-        let at = SHIM_DATA as usize;
-        let word = |i: usize| u64::from_le_bytes(page[i..i + 8].try_into().unwrap());
-        let mut ranges = Vec::new();
-        let mut i = at + 8;
-        while word(i) != 0 || word(i + 8) != 0 {
-            ranges.push((word(i), word(i + 8)));
-            i += 16;
+    /// The shim's data block, read back the way the shim reads it: the kernel
+    /// entry point, the least memory the image runs in, and the placed spans.
+    pub fn shim_data(page: &[u8]) -> (u64, u64, Vec<boot::Region>) {
+        let word =
+            |i: u64| u64::from_le_bytes(page[i as usize..i as usize + 8].try_into().unwrap());
+        let mut spans = Vec::new();
+        let mut at = SHIM_DATA + SHIM_DATA_SPANS;
+        while word(at) != 0 || word(at + SPAN_HI) != 0 {
+            spans.push((word(at), word(at + SPAN_HI), word(at + SPAN_KIND) as u32));
+            at += SPAN_LEN;
         }
-        (word(at), ranges)
+        (
+            word(SHIM_DATA + SHIM_DATA_ENTRY),
+            word(SHIM_DATA + SHIM_DATA_MIN_MEMORY),
+            spans,
+        )
+    }
+
+    /// The ranges the shim will accept in the guest `params` describes, from
+    /// the spans its own page carries and the map the loader will report.
+    pub fn shim_ranges(page: &[u8], params: &Params) -> (u64, Vec<(u64, u64)>) {
+        let (entry, _, spans) = shim_data(page);
+        let (top, host) = boot::host_regions(&params.extents());
+        (entry, boot::accept_ranges(&boot::merge(&spans, &host), top))
     }
 
     #[test]
     fn the_shim_accepts_exactly_what_the_builder_did_not_place() {
         let params = params();
         let file = built(&params).0;
-        let (entry, ranges) = shim_ranges(&reset_page(&file));
+        let (entry, ranges) = shim_ranges(&reset_page(&file), &params);
         assert_eq!(entry, KERNEL_BASE + 0x200);
 
         let loaded: Vec<u64> = igvm_pages(&file)
@@ -565,6 +648,292 @@ pub mod tests {
         assert_eq!(accepted + loaded.len() as u64 * PAGE, params.memory);
         assert_eq!(ranges.first().unwrap().0, 0);
         assert_eq!(ranges.last().unwrap().1, params.memory);
+    }
+
+    /// The map the shim carries is measured, so it is one map for every guest
+    /// the image can run in. For each of them it has to produce exactly what
+    /// the builder would have produced knowing that guest's size -- including
+    /// the q35 aperture, which the measured map always states and a guest too
+    /// small to open one must never see.
+    #[test]
+    fn the_measured_map_describes_every_guest_the_image_can_run_in() {
+        let dir = tempdir().unwrap();
+        let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
+        fs::write(&k, test_kernel()).unwrap();
+        fs::write(&i, vec![7u8; 100_000]).unwrap();
+        for ram in [
+            align_up(INITRAMFS_BASE + 100_000, PAGE),
+            DEFAULT_RAM,
+            2 * GIB,
+            Q35_SPLIT - PAGE,
+            Q35_SPLIT,
+            8 * GIB,
+            1024 * GIB,
+            MAX_RAM,
+        ] {
+            for snp in [false, true] {
+                let params = if snp {
+                    Params::snp(ram, 1, DEFAULT_CBIT, "").unwrap()
+                } else {
+                    Params::tdx(ram, 1, "").unwrap()
+                };
+                let launch = if snp {
+                    tinfoil_firmware::snp(&k, &i, &params)
+                } else {
+                    tinfoil_firmware::tdx(&k, &i, &params)
+                }
+                .unwrap();
+                // What a builder that knew this guest's size would have laid
+                // out for it: the placed map, aperture and all.
+                let known = boot::spans(&launch.placed);
+                let memory = params.memory;
+                let (top, host) = boot::host_regions(&params.extents());
+                assert_eq!(top, memory, "the top of RAM for {ram:#x}, snp={snp}");
+                let merged = boot::merge(&launch.spans, &host);
+                assert_eq!(
+                    boot::e820(&merged, top),
+                    boot::e820(&known, memory),
+                    "the E820 map for {ram:#x} of RAM, snp={snp}"
+                );
+                assert_eq!(
+                    boot::accept_ranges(&merged, top),
+                    boot::accept_ranges(&known, memory),
+                    "the accept ranges for {ram:#x} of RAM, snp={snp}"
+                );
+                // Nothing placed is ever accepted, at any size.
+                for (lo, hi) in boot::accept_ranges(&merged, top) {
+                    assert!(known.iter().all(|(a, b, _)| hi <= *a || lo >= *b));
+                }
+                // The least memory the shim will run in holds the initramfs.
+                assert_eq!(
+                    boot::min_memory(&launch.spans),
+                    align_up(INITRAMFS_BASE + 100_000, PAGE)
+                );
+            }
+        }
+    }
+
+    /// Builds both platforms' launch state from stub inputs.
+    fn launched(dir: &Path, ram: u64, snp: bool) -> (Params, tinfoil_firmware::Launch) {
+        let (k, i) = (dir.join("bzImage"), dir.join("initrd"));
+        if !k.exists() {
+            fs::write(&k, test_kernel()).unwrap();
+            fs::write(&i, vec![7u8; 100_000]).unwrap();
+        }
+        let params = if snp {
+            Params::snp(ram, 1, DEFAULT_CBIT, "").unwrap()
+        } else {
+            Params::tdx(ram, 1, "").unwrap()
+        };
+        let launch = if snp {
+            tinfoil_firmware::snp(&k, &i, &params)
+        } else {
+            tinfoil_firmware::tdx(&k, &i, &params)
+        }
+        .unwrap();
+        (params, launch)
+    }
+
+    /// Every guest size this image can be launched at, including both sides of
+    /// the q35 aperture and both ends of the range.
+    const SIZES: [u64; 9] = [
+        0x2001_9000,
+        DEFAULT_RAM,
+        2 * GIB,
+        Q35_SPLIT - PAGE,
+        Q35_SPLIT,
+        8 * GIB,
+        64 * GIB,
+        1024 * GIB,
+        MAX_RAM,
+    ];
+
+    /// The shim's own assembly, run here against the map a real image carries
+    /// and the extents a loader will describe. This is the whole point of
+    /// taking these tables out of the measurement: one measured list of spans,
+    /// and a shim that merges a host's map into it and arrives at exactly what
+    /// boot.rs specifies for whatever machine the host built.
+    #[test]
+    fn the_shim_builds_the_map_boot_rs_specifies() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        for snp in [false, true] {
+            for ram in SIZES {
+                let (params, launch) = launched(dir.path(), ram, snp);
+                shim.data(launch.entry, &launch.spans).loader_ram(ram);
+                let (top, host) = boot::host_regions(&params.extents());
+                let want = boot::merge(&launch.spans, &host);
+                assert_eq!(
+                    shim.regions(),
+                    Some((top, want.clone())),
+                    "the regions for {ram:#x}, snp={snp}"
+                );
+                assert_eq!(
+                    shim.e820(top),
+                    Some(boot::e820(&want, top)),
+                    "the E820 map for {ram:#x}, snp={snp}"
+                );
+                assert_eq!(
+                    shim.accept_ranges(top),
+                    boot::accept_ranges(&want, top),
+                    "the accept ranges for {ram:#x}, snp={snp}"
+                );
+            }
+        }
+    }
+
+    /// QEMU moves a large guest's high memory above 1 TiB on AMD hosts, past
+    /// the HyperTransport range it reserves (hw/i386/pc.c). The shim is told
+    /// where RAM is rather than assuming, so it describes that machine too --
+    /// with the reserved range reserved and the gap left for devices.
+    #[test]
+    fn a_map_with_memory_relocated_above_the_reserved_range_still_describes_it() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        let (_, launch) = launched(dir.path(), 8 * GIB, true);
+        // AMD_HT_START..AMD_ABOVE_1TB_START, and the RAM QEMU restacks above it.
+        let (ht_lo, ht_hi) = (1012 * GIB, 1024 * GIB);
+        let (lo, hi) = (1024 * GIB, 1536 * GIB);
+        shim.data(launch.entry, &launch.spans).loader_memory_map(&[
+            (0, Q35_LOWMEM / PAGE, MAP_TYPE_MEMORY as u16),
+            (ht_lo / PAGE, (ht_hi - ht_lo) / PAGE, 1),
+            (lo / PAGE, (hi - lo) / PAGE, MAP_TYPE_MEMORY as u16),
+        ]);
+        let extents = [(0, Q35_LOWMEM, true), (ht_lo, ht_hi, false), (lo, hi, true)];
+        let (top, host) = boot::host_regions(&extents);
+        let want = boot::merge(&launch.spans, &host);
+        assert_eq!(shim.regions(), Some((top, want.clone())));
+        let e820 = shim.e820(top).unwrap();
+        assert_eq!(e820, boot::e820(&want, top));
+        // The aperture between the two banks of RAM belongs to no entry, the
+        // reserved range is reserved, and the high bank is ordinary RAM.
+        assert!(e820
+            .iter()
+            .all(|(b, n, k)| *k != RAM || b + n <= Q35_LOWMEM || *b >= lo));
+        assert!(e820.contains(&(ht_lo, ht_hi - ht_lo, RESERVED)));
+        assert!(e820.contains(&(lo, hi - lo, RAM)));
+        // ...and nothing outside the RAM the loader described is accepted.
+        for (l, h) in shim.accept_ranges(top) {
+            assert!(h <= Q35_LOWMEM || (l >= lo && h <= hi), "{l:#x}..{h:#x}");
+        }
+    }
+
+    /// A measured span and one of the loader's regions can begin at the same
+    /// address -- the reset page sits at the top of the 32-bit space, where a
+    /// map's aperture can begin too. The order the two are merged in decides
+    /// the table, so it is pinned here rather than left to whichever list the
+    /// shim happens to read first.
+    #[test]
+    fn a_region_beginning_where_a_placed_span_does_is_merged_the_same_way() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        let (_, launch) = launched(dir.path(), 8 * GIB, false);
+        let ram = MAP_TYPE_MEMORY as u16;
+        // Low RAM stopping exactly at the reset page, so the aperture after it
+        // and the page itself begin together.
+        let extents = [(0, RESET_ALIAS, true), (FOUR_GIB, 6 * GIB, true)];
+        shim.data(launch.entry, &launch.spans).loader_memory_map(&[
+            (0, RESET_ALIAS / PAGE, ram),
+            (FOUR_GIB / PAGE, 2 * GIB / PAGE, ram),
+        ]);
+        let (top, host) = boot::host_regions(&extents);
+        let want = boot::merge(&launch.spans, &host);
+        assert!(want.iter().filter(|(lo, _, _)| *lo == RESET_ALIAS).count() == 2);
+        assert_eq!(shim.regions(), Some((top, want.clone())));
+        assert_eq!(shim.e820(top), Some(boot::e820(&want, top)));
+        assert_eq!(shim.accept_ranges(top), boot::accept_ranges(&want, top));
+        // Whichever way round they are merged, the reset page is not accepted.
+        for (lo, hi) in shim.accept_ranges(top) {
+            assert!(hi <= RESET_ALIAS || lo >= RESET_ALIAS + PAGE);
+        }
+    }
+
+    /// QEMU reserves the HyperTransport range on any AMD host with a wide
+    /// enough address space, whatever size the guest is, and a host may
+    /// describe anything else it likes above the RAM it gave out. None of it
+    /// changes a guest that ends below it.
+    #[test]
+    fn regions_above_the_guests_ram_change_nothing_in_it() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        let (params, launch) = launched(dir.path(), 8 * GIB, true);
+        let ram = MAP_TYPE_MEMORY as u16;
+        shim.data(launch.entry, &launch.spans).loader_ram(8 * GIB);
+        let plain = (
+            shim.regions().unwrap().0,
+            shim.e820(params.memory),
+            shim.accept_ranges(params.memory),
+        );
+
+        shim.loader_memory_map(&[
+            (0, Q35_LOWMEM / PAGE, ram),
+            (FOUR_GIB / PAGE, (params.memory - FOUR_GIB) / PAGE, ram),
+            // AMD_HT_START..AMD_ABOVE_1TB_START, and something past the map.
+            (1012 * GIB / PAGE, 12 * GIB / PAGE, 1),
+            (4096 * GIB / PAGE, GIB / PAGE, 1),
+        ]);
+        assert_eq!(shim.regions().unwrap().0, plain.0);
+        assert_eq!(shim.e820(params.memory), plain.1);
+        assert_eq!(shim.accept_ranges(params.memory), plain.2);
+    }
+
+    /// The memory map is unmeasured and the host writes it. Every map this
+    /// image cannot describe has to terminate the shim, not be clamped into
+    /// range: a clamped map is a guest whose E820 table and whose RAM disagree.
+    #[test]
+    fn a_memory_map_this_image_cannot_run_in_is_refused() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        let (params, launch) = launched(dir.path(), 8 * GIB, false);
+        shim.data(launch.entry, &launch.spans);
+        let min = boot::min_memory(&launch.spans);
+        let ram = MAP_TYPE_MEMORY as u16;
+
+        // The map a working guest presents, so the refusals below are the only
+        // thing that differs.
+        shim.loader_ram(8 * GIB);
+        assert_eq!(shim.regions().map(|(top, _)| top), Some(params.memory));
+
+        let long: Vec<(u64, u64, u16)> = (0..=MAP_ENTRIES).map(|n| (n * 2 + 1, 1, ram)).collect();
+        for (why, map) in [
+            ("an empty map", vec![]),
+            ("no memory at all", vec![(0, 0, ram)]),
+            (
+                "less than the image places in it",
+                vec![(0, min / PAGE - 1, ram)],
+            ),
+            (
+                "more than the page tables reach",
+                vec![
+                    (0, Q35_LOWMEM / PAGE, ram),
+                    (FOUR_GIB / PAGE, (MAX_MEMORY - FOUR_GIB) / PAGE + 1, ram),
+                ],
+            ),
+            ("a page count that wraps", vec![(1, u64::MAX, ram)]),
+            (
+                "extents that do not ascend",
+                vec![
+                    (FOUR_GIB / PAGE, GIB / PAGE, ram),
+                    (0, Q35_LOWMEM / PAGE, ram),
+                ],
+            ),
+            (
+                "extents that overlap",
+                vec![(0, 8 * GIB / PAGE, ram), (FOUR_GIB / PAGE, GIB / PAGE, ram)],
+            ),
+            (
+                "memory that does not start at zero",
+                vec![(1, 8 * GIB / PAGE, ram)],
+            ),
+            (
+                "the image's own pages declared reserved",
+                vec![(0, 8 * GIB / PAGE, 1)],
+            ),
+            ("more extents than the shim reads", long),
+        ] {
+            shim.loader_memory_map(&map);
+            assert_eq!(shim.regions(), None, "{why} was accepted");
+        }
     }
 
     /// Each component is SHA-256 of exactly `size` bytes at `address`, reset page included.
@@ -628,7 +997,7 @@ pub mod tests {
                 vec![0u8; PAGE as usize],
             )])
             .collect();
-        let e820 = boot::e820(&placed, p.memory);
+        let e820 = boot::e820(&boot::spans(&placed), p.memory);
         assert!(e820
             .iter()
             .all(|(base, size, kind)| *kind != RAM || base + size <= 2 * GIB || *base >= 4 * GIB));
@@ -641,21 +1010,22 @@ pub mod tests {
     #[test]
     fn a_large_guest_leaves_the_reset_page_out_of_its_ram() {
         let params = Params::tdx(8 * GIB, DEFAULT_VCPUS, "").unwrap();
-        let (_, ranges) = shim_ranges(&reset_page(&built(&params).0));
+        let (_, ranges) = shim_ranges(&reset_page(&built(&params).0), &params);
         assert!(ranges
             .iter()
             .all(|(lo, hi)| *hi <= RESET_ALIAS || *lo >= RESET_ALIAS + PAGE));
         assert_eq!(ranges.last().unwrap(), &(RESET_ALIAS + PAGE, params.memory));
         // The same placement reserves it in E820, so Linux does not take it for free RAM.
         let e820 = boot::e820(
-            &[Placed::measured(
+            &boot::spans(&[Placed::measured(
                 RESET_ALIAS,
                 "",
                 RESERVED,
                 vec![0u8; PAGE as usize],
-            )],
+            )]),
             params.memory,
         );
+
         assert!(e820
             .iter()
             .any(|(base, size, kind)| *base == RESET_ALIAS && *size == PAGE && *kind == RESERVED));

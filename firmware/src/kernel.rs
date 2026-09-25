@@ -68,20 +68,42 @@ pub(crate) fn prepare(
     })
 }
 
-/// The shim, with the entry point and zero-terminated accept ranges packed in.
-pub(crate) fn shim(blob: &[u8], entry: u64, ranges: &[(u64, u64)]) -> Result<Vec<u8>, String> {
+/// The shim, with the entry point, the least memory this image can run in and
+/// the zero-terminated spans it placed packed in. The E820 map and the ranges
+/// to accept both follow from those spans and the memory the loader reports,
+/// so neither the guest's RAM nor anything derived from it is measured here.
+pub fn data_block(entry: u64, spans: &[boot::Region]) -> Result<Vec<u8>, String> {
+    // Each span can cost the E820 map a gap entry and an entry of its own, and
+    // the RAM above the last of them one more. What the loader's map adds to
+    // that is not known until boot, so the shim counts the entries it writes
+    // and terminates rather than overrunning boot_params.
+    if 2 * spans.len() + 1 > E820_MAX as usize {
+        return Err(format!(
+            "{} placed spans can describe more than the {E820_MAX} E820 entries \
+             boot_params holds",
+            spans.len()
+        ));
+    }
     let mut data = entry.to_le_bytes().to_vec();
-    for (lo, hi) in ranges {
+    data.extend_from_slice(&boot::min_memory(spans).to_le_bytes());
+    for (lo, hi, kind) in spans {
         data.extend_from_slice(&lo.to_le_bytes());
         data.extend_from_slice(&hi.to_le_bytes());
+        data.extend_from_slice(&kind.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
     }
-    data.extend_from_slice(&[0u8; 16]);
+    data.extend_from_slice(&[0u8; SPAN_LEN as usize]);
     if data.len() > SHIM_DATA_SIZE as usize {
         return Err(format!(
             "shim data block needs {} of {SHIM_DATA_SIZE} bytes",
             data.len()
         ));
     }
+    Ok(data)
+}
+
+pub(crate) fn shim(blob: &[u8], entry: u64, spans: &[boot::Region]) -> Result<Vec<u8>, String> {
+    let data = data_block(entry, spans)?;
     let (mut shim, at) = (blob.to_vec(), SHIM_DATA as usize);
     if shim[at..at + data.len()].iter().any(|b| *b != 0) {
         return Err("shim code overruns its data block".into());
@@ -106,19 +128,28 @@ pub(crate) fn shim_owned(placed: &[Placed]) -> Result<usize, String> {
     Ok(owned)
 }
 
-/// The 4-level map covering [0, MAP_LIMIT); `c_bit` is 0 on TDX and the C-bit on SNP.
+/// The 4-level map covering [0, MAP_LIMIT); `c_bit` is 0 on TDX and the C-bit
+/// on SNP. It is measured, so it is built for the whole of MAP_LIMIT whatever
+/// RAM the guest turns out to have: one PML4 entry and one PDPT of 1-GiB pages
+/// per 512 GiB.
 pub(crate) fn identity_map(c_bit: u64, shared_alias: bool) -> Vec<u8> {
     let c = if c_bit == 0 { 0 } else { 1u64 << c_bit };
-    let pages = if shared_alias { 3 } else { 2 };
-    let mut v = vec![0u8; pages * PAGE as usize];
-    put64(&mut v, 0, (PAGE_TABLES + PAGE) | c | 3);
+    let pdpts = MAP_LIMIT / PDPT_SPAN;
+    let pages = pdpts + 1 + u64::from(shared_alias);
+    let mut v = vec![0u8; (pages * PAGE) as usize];
+    for pdpt in 0..pdpts {
+        let at = (pdpt * 8) as usize;
+        put64(&mut v, at, (PAGE_TABLES + (pdpt + 1) * PAGE) | c | 3);
+    }
     for gib in 0..MAP_LIMIT / GIB {
         put64(&mut v, (PAGE + gib * 8) as usize, (gib * GIB) | c | 0x83);
     }
     if shared_alias {
-        // PML4[1] -> a second PDPT whose first entry is physical GiB 0, unencrypted.
-        put64(&mut v, 8, (PAGE_TABLES + 2 * PAGE) | c | 3);
-        put64(&mut v, (2 * PAGE) as usize, 0x83);
+        // The slot above the mapped range -> a PDPT whose first entry is
+        // physical GiB 0, unencrypted.
+        let at = (pdpts * 8) as usize;
+        put64(&mut v, at, (PAGE_TABLES + (pdpts + 1) * PAGE) | c | 3);
+        put64(&mut v, ((pdpts + 1) * PAGE) as usize, 0x83);
     }
     v
 }
@@ -161,17 +192,50 @@ mod tests {
             );
         }
     }
-    /// On SNP, PML4[1] reaches physical GiB 0 again with the C-bit clear, and nothing else.
+    /// On SNP the slot just above the mapped range reaches physical GiB 0 again
+    /// with the C-bit clear, and nothing else.
     #[test]
     fn the_shared_alias_maps_gib_zero_unencrypted() {
+        let pdpts = MAP_LIMIT / PDPT_SPAN;
         let m = identity_map(DEFAULT_CBIT as u64, true);
-        assert_eq!(m.len(), 3 * PAGE as usize);
-        let pml4_1 = u64::from_le_bytes(m[8..16].try_into().unwrap());
-        assert_eq!(pml4_1, (PAGE_TABLES + 2 * PAGE) | 1 << DEFAULT_CBIT | 3);
-        let alias = &m[2 * PAGE as usize..];
+        assert_eq!(m.len() as u64, (pdpts + 2) * PAGE);
+        let at = (pdpts * 8) as usize;
+        let entry = u64::from_le_bytes(m[at..at + 8].try_into().unwrap());
+        assert_eq!(
+            entry,
+            (PAGE_TABLES + (pdpts + 1) * PAGE) | 1 << DEFAULT_CBIT | 3
+        );
+        let alias = &m[((pdpts + 1) * PAGE) as usize..];
         assert_eq!(u64::from_le_bytes(alias[..8].try_into().unwrap()), 0x83);
         assert!(alias[8..].iter().all(|b| *b == 0));
-        assert_eq!(SHARED_ALIAS, 512 * GIB);
+        // The alias is the first address past the identity map, so nothing the
+        // guest reaches through the map can reach it.
+        assert_eq!(SHARED_ALIAS, pdpts * PDPT_SPAN);
+    }
+
+    /// Four PML4 entries, one per PDPT, each of 512 1-GiB pages: the map covers
+    /// MAP_LIMIT whatever RAM the guest has, because it is measured.
+    #[test]
+    fn the_map_is_built_for_the_whole_limit_however_large_the_guest_is() {
+        let m = identity_map(0, false);
+        let pdpts = MAP_LIMIT / PDPT_SPAN;
+        assert_eq!(m.len() as u64, (pdpts + 1) * PAGE);
+        for pdpt in 0..pdpts {
+            let at = (pdpt * 8) as usize;
+            assert_eq!(
+                u64::from_le_bytes(m[at..at + 8].try_into().unwrap()),
+                (PAGE_TABLES + (pdpt + 1) * PAGE) | 3
+            );
+            // Every PDPT is full, so no 1-GiB slot below MAP_LIMIT is missing.
+            assert_eq!(pdpte(&m, pdpt * PDPT_SPAN), (pdpt * PDPT_SPAN) | 0x83);
+            assert_eq!(
+                pdpte(&m, (pdpt + 1) * PDPT_SPAN - GIB),
+                ((pdpt + 1) * PDPT_SPAN - GIB) | 0x83
+            );
+        }
+        assert!(m[(pdpts * 8) as usize..PAGE as usize]
+            .iter()
+            .all(|b| *b == 0));
     }
     /// The SNP shim PVALIDATEs and zeroes through the map, so every range it walks is mapped.
     #[test]
@@ -185,7 +249,9 @@ mod tests {
                 RAM,
                 vec![0u8; PAGE as usize],
             )];
-            for (_, hi) in boot::accept_ranges(&placed, params.memory) {
+            let spans = boot::shim_spans(&placed);
+            let (top, host) = boot::host_regions(&params.extents());
+            for (_, hi) in boot::accept_ranges(&boot::merge(&spans, &host), top) {
                 assert_eq!(pdpte(&map, hi - PAGE) & 1, 1, "{hi:#x} is unmapped");
             }
         }

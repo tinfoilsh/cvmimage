@@ -1,6 +1,7 @@
 use crate::image::{
-    component, components, config_field, mmio_holes, page_directive, parameter_directives,
-    write_manifest, zeros, Component, ReportFields, COMPAT, PARAM_AREA, PARAM_VCPUS,
+    component, components, config_field, mmio_holes, page_directive, param_gpa,
+    parameter_directives, write_manifest, zeros, Component, ReportFields, COMPAT, PARAM_AREA,
+    PARAM_MAP_AREA, PARAM_OFFSET, PARAM_PAGES,
 };
 use igvm::{
     IgvmDirectiveHeader, IgvmFile, IgvmInitializationHeader, IgvmPlatformHeader, IgvmRevision,
@@ -164,10 +165,12 @@ pub fn build(
             at += bytes;
         }
     }
-    directives.extend(pages.iter().flat_map(|p| match p.kind {
-        PAGE_UNMEASURED => parameter_directives(p.gpa),
-        kind => vec![page_directive(p.gpa, igvm_type(kind), p.data.clone())],
-    }));
+    for p in &pages {
+        match p.kind {
+            PAGE_UNMEASURED => directives.extend(parameter_directives(p.gpa)?),
+            kind => directives.push(page_directive(p.gpa, igvm_type(kind), p.data.clone())),
+        }
+    }
     // KVM consumes the VMSAs last and only at this architectural high GPA, which
     // QEMU checks per context; the vp index is what separates them.
     for vp_index in 0..params.vcpus as u16 {
@@ -469,15 +472,18 @@ pub fn measure_snp(file: &[u8]) -> Result<[u8; 48], String> {
                 parameter_area_index,
                 initial_data,
             } if *number_of_bytes == PAGE
-                && *parameter_area_index == PARAM_AREA
+                && param_gpa(*parameter_area_index).is_some()
                 && initial_data.is_empty() => {}
             IgvmDirectiveHeader::VpCount(p)
-                if p.parameter_area_index == PARAM_AREA && p.byte_offset == PARAM_VCPUS => {}
+                if p.parameter_area_index == PARAM_AREA && p.byte_offset == PARAM_OFFSET => {}
+            IgvmDirectiveHeader::MemoryMap(p)
+                if p.parameter_area_index == PARAM_MAP_AREA && p.byte_offset == PARAM_OFFSET => {}
             // Unmeasured contents, but the address they are imported at is not.
             IgvmDirectiveHeader::ParameterInsert(p)
-                if p.compatibility_mask == COMPAT && p.parameter_area_index == PARAM_AREA =>
+                if p.compatibility_mask == COMPAT
+                    && param_gpa(p.parameter_area_index) == Some(p.gpa) =>
             {
-                if !pages.is_empty() {
+                if pages.iter().any(|p| p.kind != PAGE_UNMEASURED) {
                     return Err("SNP IGVM inserts a parameter area after page data".into());
                 }
                 pages.push(LaunchPage {
@@ -493,6 +499,18 @@ pub fn measure_snp(file: &[u8]) -> Result<[u8; 48], String> {
     }
     if vmsas.is_empty() {
         return Err("SNP IGVM carries no save area, so it measures no processor".into());
+    }
+    // Every unmeasured page this image asks for, imported exactly once and
+    // before anything the digest covers.
+    let parameters: Vec<u64> = pages
+        .iter()
+        .filter(|p| p.kind == PAGE_UNMEASURED)
+        .map(|p| p.gpa)
+        .collect();
+    if parameters != PARAM_PAGES {
+        return Err(format!(
+            "SNP IGVM inserts parameter areas at {parameters:#x?}, expected {PARAM_PAGES:#x?}"
+        ));
     }
     // Deliberately not sorted: the digest folds pages in the order a loader
     // issues them, so sorting would measure a file that was never shipped.
@@ -745,24 +763,17 @@ mod tests {
             })
             .collect();
         assert!(pages.contains_key(&SNP_GHCB));
-        let (_, ranges) = crate::image::tests::shim_ranges(&pages[&SHIM_BASE]);
+        let (_, ranges) = crate::image::tests::shim_ranges(&pages[&SHIM_BASE], &params());
         assert!(!ranges.is_empty());
         assert!(!ranges
             .iter()
             .any(|(lo, hi)| *lo <= SNP_GHCB && SNP_GHCB < *hi));
         // The zero page's E820 map: entry count at 0x1e8, 20-byte entries from 0x2d0.
-        let zero = &pages[&ZERO_PAGE];
-        let count = zero[0x1e8] as usize;
-        let e820: Vec<(u64, u64, u32)> = (0..count)
-            .map(|n| {
-                let at = 0x2d0 + n * 20;
-                (
-                    u64::from_le_bytes(zero[at..at + 8].try_into().unwrap()),
-                    u64::from_le_bytes(zero[at + 8..at + 16].try_into().unwrap()),
-                    u32::from_le_bytes(zero[at + 16..at + 20].try_into().unwrap()),
-                )
-            })
-            .collect();
+        // The shim writes the table at boot, so this is the map it will write.
+        let (_, _, spans) = crate::image::tests::shim_data(&pages[&SHIM_BASE]);
+        assert!(boot::read_e820(&pages[&ZERO_PAGE]).is_empty());
+        let (top, host) = boot::host_regions(&params().extents());
+        let e820 = boot::e820(&boot::merge(&spans, &host), top);
         let kind = e820
             .iter()
             .find(|(base, size, _)| *base <= SNP_GHCB && SNP_GHCB < base + size)
@@ -827,6 +838,36 @@ mod tests {
             base, moved,
             "the processor count left the measurement alone"
         );
+    }
+
+    /// The RAM a guest is given no longer reaches the digest: the E820 map and
+    /// the accept list it decided are written by the shim, from a memory map
+    /// the loader deposits after the measurement is closed. The file still
+    /// states that RAM as required memory, because the loader has to make it
+    /// private before the shim validates it, but nothing measured moves.
+    #[test]
+    fn the_guest_size_leaves_the_measurement_alone() {
+        let dir = tempdir().unwrap();
+        let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
+        fs::write(&k, test_kernel()).unwrap();
+        fs::write(&i, vec![7u8; 100_000]).unwrap();
+        let digest = |ram| {
+            let out = dir.path().join("out.igvm");
+            let params = Params::snp(ram, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
+            build(&k, &i, &out, &params, None, None, 0).unwrap();
+            measure_snp(&fs::read(&out).unwrap()).unwrap()
+        };
+        let base = digest(8 * GIB);
+        for ram in [
+            DEFAULT_RAM,
+            2 * GIB,
+            16 * GIB,
+            64 * GIB,
+            1024 * GIB,
+            MAX_RAM,
+        ] {
+            assert_eq!(base, digest(ram), "{ram:#x} of RAM moved the digest");
+        }
     }
 
     #[test]

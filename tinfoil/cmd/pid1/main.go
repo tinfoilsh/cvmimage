@@ -106,22 +106,23 @@ type consoleControl interface {
 }
 
 type lifecycleDeps struct {
-	services       serviceControl
-	startConsole   func(context.Context) (consoleControl, error)
-	oneShot        func(context.Context, supervisor.Command) error
-	nvidia         func(context.Context) error
-	lockModules    func() error
-	debugFailure   func(context.Context, error)
-	setupFS        func(pidruntime.LogFunc) error
-	sysctls        func(pidruntime.LogFunc) error
-	ramdisk        func(pidruntime.LogFunc) error
-	limits         func() error
-	syslog         func(context.Context)
-	exists         func(string) (bool, error)
-	measuredConfig func() (*runtimeconfig.Config, error)
-	term           time.Duration
-	kill           time.Duration
-	cmdline        kernelcmdline.Values
+	services         serviceControl
+	startConsole     func(context.Context) (consoleControl, error)
+	oneShot          func(context.Context, supervisor.Command) error
+	nvidia           func(context.Context) error
+	lockModules      func() error
+	debugFailure     func(context.Context, error)
+	setupFS          func(pidruntime.LogFunc) error
+	sysctls          func(pidruntime.LogFunc) error
+	ramdisk          func(pidruntime.LogFunc) error
+	localAttestation func() (*os.File, error)
+	limits           func() error
+	syslog           func(context.Context)
+	exists           func(string) (bool, error)
+	measuredConfig   func() (*runtimeconfig.Config, error)
+	term             time.Duration
+	kill             time.Duration
+	cmdline          kernelcmdline.Values
 }
 
 func run(parent context.Context) (result error) {
@@ -158,23 +159,28 @@ func run(parent context.Context) (result error) {
 		measuredConfig: func() (*runtimeconfig.Config, error) {
 			return readMeasuredConfig(cmdline.Debug)
 		},
-		lockModules: hardening.LockKernelModules,
-		setupFS:     pidruntime.SetupFilesystems,
-		sysctls:     pidruntime.ApplySysctls,
-		ramdisk:     pidruntime.SetupRamdisk,
-		limits:      hardening.ApplyRuntimeLimits,
-		syslog:      startOptionalSyslogSink,
-		exists:      pathExists,
-		term:        serviceTermGrace,
-		kill:        serviceKillGrace,
-		cmdline:     cmdline,
+		lockModules:      hardening.LockKernelModules,
+		setupFS:          pidruntime.SetupFilesystems,
+		sysctls:          pidruntime.ApplySysctls,
+		ramdisk:          pidruntime.SetupRamdisk,
+		localAttestation: func() (*os.File, error) { return newLocalAttestationSocket(boot.AttestationSocket) },
+		limits:           hardening.ApplyRuntimeLimits,
+		syslog:           startOptionalSyslogSink,
+		exists:           pathExists,
+		term:             serviceTermGrace,
+		kill:             serviceKillGrace,
+		cmdline:          cmdline,
 	}
 	return runLifecycle(parent, deps, readiness)
 }
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
 	var console consoleControl
+	var localAttestationSocket *os.File
 	defer func() {
+		if localAttestationSocket != nil {
+			localAttestationSocket.Close()
+		}
 		if console != nil {
 			result = errors.Join(result, console.stop(deps.term, deps.kill))
 		}
@@ -251,10 +257,17 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}
 	// The shim intentionally starts in its ephemeral boot-status phase before
 	// provisioning, then upgrades in place as boot publishes private artifacts.
+	localAttestationSocket, err = deps.localAttestation()
+	if err != nil {
+		return fmt.Errorf("local attestation socket: %w", err)
+	}
+	shimCommand := hardenedCommand(hardening.ServiceShim, boot.ShimBinary)
+	shimFD := shimCommand.AddExtraFile(localAttestationSocket)
+	shimCommand.Args = append(shimCommand.Args, fmt.Sprintf("--attestation-fd=%d", shimFD))
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: shimName, Required: true, Restart: true,
 		DrainUntilExit: true,
-		Command:        hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
+		Command:        shimCommand,
 		Ready:          endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
 		PIDFile:        boot.ShimPIDPath,
 	}); err != nil {

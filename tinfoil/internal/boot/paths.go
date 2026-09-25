@@ -8,6 +8,7 @@ const (
 	// Public — mounted read-only into containers as /tinfoil.
 	ConfigPath          = PublicDir + "/config.yml"
 	AttestationPath     = PublicDir + "/attestation.json"
+	AttestationSocket   = PublicDir + "/attestation.sock"
 	ContainerStatusPath = PublicDir + "/container-status.json"
 	PublicModelsDir     = PublicDir + "/models"
 	MWPDir              = PublicDir + "/mwp"

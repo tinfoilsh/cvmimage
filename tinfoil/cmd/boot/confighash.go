@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -22,18 +21,19 @@ const (
 )
 
 // MRCONFIGID is TDX's equivalent, 48 bytes, so it carries the 32-byte config
-// hash followed by 16 zero bytes. TDINFO_STRUCT starts halfway through
-// TDREPORT_STRUCT, after REPORTMACSTRUCT and TEE_TCB_INFO, and ATTRIBUTES,
-// XFAM and MRTD precede MRCONFIGID within it.
+// hash followed by 16 zero bytes. It sits in TDINFO_STRUCT, which follows
+// REPORTMACSTRUCT and TEE_TCB_INFO in a TD report, behind ATTRIBUTES, XFAM and
+// MRTD. TDINFO_STRUCT gives those three the same widths TDQUOTEBODY does, so
+// the library's sizes place the field.
 const (
-	reportMACStructSize = 256 // REPORTMACSTRUCT
-	teeTCBInfoSize      = 256 // TEE_TCB_INFO and the reserved bytes after it
+	reportMACStructSize = 256      // REPORTMACSTRUCT
+	teeTCBInfoSize      = 239 + 17 // TEE_TCB_INFO and the reserved bytes after it
 	tdInfoOffset        = reportMACStructSize + teeTCBInfoSize
 	mrConfigIDOffset    = tdInfoOffset + tdxabi.TdAttributesSize + tdxabi.XfamSize + tdxabi.MrTdSize
 )
 
 // measuredConfigHash reads the config hash the host committed to at launch.
-// It binds no key, so it needs only the platform's own launch-time fields.
+// Neither branch binds a key; the report is read for the one field.
 func measuredConfigHash() (string, error) {
 	platform, err := attestation.DevicePlatform()
 	if err != nil {
@@ -68,8 +68,8 @@ func hostDataConfigHash() (string, error) {
 // config stage runs before attestation, and reading the guest's own registers
 // must not depend on the host's quote generation service.
 func mrConfigIDConfigHash() (string, error) {
-	device, err := tdxclient.OpenDevice()
-	if err != nil {
+	device := &tdxclient.LinuxDevice{}
+	if err := device.Open(attestation.TDXGuestDevice); err != nil {
 		return "", fmt.Errorf("opening TDX guest device: %w", err)
 	}
 	defer device.Close()
@@ -82,19 +82,29 @@ func mrConfigIDConfigHash() (string, error) {
 	if result != uintptr(tdxlabi.TdxAttestSuccess) {
 		return "", fmt.Errorf("reading TD report: status %d", result)
 	}
-	return configHashFromMRCONFIGID(request.TdReport[mrConfigIDOffset : mrConfigIDOffset+tdxabi.MrConfigIDSize])
+	return configHashFromTDReport(request.TdReport[:])
 }
 
-// configHashFromMRCONFIGID unpacks SHA-256(config) || 16 zero bytes. A
-// nonzero tail is rejected rather than ignored: it is a field the host chose
-// and the guest would otherwise claim to have checked.
+// configHashFromTDReport cuts MRCONFIGID out of a TD report. MRTD and MROWNER
+// are its neighbours, and a host chooses MROWNER, so reading past either end
+// would hand the config hash to whoever laid the report out.
+func configHashFromTDReport(report []byte) (string, error) {
+	if len(report) != tdxlabi.TdReportSize {
+		return "", fmt.Errorf("TD report is %d bytes, expected %d", len(report), tdxlabi.TdReportSize)
+	}
+	return configHashFromMRCONFIGID(report[mrConfigIDOffset : mrConfigIDOffset+tdxabi.MrConfigIDSize])
+}
+
+// configHashFromMRCONFIGID unpacks SHA-256(config) || 16 zero bytes, the one
+// encoding the compiler emits.
 func configHashFromMRCONFIGID(field []byte) (string, error) {
 	if len(field) != tdxabi.MrConfigIDSize {
 		return "", fmt.Errorf("MRCONFIGID is %d bytes, expected %d", len(field), tdxabi.MrConfigIDSize)
 	}
-	tail := field[sha256.Size:]
-	if !bytes.Equal(tail, make([]byte, len(tail))) {
-		return "", fmt.Errorf("MRCONFIGID pads the config hash with %x, not zeros", tail)
+	for _, pad := range field[sha256.Size:] {
+		if pad != 0 {
+			return "", fmt.Errorf("MRCONFIGID pads the config hash with %x, not zeros", field[sha256.Size:])
+		}
 	}
 	return hex.EncodeToString(field[:sha256.Size]), nil
 }

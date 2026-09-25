@@ -189,7 +189,9 @@ Do not pass `-bios`, `-kernel`, `-initrd` or `-append`. Add `console=ttyS0` to
 `--cmdline` for a serial console.
 
 `MRCONFIGID` reaches the guest through the `tdx-guest` object's `mrconfigid`
-property, base64-encoded like SEV-SNP's `host-data`.
+property, base64-encoded like SEV-SNP's `host-data`. The example above sets
+neither, so the field is zero and a guest that verifies a config refuses to
+boot.
 
 QEMU must be built with `--enable-igvm` against libigvm 0.3 or newer. Upstream
 supports IGVM for SEV, SEV-ES and SEV-SNP but not TDX, and implements

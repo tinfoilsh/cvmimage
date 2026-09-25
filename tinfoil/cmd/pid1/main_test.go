@@ -150,7 +150,7 @@ func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 			shimCommand = service.Command
 		}
 	}
-	if len(shimCommand.ExtraFiles) != 1 || shimCommand.ExtraFiles[0] == nil {
+	if len(shimCommand.ExtraFiles) != 1 || shimCommand.ExtraFiles[0] == nil || shimCommand.ExtraFiles[0] == bootCommand.ExtraFiles[0] {
 		t.Fatal("shim did not receive its attestation listener")
 	}
 	if got := fmt.Sprint(containersCommand.Args); !strings.Contains(got, "--debug=true") {

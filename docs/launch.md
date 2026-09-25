@@ -3,7 +3,8 @@
 - **`firmware/`** is what the guest executes and the state it starts from: the
   reset stubs, the guest-physical map, the ACPI tables, the zero page and its
   E820 map, the page tables, and on SEV-SNP one Virtual Machine Save Area
-  (VMSA) per processor. All of it is measured.
+  (VMSA) per processor. All of it is measured, except the one table that
+  depends on the processor count (see below).
 - **`compiler/`** is the `cvmc` command, which serializes that state into an
   Independent Guest Virtual Machine (IGVM) image and reports the launch digest
   it produces.
@@ -43,6 +44,18 @@ command line and identity page tables.
 Pages already imported must not be accepted or validated again, so the build
 produces one placement map covering the E820 map handed to Linux, the pages
 imported from the IGVM file, and the ranges the reset shim initializes.
+
+The Multiple APIC Description Table (MADT) is the one table the measured image
+does not carry: it lists one entry per processor, so measuring it would bind
+every image to a processor count. Instead the image declares an IGVM parameter
+area, the loader deposits the processor count there, and the shim builds the
+MADT around a header that is measured inside its own page. The count is
+unmeasured and untrusted, so a shim that reads one outside 1..=`MAX_VCPUS`
+terminates rather than clamping. The area's address and type still enter the
+measurement; only its contents do not.
+
+On SEV-SNP the digest covers one VMSA per processor, so the processor count
+still changes the launch measurement there whatever the tables say.
 
 On TDX every image page contributes to the measurement register for the trust
 domain (MRTD). The shim enters long mode, parks
@@ -91,7 +104,7 @@ fields this image fixes.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--ram` | `1G` | Guest RAM, matching QEMU `-m` |
-| `--vcpus` | `4` | Processor count; SNP measures one VMSA per processor |
+| `--vcpus` | `4` | Processor count; SNP measures one VMSA per processor, TDX measures none |
 | `--cmdline` | `panic=-1` | Linux command line |
 | `--config-hash` | zero | TDX `MRCONFIGID` or SNP `HOST_DATA` |
 | `--cbit` | `51` | SNP encryption bit |

@@ -2,7 +2,7 @@ use crate::mrtd;
 use igvm::{IgvmDirectiveHeader, IgvmFile, IgvmPlatformHeader, IgvmRevision};
 use igvm_defs::{
     IgvmPageDataFlags, IgvmPageDataType, IgvmPlatformType, IGVM_TDX_PLATFORM_VERSION,
-    IGVM_VHS_SUPPORTED_PLATFORM,
+    IGVM_VHS_PARAMETER, IGVM_VHS_PARAMETER_INSERT, IGVM_VHS_SUPPORTED_PLATFORM,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -15,6 +15,17 @@ use tinfoil_firmware::{
 
 // One compatibility mask bit: this file describes one platform.
 pub const COMPAT: u32 = 1;
+// The one parameter area, holding the vCPU count at its first byte.
+pub const PARAM_AREA: u32 = 0;
+pub const PARAM_VCPUS: u32 = 0;
+
+/// A page a loader imports at `gpa`: its contents when the launch digest
+/// covers them, and nothing when the loader is the one that fills the page.
+#[derive(PartialEq)]
+pub struct Page {
+    pub gpa: u64,
+    pub data: Option<Vec<u8>>,
+}
 
 #[derive(Serialize)]
 pub struct Component {
@@ -120,12 +131,29 @@ pub fn write_manifest<T: Serialize>(output: &Path, manifest: &T) -> Result<(), S
         .map_err(io_error("write manifest"))
 }
 
-fn launch_pages(placed: &[Placed]) -> Result<Vec<(u64, Vec<u8>)>, String> {
+/// The order a loader imports these in, which is the order every digest folds
+/// them in. The pages the loader fills come first: QEMU batches page data and
+/// flushes the batch only at the next page directive, so a parameter insert
+/// lands ahead of the pages it interrupts (backends/igvm.c).
+pub fn launch_pages(placed: &[Placed]) -> Result<Vec<Page>, String> {
     let mut out = Vec::new();
     for region in placed {
+        if matches!(region.fill, Fill::Parameters) {
+            out.push(Page {
+                gpa: region.base,
+                data: None,
+            });
+        }
+    }
+    for region in placed {
         match &region.fill {
-            Fill::Measured(data) => out.extend(boot::pages(region.base, data)),
-            Fill::Mmio(_) => {}
+            Fill::Measured(data) => {
+                out.extend(boot::pages(region.base, data).map(|(gpa, data)| Page {
+                    gpa,
+                    data: Some(data),
+                }))
+            }
+            Fill::Parameters | Fill::Mmio(_) => {}
             Fill::Host => {
                 return Err(format!(
                     "{:#x} is placed but has no measured contents",
@@ -135,6 +163,27 @@ fn launch_pages(placed: &[Placed]) -> Result<Vec<(u64, Vec<u8>)>, String> {
         }
     }
     Ok(out)
+}
+
+/// The area QEMU deposits the vCPU count in, and its insertion at `gpa`. The
+/// contents are unmeasured and untrusted; the address and the type are not.
+pub fn parameter_directives(gpa: u64) -> Vec<IgvmDirectiveHeader> {
+    vec![
+        IgvmDirectiveHeader::ParameterArea {
+            number_of_bytes: PAGE,
+            parameter_area_index: PARAM_AREA,
+            initial_data: Vec::new(),
+        },
+        IgvmDirectiveHeader::VpCount(IGVM_VHS_PARAMETER {
+            parameter_area_index: PARAM_AREA,
+            byte_offset: PARAM_VCPUS,
+        }),
+        IgvmDirectiveHeader::ParameterInsert(IGVM_VHS_PARAMETER_INSERT {
+            gpa,
+            compatibility_mask: COMPAT,
+            parameter_area_index: PARAM_AREA,
+        }),
+    ]
 }
 
 /// A page a loader imports at `gpa`: 4 KiB, private and measured, which is flags of zero.
@@ -148,7 +197,7 @@ pub fn page_directive(gpa: u64, data_type: IgvmPageDataType, data: Vec<u8>) -> I
     }
 }
 
-fn igvm(pages: &[(u64, Vec<u8>)]) -> Result<Vec<u8>, String> {
+fn igvm(pages: &[Page]) -> Result<Vec<u8>, String> {
     let platform = IgvmPlatformHeader::SupportedPlatform(IGVM_VHS_SUPPORTED_PLATFORM {
         compatibility_mask: COMPAT,
         highest_vtl: 0,
@@ -159,7 +208,14 @@ fn igvm(pages: &[(u64, Vec<u8>)]) -> Result<Vec<u8>, String> {
     });
     let directives = pages
         .iter()
-        .map(|(gpa, data)| page_directive(*gpa, IgvmPageDataType::NORMAL, data.clone()))
+        .flat_map(|p| match &p.data {
+            Some(data) => vec![page_directive(
+                p.gpa,
+                IgvmPageDataType::NORMAL,
+                data.clone(),
+            )],
+            None => parameter_directives(p.gpa),
+        })
         .collect();
     let file = IgvmFile::new(IgvmRevision::V1, vec![platform], vec![], directives)
         .map_err(|e| format!("construct TDX IGVM: {e}"))?;
@@ -169,13 +225,15 @@ fn igvm(pages: &[(u64, Vec<u8>)]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Reads an image back the way a loader does, refusing any directive that is not a measured page.
-fn igvm_pages(file: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, String> {
-    IgvmFile::new_from_binary(file, None)
+/// Reads an image back the way a loader does, refusing any directive that is
+/// neither a measured page nor the one parameter area.
+fn igvm_pages(file: &[u8]) -> Result<Vec<Page>, String> {
+    let mut out = Vec::new();
+    for directive in IgvmFile::new_from_binary(file, None)
         .map_err(|e| format!("read back TDX IGVM: {e}"))?
         .directives()
-        .iter()
-        .map(|d| match d {
+    {
+        match directive {
             IgvmDirectiveHeader::PageData {
                 gpa,
                 compatibility_mask,
@@ -189,11 +247,35 @@ fn igvm_pages(file: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, String> {
                 && !flags.shared()
                 && data.len() == PAGE as usize =>
             {
-                Ok((*gpa, data.clone()))
+                out.push(Page {
+                    gpa: *gpa,
+                    data: Some(data.clone()),
+                })
             }
-            _ => Err("TDX IGVM carries a directive that is not a measured page".to_string()),
-        })
-        .collect()
+            IgvmDirectiveHeader::ParameterArea {
+                number_of_bytes,
+                parameter_area_index,
+                initial_data,
+            } if *number_of_bytes == PAGE
+                && *parameter_area_index == PARAM_AREA
+                && initial_data.is_empty() => {}
+            IgvmDirectiveHeader::VpCount(p)
+                if p.parameter_area_index == PARAM_AREA && p.byte_offset == PARAM_VCPUS => {}
+            IgvmDirectiveHeader::ParameterInsert(p)
+                if p.parameter_area_index == PARAM_AREA && p.compatibility_mask == COMPAT =>
+            {
+                if !out.is_empty() {
+                    return Err("TDX IGVM inserts a parameter area after page data".into());
+                }
+                out.push(Page {
+                    gpa: p.gpa,
+                    data: None,
+                });
+            }
+            _ => return Err("TDX IGVM carries a directive this image never emits".to_string()),
+        }
+    }
+    Ok(out)
 }
 
 // What a TD launched from this image reports. ATTRIBUTES, XFAM, the owner
@@ -221,13 +303,24 @@ pub fn component(address: u64, data: &[u8]) -> Component {
 /// Recompute the Intel TDX launch digest from a serialized image.
 pub fn measure_tdx(file: &[u8]) -> Result<[u8; 48], String> {
     let pages = igvm_pages(file)?;
-    // MEM.PAGE.ADD folds pages in file order, so a file whose pages descend or
-    // overlap measures to a value no hardware will report.
-    for pair in pages.windows(2) {
-        if pair[0].0 + PAGE > pair[1].0 {
+    // MEM.PAGE.ADD folds pages in file order, so a file that states a page
+    // twice, or whose measured pages descend, measures to a value no hardware
+    // will report.
+    let mut stated: Vec<u64> = pages.iter().map(|p| p.gpa).collect();
+    stated.sort_unstable();
+    if stated.windows(2).any(|w| w[0] == w[1]) {
+        return Err("TDX image states a page more than once".into());
+    }
+    let measured: Vec<u64> = pages
+        .iter()
+        .filter(|p| p.data.is_some())
+        .map(|p| p.gpa)
+        .collect();
+    for pair in measured.windows(2) {
+        if pair[0] + PAGE > pair[1] {
             return Err(format!(
                 "TDX pages are not in ascending order, or overlap, at {:#x}",
-                pair[1].0
+                pair[1]
             ));
         }
     }
@@ -369,12 +462,29 @@ pub mod tests {
             DEFAULT_VCPUS,
         );
         assert_ne!(base, moved, "the command line left the measurement alone");
+    }
 
-        let moved = mrtd(&kernel, &initramfs, cmdline, DEFAULT_VCPUS + 1);
-        assert_ne!(
-            base, moved,
-            "the processor count left the measurement alone"
-        );
+    /// The processor count is the one launch input the digest no longer
+    /// covers: the MADT it decides is written by the shim, out of a parameter
+    /// the loader fills after the measurement is closed. Holding the rest of
+    /// the image still, MRTD must not move with it -- that is the whole point
+    /// of taking the table out of the measured page.
+    #[test]
+    fn the_processor_count_leaves_the_measurement_alone() {
+        let mrtd = |vcpus| {
+            let params = Params::tdx(DEFAULT_RAM, vcpus, "").unwrap();
+            built(&params).1["expected_mrtd"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let base = mrtd(2);
+        assert_eq!(base, mrtd(4));
+        assert_eq!(base, mrtd(8));
+        assert_eq!(base, mrtd(MAX_VCPUS));
+        // ...while the RAM it is built for still does.
+        let other = Params::tdx(DEFAULT_RAM + PAGE, 2, "").unwrap();
+        assert_ne!(base, built(&other).1["expected_mrtd"].as_str().unwrap());
     }
 
     /// Builds from stub inputs and returns the IGVM file and the manifest beside it.
@@ -396,9 +506,9 @@ pub mod tests {
     }
 
     fn reset_page(file: &[u8]) -> Vec<u8> {
-        let (gpa, page) = igvm_pages(file).unwrap().pop().unwrap();
-        assert_eq!(gpa, RESET_ALIAS);
-        page
+        let last = igvm_pages(file).unwrap().pop().unwrap();
+        assert_eq!(last.gpa, RESET_ALIAS);
+        last.data.unwrap()
     }
 
     #[test]
@@ -407,7 +517,11 @@ pub mod tests {
         assert_eq!(one, built(&params()).0);
         // Read back the way a loader does: whole measured pages in ascending order.
         let pages = igvm_pages(&one).unwrap();
-        assert!(pages.windows(2).all(|w| w[0].0 + PAGE <= w[1].0));
+        let measured: Vec<&Page> = pages.iter().filter(|p| p.data.is_some()).collect();
+        assert!(measured.windows(2).all(|w| w[0].gpa + PAGE <= w[1].gpa));
+        // The one page the loader fills is imported before any of them.
+        let first = pages.first().unwrap();
+        assert!(first.gpa == PARAM_PAGE && first.data.is_none());
         // The architectural reset instruction is the last 16 bytes of memory.
         assert_eq!(reset_page(&one)[PAGE as usize - 16], 0xe9);
     }
@@ -434,7 +548,7 @@ pub mod tests {
         let loaded: Vec<u64> = igvm_pages(&file)
             .unwrap()
             .iter()
-            .map(|(gpa, _)| *gpa)
+            .map(|p| p.gpa)
             .filter(|gpa| *gpa < params.memory)
             .collect();
         // The loader accepted every page it loaded, and accepting one twice replaces it...
@@ -457,7 +571,11 @@ pub mod tests {
     #[test]
     fn every_component_hashes_the_bytes_at_the_address_it_names() {
         let (file, manifest) = built(&params());
-        let loaded: BTreeMap<u64, Vec<u8>> = igvm_pages(&file).unwrap().into_iter().collect();
+        let loaded: BTreeMap<u64, Vec<u8>> = igvm_pages(&file)
+            .unwrap()
+            .into_iter()
+            .filter_map(|p| p.data.map(|d| (p.gpa, d)))
+            .collect();
         let components = manifest["components"].as_object().unwrap();
         assert_eq!(components.len(), 6);
         for (name, c) in components {

@@ -22,6 +22,8 @@ fn write_layout(path: &Path) {
     for (name, value) in layout::SYMBOLS {
         out.push_str(&format!(".set {name}, {value:#x}\n"));
     }
+    // A processor count, so not one of the u64 addresses the macro above emits.
+    out.push_str(&format!(".set MAX_VCPUS, {:#x}\n", layout::MAX_VCPUS));
     fs::write(path, out).expect("write layout.inc");
 }
 
@@ -29,7 +31,7 @@ fn assemble(out: &Path, name: &str) {
     let object = out.join(format!("{name}.o"));
     let binary = out.join(format!("{name}.bin"));
     run(Command::new("as")
-        .args(["--64", "-I"])
+        .args(["--64", "-I", "src", "-I"])
         .arg(out)
         .arg("-o")
         .arg(&object)
@@ -43,6 +45,7 @@ fn assemble(out: &Path, name: &str) {
 fn main() {
     println!("cargo:rerun-if-changed=src/reset.S");
     println!("cargo:rerun-if-changed=src/snp_reset.S");
+    println!("cargo:rerun-if-changed=src/madt.inc");
     println!("cargo:rerun-if-changed=src/layout.rs");
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     write_layout(&out.join("layout.inc"));

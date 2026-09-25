@@ -152,6 +152,9 @@ pub enum Fill {
     Measured(Vec<u8>),
     /// One SNP page the firmware fills: measured by address, never by content.
     Host,
+    /// One page the loader fills from an IGVM parameter area: private on
+    /// arrival, so no shim accepts it, and measured by address alone.
+    Parameters,
     /// A declared MMIO aperture: nothing is loaded there and no shim accepts it.
     Mmio(u64),
 }
@@ -182,6 +185,14 @@ impl Placed {
             fill: Fill::Host,
         }
     }
+    pub fn parameters(base: u64) -> Placed {
+        Placed {
+            base,
+            name: "",
+            e820: RESERVED,
+            fill: Fill::Parameters,
+        }
+    }
     pub fn mmio(base: u64, size: u64) -> Placed {
         Placed {
             base,
@@ -193,7 +204,7 @@ impl Placed {
     pub fn span(&self) -> u64 {
         match &self.fill {
             Fill::Measured(d) => align_up(d.len() as u64, PAGE).max(PAGE),
-            Fill::Host => PAGE,
+            Fill::Host | Fill::Parameters => PAGE,
             Fill::Mmio(n) => *n,
         }
     }

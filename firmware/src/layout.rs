@@ -14,6 +14,8 @@ layout! {
     ZERO_PAGE = 0x0000_7000;
     CMDLINE = 0x0002_0000;
     ACPI_BASE = 0x000e_0000;
+    // The one page the loader fills and no shim accepts: the vCPU count, unmeasured.
+    PARAM_PAGE = 0x000e_1000;
     MAILBOX = 0x000f_0000;
     SNP_CPUID = 0x000f_0000;
     SNP_SECRETS = 0x000f_1000;
@@ -56,12 +58,31 @@ layout! {
     // shim writes the one page it has made shared.
     SHARED_ALIAS = 0x80_0000_0000;
 
+    // The fixed part of the MADT, measured inside the shim page that builds the rest.
+    SHIM_MADT = 0x0000_0b80;
     // Where each shim finds its data block: the kernel entry point and the accept list.
     SHIM_DATA = 0x0000_0c00;
     // The block runs to the reset vector; nothing else lives in the page.
     SHIM_DATA_SIZE = RESET_VECTOR - SHIM_DATA;
     // A TD fetches its first instruction from the last 16 bytes of this page.
     RESET_VECTOR = PAGE - 16;
+
+    ACPI_XSDT = 0x100;
+    ACPI_FADT = 0x200;
+    ACPI_DSDT = 0x400;
+    ACPI_MADT = 0x500;
+    RSDP_LEN = 36;
+    XSDT_LEN = 52;
+    FADT_LEN = 276;
+    // A DSDT of nothing but its header: this machine has no AML to run.
+    DSDT_LEN = 36;
+    MADT_HEADER_LEN = 44;
+    MADT_LAPIC_LEN = 8;
+    MADT_WAKEUP_LEN = 16;
+    // The MADT entry types the shims write, and the flag that says a processor is usable.
+    MADT_LOCAL_APIC = 0;
+    MADT_WAKEUP = 16;
+    LAPIC_ENABLED = 1;
 }
 
 pub const SHIM_LIMIT: usize = 256 * 1024;
@@ -79,6 +100,7 @@ pub const MAX_RAM: u64 = MAP_LIMIT - FOUR_GIB + Q35_LOWMEM;
 const _: () = assert!(RESET_ALIAS < MAP_LIMIT);
 
 // A shim accepts the gaps between these regions, so they tile in the order it skips them.
+const _: () = assert!(ACPI_BASE + PAGE == PARAM_PAGE && PARAM_PAGE + PAGE <= MAILBOX);
 const _: () = assert!(MAILBOX + PAGE <= PAGE_TABLES);
 const _: () = assert!(SNP_CPUID + PAGE == SNP_SECRETS && SNP_SECRETS + PAGE == SNP_CC_BLOB);
 const _: () = assert!(SNP_CC_BLOB + PAGE <= PAGE_TABLES);
@@ -92,23 +114,12 @@ const _: () = assert!(KERNEL_BASE < INITRAMFS_BASE);
 const _: () = assert!(SHIM_DATA + SHIM_DATA_SIZE <= SHIM_SIZE);
 // An IGVM VP context indexes processors in 16 bits.
 const _: () = assert!(MAX_VCPUS <= u16::MAX as u32);
-// The park stub is a handful of instructions; it must not run into the data block.
-const _: () = assert!(SHIM_AP_PARK + 64 <= SHIM_DATA);
+// The park stub is a handful of instructions; it must not run into the template.
+const _: () = assert!(SHIM_AP_PARK + 64 <= SHIM_MADT);
+const _: () = assert!(SHIM_MADT + MADT_HEADER_LEN <= SHIM_DATA);
 // A TD fetches its first instruction from the top of the 32-bit address space.
 const _: () = assert!(RESET_ALIAS + PAGE == 0x1_0000_0000);
 
-pub const ACPI_XSDT: u64 = 0x100;
-pub const ACPI_FADT: u64 = 0x200;
-pub const ACPI_DSDT: u64 = 0x400;
-pub const ACPI_MADT: u64 = 0x500;
-pub const RSDP_LEN: u64 = 36;
-pub const XSDT_LEN: u64 = 52;
-pub const FADT_LEN: u64 = 276;
-// A DSDT of nothing but its header: this machine has no AML to run.
-pub const DSDT_LEN: u64 = 36;
-pub const MADT_HEADER_LEN: u64 = 44;
-pub const MADT_LAPIC_LEN: u64 = 8;
-pub const MADT_WAKEUP_LEN: u64 = 16;
 const _: () = assert!(RSDP_LEN <= ACPI_XSDT);
 const _: () = assert!(ACPI_XSDT + XSDT_LEN <= ACPI_FADT);
 const _: () = assert!(ACPI_FADT + FADT_LEN <= ACPI_DSDT);

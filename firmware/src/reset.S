@@ -1,4 +1,5 @@
 .include "layout.inc"
+.include "madt.inc"
 .section .reset,"ax"
 
 .code32
@@ -50,6 +51,8 @@ accept_next:
     jmp accept_next
 
 boot_kernel:
+    # The one table the measurement leaves to the shim, wakeup structure and all.
+    madt_build die, 1
     mov $ZERO_PAGE, %rsi
     lea shim_data(%rip), %rax
     jmp *(%rax)
@@ -114,6 +117,10 @@ fatal:
     cli
     hlt
     jmp fatal
+
+    .org SHIM_MADT
+madt_template:
+    madt_header
 
     # The kernel entry point and the ranges to accept, written here by the builder.
     .org SHIM_DATA

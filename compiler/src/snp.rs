@@ -1,6 +1,6 @@
 use crate::image::{
-    component, components, config_field, mmio_holes, page_directive, write_manifest, zeros,
-    Component, ReportFields, COMPAT,
+    component, components, config_field, mmio_holes, page_directive, parameter_directives,
+    write_manifest, zeros, Component, ReportFields, COMPAT, PARAM_AREA, PARAM_VCPUS,
 };
 use igvm::{
     IgvmDirectiveHeader, IgvmFile, IgvmInitializationHeader, IgvmPlatformHeader, IgvmRevision,
@@ -35,6 +35,8 @@ const PAGE_INFO_TYPE: usize = 98;
 const PAGE_INFO_GPA: usize = 104;
 const PAGE_NORMAL: u8 = 1;
 const PAGE_VMSA: u8 = 2;
+// Not 3, which is ZERO: the type is part of what the firmware digests.
+const PAGE_UNMEASURED: u8 = 4;
 const PAGE_SECRETS: u8 = 5;
 const PAGE_CPUID: u8 = 6;
 
@@ -60,7 +62,8 @@ const ECDSA_COMPONENT_LEN: usize = 72;
 struct LaunchPage {
     gpa: u64,
     data: Vec<u8>,
-    kind: IgvmPageDataType,
+    /// The PAGE_INFO type SNP_LAUNCH_UPDATE stamps on the page.
+    kind: u8,
 }
 
 #[derive(Serialize)]
@@ -109,16 +112,22 @@ pub fn build(
     let e820 = launch.e820;
     let owned = launch.shim_owned;
 
+    // The parameter area first, in the order a loader imports it: see image::launch_pages.
     let mut pages = Vec::new();
+    for region in &placed {
+        if matches!(region.fill, Fill::Parameters) {
+            add_special(&mut pages, region.base, PAGE_UNMEASURED);
+        }
+    }
     for region in &placed {
         match &region.fill {
             // The loader and firmware fill these two, so both are measured by address alone.
             Fill::Host if region.base == SNP_CPUID => {
-                add_special(&mut pages, region.base, IgvmPageDataType::CPUID_DATA)
+                add_special(&mut pages, region.base, PAGE_CPUID)
             }
-            Fill::Host => add_special(&mut pages, region.base, IgvmPageDataType::SECRETS),
+            Fill::Host => add_special(&mut pages, region.base, PAGE_SECRETS),
             Fill::Measured(data) => add_normal(&mut pages, region.base, data),
-            Fill::Mmio(_) => {}
+            Fill::Parameters | Fill::Mmio(_) => {}
         }
     }
     validate_pages(&pages)?;
@@ -155,11 +164,10 @@ pub fn build(
             at += bytes;
         }
     }
-    directives.extend(
-        pages
-            .iter()
-            .map(|p| page_directive(p.gpa, p.kind, p.data.clone())),
-    );
+    directives.extend(pages.iter().flat_map(|p| match p.kind {
+        PAGE_UNMEASURED => parameter_directives(p.gpa),
+        kind => vec![page_directive(p.gpa, igvm_type(kind), p.data.clone())],
+    }));
     // KVM consumes the VMSAs last and only at this architectural high GPA, which
     // QEMU checks per context; the vp index is what separates them.
     for vp_index in 0..params.vcpus as u16 {
@@ -203,8 +211,11 @@ pub fn build(
     let mut serialized = Vec::new();
     file.serialize(&mut serialized)
         .map_err(|e| format!("serialize SNP IGVM: {e}"))?;
-    IgvmFile::new_from_binary(&serialized, None)
-        .map_err(|e| format!("verify final SNP IGVM: {e}"))?;
+    // Read the file back the way a loader will, before publishing a digest for
+    // it: the order directives are stated in is part of what they measure.
+    if measure_snp(&serialized)? != measurement {
+        return Err("emitted SNP IGVM does not measure what this build computed".into());
+    }
     fs::write(output, &serialized).map_err(io_error("write SNP IGVM"))?;
 
     let mut components = components(&placed);
@@ -327,7 +338,7 @@ fn snp_launch(
 fn launch_measurement(pages: &[LaunchPage], vmsas: &[Vec<u8>]) -> [u8; 48] {
     let mut digest = [0u8; 48];
     for p in pages {
-        digest = extend(digest, p.gpa, measure_kind(p.kind), &p.data);
+        digest = extend(digest, p.gpa, p.kind, &p.data);
     }
     // KVM updates the VMSAs in vp index order once the pages are in, so the
     // digest takes them in that order too.
@@ -337,12 +348,13 @@ fn launch_measurement(pages: &[LaunchPage], vmsas: &[Vec<u8>]) -> [u8; 48] {
     digest
 }
 
-// The PAGE_INFO type SNP_LAUNCH_UPDATE stamps on each imported page.
-fn measure_kind(kind: IgvmPageDataType) -> u8 {
+// The directive that carries a page of each type to the loader. The parameter
+// area is not page data at all, so it has none.
+fn igvm_type(kind: u8) -> IgvmPageDataType {
     match kind {
-        IgvmPageDataType::SECRETS => PAGE_SECRETS,
-        IgvmPageDataType::CPUID_DATA => PAGE_CPUID,
-        _ => PAGE_NORMAL,
+        PAGE_SECRETS => IgvmPageDataType::SECRETS,
+        PAGE_CPUID => IgvmPageDataType::CPUID_DATA,
+        _ => IgvmPageDataType::NORMAL,
     }
 }
 
@@ -364,10 +376,10 @@ fn add_normal(out: &mut Vec<LaunchPage>, base: u64, data: &[u8]) {
     out.extend(boot::pages(base, data).map(|(gpa, data)| LaunchPage {
         gpa,
         data,
-        kind: IgvmPageDataType::NORMAL,
+        kind: PAGE_NORMAL,
     }));
 }
-fn add_special(out: &mut Vec<LaunchPage>, gpa: u64, kind: IgvmPageDataType) {
+fn add_special(out: &mut Vec<LaunchPage>, gpa: u64, kind: u8) {
     out.push(LaunchPage {
         gpa,
         data: vec![0; PAGE as usize],
@@ -375,11 +387,22 @@ fn add_special(out: &mut Vec<LaunchPage>, gpa: u64, kind: IgvmPageDataType) {
     });
 }
 fn validate_pages(p: &[LaunchPage]) -> Result<(), String> {
-    for w in p.windows(2) {
-        if w[0].gpa + PAGE > w[1].gpa {
+    let mut stated: Vec<u64> = p.iter().map(|p| p.gpa).collect();
+    stated.sort_unstable();
+    if stated.windows(2).any(|w| w[0] == w[1]) {
+        return Err("SNP image states a page more than once".into());
+    }
+    // The loader's own page is imported before these, so it is not among them.
+    let measured: Vec<u64> = p
+        .iter()
+        .filter(|p| p.kind != PAGE_UNMEASURED)
+        .map(|p| p.gpa)
+        .collect();
+    for w in measured.windows(2) {
+        if w[0] + PAGE > w[1] {
             return Err(format!(
                 "SNP launch pages are not in ascending order, or overlap, at {:#x}",
-                w[1].gpa
+                w[1]
             ));
         }
     }
@@ -423,7 +446,11 @@ pub fn measure_snp(file: &[u8]) -> Result<[u8; 48], String> {
                     } else {
                         vec![0; PAGE as usize]
                     },
-                    kind: *data_type,
+                    kind: match *data_type {
+                        IgvmPageDataType::SECRETS => PAGE_SECRETS,
+                        IgvmPageDataType::CPUID_DATA => PAGE_CPUID,
+                        _ => PAGE_NORMAL,
+                    },
                 });
             }
             IgvmDirectiveHeader::SnpVpContext {
@@ -435,6 +462,30 @@ pub fn measure_snp(file: &[u8]) -> Result<[u8; 48], String> {
                 vmsas.push((*vp_index, vmsa_page(vmsa)));
             }
             IgvmDirectiveHeader::RequiredMemory { .. } => {}
+            // The loader imports the whole area, so a larger one is more
+            // unmeasured pages than the digest below accounts for.
+            IgvmDirectiveHeader::ParameterArea {
+                number_of_bytes,
+                parameter_area_index,
+                initial_data,
+            } if *number_of_bytes == PAGE
+                && *parameter_area_index == PARAM_AREA
+                && initial_data.is_empty() => {}
+            IgvmDirectiveHeader::VpCount(p)
+                if p.parameter_area_index == PARAM_AREA && p.byte_offset == PARAM_VCPUS => {}
+            // Unmeasured contents, but the address they are imported at is not.
+            IgvmDirectiveHeader::ParameterInsert(p)
+                if p.compatibility_mask == COMPAT && p.parameter_area_index == PARAM_AREA =>
+            {
+                if !pages.is_empty() {
+                    return Err("SNP IGVM inserts a parameter area after page data".into());
+                }
+                pages.push(LaunchPage {
+                    gpa: p.gpa,
+                    data: vec![0; PAGE as usize],
+                    kind: PAGE_UNMEASURED,
+                });
+            }
             // Not hashed, but it states what the digest must be.
             IgvmDirectiveHeader::SnpIdBlock { ld, .. } => id_block_ld = Some(*ld),
             _ => return Err("SNP IGVM carries a directive that is not a measured page".to_string()),
@@ -490,8 +541,8 @@ mod tests {
         let mut data = vec![0u8; PAGE as usize];
         data[0] = 1;
         add_normal(&mut p, 0x1000, &data);
-        add_special(&mut p, 0x2000, IgvmPageDataType::SECRETS);
-        add_special(&mut p, 0x3000, IgvmPageDataType::CPUID_DATA);
+        add_special(&mut p, 0x2000, PAGE_SECRETS);
+        add_special(&mut p, 0x3000, PAGE_CPUID);
         assert_eq!(
             hex::encode(launch_measurement(&p, &[vec![0u8; PAGE as usize]])),
             "64fba8d7f08e6c2b07f7a3fd610e2965a1683a3ca18ad66a73acc84e5cc2ebfb\
@@ -501,7 +552,7 @@ mod tests {
     #[test]
     fn special_pages_are_measured_without_their_contents() {
         let mut a = Vec::new();
-        add_special(&mut a, SNP_SECRETS, IgvmPageDataType::SECRETS);
+        add_special(&mut a, SNP_SECRETS, PAGE_SECRETS);
         let mut b = a.clone();
         b[0].data[0] = 1;
         let v = vec![vmsa_page(&bsp_vmsa())];
@@ -598,6 +649,43 @@ mod tests {
         assert_ne!(two, three);
         // And the order is vp index order, not an unordered set.
         assert_ne!(two, launch_measurement(&pages, &[ap, bsp]));
+    }
+
+    /// The pages an image loads no longer depend on the processor count: the
+    /// MADT that did is written by the shim from an unmeasured parameter. The
+    /// save areas still do, one per processor, so the launch digest moves with
+    /// --vcpus however the tables are built.
+    #[test]
+    fn the_processor_count_leaves_the_loaded_pages_alone() {
+        let dir = tempdir().unwrap();
+        let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
+        fs::write(&k, test_kernel()).unwrap();
+        fs::write(&i, vec![7u8; 100_000]).unwrap();
+        let image = |cpus: u32| {
+            let out = dir.path().join(format!("out{cpus}.igvm"));
+            let params = Params::snp(DEFAULT_RAM, cpus, DEFAULT_CBIT, "").unwrap();
+            build(&k, &i, &out, &params, None, None, 0).unwrap();
+            let bytes = fs::read(&out).unwrap();
+            let parsed = IgvmFile::new_from_binary(&bytes, None).unwrap();
+            let loaded: Vec<String> = parsed
+                .directives()
+                .iter()
+                .filter_map(|d| match d {
+                    IgvmDirectiveHeader::PageData { gpa, data, .. } => {
+                        Some(format!("{gpa:#x} {}", hex::encode(Sha384::digest(data))))
+                    }
+                    IgvmDirectiveHeader::ParameterInsert(p) => Some(format!("{:#x} -", p.gpa)),
+                    _ => None,
+                })
+                .collect();
+            (loaded, measure_snp(&bytes).unwrap())
+        };
+        let (loaded, digest) = image(2);
+        for cpus in [4, 8] {
+            let other = image(cpus);
+            assert_eq!(loaded, other.0, "the loaded pages moved with --vcpus");
+            assert_ne!(digest, other.1, "a processor was measured by nothing");
+        }
     }
 
     #[test]
@@ -802,6 +890,73 @@ mod tests {
 
         let err = measure_snp(&bytes).unwrap_err();
         assert!(err.contains("overlap"), "unexpected error: {err}");
+    }
+
+    /// The loader imports the whole parameter area, and imports it where the
+    /// file says: a file that widens the area, or states the insert after page
+    /// data, loads in an order this digest does not describe.
+    #[test]
+    fn measure_refuses_a_parameter_area_it_does_not_model() {
+        let dir = tempdir().unwrap();
+        let (k, i, out) = (
+            dir.path().join("bzImage"),
+            dir.path().join("initrd"),
+            dir.path().join("out.igvm"),
+        );
+        fs::write(&k, test_kernel()).unwrap();
+        fs::write(&i, vec![7u8; 100_000]).unwrap();
+        build(&k, &i, &out, &params(), None, None, 0).unwrap();
+        let parsed = IgvmFile::new_from_binary(&fs::read(&out).unwrap(), None).unwrap();
+
+        let measure = |directives: Vec<IgvmDirectiveHeader>| {
+            let file = IgvmFile::new(
+                IgvmRevision::V1,
+                vec![IgvmPlatformHeader::SupportedPlatform(
+                    IGVM_VHS_SUPPORTED_PLATFORM {
+                        compatibility_mask: COMPAT,
+                        highest_vtl: 0,
+                        platform_type: IgvmPlatformType::SEV_SNP,
+                        platform_version: 1,
+                        shared_gpa_boundary: 0,
+                    },
+                )],
+                vec![],
+                directives,
+            )
+            .unwrap();
+            let mut bytes = Vec::new();
+            file.serialize(&mut bytes).unwrap();
+            measure_snp(&bytes)
+        };
+
+        let mut widened = parsed.directives().to_vec();
+        let area = widened
+            .iter()
+            .position(|d| matches!(d, IgvmDirectiveHeader::ParameterArea { .. }))
+            .unwrap();
+        widened[area] = IgvmDirectiveHeader::ParameterArea {
+            number_of_bytes: 2 * PAGE,
+            parameter_area_index: PARAM_AREA,
+            initial_data: Vec::new(),
+        };
+        assert!(
+            measure(widened).is_err(),
+            "a two-page area was measured as one"
+        );
+
+        let mut late = parsed.directives().to_vec();
+        let insert = late
+            .iter()
+            .position(|d| matches!(d, IgvmDirectiveHeader::ParameterInsert(_)))
+            .unwrap();
+        let moved = late.remove(insert);
+        let after = late
+            .iter()
+            .position(|d| matches!(d, IgvmDirectiveHeader::PageData { .. }))
+            .unwrap();
+        late.insert(after + 1, moved);
+        let err = measure(late).unwrap_err();
+        assert!(err.contains("after page data"), "unexpected error: {err}");
     }
 
     /// One save area per processor, numbered from zero. Anything else describes

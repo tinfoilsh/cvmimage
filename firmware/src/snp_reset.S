@@ -1,4 +1,5 @@
 .include "layout.inc"
+.include "madt.inc"
 .section .reset,"ax"
 
 .code32
@@ -108,6 +109,11 @@ wake_aps:
     pvalidate
     test %eax, %eax
     jnz die_wake
+
+    # The one table the measurement leaves to the shim; SNP launches every
+    # processor itself, so it carries no wakeup structure.
+    mov $9, %r15d
+    madt_build die_wake, 0
 
 snp_boot_kernel:
     mov $ZERO_PAGE, %rsi
@@ -253,6 +259,10 @@ snp_ap_park:
     wrmsr
     vmgexit
     jmp 1b                          # re-park if the host resumes us early
+
+    .org SHIM_MADT
+madt_template:
+    madt_header
 
     # The kernel entry point and the ranges to validate, written here by the builder.
     .org SHIM_DATA

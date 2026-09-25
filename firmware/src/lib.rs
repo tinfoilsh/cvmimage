@@ -1,7 +1,8 @@
 //! The measured initial state of a confidential guest: the physical map, ACPI
 //! tables, zero page, page tables, reset shims, and on SEV-SNP one save area
 //! per processor. The kernel and initramfs are inputs; this crate decides only
-//! where they sit.
+//! where they sit. The MADT is the one table left out: a shim writes it from
+//! the processor count the loader leaves in an unmeasured parameter page.
 //!
 //! Serializing that state and hashing it belongs to the compiler. The split is
 //! the trust boundary: these bytes are measured, the compiler's are not.
@@ -42,7 +43,8 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         // Blank: the zero page describes the map it belongs to, so its contents come last.
         Placed::measured(ZERO_PAGE, "", RESERVED, vec![0u8; PAGE as usize]),
         Placed::measured(CMDLINE, "command_line", RESERVED, p.command),
-        Placed::measured(ACPI_BASE, "acpi", ACPI, acpi::build(params.vcpus, true)),
+        Placed::measured(ACPI_BASE, "acpi", ACPI, acpi::build()),
+        Placed::parameters(PARAM_PAGE),
         Placed::measured(MAILBOX, "", RESERVED, vec![0u8; PAGE as usize]),
         Placed::measured(PAGE_TABLES, "", RESERVED, identity_map(0, false)),
         Placed::measured(BSP_STACK, "", RESERVED, boot::gdt_stack()),
@@ -87,7 +89,8 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         // Blank: the zero page describes the map it belongs to, so its contents come last.
         Placed::measured(ZERO_PAGE, "", RESERVED, vec![0u8; PAGE as usize]),
         Placed::measured(CMDLINE, "command_line", RESERVED, p.command),
-        Placed::measured(ACPI_BASE, "acpi", ACPI, acpi::build(params.vcpus, false)),
+        Placed::measured(ACPI_BASE, "acpi", ACPI, acpi::build()),
+        Placed::parameters(PARAM_PAGE),
         Placed::host(SNP_CPUID),
         Placed::host(SNP_SECRETS),
         Placed::measured(SNP_CC_BLOB, "cc_blob", RAM, cc_blob()),

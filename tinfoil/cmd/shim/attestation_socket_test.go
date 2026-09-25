@@ -138,72 +138,35 @@ func TestLocalAttestationRejectsOtherRequests(t *testing.T) {
 	}
 }
 
-func TestLocalAttestationRateLimitRefills(t *testing.T) {
-	handler := newLocalAttestationHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	var clock atomic.Int64
-	clock.Store(time.Now().UnixNano())
-	handler.now = func() time.Time { return time.Unix(0, clock.Load()) }
-	client, _, _, _, _ := startLocalAttestationTestServer(t, handler)
-	for _, status := range []int{http.StatusNoContent, http.StatusTooManyRequests, http.StatusNoContent} {
-		response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
-		if response.StatusCode != status {
-			t.Fatalf("status = %d, want %d: %s", response.StatusCode, status, body)
-		}
-		if status == http.StatusTooManyRequests {
-			if got := response.Header.Get("Retry-After"); got != "1" {
-				t.Fatalf("Retry-After = %q", got)
-			}
-			clock.Add(localAttestationInterval.Nanoseconds())
-		}
-	}
-}
-
-func TestLocalAttestationRejectsConcurrentQuotes(t *testing.T) {
-	entered, release := make(chan struct{}), make(chan struct{})
+func TestLocalAttestationAllowsConcurrentRequests(t *testing.T) {
+	release := make(chan struct{})
 	releaseFirst := sync.OnceFunc(func() { close(release) })
 	defer releaseFirst()
 	var calls atomic.Int32
 	handler := newLocalAttestationHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) == 1 {
-			close(entered)
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
 			<-release
 		}
-		w.WriteHeader(http.StatusNoContent)
+		io.WriteString(w, r.URL.Query().Get("nonce"))
 	}))
-	var clock atomic.Int64
-	clock.Store(time.Now().UnixNano())
-	handler.now = func() time.Time { return time.Unix(0, clock.Load()) }
 	client, _, _, _, _ := startLocalAttestationTestServer(t, handler)
-	firstDone := make(chan error, 1)
-	go func() {
-		response, err := client.Get("http://shim" + localAttestationTestQuery)
-		if err == nil {
-			response.Body.Close()
-			if response.StatusCode != http.StatusNoContent {
-				err = errors.New(response.Status)
-			}
-		}
-		firstDone <- err
-	}()
-	select {
-	case <-entered:
-	case <-time.After(localAttestationTestTimeout):
-		t.Fatal("first quote did not start")
-	}
-	clock.Add(localAttestationInterval.Nanoseconds())
-	response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
-	if response.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("concurrent request = %d: %s", response.StatusCode, body)
-	}
-	releaseFirst()
-	if err := <-firstDone; err != nil {
+	first, err := client.Get("http://shim" + localAttestationTestQuery)
+	if err != nil {
 		t.Fatal(err)
 	}
-	response, body = localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
-	if response.StatusCode != http.StatusNoContent || calls.Load() != 2 {
-		t.Fatalf("request after quote completion = %d, calls = %d: %s", response.StatusCode, calls.Load(), body)
+	defer first.Body.Close()
+	for _, nonce := range []string{strings.Repeat("cd", envelope.NonceSize), strings.Repeat("ef", envelope.NonceSize)} {
+		response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationPath+"?nonce="+nonce, "")
+		if response.StatusCode != http.StatusOK || body != nonce {
+			t.Fatalf("concurrent request = %d %q, want %q", response.StatusCode, body, nonce)
+		}
+	}
+	releaseFirst()
+	body, err := io.ReadAll(first.Body)
+	if err != nil || first.StatusCode != http.StatusOK || string(body) != strings.Repeat("ab", envelope.NonceSize) {
+		t.Fatalf("first request = %d %q, %v", first.StatusCode, body, err)
 	}
 }
 
@@ -213,9 +176,6 @@ func TestLocalAttestationFollowsReadinessAndPreservesSocket(t *testing.T) {
 	handler := newLocalAttestationHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		current.Load().(http.Handler).ServeHTTP(w, r)
 	}))
-	var clock atomic.Int64
-	clock.Store(time.Now().UnixNano())
-	handler.now = func() time.Time { return time.Unix(0, clock.Load()) }
 	client, _, cancel, done, path := startLocalAttestationTestServer(t, handler)
 	response, _ := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
 	if response.StatusCode != http.StatusServiceUnavailable {
@@ -228,7 +188,6 @@ func TestLocalAttestationFollowsReadinessAndPreservesSocket(t *testing.T) {
 	ready := NewObservabilityServer(&legacy.Document{Format: legacy.DummyV2}, tinfoilattestation.BodyV2{}, 0,
 		id, nil, errorCollateralSource{}, &config.Config{}, &config.ExternalConfig{})
 	current.Store(http.HandlerFunc(ready.ServeHTTP))
-	clock.Add(localAttestationInterval.Nanoseconds())
 	response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
 	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, errMsgCollateralUnavailable) {
 		t.Fatalf("ready request did not reach fresh attestation: %d %s", response.StatusCode, body)

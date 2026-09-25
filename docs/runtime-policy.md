@@ -61,6 +61,21 @@ measured UID/GID. Every v3 quote endorses each key as a `crypto_material` entry
 using the declared ID and `https://tinfoil.sh/key/spki/v1` with full SPKI DER as
 lowercase hex. The runtime never emits SSH or other application encodings.
 
+Containers can request fresh v3 evidence from the shim through the Unix socket
+`/tinfoil/attestation.sock`, including without an attached network:
+
+```sh
+curl --unix-socket /tinfoil/attestation.sock \
+  "http://localhost/.well-known/tinfoil-attestation?nonce=${NONCE}"
+```
+
+`NONCE` must be the verifier's 32-byte challenge encoded as 64 hexadecimal
+characters. The socket serves only attestation GET requests, with at most one
+request per second and one request in flight; excess requests return HTTP 429.
+It returns HTTP 503 until attestation is ready. The verifier must also check
+the approved measurements and bind authentication to an endorsed key; fetching
+a quote does not identify the requesting container.
+
 ## CVM administrator containers
 
 `cvm_admin: true` in the measured container config selects a fixed administrative

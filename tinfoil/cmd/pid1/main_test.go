@@ -102,6 +102,7 @@ func newLifecycleHarness() *lifecycleHarness {
 		setupFS:      noSetup,
 		sysctls:      noSetup,
 		ramdisk:      noSetup,
+		attestation:  func() (*os.File, error) { return os.Open(os.DevNull) },
 		limits:       func() error { return nil },
 		syslog:       func(context.Context) {},
 		exists: func(path string) (bool, error) {
@@ -140,11 +141,17 @@ func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	if len(bootCommand.ExtraFiles) != 1 {
 		t.Fatalf("boot extra files = %d, want 1", len(bootCommand.ExtraFiles))
 	}
-	var containersCommand supervisor.Command
+	var containersCommand, shimCommand supervisor.Command
 	for _, service := range harness.services.started {
 		if service.Name == containersName {
 			containersCommand = service.Command
 		}
+		if service.Name == shimName {
+			shimCommand = service.Command
+		}
+	}
+	if len(shimCommand.ExtraFiles) != 1 || !slices.Contains(shimCommand.Args, "--attestation-fd=3") {
+		t.Fatal("shim did not receive its attestation listener")
 	}
 	if got := fmt.Sprint(containersCommand.Args); !strings.Contains(got, "--debug=true") {
 		t.Fatalf("containers args = %s", got)

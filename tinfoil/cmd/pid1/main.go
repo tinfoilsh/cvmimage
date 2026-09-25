@@ -115,6 +115,7 @@ type lifecycleDeps struct {
 	setupFS        func(pidruntime.LogFunc) error
 	sysctls        func(pidruntime.LogFunc) error
 	ramdisk        func(pidruntime.LogFunc) error
+	attestation    func() (*os.File, error)
 	limits         func() error
 	syslog         func(context.Context)
 	exists         func(string) (bool, error)
@@ -162,6 +163,7 @@ func run(parent context.Context) (result error) {
 		setupFS:     pidruntime.SetupFilesystems,
 		sysctls:     pidruntime.ApplySysctls,
 		ramdisk:     pidruntime.SetupRamdisk,
+		attestation: func() (*os.File, error) { return newAttestationSocket(boot.AttestationSocket) },
 		limits:      hardening.ApplyRuntimeLimits,
 		syslog:      startOptionalSyslogSink,
 		exists:      pathExists,
@@ -174,7 +176,11 @@ func run(parent context.Context) (result error) {
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
 	var console consoleControl
+	var attestationSocket *os.File
 	defer func() {
+		if attestationSocket != nil {
+			attestationSocket.Close()
+		}
 		if console != nil {
 			result = errors.Join(result, console.stop(deps.term, deps.kill))
 		}
@@ -251,10 +257,17 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}
 	// The shim intentionally starts in its ephemeral boot-status phase before
 	// provisioning, then upgrades in place as boot publishes private artifacts.
+	attestationSocket, err = deps.attestation()
+	if err != nil {
+		return fmt.Errorf("attestation socket: %w", err)
+	}
+	shimCommand := hardenedCommand(hardening.ServiceShim, boot.ShimBinary)
+	shimFD := shimCommand.AddExtraFile(attestationSocket)
+	shimCommand.Args = append(shimCommand.Args, fmt.Sprintf("--attestation-fd=%d", shimFD))
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: shimName, Required: true, Restart: true,
 		DrainUntilExit: true,
-		Command:        hardenedCommand(hardening.ServiceShim, boot.ShimBinary),
+		Command:        shimCommand,
 		Ready:          endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
 		PIDFile:        boot.ShimPIDPath,
 	}); err != nil {

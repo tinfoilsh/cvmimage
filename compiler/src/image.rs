@@ -77,9 +77,14 @@ pub fn config_field(hash: Option<&str>, bytes: usize) -> Result<String, String> 
 // a nonzero tail, so refuse one here too: an image built with a tail the guest
 // will not accept stops a guest that has no console to say why.
 fn mrconfigid_field(hash: Option<&str>) -> Result<String, String> {
-    let field = config_field(hash, 48)?;
-    if field[64..].bytes().any(|b| b != b'0') {
-        return Err("--config-hash must be a 32-byte config hash padded with 16 zero bytes".into());
+    const MRCONFIGID_BYTES: usize = 48;
+    const HASH_BYTES: usize = 32;
+    let field = config_field(hash, MRCONFIGID_BYTES)?;
+    let tail = &field[HASH_BYTES * 2..];
+    if tail.bytes().any(|b| b != b'0') {
+        return Err(format!(
+            "--config-hash pads the config hash with {tail}, not 16 zero bytes"
+        ));
     }
     Ok(field)
 }

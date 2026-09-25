@@ -96,7 +96,8 @@ func configHashFromTDReport(report []byte) (string, error) {
 }
 
 // configHashFromMRCONFIGID unpacks SHA-256(config) || 16 zero bytes, the one
-// encoding the compiler emits.
+// encoding the compiler emits. A nonzero tail is refused rather than ignored:
+// the host chose those bytes, and a verifier pins all 48.
 func configHashFromMRCONFIGID(field []byte) (string, error) {
 	if len(field) != tdxabi.MrConfigIDSize {
 		return "", fmt.Errorf("MRCONFIGID is %d bytes, expected %d", len(field), tdxabi.MrConfigIDSize)

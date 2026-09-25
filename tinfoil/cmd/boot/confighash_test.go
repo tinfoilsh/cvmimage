@@ -11,15 +11,22 @@ import (
 	tdxlabi "github.com/google/go-tdx-guest/client/linuxabi"
 )
 
-// The Intel TDX module ABI puts TDINFO_STRUCT at byte 512 of the 1024-byte
-// TDREPORT_STRUCT and MRCONFIGID at byte 64 within it. The constants are
-// built from field widths, so pin the arithmetic to the spec's own numbers.
+// Offsets the Intel TDX module ABI states for a 1024-byte TDREPORT_STRUCT.
+// Written out rather than derived, so they pin the constants the code builds
+// from its field widths instead of restating them.
+const (
+	specTDInfoOffset     = 512
+	specMRTDOffset       = 528
+	specMRCONFIGIDOffset = 576
+	specMROWNEROffset    = 624
+)
+
 func TestMRCONFIGIDSitsWhereTheTDXABISaysItDoes(t *testing.T) {
-	if tdInfoOffset != 512 {
-		t.Fatalf("TDINFO_STRUCT at %d, spec says 512", tdInfoOffset)
+	if tdInfoOffset != specTDInfoOffset {
+		t.Fatalf("TDINFO_STRUCT at %d, spec says %d", tdInfoOffset, specTDInfoOffset)
 	}
-	if mrConfigIDOffset != 576 {
-		t.Fatalf("MRCONFIGID at %d, spec says 576", mrConfigIDOffset)
+	if mrConfigIDOffset != specMRCONFIGIDOffset {
+		t.Fatalf("MRCONFIGID at %d, spec says %d", mrConfigIDOffset, specMRCONFIGIDOffset)
 	}
 	if mrConfigIDOffset+tdxabi.MrConfigIDSize > tdxlabi.TdReportSize {
 		t.Fatalf("MRCONFIGID runs past the %d-byte TD report", tdxlabi.TdReportSize)
@@ -29,26 +36,25 @@ func TestMRCONFIGIDSitsWhereTheTDXABISaysItDoes(t *testing.T) {
 	}
 }
 
-// tdReport fills a TD report with a distinct byte per measurement register, so
-// a cut at the wrong offset returns someone else's register rather than
-// something that merely fails to parse.
-func tdReport(t *testing.T, mrConfigID []byte) []byte {
-	t.Helper()
+// tdReport paints every byte of a TD report, one value per region, so that a
+// cut at any wrong offset comes back as a region's fill rather than as
+// anything a caller could mistake for a config hash.
+func tdReport(mrConfigID []byte) []byte {
 	report := make([]byte, tdxlabi.TdReportSize)
-	mrTDOffset := tdInfoOffset + tdxabi.TdAttributesSize + tdxabi.XfamSize
-	for _, register := range []struct {
-		offset int
-		fill   byte
+	for _, region := range []struct {
+		from, to int
+		fill     byte
 	}{
-		{tdInfoOffset, 0xa1}, // ATTRIBUTES and XFAM
-		{mrTDOffset, 0xa2},   // MRTD
-		{mrConfigIDOffset + tdxabi.MrConfigIDSize, 0xa3}, // MROWNER onwards
+		{0, specTDInfoOffset, 0xa0},                  // REPORTMACSTRUCT and TEE_TCB_INFO
+		{specTDInfoOffset, specMRTDOffset, 0xa1},     // ATTRIBUTES and XFAM
+		{specMRTDOffset, specMRCONFIGIDOffset, 0xa2}, // MRTD
+		{specMROWNEROffset, len(report), 0xa3},       // MROWNER onwards
 	} {
-		for i := register.offset; i < len(report); i++ {
-			report[i] = register.fill
+		for i := region.from; i < region.to; i++ {
+			report[i] = region.fill
 		}
 	}
-	copy(report[mrConfigIDOffset:], mrConfigID)
+	copy(report[specMRCONFIGIDOffset:specMROWNEROffset], mrConfigID)
 	return report
 }
 
@@ -57,7 +63,7 @@ func TestConfigHashFromTDReportCutsMRCONFIGIDAndNotItsNeighbours(t *testing.T) {
 	field := make([]byte, tdxabi.MrConfigIDSize)
 	copy(field, want[:])
 
-	got, err := configHashFromTDReport(tdReport(t, field))
+	got, err := configHashFromTDReport(tdReport(field))
 	if err != nil {
 		t.Fatalf("configHashFromTDReport: %v", err)
 	}
@@ -74,7 +80,7 @@ func TestConfigHashFromTDReportCutsMRCONFIGIDAndNotItsNeighbours(t *testing.T) {
 func TestConfigHashFromTDReportRejectsTheWrongSize(t *testing.T) {
 	field := make([]byte, tdxabi.MrConfigIDSize)
 	for _, size := range []int{0, tdxlabi.TdReportSize - 1, tdxlabi.TdReportSize + 1} {
-		report := tdReport(t, field)
+		report := tdReport(field)
 		if len(report) > size {
 			report = report[:size]
 		} else {

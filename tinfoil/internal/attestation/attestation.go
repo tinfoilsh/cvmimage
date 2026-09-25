@@ -105,8 +105,9 @@ func Report(userData [64]byte) (report []byte, platform string, err error) {
 			return nil, "", fmt.Errorf("failed to get quote: %w", err)
 		}
 		return report, PlatformTDX, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported platform %q", platform)
 	}
-	return nil, "", fmt.Errorf("unsupported platform %q", platform)
 }
 
 const (

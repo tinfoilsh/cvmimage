@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestAttestationSocketFailureStopsBoot(t *testing.T) {
+func TestLocalAttestationSocketFailureStopsBoot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "attestation.sock")
 	occupied, err := net.Listen("unix", path)
 	if err != nil {
@@ -20,27 +20,27 @@ func TestAttestationSocketFailureStopsBoot(t *testing.T) {
 	}
 	defer occupied.Close()
 	harness := newLifecycleHarness()
-	harness.deps.attestation = func() (*os.File, error) { return newAttestationSocket(path) }
+	harness.deps.localAttestation = func() (*os.File, error) { return newLocalAttestationSocket(path) }
 	if err := runLifecycle(context.Background(), harness.deps, harness.readiness); !errors.Is(err, syscall.EADDRINUSE) {
 		t.Fatalf("boot error = %v, want occupied socket error", err)
 	}
 	for _, service := range harness.services.started {
 		if service.Name == shimName {
-			t.Fatal("shim started without an attestation listener")
+			t.Fatal("shim started without a local attestation listener")
 		}
 	}
 	receiveTest(t, harness.services.drained)
 }
 
-func TestAttestationSocketSurvivesShimRestart(t *testing.T) {
+func TestLocalAttestationSocketSurvivesShimRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "attestation.sock")
-	file, err := newAttestationSocket(path)
+	file, err := newLocalAttestationSocket(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer file.Close()
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != attestationSocketMode {
+	if err != nil || info.Mode().Perm() != localAttestationSocketMode {
 		t.Fatalf("socket is not accessible to container users: %v, %v", info, err)
 	}
 	for _, name := range []string{"initial", "restarted"} {

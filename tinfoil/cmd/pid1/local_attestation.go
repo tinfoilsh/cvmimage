@@ -5,15 +5,15 @@ import (
 	"os"
 )
 
-const attestationSocketMode = 0o666
+const localAttestationSocketMode = 0o666
 
-func newAttestationSocket(path string) (*os.File, error) {
+func newLocalAttestationSocket(path string) (*os.File, error) {
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		return nil, err
 	}
 	defer listener.Close()
-	if err := os.Chmod(path, attestationSocketMode); err != nil {
+	if err := os.Chmod(path, localAttestationSocketMode); err != nil {
 		return nil, err
 	}
 	file, err := listener.File()

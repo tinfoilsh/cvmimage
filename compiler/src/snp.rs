@@ -110,7 +110,7 @@ pub fn build(
     let host_data = config_field(config_hash, 32)?;
     let launch = tinfoil_firmware::snp(kernel_path, initramfs_path, params)?;
     let placed = launch.placed;
-    let e820 = launch.e820;
+    let required_memory = launch.required_memory;
     let owned = launch.shim_owned;
 
     // The parameter area first, in the order a loader imports it: see image::launch_pages.
@@ -145,7 +145,7 @@ pub fn build(
     let measurement = launch_measurement(&pages, &vmsa_pages);
     // The loader must find memory wherever E820 claims some and none in the apertures.
     let mut spans: Vec<(u64, u64)> = Vec::new();
-    for (base, size, _) in &e820 {
+    for (base, size, _) in &required_memory {
         match spans.last_mut() {
             Some(last) if last.1 == *base => last.1 = base + size,
             _ => spans.push((*base, base + size)),
@@ -227,7 +227,7 @@ pub fn build(
         components.insert("vmsa_ap", component(SNP_VMSA, &ap_page));
     }
     let manifest = Manifest {
-        format_version: 2,
+        format_version: 3,
         platform: "sev-snp",
         memory_bytes: params.memory,
         topology: Topology {

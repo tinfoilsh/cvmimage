@@ -30,9 +30,10 @@ use vmsa::{cc_blob, SNP_SHIM};
 pub struct Launch {
     /// Every region of the guest physical map, in ascending address order.
     pub placed: Vec<Placed>,
-    /// The E820 map the shim will write for a guest of `Params::memory`, kept
-    /// because the SEV-SNP image republishes it as required memory.
-    pub e820: Vec<boot::Region>,
+    /// The memory an SEV-SNP loader must make private before the shim
+    /// validates it, as the E820 map the shim will write for a guest of
+    /// `Params::memory`. Intel TDX asks a loader for none, and leaves it empty.
+    pub required_memory: Vec<boot::Region>,
     /// The measured spans the shim merges the loader's map into, and derives
     /// that E820 table and the ranges it accepts from -- for whatever machine
     /// the loader describes, not this one.
@@ -69,8 +70,6 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
     boot::validate(&placed, params.memory)?;
     let spans = boot::shim_spans(&placed);
-    let (top, host) = boot::host_regions(&params.extents());
-    let e820 = boot::e820(&boot::merge(&spans, &host), top);
     let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
     boot::fill(&mut placed, RESET_ALIAS, shim(RESET_SHIM, p.entry, &spans)?)?;
@@ -80,7 +79,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.sort_by_key(|p| p.base);
     Ok(Launch {
         placed,
-        e820,
+        required_memory: Vec::new(),
         spans,
         entry: p.entry,
         shim_owned,
@@ -122,7 +121,7 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     boot::validate(&placed, params.memory)?;
     let spans = boot::shim_spans(&placed);
     let (top, host) = boot::host_regions(&params.extents());
-    let e820 = boot::e820(&boot::merge(&spans, &host), top);
+    let required_memory = boot::e820(&boot::merge(&spans, &host), top);
     // The setup_data chain is one measured SETUP_CC_BLOB record.
     let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
@@ -132,7 +131,7 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.sort_by_key(|p| p.base);
     Ok(Launch {
         placed,
-        e820,
+        required_memory,
         spans,
         entry: p.entry,
         shim_owned,

@@ -158,6 +158,56 @@ pub(crate) fn identity_map(c_bit: u64, shared_alias: bool) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::boot::RAM;
+    use crate::vmsa::SNP_SHIM;
+
+    // What the assembler made of each shim, so a test can hold its boot path to
+    // the routines it runs rather than only to what those routines contain.
+    const RESET_LISTING: &str = include_str!(concat!(env!("OUT_DIR"), "/reset.dis"));
+    const SNP_LISTING: &str = include_str!(concat!(env!("OUT_DIR"), "/snp_reset.dis"));
+
+    /// Every instruction objdump printed: where it is and what it says.
+    fn listing(dis: &str) -> Vec<(u64, Vec<&str>)> {
+        dis.lines()
+            .filter_map(|line| {
+                let (at, rest) = line.split_once(":\t")?;
+                let at = u64::from_str_radix(at.trim(), 16).ok()?;
+                let (_bytes, text) = rest.split_once('\t')?;
+                Some((at, text.split_whitespace().collect()))
+            })
+            .collect()
+    }
+
+    /// The symbol a call or jump names, and nothing for any other instruction.
+    fn target<'a>(text: &[&'a str]) -> Option<&'a str> {
+        if !matches!(text.first(), Some(&"call") | Some(&"jmp")) {
+            return None;
+        }
+        text.last()?.strip_prefix('<')?.strip_suffix('>')
+    }
+
+    /// Where each routine objdump named begins, in address order.
+    fn symbols(dis: &str) -> Vec<(u64, &str)> {
+        let mut v: Vec<(u64, &str)> = dis
+            .lines()
+            .filter_map(|line| {
+                let (at, name) = line.split_once(" <")?;
+                let at = u64::from_str_radix(at.trim(), 16).ok()?;
+                Some((at, name.strip_suffix(">:")?))
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// The routine an address falls in.
+    fn routine<'a>(symbols: &[(u64, &'a str)], at: u64) -> &'a str {
+        symbols
+            .iter()
+            .take_while(|(start, _)| *start <= at)
+            .last()
+            .map(|(_, name)| *name)
+            .unwrap_or("")
+    }
 
     fn pdpte(map: &[u8], gpa: u64) -> u64 {
         let at = (PAGE + gpa / GIB * 8) as usize;
@@ -237,6 +287,102 @@ mod tests {
             .iter()
             .all(|b| *b == 0));
     }
+    /// map.inc and madt.inc are held to boot.rs and acpi.rs by tests that run
+    /// them. Nothing in those tests says the shim runs them: a routine the boot
+    /// path never calls, or calls in the wrong order, or hands to the wrong
+    /// primitive, assembles and passes exactly as well as one it does. That is
+    /// the half of "measured assembly nothing ever executed" a harness cannot
+    /// reach, so it is asserted against what the assembler actually emitted.
+    #[test]
+    fn each_shim_runs_the_routines_it_is_built_from() {
+        for (blob, dis, entered, accept) in [
+            (RESET_SHIM, RESET_LISTING, "long_mode", "accept_range"),
+            (SNP_SHIM, SNP_LISTING, "snp_long_mode", "validate_range"),
+        ] {
+            let code = listing(dis);
+            let symbols = symbols(dis);
+            // The listing describes the page that is measured, not some other build.
+            assert_eq!(
+                code.len(),
+                code.iter().filter(|(at, _)| *at < SHIM_SIZE).count(),
+                "the listing runs past the shim page"
+            );
+            let calls: Vec<(u64, &str)> = code
+                .iter()
+                .filter_map(|(at, text)| target(text).map(|name| (*at, name)))
+                .collect();
+            let sites = |name: &str| -> Vec<u64> {
+                calls
+                    .iter()
+                    .filter(|(_, n)| *n == name)
+                    .map(|(at, _)| *at)
+                    .collect()
+            };
+
+            // The boot path runs these once each, in this order.
+            let mut last = 0;
+            for name in ["host_regions", "merge_regions", "e820_build", "accept_walk"] {
+                let at = sites(name);
+                assert_eq!(at.len(), 1, "{name} is reached from {} places", at.len());
+                assert_eq!(
+                    routine(&symbols, at[0]),
+                    entered,
+                    "{name} is not on the boot path"
+                );
+                assert!(at[0] > last, "{name} runs out of order");
+                last = at[0];
+            }
+
+            // ...and e820_build is given the zero page it writes the table into.
+            let at = code
+                .iter()
+                .position(|(_, text)| target(text) == Some("e820_build"))
+                .unwrap();
+            assert_eq!(
+                code[at - 1].1,
+                ["mov", &format!("${ZERO_PAGE:#x},%edi")],
+                "e820_build is handed something other than the zero page"
+            );
+
+            // accept_walk hands its ranges to this platform's own primitive and
+            // to nothing else: once from the loop, once as it tails out.
+            let from_walk: Vec<&str> = calls
+                .iter()
+                .filter(|(at, name)| routine(&symbols, *at) == "accept_walk" && !name.contains('+'))
+                .map(|(_, name)| *name)
+                .collect();
+            assert_eq!(
+                from_walk,
+                [accept, accept],
+                "accept_walk hands ranges elsewhere"
+            );
+
+            // The shim page really is what the listing describes.
+            let (at, text) = &code[code.len() - 1];
+            assert!(*at < SHIM_SIZE && !text.is_empty() && !blob.is_empty());
+        }
+    }
+
+    /// Only the TDX shim starts application processors through the ACPI wakeup
+    /// mailbox, so only its MADT carries the structure that names one.
+    #[test]
+    fn only_the_tdx_shim_builds_a_wakeup_structure() {
+        let wakeup = format!("${:#x},(%rdi)", (MADT_WAKEUP_LEN << 8) | MADT_WAKEUP);
+        let writes = |dis| {
+            listing(dis)
+                .iter()
+                .any(|(_, text)| text.first() == Some(&"movl") && text.get(1) == Some(&&wakeup[..]))
+        };
+        assert!(
+            writes(RESET_LISTING),
+            "the TDX MADT has no wakeup structure"
+        );
+        assert!(
+            !writes(SNP_LISTING),
+            "the SNP MADT carries a wakeup structure"
+        );
+    }
+
     /// The SNP shim PVALIDATEs and zeroes through the map, so every range it walks is mapped.
     #[test]
     fn every_range_the_shim_is_told_to_touch_is_mapped() {

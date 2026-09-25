@@ -196,6 +196,8 @@ const _: () = assert!(ACPI_DSDT + DSDT_LEN <= ACPI_MADT);
 // The MADT Local APIC structure states an 8-bit APIC id, and 0xff is the xAPIC
 // broadcast: a larger count would number two processors the same.
 pub const MAX_VCPUS: u32 = 255;
+// The last id a shim writes is one below the count, and 0xff is the broadcast.
+const _: () = assert!(MAX_VCPUS > 0 && MAX_VCPUS - 1 < 0xff);
 // One Local APIC entry per processor plus the wakeup structure, all inside the page.
 const _: () = assert!(
     ACPI_MADT + MADT_HEADER_LEN + MAX_VCPUS as u64 * MADT_LAPIC_LEN + MADT_WAKEUP_LEN <= PAGE

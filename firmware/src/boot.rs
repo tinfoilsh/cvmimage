@@ -344,6 +344,9 @@ pub fn merge(placed: &[Region], host: &[Region]) -> Vec<Region> {
 pub fn e820(regions: &[Region], memory: u64) -> Vec<Region> {
     let mut out: Vec<(u64, u64, u32)> = Vec::new();
     let mut push = |base: u64, end: u64, kind: u32| {
+        // A region nested inside one already written starts where that one
+        // ended, so the table only ever ascends.
+        let base = base.max(out.last().map_or(0, |last: &Region| last.0 + last.1));
         if base >= end {
             return;
         }

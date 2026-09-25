@@ -15,6 +15,9 @@ use crate::kernel::data_block;
 use crate::layout::*;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+// As harness.S sizes it: two words a range.
+const HARNESS_RANGES: usize = 256;
+
 extern "C" {
     fn harness_regions() -> u64;
     fn harness_e820(zero: *mut u8, memory: u64) -> u64;
@@ -22,7 +25,7 @@ extern "C" {
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
     static mut harness_shim_data: [u8; SHIM_DATA_SIZE as usize];
-    static mut harness_ranges: [u64; 512];
+    static mut harness_ranges: [u64; 2 * HARNESS_RANGES];
     static harness_madt_template: [u8; MADT_HEADER_LEN as usize];
 }
 
@@ -76,29 +79,46 @@ pub fn shim() -> Shim {
     Shim(lock.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-fn page(base: u64) -> &'static mut [u8] {
-    unsafe { std::slice::from_raw_parts_mut(base as *mut u8, PAGE as usize) }
+/// One of those pages. It is raw because the same bytes are read back through
+/// another pointer, and two live references to them would be a rule broken for
+/// no gain.
+fn page(base: u64) -> *mut u8 {
+    base as *mut u8
+}
+
+fn fill(base: u64, at: u64, bytes: &[u8]) {
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), page(base).add(at as usize), bytes.len())
+    }
+}
+
+fn zero(base: u64, at: u64, len: u64) {
+    unsafe { std::ptr::write_bytes(page(base).add(at as usize), 0, len as usize) }
+}
+
+fn read(base: u64, at: u64, len: u64) -> Vec<u8> {
+    let mut v = vec![0u8; len as usize];
+    unsafe { std::ptr::copy_nonoverlapping(page(base).add(at as usize), v.as_mut_ptr(), v.len()) }
+    v
 }
 
 impl Shim {
     /// The processor count an untrusted loader leaves in its parameter page.
     pub fn loader_vcpus(&self, count: u32) -> &Self {
-        let p = page(PARAM_PAGE);
-        p.fill(0);
-        p[..4].copy_from_slice(&count.to_le_bytes());
+        zero(PARAM_PAGE, 0, PAGE);
+        fill(PARAM_PAGE, 0, &count.to_le_bytes());
         self
     }
 
     /// The memory map an untrusted loader leaves in its parameter page, as
     /// IGVM_VHS_MEMORY_MAP_ENTRY: a page number, a page count and a type.
     pub fn loader_memory_map(&self, entries: &[(u64, u64, u16)]) -> &Self {
-        let p = page(PARAM_MAP_PAGE);
-        p.fill(0);
+        zero(PARAM_MAP_PAGE, 0, PAGE);
         for (n, (start, pages, kind)) in entries.iter().enumerate() {
-            let at = n * MAP_ENTRY_LEN as usize;
-            p[at..at + 8].copy_from_slice(&start.to_le_bytes());
-            p[at + 8..at + 16].copy_from_slice(&pages.to_le_bytes());
-            p[at + 16..at + 18].copy_from_slice(&kind.to_le_bytes());
+            let at = n as u64 * MAP_ENTRY_LEN;
+            fill(PARAM_MAP_PAGE, at, &start.to_le_bytes());
+            fill(PARAM_MAP_PAGE, at + MAP_ENTRY_PAGES, &pages.to_le_bytes());
+            fill(PARAM_MAP_PAGE, at + MAP_ENTRY_TYPE, &kind.to_le_bytes());
         }
         self
     }
@@ -131,12 +151,7 @@ impl Shim {
         if top == 0 {
             return None;
         }
-        let list = unsafe {
-            std::slice::from_raw_parts(
-                SHIM_REGIONS as *const u8,
-                (SHIM_REGIONS_END - SHIM_REGIONS) as usize,
-            )
-        };
+        let list = read(SHIM_REGIONS, 0, SHIM_REGIONS_END - SHIM_REGIONS);
         let mut out = Vec::new();
         let mut at = 0usize;
         loop {
@@ -156,10 +171,10 @@ impl Shim {
 
     /// The E820 map the shim writes into a zero page for a guest of `memory`.
     pub fn e820(&self, memory: u64) -> Option<Vec<Region>> {
-        let mut zero = vec![0u8; PAGE as usize];
-        match unsafe { harness_e820(zero.as_mut_ptr(), memory) } {
+        let mut page = vec![0u8; PAGE as usize];
+        match unsafe { harness_e820(page.as_mut_ptr(), memory) } {
             0 => None,
-            _ => Some(boot::read_e820(&zero)),
+            _ => Some(boot::read_e820(&page)),
         }
     }
 
@@ -177,8 +192,7 @@ impl Shim {
     /// The MADT the shim writes into the ACPI page, or None where it refuses
     /// the processor count and terminates.
     pub fn madt(&self, wakeup: bool) -> Option<Vec<u8>> {
-        let table = &mut page(ACPI_BASE)[ACPI_MADT as usize..];
-        table.fill(0);
+        zero(ACPI_BASE, ACPI_MADT, PAGE - ACPI_MADT);
         let built = unsafe {
             if wakeup {
                 harness_madt_wakeup()
@@ -189,10 +203,12 @@ impl Shim {
         if built == 0 {
             return None;
         }
-        let table = &page(ACPI_BASE)[ACPI_MADT as usize..];
-        let len = u32::from_le_bytes(table[4..8].try_into().unwrap()) as usize;
-        assert!(len <= table.len(), "the table the shim wrote left its page");
-        Some(table[..len].to_vec())
+        let len = u32::from_le_bytes(read(ACPI_BASE, ACPI_MADT + 4, 4).try_into().unwrap()) as u64;
+        assert!(
+            ACPI_MADT + len <= PAGE,
+            "the table the shim wrote left its page"
+        );
+        Some(read(ACPI_BASE, ACPI_MADT, len))
     }
 
     /// The fixed header the shim copies, which every shim page carries.

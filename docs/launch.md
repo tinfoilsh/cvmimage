@@ -38,12 +38,14 @@ enters Linux.
 ## Design
 
 At build time the compiler validates the `bzImage`, places the kernel and
-initramfs, and constructs the zero page, E820 map, ACPI tables, GDT, stack,
-command line and identity page tables.
+initramfs, and constructs the zero page, ACPI tables, GDT, stack, command line
+and identity page tables.
 
 Pages already imported must not be accepted or validated again, so the build
-produces one placement map covering the E820 map handed to Linux, the pages
-imported from the IGVM file, and the ranges the reset shim initializes.
+produces one placement map, covering the pages imported from the IGVM file and
+carried in the shim's own page. Everything that describes the guest's memory —
+the E820 map Linux is handed and the ranges the shim initializes — follows from
+that map and from what the loader says the machine is, and is built at boot.
 
 Two things the image would otherwise carry depend on the size of the machine,
 and measuring either would bind every image to one machine:
@@ -77,13 +79,19 @@ the image itself placed keeps its own entry -- including the reset page, which
 sits inside an aperture and must not be handed to a device.
 
 Every layout decision downstream of those extents stays the image's. The map
-itself has to be one this image can run in, and is refused rather than clamped
-if it is not: its extents must ascend without overlapping, must not wrap, must
-lie inside what the measured page tables reach, and the first of them must be
-the memory the loader loaded this image into, reaching at least as far as the
-last page it placed. A map longer than the shim reads is refused rather than
-described in part, and an E820 table that would overrun `boot_params` terminates
-the shim rather than being truncated.
+itself has to be one this image can run in, and terminates the shim rather than
+being clamped if it is not: its extents must ascend without overlapping, must
+not wrap, must not reach past what the measured page tables map, and the first
+of them must be the memory the loader loaded this image into, reaching at least
+as far as the last page it placed. An E820 table that would overrun
+`boot_params` terminates it too, rather than being truncated.
+
+An extent that *starts* at or past the end of the mapped range ends the walk
+instead: there is nothing there for this image to describe, and a host is free
+to say what it likes about addresses the guest will never touch. Everything
+below the top of RAM has already been described by then, so the rest of the map
+is ignored rather than refused — including a map longer than the shim reads,
+which is otherwise refused rather than described in part.
 
 Taking the extents rather than assuming them is what lets one image run on a
 machine laid out differently from the usual q35 one -- QEMU restacks a large
@@ -144,7 +152,7 @@ fields this image fixes.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--ram` | `1G` | Guest RAM, matching QEMU `-m`; leaves the measurement alone |
-| `--vcpus` | `4` | Processor count; SNP measures one VMSA per processor, TDX measures none |
+| `--vcpus` | `4` | Processor count, 1 to 255; SNP measures one VMSA per processor, TDX measures none |
 | `--cmdline` | `panic=-1` | Linux command line |
 | `--config-hash` | zero | TDX `MRCONFIGID` or SNP `HOST_DATA` |
 | `--cbit` | `51` | SNP encryption bit |
@@ -152,6 +160,15 @@ fields this image fixes.
 | `--id-key` | none | Key signing the SNP ID block |
 
 `no5lvl` is appended because the image uses four-level page tables.
+
+The processor ceiling is 255: the MADT Local APIC structure states an 8-bit
+APIC id and `0xff` is the xAPIC broadcast, so a larger count numbered two
+processors the same.
+
+The manifest is `format_version` 3. Versions 1 and 2 measured the guest's
+memory and processor count; version 3 does not, so `memory_bytes`, `vcpus` and
+`mmio_holes` record what the build was asked for rather than anything the
+digest covers. Only the `launch` object states what a report must say.
 
 ## Run on TDX
 

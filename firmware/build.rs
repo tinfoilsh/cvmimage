@@ -44,6 +44,15 @@ fn flatten(out: &Path, name: &str) {
         .args(["-O", "binary", "-j", ".reset"])
         .arg(&object)
         .arg(out.join(format!("{name}.bin"))));
+    // What the shim was assembled into, so a test can hold its boot path to
+    // the routines it is supposed to run rather than only to their contents.
+    let listing = Command::new("objdump")
+        .args(["-d", "--section=.reset"])
+        .arg(&object)
+        .output()
+        .expect("failed to disassemble the shim");
+    assert!(listing.status.success(), "objdump failed");
+    fs::write(out.join(format!("{name}.dis")), listing.stdout).expect("write disassembly");
 }
 
 /// The same macros, assembled into an ordinary object the crate's tests link

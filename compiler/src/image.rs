@@ -118,7 +118,7 @@ pub fn build(
     fs::write(output, &file).map_err(io_error("write IGVM"))?;
 
     let manifest = Manifest {
-        format_version: 2,
+        format_version: 3,
         platform: "tdx",
         memory_bytes: params.memory,
         vcpus: params.vcpus,
@@ -768,11 +768,22 @@ pub mod tests {
                     Some((top, want.clone())),
                     "the regions for {ram:#x}, snp={snp}"
                 );
+                let e820 = shim.e820(top).unwrap();
                 assert_eq!(
-                    shim.e820(top),
-                    Some(boot::e820(&want, top)),
+                    e820,
+                    boot::e820(&want, top),
                     "the E820 map for {ram:#x}, snp={snp}"
                 );
+                // Whatever the loader says, Linux is handed a table that only
+                // ascends: an entry that went backwards over another would be
+                // left to e820__update_table to sort out.
+                for pair in e820.windows(2) {
+                    assert!(
+                        pair[0].0 + pair[0].1 <= pair[1].0,
+                        "the E820 map for {ram:#x} overlaps at {:#x}",
+                        pair[1].0
+                    );
+                }
                 assert_eq!(
                     shim.accept_ranges(top),
                     boot::accept_ranges(&want, top),
@@ -805,6 +816,9 @@ pub mod tests {
         assert_eq!(shim.regions(), Some((top, want.clone())));
         let e820 = shim.e820(top).unwrap();
         assert_eq!(e820, boot::e820(&want, top));
+        for pair in e820.windows(2) {
+            assert!(pair[0].0 + pair[0].1 <= pair[1].0, "the E820 map overlaps");
+        }
         // The aperture between the two banks of RAM belongs to no entry, the
         // reserved range is reserved, and the high bank is ordinary RAM.
         assert!(e820
@@ -875,6 +889,49 @@ pub mod tests {
         assert_eq!(shim.regions().unwrap().0, plain.0);
         assert_eq!(shim.e820(params.memory), plain.1);
         assert_eq!(shim.accept_ranges(params.memory), plain.2);
+    }
+
+    /// A loader can describe a region that covers a page this image placed --
+    /// the reset page sits where a host is free to call the whole top of the
+    /// 32-bit space reserved. Two entries for the same bytes would be a table
+    /// that goes backwards, so the second is folded into the first.
+    #[test]
+    fn a_region_swallowing_a_placed_page_still_leaves_an_ascending_table() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        let (_, launch) = launched(dir.path(), 8 * GIB, false);
+        let ram = MAP_TYPE_MEMORY as u16;
+        let min = boot::min_memory(&launch.spans);
+        shim.data(launch.entry, &launch.spans).loader_memory_map(&[
+            (0, min / PAGE, ram),
+            (0xffff_0000 / PAGE, 0x1_0000 / PAGE, 1),
+            (FOUR_GIB / PAGE, 4 * GIB / PAGE, ram),
+        ]);
+        let extents = [
+            (0, min, true),
+            (0xffff_0000, FOUR_GIB, false),
+            (FOUR_GIB, FOUR_GIB + 4 * GIB, true),
+        ];
+        let (top, host) = boot::host_regions(&extents);
+        let want = boot::merge(&launch.spans, &host);
+        assert_eq!(shim.regions(), Some((top, want.clone())));
+        let e820 = shim.e820(top).unwrap();
+        assert_eq!(e820, boot::e820(&want, top));
+        for pair in e820.windows(2) {
+            assert!(
+                pair[0].0 + pair[0].1 <= pair[1].0,
+                "the E820 map overlaps at {:#x}",
+                pair[1].0
+            );
+        }
+        // The reset page is inside that region, so it is reserved either way...
+        assert!(e820
+            .iter()
+            .any(|(b, n, k)| *b <= RESET_ALIAS && RESET_ALIAS < b + n && *k == RESERVED));
+        // ...and still never accepted.
+        for (lo, hi) in shim.accept_ranges(top) {
+            assert!(hi <= RESET_ALIAS || lo >= RESET_ALIAS + PAGE);
+        }
     }
 
     /// The memory map is unmeasured and the host writes it. Every map this

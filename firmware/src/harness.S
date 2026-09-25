@@ -1,9 +1,9 @@
 # The shim's own assembly, assembled from the same macros the reset stubs are
-# and called from a test. Nothing in madt.inc or map.inc runs a privileged
-# instruction or names an address a caller has not passed it, so all of it runs
-# in a userspace process with the pages it reads mapped at their real addresses
-# -- which is what holds the shipped assembly, rather than a re-implementation
-# of it, to the generators in acpi.rs and boot.rs.
+# and called from a test. None of madt.inc or map.inc runs a privileged
+# instruction, and the only addresses they name are this layout's own, so all
+# of it runs in a userspace process with those pages mapped where a guest has
+# them -- which is what holds the shipped assembly, rather than a
+# re-implementation of it, to the generators in acpi.rs and boot.rs.
 #
 # This object is linked into the crate's tests. It is not measured and no guest
 # ever executes it.
@@ -75,6 +75,8 @@ harness_accept:
     cmp %r13, %r12
     jae 1f
     mov harness_count(%rip), %rax
+    cmp $HARNESS_RANGES, %rax
+    jae harness_fail                # before the counter the test reads is overrun
     shl $4, %rax
     lea harness_ranges(%rip), %rcx
     mov %r12, (%rcx,%rax)
@@ -101,17 +103,21 @@ harness_madt_bare:
     jmp harness_ret
 
 .data
+.balign 8
 # The data block the shims carry in their measured page, which a test fills.
 .globl harness_shim_data
 harness_shim_data:
 shim_data:
     .fill SHIM_DATA_SIZE,1,0
 
-# Room for every range a walk of a full data block can produce.
+# Room for every range a walk of a full region list can produce.
+.set HARNESS_RANGES, 256
+.balign 8
 .globl harness_ranges
 harness_ranges:
-    .fill 4096,1,0
+    .fill HARNESS_RANGES * 16,1,0
 
+.balign 8
 harness_sp:
     .quad 0
 harness_count:

@@ -208,6 +208,7 @@ validate_range:
     mov $1, %edx
     pvalidate
     setc %bl
+    movzbl %bl, %ebx                # %ebx arrives holding a cursor, not zero
     mov %eax, %r15d
     test %eax, %eax
     jnz size_2m
@@ -223,6 +224,7 @@ validate_4k:
     mov $1, %edx
     pvalidate
     setc %bl
+    movzbl %bl, %ebx                # %ebx arrives holding a cursor, not zero
     mov %eax, %r15d
     test %eax, %eax
     jnz die

@@ -88,6 +88,7 @@ host_regions:
     # not shown, so it is refused rather than described in part.
     mov (%rsi), %rax
     or MAP_ENTRY_PAGES(%rsi), %rax
+    or MAP_ENTRY_TYPE(%rsi), %rax    # every field of it, not the two that matter
     jnz \fail
 7:  test %r8, %r8
     jz \fail                        # a map with no memory in it
@@ -144,6 +145,7 @@ merge_regions:
     mov %rax, SPAN_HI(%rdi)
     mov SPAN_KIND(%rbx), %eax
     mov %eax, SPAN_KIND(%rdi)
+    movl $0, SPAN_KIND+4(%rdi)
     add $SPAN_LEN, %rdi
     jmp 1b
 7:  movq $0, (%rdi)
@@ -194,13 +196,20 @@ e820_build:
     ret
 
 # Add [%rax, %rdx) as type %ecx, extending the last entry where they abut.
+# A region nested inside one already written starts where that one ended, so
+# the table only ever ascends: Linux is handed no entry that overlaps another.
 e820_push:
-    cmp %rdx, %rax
+    test %r10d, %r10d
+    jz 1f
+    mov E820_LAST_BASE(%rdi), %r9
+    add E820_LAST_SIZE(%rdi), %r9
+    cmp %r9, %rax
+    jae 1f
+    mov %r9, %rax
+1:  cmp %rdx, %rax
     jae 8f
     test %r10d, %r10d
     jz 9f
-    mov E820_LAST_BASE(%rdi), %r9
-    add E820_LAST_SIZE(%rdi), %r9
     cmp %rax, %r9
     jne 9f
     cmp E820_LAST_KIND(%rdi), %ecx
@@ -208,6 +217,9 @@ e820_push:
     sub %rax, %rdx
     add %rdx, E820_LAST_SIZE(%rdi)
 8:  ret
+    # The layout asserts bound the merged list well inside both buffers and the
+    # table well inside boot_params, so neither this nor add_region's bound can
+    # be reached; they are what makes that a property rather than an argument.
 9:  cmp $E820_MAX, %r10d
     jae \fail                       # more than boot_params has room for
     mov %rax, (%rdi)

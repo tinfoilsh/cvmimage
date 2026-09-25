@@ -1,13 +1,36 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestAttestationSocketFailureStopsBoot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attestation.sock")
+	occupied, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	harness := newLifecycleHarness()
+	harness.deps.attestation = func() (*os.File, error) { return newAttestationSocket(path) }
+	if err := runLifecycle(context.Background(), harness.deps, harness.readiness); !errors.Is(err, syscall.EADDRINUSE) {
+		t.Fatalf("boot error = %v, want occupied socket error", err)
+	}
+	for _, service := range harness.services.started {
+		if service.Name == shimName {
+			t.Fatal("shim started without an attestation listener")
+		}
+	}
+	receiveTest(t, harness.services.drained)
+}
 
 func TestAttestationSocketSurvivesShimRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "attestation.sock")

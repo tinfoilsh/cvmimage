@@ -55,11 +55,7 @@ func (a BodyV2) Marshal() [64]byte {
 // Report fetches the raw hardware attestation report and platform identifier.
 func Report(userData [64]byte) (report []byte, platform string, err error) {
 	if _, statErr := os.Stat("/dev/sev-guest"); statErr == nil {
-		var qp sevclient.QuoteProvider
-		qp, err = sevclient.GetQuoteProvider()
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to get quote provider: %w", err)
-		}
+		var qp sevclient.LinuxConfigFsQuoteProvider
 		report, err = qp.GetRawQuote(userData)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get quote: %w", err)

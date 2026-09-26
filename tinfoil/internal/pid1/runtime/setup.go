@@ -23,6 +23,8 @@ const (
 	ramdiskFallbackGB = 4
 
 	tmpfs512M = "size=512M,mode=1777"
+
+	attestationMountMode = 0o444
 )
 
 // LogFunc receives runtime setup diagnostics.
@@ -144,6 +146,10 @@ func SetupRamdisk(log LogFunc) error {
 	}
 	if err := ensureDir(boot.PublicDir, 0755); err != nil {
 		return err
+	}
+	// The nested socket mount needs a target in the read-only public directory.
+	if err := os.WriteFile(boot.AttestationMount, nil, attestationMountMode); err != nil {
+		return fmt.Errorf("creating attestation mount target: %w", err)
 	}
 	if err := mountIfNeeded("tmpfs", "/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, tmpfs512M, log); err != nil {
 		return err

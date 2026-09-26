@@ -46,6 +46,9 @@ const (
 	maxOverlays    = 8
 	KeyBytes       = 64
 	blankProbeSize = 1 << 20
+
+	// Linux include/linux/statfs.h defines ST_NOSYMFOLLOW; x/sys/unix omits it.
+	statfsNoSymfollow = 0x2000
 )
 
 var (
@@ -222,8 +225,18 @@ func prepareDataMount(path string, inspect func() (bool, error), mount func(stri
 	if err := unix.Statfs(path, &info); err != nil {
 		return false, err
 	}
-	const retainedFlags = unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_NOATIME | unix.MS_NODIRATIME | unix.MS_RELATIME
+	const retainedFlags = unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_NOATIME | unix.MS_NODIRATIME
 	flags := uintptr(info.Flags)&retainedFlags | unix.MS_REMOUNT | unix.MS_BIND | unix.MS_RDONLY
+	// These statfs bits differ from their mount(2) counterparts.
+	if info.Flags&unix.ST_RELATIME != 0 {
+		flags |= unix.MS_RELATIME
+	}
+	if info.Flags&statfsNoSymfollow != 0 {
+		flags |= unix.MS_NOSYMFOLLOW
+	}
+	if info.Flags&(unix.ST_NOATIME|unix.ST_RELATIME) == 0 {
+		flags |= unix.MS_STRICTATIME
+	}
 	if err := mount("", path, "", flags, ""); err != nil {
 		return false, fmt.Errorf("protecting locked volume: %w", err)
 	}

@@ -59,7 +59,23 @@ func TestPrepareDataMount(t *testing.T) {
 			if mounted != (test.mounted && !wantErr) {
 				t.Fatalf("mounted = %t", mounted)
 			}
-			retained := uintptr(info.Flags) & (unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_NOATIME | unix.MS_NODIRATIME | unix.MS_RELATIME)
+			var retained uintptr
+			for _, flag := range []struct{ stat, mount uintptr }{
+				{unix.ST_NOSUID, unix.MS_NOSUID},
+				{unix.ST_NODEV, unix.MS_NODEV},
+				{unix.ST_NOEXEC, unix.MS_NOEXEC},
+				{unix.ST_NOATIME, unix.MS_NOATIME},
+				{unix.ST_NODIRATIME, unix.MS_NODIRATIME},
+				{unix.ST_RELATIME, unix.MS_RELATIME},
+				{statfsNoSymfollow, unix.MS_NOSYMFOLLOW},
+			} {
+				if uintptr(info.Flags)&flag.stat != 0 {
+					retained |= flag.mount
+				}
+			}
+			if info.Flags&(unix.ST_NOATIME|unix.ST_RELATIME) == 0 {
+				retained |= unix.MS_STRICTATIME
+			}
 			want := []uintptr{unix.MS_BIND, unix.MS_SHARED, unix.MS_REMOUNT | unix.MS_BIND | unix.MS_RDONLY | retained}
 			if !reflect.DeepEqual(calls, want[:test.wantCalls]) {
 				t.Fatalf("mount flags = %#v, want %#v", calls, want[:test.wantCalls])

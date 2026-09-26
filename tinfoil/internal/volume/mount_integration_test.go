@@ -31,8 +31,26 @@ func TestLockedMountPropagation(t *testing.T) {
 	if err := unix.Mount("", "/", "", unix.MS_PRIVATE|unix.MS_REC, ""); err != nil {
 		t.Fatal(err)
 	}
+	for _, test := range []struct {
+		name  string
+		flags uintptr
+	}{
+		{"relatime", unix.MS_RELATIME},
+		{"relatime-nodiratime", unix.MS_RELATIME | unix.MS_NODIRATIME},
+		{"noatime", unix.MS_NOATIME},
+		{"noatime-nodiratime", unix.MS_NOATIME | unix.MS_NODIRATIME},
+		{"strictatime", unix.MS_STRICTATIME},
+		{"strictatime-nodiratime", unix.MS_STRICTATIME | unix.MS_NODIRATIME},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testLockedMountPropagation(t, test.flags)
+		})
+	}
+}
+
+func testLockedMountPropagation(t *testing.T, atimeFlags uintptr) {
 	root := t.TempDir()
-	if err := unix.Mount("tmpfs", root, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC, "size=16m"); err != nil {
+	if err := unix.Mount("tmpfs", root, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC|unix.MS_NOSYMFOLLOW|atimeFlags, "size=16m"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -42,6 +60,24 @@ func TestLockedMountPropagation(t *testing.T) {
 	})
 	source := filepath.Join(root, "source")
 	if err := os.Mkdir(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "target"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(source, "link")
+	if err := os.Symlink("target", link); err != nil {
+		t.Fatal(err)
+	}
+	checkSymlink := func() {
+		t.Helper()
+		if _, err := os.ReadFile(link); !errors.Is(err, unix.ELOOP) {
+			t.Fatalf("symlink traversal = %v, want ELOOP", err)
+		}
+	}
+	checkSymlink()
+	var inherited unix.Statfs_t
+	if err := unix.Statfs(source, &inherited); err != nil {
 		t.Fatal(err)
 	}
 	inspect := func() (bool, error) {
@@ -54,8 +90,18 @@ func TestLockedMountPropagation(t *testing.T) {
 		if err != nil || mounted != wantMounted {
 			t.Fatalf("prepare = %t, %v; want mounted %t", mounted, err, wantMounted)
 		}
+		if !wantMounted {
+			var actual unix.Statfs_t
+			if err := unix.Statfs(source, &actual); err != nil {
+				t.Fatal(err)
+			}
+			if want := inherited.Flags | unix.ST_RDONLY; actual.Flags != want {
+				t.Errorf("placeholder flags = %#x, want inherited flags plus readonly %#x", actual.Flags, want)
+			}
+		}
 	}
 	prepare(false)
+	checkSymlink()
 	before, err := readMountState(source)
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +111,7 @@ func TestLockedMountPropagation(t *testing.T) {
 	if err != nil || before != after {
 		t.Fatalf("repeat prepare changed placeholder: %v, %v, %v", before, after, err)
 	}
+	checkSymlink()
 	var info unix.Statfs_t
 	if err := unix.Statfs(source, &info); err != nil {
 		t.Fatal(err)
@@ -93,4 +140,5 @@ func TestLockedMountPropagation(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.check("rolled back", true)
+	checkSymlink()
 }

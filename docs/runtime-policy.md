@@ -161,3 +161,31 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+
+## Locked storage volumes
+
+A declared storage volume without `key-secret` starts locked. Before its worker
+publishes the control socket and PID 1 starts applications, the guest makes the
+placeholder bind mount read-only. Writes fail with `EROFS`, including for root
+with `CAP_DAC_OVERRIDE`; directory permissions are not the guard. This is not a
+boundary against a CVM administrator with permission to remount filesystems.
+
+The source stays shared and the application bind stays `rslave`. A successful
+unlock mounts the writable encrypted filesystem over the placeholder and
+propagates it into the existing application mount namespace without recreating
+the container. A failed unlock leaves the placeholder read-only. Preparing an
+already-unlocked volume does not remount its filesystem read-only.
+
+Boot auto-unlock uses the existing `key-secret` field. An unresolved or malformed
+key, or a failure to mount with it, still prevents application startup. Explicit
+runtime `initialize` accepts only a blank disk; a wrong key never triggers a
+format fallback. The per-volume worker still replies with status `"ok"` and
+exits after a successful runtime unlock.
+
+The write guard requires a **new guest image release and an explicit update of
+the approved guest release/measurement pin**. CLI auto-unlock alone does not add
+the guard to older images. Merging this change does not automatically release,
+tag, deploy, or update any runtime pin. Attestation verification remains required.
+
+See the [isolated volume fixture](../tests/volume-vm/README.md) for reproducible
+mount-propagation and encrypted-persistence checks.

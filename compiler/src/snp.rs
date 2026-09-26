@@ -21,7 +21,7 @@ use tinfoil_firmware::{
     boot::{self, Fill},
     io_error,
     layout::*,
-    vmsa::{ap_vmsa, bsp_vmsa, validate_vmsa, vmsa_page},
+    vmsa::{bsp_vmsa, validate_vmsa, vmsa_page},
 };
 use zerocopy::FromZeroes;
 
@@ -133,16 +133,13 @@ pub fn build(
     }
     validate_pages(&pages)?;
 
-    // One measured VMSA per processor.
+    // The boot processor is the only measured save area: the launch asks for
+    // KVM_SEV_SNP_MEASURE_BSP_ONLY, so the digest stops moving with the
+    // processor count and the guest builds the rest through AP Creation.
     let bsp_vmsa = bsp_vmsa();
     validate_vmsa(&bsp_vmsa, SHIM_BASE, BSP_STACK_TOP, ZERO_PAGE)?;
-    let ap_vmsa = ap_vmsa();
-    validate_vmsa(&ap_vmsa, SNP_AP_ENTRY, 0, 0)?;
     let vmsa = vmsa_page(&bsp_vmsa);
-    let ap_page = vmsa_page(&ap_vmsa);
-    let mut vmsa_pages = vec![vmsa.clone()];
-    vmsa_pages.extend((1..params.vcpus).map(|_| ap_page.clone()));
-    let measurement = launch_measurement(&pages, &vmsa_pages);
+    let measurement = launch_measurement(&pages, std::slice::from_ref(&vmsa));
     // The loader must find memory wherever E820 claims some and none in the apertures.
     let mut spans: Vec<(u64, u64)> = Vec::new();
     for (base, size, _) in &required_memory {
@@ -171,20 +168,15 @@ pub fn build(
             kind => directives.push(page_directive(p.gpa, igvm_type(kind), p.data.clone())),
         }
     }
-    // KVM consumes the VMSAs last and only at this architectural high GPA, which
-    // QEMU checks per context; the vp index is what separates them.
-    for vp_index in 0..params.vcpus as u16 {
-        directives.push(IgvmDirectiveHeader::SnpVpContext {
-            gpa: SNP_VMSA,
-            compatibility_mask: COMPAT,
-            vp_index,
-            vmsa: if vp_index == 0 {
-                bsp_vmsa.clone()
-            } else {
-                ap_vmsa.clone()
-            },
-        });
-    }
+    // KVM consumes the save area last and only at this architectural high GPA.
+    // One context, whatever -smp is: QEMU leaves a processor it has no context
+    // for at its reset state, and none of those are measured.
+    directives.push(IgvmDirectiveHeader::SnpVpContext {
+        gpa: SNP_VMSA,
+        compatibility_mask: COMPAT,
+        vp_index: 0,
+        vmsa: bsp_vmsa.clone(),
+    });
     let signed = match id_key {
         None => None,
         Some(path) => {
@@ -223,9 +215,6 @@ pub fn build(
 
     let mut components = components(&placed);
     components.insert("vmsa", component(SNP_VMSA, &vmsa));
-    if params.vcpus > 1 {
-        components.insert("vmsa_ap", component(SNP_VMSA, &ap_page));
-    }
     let manifest = Manifest {
         format_version: 3,
         platform: "sev-snp",
@@ -516,7 +505,9 @@ pub fn measure_snp(file: &[u8]) -> Result<[u8; 48], String> {
     // issues them, so sorting would measure a file that was never shipped.
     validate_pages(&pages)?;
     // Save areas are applied in processor index order, one per processor from
-    // zero, so anything but a gapless 0..n cannot be launched.
+    // zero, so anything but a gapless 0..n cannot be launched. An image this
+    // tool builds now carries only index 0, but measure still has to read the
+    // multi-processor images it published before.
     vmsas.sort_by_key(|(index, _)| *index);
     if vmsas
         .iter()
@@ -653,28 +644,30 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_digest_covers_one_vmsa_per_processor() {
+    fn the_launch_digest_takes_one_save_area_at_a_time_in_order() {
         let mut pages = Vec::new();
         add_normal(&mut pages, 0x1000, &[0; PAGE as usize]);
         let bsp = vmsa_page(&bsp_vmsa());
-        let ap = vmsa_page(&ap_vmsa());
+        // Any second distinct save area; the launch carries only the one.
+        let mut ap = bsp.clone();
+        ap[0] ^= 1;
 
         let one = launch_measurement(&pages, std::slice::from_ref(&bsp));
         let two = launch_measurement(&pages, &[bsp.clone(), ap.clone()]);
         let three = launch_measurement(&pages, &[bsp.clone(), ap.clone(), ap.clone()]);
-        // Adding a processor adds a measured VMSA, so the digest has to move.
+        // Each save area handed to the digest extends it again. Images no
+        // longer supply more than one, but the primitive still counts them.
         assert_ne!(one, two);
         assert_ne!(two, three);
         // And the order is vp index order, not an unordered set.
         assert_ne!(two, launch_measurement(&pages, &[ap, bsp]));
     }
 
-    /// The pages an image loads no longer depend on the processor count: the
-    /// MADT that did is written by the shim from an unmeasured parameter. The
-    /// save areas still do, one per processor, so the launch digest moves with
-    /// --vcpus however the tables are built.
+    /// Nothing an image carries depends on the processor count any more: the
+    /// MADT that did is written by the shim from an unmeasured parameter, and
+    /// only the boot processor's save area is measured.
     #[test]
-    fn the_processor_count_leaves_the_loaded_pages_alone() {
+    fn the_processor_count_leaves_the_launch_digest_alone() {
         let dir = tempdir().unwrap();
         let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
         fs::write(&k, test_kernel()).unwrap();
@@ -702,12 +695,12 @@ mod tests {
         for cpus in [4, 8] {
             let other = image(cpus);
             assert_eq!(loaded, other.0, "the loaded pages moved with --vcpus");
-            assert_ne!(digest, other.1, "a processor was measured by nothing");
+            assert_eq!(digest, other.1, "the launch digest moved with --vcpus");
         }
     }
 
     #[test]
-    fn an_snp_image_carries_one_vp_context_per_processor() {
+    fn an_snp_image_carries_one_vp_context_whatever_the_processor_count() {
         let dir = tempdir().unwrap();
         let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
         fs::write(&k, test_kernel()).unwrap();
@@ -731,7 +724,7 @@ mod tests {
                 })
                 .collect();
             indexes.sort_unstable();
-            assert_eq!(indexes, (0..cpus as u16).collect::<Vec<_>>());
+            assert_eq!(indexes, vec![0], "--vcpus {cpus} changed the contexts");
         }
     }
 
@@ -833,11 +826,10 @@ mod tests {
         );
         assert_ne!(base, moved, "the command line left the measurement alone");
 
-        let moved = digest(&kernel, &initramfs, cmdline, DEFAULT_VCPUS + 1);
-        assert_ne!(
-            base, moved,
-            "the processor count left the measurement alone"
-        );
+        // Not a measured input: the launch covers the boot processor's save
+        // area alone, which is what lets one release serve any processor count.
+        let same = digest(&kernel, &initramfs, cmdline, DEFAULT_VCPUS + 1);
+        assert_eq!(base, same, "the processor count moved the measurement");
     }
 
     /// The RAM a guest is given no longer reaches the digest: the E820 map and
@@ -1018,19 +1010,22 @@ mod tests {
         let directives: Vec<IgvmDirectiveHeader> = parsed
             .directives()
             .iter()
-            .map(|d| match d {
+            .flat_map(|d| match d {
                 IgvmDirectiveHeader::SnpVpContext {
                     gpa,
                     compatibility_mask,
                     vmsa,
                     ..
-                } => IgvmDirectiveHeader::SnpVpContext {
-                    gpa: *gpa,
-                    compatibility_mask: *compatibility_mask,
-                    vp_index: 0,
-                    vmsa: vmsa.clone(),
-                },
-                other => other.clone(),
+                } => vec![
+                    d.clone(),
+                    IgvmDirectiveHeader::SnpVpContext {
+                        gpa: *gpa,
+                        compatibility_mask: *compatibility_mask,
+                        vp_index: 0,
+                        vmsa: vmsa.clone(),
+                    },
+                ],
+                other => vec![other.clone()],
             })
             .collect();
         let file = IgvmFile::new(

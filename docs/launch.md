@@ -2,7 +2,7 @@
 
 - **`firmware/`** is what the guest executes and the state it starts from: the
   reset stubs, the guest-physical map, the ACPI tables, the zero page, the page
-  tables, and on SEV-SNP one Virtual Machine Save Area (VMSA) per processor.
+  tables, and on SEV-SNP the boot processor's Virtual Machine Save Area (VMSA).
   All of it is measured, except the tables that depend on how large a machine
   the guest is given (see below).
 - **`compiler/`** is the `cvmc` command, which serializes that state into an
@@ -100,28 +100,22 @@ reserves (`hw/i386/pc.c`) -- and it is what keeps the accept list clear of the
 64-bit windows a passed-through device's BARs are assigned out of, which lie
 above the RAM the map describes.
 
-On SEV-SNP the digest covers one VMSA per processor, so the processor count
-still changes the launch measurement there whatever the tables say. The RAM does
-not, though the file still declares it as required memory: the loader has to
-make those pages private before the shim validates them.
+The RAM does not either, though the file still declares it as required memory:
+the loader has to make those pages private before the shim validates them.
 
 On TDX every image page contributes to the measurement register for the trust
 domain (MRTD). The shim enters long mode, parks
 application processors in the ACPI wakeup mailbox, accepts the remaining
 private RAM, and jumps to Linux.
 
-On SEV-SNP the digest covers the normal pages and one VMSA per processor. The
-shim enters long mode, validates and clears the remaining private RAM, wakes
-the application processors, and jumps to Linux.
+On SEV-SNP the digest covers the normal pages and the boot processor's VMSA.
+The shim enters long mode, validates and clears the remaining private RAM, and
+jumps to Linux.
 
-Each SEV-SNP application processor launches from its own measured VMSA into a
-park stub and waits on a Guest-Hypervisor Communication Block (GHCB) AP Reset
-Hold until Linux replaces its VMSA through the GHCB AP-creation call. KVM starts
-every non-boot processor in wait-for-SIPI and only an INIT takes it out, so the
-boot processor sends INIT-SIPI-SIPI first, as firmware would. Under SEV-ES the
-local APIC is reachable only through the GHCB, so the shim rescinds one measured
-page, makes it shared, registers it as its GHCB, issues the three
-interrupt-command writes through it, and returns the page to private.
+It starts no application processor. Only the boot processor is given a save
+area, and Linux brings the rest up itself through the Guest-Hypervisor
+Communication Block (GHCB) AP-creation call, building each save area in its own
+private memory. That is what keeps the processor count out of the measurement.
 
 The SNP image reaches Linux through a confidential-computing blob on the
 `setup_data` chain. The record and the blob share one measured page of E820 RAM
@@ -152,7 +146,7 @@ fields this image fixes.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--ram` | `1G` | Guest RAM, matching QEMU `-m`; leaves the measurement alone |
-| `--vcpus` | `4` | Processor count, 1 to 255; SNP measures one VMSA per processor, TDX measures none |
+| `--vcpus` | `4` | Processor count, 1 to 255; leaves the measurement alone |
 | `--cmdline` | `panic=-1` | Linux command line |
 | `--config-hash` | zero | TDX `MRCONFIGID` or SNP `HOST_DATA` |
 | `--cbit` | `51` | SNP encryption bit |
@@ -175,6 +169,11 @@ The manifest is `format_version` 3. Versions 1 and 2 measured the guest's
 memory and processor count; version 3 does not, so `memory_bytes`, `vcpus` and
 `mmio_holes` record what the build was asked for rather than anything the
 digest covers. Only the `launch` object states what a report must say.
+
+On SEV-SNP this needs a host kernel that accepts
+`KVM_SEV_SNP_MEASURE_BSP_ONLY` and `-object sev-snp-guest,measure-bsp-only=on`.
+Without both, KVM measures a save area per processor and the launch fails
+against the published measurement rather than passing with a different count.
 
 ## Run on TDX
 

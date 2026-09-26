@@ -79,15 +79,6 @@ pub fn bsp_vmsa() -> Box<SevVmsa> {
     v
 }
 
-/// Parks in the shim and owns no stack, so the digest stays a function of the
-/// processor count alone.
-pub fn ap_vmsa() -> Box<SevVmsa> {
-    let mut v = bsp_vmsa();
-    v.rip = SNP_AP_ENTRY;
-    v.rsp = 0;
-    v.rsi = 0;
-    v
-}
 
 pub fn validate_vmsa(v: &SevVmsa, rip: u64, rsp: u64, rsi: u64) -> Result<(), String> {
     let data = |s: &SevSelector, sel: u64, attrib: u16| {
@@ -229,22 +220,5 @@ mod tests {
             u64::from_le_bytes(c[info + 24..info + 32].try_into().unwrap()),
             SNP_CPUID
         );
-    }
-    #[test]
-    fn an_ap_parks_in_the_shim_and_owns_no_stack() {
-        let ap = ap_vmsa();
-        assert_eq!(ap.rip, SNP_AP_ENTRY);
-        assert_eq!(ap.rsp, 0);
-        assert_eq!(ap.rsi, 0);
-        // Everything the firmware measures besides the entry state matches the
-        // boot processor, so a reader can diff the two contexts and see only it.
-        let bsp = bsp_vmsa();
-        assert_eq!(ap.cs.selector, bsp.cs.selector);
-        assert_eq!(ap.cr0, bsp.cr0);
-        assert_eq!(ap.efer, bsp.efer);
-        assert_eq!(ap.sev_features.into_bits(), SNP_SEV_FEATURES);
-        assert!(validate_vmsa(&ap, SNP_AP_ENTRY, 0, 0).is_ok());
-        // An AP that kept the boot processor's entry state would run the shim twice.
-        assert!(validate_vmsa(&bsp, SNP_AP_ENTRY, 0, 0).is_err());
     }
 }

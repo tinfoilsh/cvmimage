@@ -32,7 +32,9 @@ layout! {
     BSP_STACK = 0x0010_7000;
     BSP_STACK_SIZE = 0x0001_0000;
     BSP_STACK_TOP = BSP_STACK + BSP_STACK_SIZE;
-    // The page the SNP shim shares with the host as its GHCB, to wake the other processors.
+    // Reserved out of the guest's map for a Guest-Hypervisor Communication Block.
+    // The shim no longer needs one - it reaches the host only through the GHCB
+    // MSR protocol - but Linux is left the hole rather than moving the layout.
     SNP_GHCB = 0x0011_7000;
     SHIM_BASE = 0x0012_0000;
     SHIM_SIZE = PAGE;
@@ -53,13 +55,9 @@ layout! {
     // The 10-byte pseudo-descriptor follows the GDT, so a shim `lgdt`s without a stack.
     GDT_PTR = BSP_STACK + GDT_LIMIT + 1;
 
-    // An SNP application processor launches from its own measured VMSA and parks
-    // here until Linux recreates it through the GHCB AP-creation call.
-    SHIM_AP_PARK = 0x0000_0b00;
-    SNP_AP_ENTRY = SHIM_BASE + SHIM_AP_PARK;
-
-    // Physical GiB 0 seen again through PML4[4] with the C-bit clear: how the SNP
-    // shim writes the one page it has made shared.
+    // Physical GiB 0 seen again through PML4[4] with the C-bit clear. Nothing in
+    // the shim writes through it now that it shares no page; it stays because the
+    // page tables and MAP_LIMIT are built around it.
     SHARED_ALIAS = 0x200_0000_0000;
 
     // The fixed part of the MADT, measured inside the shim page that builds the rest.
@@ -184,7 +182,6 @@ const _: () = assert!(SHIM_DATA + SHIM_DATA_SIZE <= SHIM_SIZE);
 // An IGVM VP context indexes processors in 16 bits.
 const _: () = assert!(MAX_VCPUS <= u16::MAX as u32);
 // The park stub is a handful of instructions; it must not run into the template.
-const _: () = assert!(SHIM_AP_PARK + 64 <= SHIM_MADT);
 const _: () = assert!(SHIM_MADT + MADT_HEADER_LEN <= SHIM_DATA);
 // A TD fetches its first instruction from the top of the 32-bit address space.
 const _: () = assert!(RESET_ALIAS + PAGE == 0x1_0000_0000);

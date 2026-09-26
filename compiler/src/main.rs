@@ -41,8 +41,8 @@ struct Common {
     #[arg(long, default_value = "", hide_default_value = true)]
     cmdline: String,
     /// Processor count the host must match. The shim builds the MADT from what
-    /// the loader passes it, so this leaves MRTD alone; SNP measures one VMSA
-    /// per processor, so there it still changes the launch digest.
+    /// the loader passes it and only the boot processor is measured, so this
+    /// records what the build was asked for and leaves the digest alone.
     #[arg(long, default_value_t = DEFAULT_VCPUS)]
     vcpus: u32,
     /// MRCONFIGID (TDX, 48 bytes) or HOST_DATA (SNP, 32 bytes) the host must

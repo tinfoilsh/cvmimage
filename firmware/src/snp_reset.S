@@ -5,8 +5,8 @@
 
 .code32
 .global snp_reset_start
-# Nothing before wake_aps may depend on CPUID, an MSR, I/O, the GHCB or an exception;
-# the wake is the shim's one conversation with the host, after all private RAM is valid.
+# Nothing here may depend on CPUID, an MSR, I/O, the GHCB or an exception: the shim
+# never speaks to the host except to terminate.
 snp_reset_start:
     cli
     cld
@@ -47,122 +47,27 @@ snp_long_mode:
     # Linux finds unvalidated memory only through EFI, so guest RAM is validated here.
     call accept_walk
 
-    # Every application processor launched into KVM's wait-for-SIPI state, and
-    # only an INIT leaves it. With no firmware to send one the boot processor
-    # does, as firmware would: INIT then SIPI to all-but-self, after which each
-    # AP runs its own measured VMSA into the park stub below. Under SEV-ES the
-    # local APIC is reachable only through the GHCB, so one measured page is
-    # first rescinded, made shared and registered as this processor's GHCB, and
-    # returned to private once the interrupts are sent. Each step numbers itself
-    # in %r15d so a failure names the step in its termination code.
-wake_aps:
+    # The one table the measurement leaves to the shim. SNP carries no wakeup
+    # structure: Linux starts an application processor with a save area it
+    # builds itself and hands over through the GHCB, needing nothing from here.
+    # Each step numbers itself in %r15d so a failure names it in its code.
     mov $1, %r15d
-    mov $SNP_GHCB, %eax
-    xor %ecx, %ecx
-    xor %edx, %edx                  # rescind validation
-    pvalidate
-    test %eax, %eax
-    jnz die_wake
-    mov $2, %r15d
-    movabs $(SNP_GHCB | (2 << 52) | 0x14), %rax   # page state change: shared
-    call ghcb_msr
-    mov %rax, %rdx
-    shr $32, %rdx
-    jnz die_wake                    # error code in the high half
-    and $0xfff, %eax
-    cmp $0x15, %eax
-    jne die_wake
-    mov $3, %r15d
-    mov $(SNP_GHCB | 0x12), %eax    # register the GHCB GPA
-    call ghcb_msr
-    cmp $(SNP_GHCB | 0x13), %rax
-    jne die_wake
-    mov $4, %r15d
-    movabs $(SHARED_ALIAS + SNP_GHCB), %rbx
-    mov %rbx, %rdi
-    xor %eax, %eax
-    mov $512, %ecx
-    rep stosq
-    mov $0xc4500, %esi              # INIT, all excluding self
-    call send_ipi
-    mov $5, %r15d
-    mov $0xc4600, %esi              # SIPI, all excluding self
-    call send_ipi
-    mov $6, %r15d
-    call send_ipi
-    mov $7, %r15d
-    movabs $(SNP_GHCB | (1 << 52) | 0x14), %rax   # page state change: private
-    call ghcb_msr
-    mov %rax, %rdx
-    shr $32, %rdx
-    jnz die_wake
-    and $0xfff, %eax
-    cmp $0x15, %eax
-    jne die_wake
-    mov $8, %r15d
-    mov $SNP_GHCB, %eax
-    xor %ecx, %ecx
-    mov $1, %edx                    # validate again, so Linux sees only private RAM
-    pvalidate
-    test %eax, %eax
-    jnz die_wake
-
-    # The one table the measurement leaves to the shim; SNP launches every
-    # processor itself, so it carries no wakeup structure.
-    mov $9, %r15d
-    madt_build die_wake, 0
+    madt_build die_step, 0
 
 snp_boot_kernel:
     mov $ZERO_PAGE, %rsi
     lea shim_data(%rip), %rax
     jmp *(%rax)
 
-# Write %esi to the local APIC's ICR: an MMIO write over the GHCB at %rbx.
-send_ipi:
-    mov %esi, 0x800(%rbx)           # the shared buffer carries the data
-    mov $0x80000002, %eax           # SVM_VMGEXIT_MMIO_WRITE
-    mov %rax, 0x390(%rbx)
-    mov $0xfee00300, %eax           # ICR low
-    mov %rax, 0x398(%rbx)
-    movq $4, 0x3a0(%rbx)
-    mov $(SNP_GHCB + 0x800), %eax
-    mov %rax, 0x3a8(%rbx)
-    movq $0, 0x3f0(%rbx)
-    movq $0, 0x3f8(%rbx)
-    movb $0x3c, 0x3fe(%rbx)         # exit code, both infos and scratch are valid
-    movw $2, 0xffa(%rbx)
-    movl $0, 0xffc(%rbx)
-    mov $0xc0010130, %ecx
-    mov $SNP_GHCB, %eax
-    xor %edx, %edx
-    wrmsr
-    vmgexit
-    mov 0x398(%rbx), %eax
-    test %eax, %eax
-    jnz die_wake
-    ret
-
-# The GHCB MSR protocol: request in %rax, response back in %rax.
-ghcb_msr:
-    mov $0xc0010130, %ecx
-    mov %rax, %rdx
-    shr $32, %rdx
-    wrmsr
-    vmgexit
-    rdmsr
-    shl $32, %rdx
-    or %rdx, %rax
-    ret
-
 map_code die_map, validate_range
 
-# A map this image will not run in, which is step 10 of the sequence below.
+# A map this image will not run in, which is step 2 of the sequence above.
 die_map:
-    mov $10, %r15d
-    jmp die_wake
+    mov $2, %r15d
+    jmp die_step
 
-# Terminate with reason set 0xf and the wake step in %r15d as the code.
-die_wake:
+# Terminate with reason set 0xf and the step in %r15d as the code.
+die_step:
     mov %r15d, %eax
     shl $16, %eax
     or $0xf100, %eax
@@ -172,7 +77,7 @@ die_wake:
     vmgexit
     jmp fatal
 
-# Before the wake, the GHCB MSR termination request is the only host channel.
+# The GHCB MSR termination request is the shim's only channel to the host.
 die:
     mov %r12, %rax
     shr $21, %rax
@@ -245,26 +150,6 @@ zero_2m:
     jmp validate_range
 validated:
     ret
-
-    # An application processor launches from its own measured VMSA in 32-bit
-    # protected mode and parks here until Linux creates it for real through the
-    # GHCB AP-creation call, which replaces this VMSA wholesale.
-    #
-    # The wait is an AP Reset Hold over the GHCB MSR protocol, not a HLT: under
-    # SEV-ES a HLT is a non-automatic exit, so it would raise #VC into an AP that
-    # has no IDT and triple-fault it. Reset Hold is the one park the hypervisor
-    # can resume, and like the termination request below it needs no GHCB page.
-    .code32
-    .org SHIM_AP_PARK
-.global snp_ap_park
-snp_ap_park:
-    cli
-1:  mov $0xc0010130, %ecx
-    xor %edx, %edx
-    mov $6, %eax                    # GHCB MSR AP Reset Hold request
-    wrmsr
-    vmgexit
-    jmp 1b                          # re-park if the host resumes us early
 
     .org SHIM_MADT
 madt_template:

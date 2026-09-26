@@ -197,19 +197,37 @@ func (w *volume) prepare() (bool, error) {
 	if err := os.MkdirAll(w.dataPath(), 0o755); err != nil {
 		return false, err
 	}
-	target, parent, err := mountStates(w.dataPath())
+	return prepareDataMount(w.dataPath(), w.inspect, unix.Mount)
+}
+
+func prepareDataMount(path string, inspect func() (bool, error), mount func(string, string, string, uintptr, string) error) (bool, error) {
+	target, parent, err := mountStates(path)
 	if err != nil {
 		return false, err
 	}
 	if target.id == parent.id {
-		if err := unix.Mount(w.dataPath(), w.dataPath(), "", unix.MS_BIND, ""); err != nil {
+		if err := mount(path, path, "", unix.MS_BIND, ""); err != nil {
 			return false, err
 		}
 	}
-	if err := unix.Mount("", w.dataPath(), "", unix.MS_SHARED, ""); err != nil {
+	if err := mount("", path, "", unix.MS_SHARED, ""); err != nil {
 		return false, err
 	}
-	return w.inspect()
+	mounted, err := inspect()
+	if err != nil || mounted {
+		return mounted, err
+	}
+	// Only the placeholder bind is read-only; a propagated filesystem mount remains writable.
+	var info unix.Statfs_t
+	if err := unix.Statfs(path, &info); err != nil {
+		return false, err
+	}
+	const retainedFlags = unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_NOATIME | unix.MS_NODIRATIME | unix.MS_RELATIME
+	flags := uintptr(info.Flags)&retainedFlags | unix.MS_REMOUNT | unix.MS_BIND | unix.MS_RDONLY
+	if err := mount("", path, "", flags, ""); err != nil {
+		return false, fmt.Errorf("protecting locked volume: %w", err)
+	}
+	return false, nil
 }
 
 func (w *volume) inspect() (bool, error) {

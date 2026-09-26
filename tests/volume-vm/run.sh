@@ -6,7 +6,7 @@ trap 'rm -rf "$scratch"' EXIT
 disk="$scratch/owned-scratch.raw"
 disk_size=256M
 vm_memory=1024
-vm_timeout=300
+vm_timeout=480
 truncate -s "$disk_size" "$disk"
 for stage in initialize reopen; do
     echo "Starting isolated TCG VM: $stage"

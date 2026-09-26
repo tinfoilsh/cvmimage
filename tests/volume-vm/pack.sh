@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+set -o pipefail
 root=$(mktemp -d /tmp/tinfoil-volume-initramfs.XXXXXX)
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/bin" "$root/sbin" "$root/usr/bin" "$root/usr/sbin" "$root/lib" \

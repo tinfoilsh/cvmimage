@@ -46,8 +46,10 @@ not establish the kernel behavior.
 
 This uses a new Linux mount namespace and bounded tmpfs only. No device-mapper
 or block device access is granted. It also checks retained `nodev`, `nosuid`,
-and `noexec` flags, idempotent placeholder preparation, and an unaffected parent
-filesystem.
+`noexec`, and `nosymfollow` flags, all three access-time modes with and without
+`nodiratime`, idempotent placeholder preparation, and an unaffected parent
+filesystem. Symlink traversal must fail with `ELOOP` before and after preparation
+and after rollback; the complete statfs flag set must differ only by `ST_RDONLY`.
 
 ```sh
 docker run --rm --cap-drop ALL --cap-add SYS_ADMIN --cap-add DAC_OVERRIDE \
@@ -165,6 +167,9 @@ CVM boot. The fixture uses a distro kernel and no TDX/SNP hardware; it does not
 validate hardware attestation or the complete measured guest image. It neither
 disables nor replaces production attestation. A new guest release and approved
 pin update are still required; this fixture does not publish either.
+
+The [follow-up security review](REVIEW.md) records the inherited-flag regression,
+its immutable baseline reproduction, the fixture corrections, and fresh validation.
 
 References: Linux [`mount(2)`](https://man7.org/linux/man-pages/man2/mount.2.html),
 [shared subtrees](https://docs.kernel.org/filesystems/sharedsubtree.html), and

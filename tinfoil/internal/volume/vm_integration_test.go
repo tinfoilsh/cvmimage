@@ -50,7 +50,8 @@ func TestVolumeVM(t *testing.T) {
 			t.Fatal(err)
 		}
 		status, err := w.handle(t.Context(), packet)
-		if status != want || (want == statusOK || want == statusLocked) && err != nil {
+		wantErr := want == statusRejected || want == statusFailed
+		if status != want || (err != nil) != wantErr {
 			t.Fatalf("%s returned %q, %v; want %q", op, status, err, want)
 		}
 		t.Logf("%s: status=%s", op, status)

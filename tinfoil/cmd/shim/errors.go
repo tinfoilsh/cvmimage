@@ -41,6 +41,8 @@ const (
 	errMsgInvalidAPIKey           = "Incorrect API key provided."
 	errMsgInsufficientPermissions = "Your API key does not have permission to access this resource."
 	errMsgQuotaExceeded           = "You exceeded your current quota, please check your plan and billing details."
+	errMsgKeyQuotaExceeded        = "You exceeded this API key's usage or spending limit."
+	errMsgValidationFailed        = "API key validation failed."
 	errMsgRateLimited             = "Rate limit reached for requests."
 	errMsgServerError             = "The server had an error while processing your request."
 	errMsgUpstreamUnreachable     = "The inference service is temporarily unreachable. Please try again."
@@ -57,6 +59,8 @@ const (
 // serviceStartingRetryAfterSeconds is the Retry-After hint sent while boot
 // is still in progress.
 const serviceStartingRetryAfterSeconds = 5
+
+const maxHTTPErrorStatus = 599
 
 // retryAfterSeconds converts a rate limiter delay into a Retry-After value,
 // rounding up so the client never retries inside the window it was just

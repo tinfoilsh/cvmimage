@@ -112,21 +112,43 @@ func writeValidationFailure(w http.ResponseWriter, err error) {
 		writeAPIError(w, errServer)
 		return
 	}
+	if validationErr.StatusCode < http.StatusBadRequest || validationErr.StatusCode > maxHTTPErrorStatus {
+		writeAPIError(w, errServer)
+		return
+	}
 
 	// Preserve 402 for exhausted credit so relays can distinguish it from
 	// rate limiting without decrypting the error body.
+	apiErr := errServer
 	switch validationErr.StatusCode {
 	case http.StatusUnauthorized:
-		writeAPIError(w, errInvalidAPIKey)
+		apiErr = errInvalidAPIKey
 	case http.StatusForbidden:
-		writeAPIError(w, errInsufficientPermissions)
+		apiErr = errInsufficientPermissions
 	case http.StatusPaymentRequired:
-		writeAPIError(w, errQuotaExceeded)
+		apiErr = errQuotaExceeded
 	case http.StatusTooManyRequests:
-		writeAPIError(w, errRateLimited)
+		apiErr = errRateLimited
+		if validationErr.QuotaExceeded {
+			apiErr = errQuotaExceeded
+			apiErr.message = errMsgKeyQuotaExceeded
+		}
 	default:
-		writeAPIError(w, errServer)
+		apiErr.message = http.StatusText(validationErr.StatusCode)
+		if apiErr.message == "" {
+			apiErr.message = errMsgValidationFailed
+		}
+		if validationErr.StatusCode < http.StatusInternalServerError {
+			apiErr.errType = errTypeInvalidRequest
+		} else if validationErr.StatusCode == http.StatusServiceUnavailable {
+			apiErr.errType = errTypeServiceUnavailable
+		}
 	}
+	apiErr.status = validationErr.StatusCode
+	if validationErr.RetryAfter != "" {
+		w.Header().Set("Retry-After", validationErr.RetryAfter)
+	}
+	writeAPIError(w, apiErr)
 }
 
 func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
@@ -144,7 +166,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin") // cache
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, HEAD, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt")
+			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt, Retry-After")
 
 			// Echo requested headers or use a safe default
 			reqHdr := r.Header.Get("Access-Control-Request-Headers")

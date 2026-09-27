@@ -166,7 +166,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin") // cache
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, HEAD, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt")
+			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt, Retry-After")
 
 			// Echo requested headers or use a safe default
 			reqHdr := r.Header.Get("Access-Control-Request-Headers")

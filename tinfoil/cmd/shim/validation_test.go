@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 func TestOnlineValidationPreservesErrorsThroughEHBP(t *testing.T) {
 	const privateDetail = "private control-plane detail"
 	const retryDate = "Wed, 21 Oct 2037 07:28:00 GMT"
+	const origin = "https://client.example"
 	cases := []struct {
 		name      string
 		status    int
@@ -72,6 +74,7 @@ func TestOnlineValidationPreservesErrorsThroughEHBP(t *testing.T) {
 				handler := NewShimServer(validator, nil, &legacy.Document{}, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
 				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
 				req.Header.Set("Authorization", "Bearer test-key")
+				req.Header.Set("Origin", origin)
 				var requestContext *identity.RequestContext
 				if encrypted {
 					requestContext, err = id.EncryptRequestWithContext(req)
@@ -85,6 +88,11 @@ func TestOnlineValidationPreservesErrorsThroughEHBP(t *testing.T) {
 				defer resp.Body.Close()
 				if resp.StatusCode != tc.status || resp.Header.Get("Retry-After") != tc.wantRetry {
 					t.Errorf("status/retry = %d/%q, want %d/%q", resp.StatusCode, resp.Header.Get("Retry-After"), tc.status, tc.wantRetry)
+				}
+				if resp.Header.Get("Access-Control-Allow-Origin") != origin || !slices.ContainsFunc(strings.Split(resp.Header.Get("Access-Control-Expose-Headers"), ","), func(header string) bool {
+					return strings.EqualFold(strings.TrimSpace(header), "Retry-After")
+				}) {
+					t.Error("cross-origin clients cannot read Retry-After")
 				}
 				if encrypted {
 					if json.Valid(rec.Body.Bytes()) {

@@ -440,7 +440,7 @@ func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
 	}{
 		{"unauthorized is invalid key", http.StatusUnauthorized, http.StatusUnauthorized, errCodeInvalidAPIKey, errTypeInvalidRequest},
 		{"forbidden is insufficient permissions", http.StatusForbidden, http.StatusForbidden, errCodeInsufficientPermissions, errTypeInvalidRequest},
-		{"payment required maps to 429 quota", http.StatusPaymentRequired, http.StatusTooManyRequests, errCodeInsufficientQuota, errTypeInsufficientQuota},
+		{"payment required stays 402", http.StatusPaymentRequired, http.StatusPaymentRequired, errCodeInsufficientQuota, errTypeInsufficientQuota},
 		{"too many requests is rate limit", http.StatusTooManyRequests, http.StatusTooManyRequests, errCodeRateLimitExceeded, errTypeRateLimit},
 	}
 	for _, tc := range cases {
@@ -455,6 +455,58 @@ func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
 				t.Fatalf("code/type = %v/%s, want %s/%s", body.Code, body.Type, tc.wantCode, tc.wantType)
 			}
 		})
+	}
+}
+
+func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  apiError
+	}{
+		{"payment", apiError{status: http.StatusPaymentRequired, errType: errTypeInsufficientQuota, code: errCodeInsufficientQuota, message: errMsgQuotaExceeded}},
+		{"rate limit", apiError{status: http.StatusTooManyRequests, errType: errTypeRateLimit, code: errCodeRateLimitExceeded, message: errMsgRateLimited}},
+	} {
+		for _, encrypted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/encrypted=%t", tc.name, encrypted), func(t *testing.T) {
+				id, err := identity.NewIdentity()
+				if err != nil {
+					t.Fatal(err)
+				}
+				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status}}
+				handler := NewShimServer(validator, nil, &legacy.Document{}, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
+				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+				req.Header.Set("Authorization", "Bearer test-key")
+				var requestContext *identity.RequestContext
+				if encrypted {
+					requestContext, err = id.EncryptRequestWithContext(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				resp := rec.Result()
+				defer resp.Body.Close()
+				if resp.StatusCode != tc.err.status {
+					t.Fatalf("status = %d, want %d", resp.StatusCode, tc.err.status)
+				}
+				if encrypted {
+					if json.Valid(rec.Body.Bytes()) || strings.Contains(rec.Body.String(), tc.err.message) {
+						t.Fatal("EHBP error body is not encrypted")
+					}
+					if err := requestContext.DecryptResponse(resp); err != nil {
+						t.Fatalf("decrypting error response: %v", err)
+					}
+				}
+				var body errorEnvelope
+				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Error.Type != tc.err.errType || body.Error.Code == nil || *body.Error.Code != tc.err.code || body.Error.Message != tc.err.message {
+					t.Fatalf("unexpected error body: %+v", body.Error)
+				}
+			})
+		}
 	}
 }
 

@@ -102,7 +102,7 @@ var (
 		message: errMsgInsufficientPermissions,
 	}
 	errQuotaExceeded = apiError{
-		status:  http.StatusTooManyRequests,
+		status:  http.StatusPaymentRequired,
 		errType: errTypeInsufficientQuota,
 		code:    errCodeInsufficientQuota,
 		message: errMsgQuotaExceeded,

@@ -27,9 +27,13 @@ func TestAttestationRequestMetrics(t *testing.T) {
 		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", http.StatusOK},
 		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", http.StatusBadRequest},
 		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", http.StatusServiceUnavailable},
+		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", http.StatusFound},
+		{AttestationEndpointV3, "", "tinfoil-go", "0.15.7", http.StatusOK},
 	} {
 		handler := m.observe(test.endpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set(attestationFormatHeader, test.format)
+			if test.format != "" {
+				w.Header().Set(attestationFormatHeader, test.format)
+			}
 			w.WriteHeader(test.status)
 			fmt.Fprint(w, "response")
 		}))
@@ -49,6 +53,8 @@ tfshim_attestation_requests_total{attestation_version="v3",endpoint="unversioned
 tfshim_attestation_requests_total{attestation_version="v3",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
 tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="client_error",sdk="tinfoil-go",sdk_version="0.15.7"} 1
 tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="server_error",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="other",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
 `)))
 }
 

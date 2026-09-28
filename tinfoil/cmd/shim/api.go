@@ -28,6 +28,8 @@ import (
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 )
 
+const attestationFormatHeader = "Tinfoil-Pt"
+
 type collateralSource interface {
 	Current(context.Context) ([]envelope.CollateralEntry, error)
 }
@@ -322,7 +324,7 @@ func NewObservabilityServer(
 func wrapShimMux(config *config.Config, att *legacy.Document, mux http.Handler) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Tinfoil-Pt", string(att.Format))
+			w.Header().Set(attestationFormatHeader, string(att.Format))
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -380,6 +382,7 @@ func registerObservabilityHandlers(
 				return
 			}
 
+			w.Header().Set(attestationFormatHeader, fresh.Format)
 			json.NewEncoder(w).Encode(fresh)
 			return
 		}

@@ -113,6 +113,8 @@ func TestLocalAttestationRejectsOtherRequests(t *testing.T) {
 		{name: "invalid hex", method: http.MethodGet, target: localAttestationPath + "?nonce=" + strings.Repeat("zz", envelope.NonceSize), status: http.StatusBadRequest},
 		{name: "duplicate nonce", method: http.MethodGet, target: localAttestationTestQuery + "&nonce=ab", status: http.StatusBadRequest},
 		{name: "extra query", method: http.MethodGet, target: localAttestationTestQuery + "&key=ab", status: http.StatusBadRequest},
+		{name: "v3 extra query", method: http.MethodGet, target: attestationV3Path + "?nonce=" + strings.Repeat("ab", envelope.NonceSize) + "&cache=1", status: http.StatusBadRequest},
+		{name: "v3 trailing slash extra query", method: http.MethodGet, target: attestationV3Path + "/?nonce=" + strings.Repeat("ab", envelope.NonceSize) + "&cache=1", status: http.StatusBadRequest},
 		{name: "malformed query", method: http.MethodGet, target: localAttestationTestQuery + "&%zz=ab", status: http.StatusBadRequest},
 		{name: "body", method: http.MethodGet, target: localAttestationTestQuery, body: "payload", status: http.StatusBadRequest},
 		{name: "post", method: http.MethodPost, target: localAttestationTestQuery, status: http.StatusMethodNotAllowed},
@@ -132,9 +134,11 @@ func TestLocalAttestationRejectsOtherRequests(t *testing.T) {
 	if got := forwarded.Load(); got != 0 {
 		t.Fatalf("forwarded %d rejected requests", got)
 	}
-	response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
-	if response.StatusCode != http.StatusOK || body != strings.Repeat("ab", envelope.NonceSize) {
-		t.Fatalf("valid request = %d %q", response.StatusCode, body)
+	for _, path := range []string{localAttestationPath, attestationV3Path, attestationV3Path + "/"} {
+		response, body := localAttestationTestRequest(t, client, http.MethodGet, path+"?nonce="+strings.Repeat("ab", envelope.NonceSize), "")
+		if response.StatusCode != http.StatusOK || body != strings.Repeat("ab", envelope.NonceSize) {
+			t.Fatalf("valid request to %s = %d %q", path, response.StatusCode, body)
+		}
 	}
 }
 

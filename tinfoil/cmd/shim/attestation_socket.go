@@ -15,7 +15,7 @@ import (
 
 const (
 	noAttestationFD      = -1
-	localAttestationPath = "/.well-known/tinfoil-attestation"
+	localAttestationPath = attestationPath
 )
 
 func inheritedAttestationListener(fd int) (net.Listener, error) {
@@ -45,7 +45,9 @@ func inheritedAttestationListener(fd int) (net.Listener, error) {
 
 func newLocalAttestationHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.EscapedPath() != localAttestationPath {
+		switch r.URL.EscapedPath() {
+		case localAttestationPath, attestationV3Path, attestationV3Path + "/":
+		default:
 			writeAPIError(w, errNotFound)
 			return
 		}

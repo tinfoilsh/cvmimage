@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +27,12 @@ import (
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+)
+
+const (
+	attestationFormatHeader = "Tinfoil-Pt"
+	attestationPath         = "/.well-known/tinfoil-attestation"
+	attestationV3Path       = attestationPath + "/v3"
 )
 
 type collateralSource interface {
@@ -322,7 +329,7 @@ func NewObservabilityServer(
 func wrapShimMux(config *config.Config, att *legacy.Document, mux http.Handler) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Tinfoil-Pt", string(att.Format))
+			w.Header().Set(attestationFormatHeader, string(att.Format))
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -340,17 +347,25 @@ func registerObservabilityHandlers(
 	collateralSource collateralSource,
 	externalConfig *config.ExternalConfig,
 ) {
-	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	attestationHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != attestationPath {
+			query, err := url.ParseQuery(r.URL.RawQuery)
+			nonces := query["nonce"]
+			if err != nil || len(query) != 1 || len(nonces) != 1 || nonces[0] == "" {
+				writeAPIError(w, errInvalidNonce)
+				return
+			}
+		}
 
 		// Fresh v3 attestation with nonce: ?nonce=<64 hex chars>
 		if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
 			nonce, err := hex.DecodeString(nonceHex)
-			if err != nil || len(nonce) != 32 {
+			if err != nil || len(nonce) != envelope.NonceSize {
 				writeAPIError(w, errInvalidNonce)
 				return
 			}
-			var nonce32 [32]byte
+			var nonce32 [envelope.NonceSize]byte
 			copy(nonce32[:], nonce)
 			var collateral []envelope.CollateralEntry
 			if collateralSource != nil {
@@ -380,13 +395,20 @@ func registerObservabilityHandlers(
 				return
 			}
 
+			w.Header().Set(attestationFormatHeader, fresh.Format)
 			json.NewEncoder(w).Encode(fresh)
 			return
 		}
 
 		// Legacy (no nonce)
 		json.NewEncoder(w).Encode(att)
-	})))
+	}))
+	mux.Handle(attestationPath, attestationHandler)
+	mux.Handle("GET "+attestationV3Path, attestationHandler)
+	mux.Handle("GET "+attestationV3Path+"/{$}", attestationHandler)
+	mux.HandleFunc(attestationPath+"/", func(w http.ResponseWriter, r *http.Request) {
+		writeAPIError(w, errNotFound)
+	})
 
 	mux.HandleFunc("/.well-known/tinfoil-certificate", func(w http.ResponseWriter, r *http.Request) {
 		if tlsCert == nil || len(tlsCert.Certificate) == 0 {

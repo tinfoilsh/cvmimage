@@ -123,13 +123,55 @@ func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
 		&config.Config{},
 		&config.ExternalConfig{},
 	)
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/tinfoil-attestation?nonce="+strings.Repeat("00", 32), nil)
-	rec := httptest.NewRecorder()
+	for _, path := range []string{attestationPath, attestationV3Path, attestationV3Path + "/"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path+"?nonce="+strings.Repeat("00", envelope.NonceSize), nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+			}
+		})
+	}
+}
 
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+func TestAttestationEndpointCompatibility(t *testing.T) {
+	for name, handler := range map[string]http.Handler{
+		"shim":          testFullServer(t, nil, 9999),
+		"observability": testObservabilityServer(t, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, query := range []string{"", "?nonce="} {
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, attestationPath+query, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("legacy status = %d: %s", rec.Code, rec.Body.String())
+				}
+				var document legacy.Document
+				if err := json.Unmarshal(rec.Body.Bytes(), &document); err != nil {
+					t.Fatal(err)
+				}
+				if document.Format != legacy.DummyV2 || document.Body != "deadbeef" || rec.Header().Get(attestationFormatHeader) != string(document.Format) {
+					t.Fatalf("legacy response changed: headers=%v body=%s", rec.Header(), rec.Body.String())
+				}
+			}
+			for _, path := range []string{attestationV3Path, attestationV3Path + "/"} {
+				for _, query := range []string{"", "?nonce=", "?nonce=ab", "?nonce=" + strings.Repeat("zz", envelope.NonceSize), "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&nonce=ab", "?nonce=ab&%zz=value"} {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+query, nil))
+					if rec.Code != http.StatusBadRequest {
+						t.Errorf("%s%s: status = %d, want %d: %s", path, query, rec.Code, http.StatusBadRequest, rec.Body.String())
+					}
+				}
+			}
+			for _, path := range []string{attestationPath + "/v4", attestationV3Path + "/extra"} {
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+				if rec.Code != http.StatusNotFound {
+					t.Errorf("%s: status = %d, want %d", path, rec.Code, http.StatusNotFound)
+				}
+			}
+		})
 	}
 }
 

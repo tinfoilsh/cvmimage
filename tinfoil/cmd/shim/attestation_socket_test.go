@@ -132,9 +132,11 @@ func TestLocalAttestationRejectsOtherRequests(t *testing.T) {
 	if got := forwarded.Load(); got != 0 {
 		t.Fatalf("forwarded %d rejected requests", got)
 	}
-	response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
-	if response.StatusCode != http.StatusOK || body != strings.Repeat("ab", envelope.NonceSize) {
-		t.Fatalf("valid request = %d %q", response.StatusCode, body)
+	for _, path := range []string{localAttestationPath, attestationV3Path, attestationV3Path + "/"} {
+		response, body := localAttestationTestRequest(t, client, http.MethodGet, path+"?nonce="+strings.Repeat("ab", envelope.NonceSize), "")
+		if response.StatusCode != http.StatusOK || body != strings.Repeat("ab", envelope.NonceSize) {
+			t.Fatalf("valid request to %s = %d %q", path, response.StatusCode, body)
+		}
 	}
 }
 

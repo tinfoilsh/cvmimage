@@ -19,16 +19,16 @@ import (
 func TestAttestationRequestMetrics(t *testing.T) {
 	m := newAttestationMetrics()
 	for _, test := range []struct {
-		endpoint, format, sdk, version string
-		status                         int
+		endpoint, format, sdk, version, userAgent string
+		status                                    int
 	}{
-		{AttestationEndpointUnversioned, string(legacy.SevGuestV2), "", "", http.StatusOK},
-		{AttestationEndpointUnversioned, envelope.AttestationV3Format, "tinfoil-go", "v0.15.7", http.StatusOK},
-		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", http.StatusOK},
-		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", http.StatusBadRequest},
-		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", http.StatusServiceUnavailable},
-		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", http.StatusFound},
-		{AttestationEndpointV3, "", "tinfoil-go", "0.15.7", http.StatusOK},
+		{AttestationEndpointUnversioned, string(legacy.SevGuestV2), "", "", "Go-http-client/1.1", http.StatusOK},
+		{AttestationEndpointUnversioned, envelope.AttestationV3Format, "tinfoil-go", "v0.15.7", "Go-http-client/2.0", http.StatusOK},
+		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", "python-requests/2.32.5", http.StatusOK},
+		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", "", http.StatusBadRequest},
+		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", "", http.StatusServiceUnavailable},
+		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", "", http.StatusFound},
+		{AttestationEndpointV3, "", "tinfoil-go", "0.15.7", "", http.StatusOK},
 	} {
 		handler := m.observe(test.endpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if test.format != "" {
@@ -40,21 +40,73 @@ func TestAttestationRequestMetrics(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/", nil)
 		request.Header.Set(sdkNameHeader, test.sdk)
 		request.Header.Set(sdkVersionHeader, test.version)
+		request.Header.Set("User-Agent", test.userAgent)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		require.Equal(t, test.status, response.Code)
 		require.Equal(t, "response", response.Body.String())
 	}
 	require.NoError(t, testutil.CollectAndCompare(m.requests, strings.NewReader(`
-# HELP tfshim_attestation_requests_total Attestation HTTP requests by endpoint, served format, self-reported SDK, and response result; does not indicate client verification success.
+# HELP tfshim_attestation_requests_total Attestation HTTP requests by endpoint, served format, self-reported SDK, coarse User-Agent family, and response result; does not indicate client verification success.
 # TYPE tfshim_attestation_requests_total counter
-tfshim_attestation_requests_total{attestation_version="v2",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 1
-tfshim_attestation_requests_total{attestation_version="v3",endpoint="unversioned",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
-tfshim_attestation_requests_total{attestation_version="v3",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
-tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="client_error",sdk="tinfoil-go",sdk_version="0.15.7"} 1
-tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="server_error",sdk="tinfoil-go",sdk_version="0.15.7"} 1
-tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="other",sdk="tinfoil-go",sdk_version="0.15.7"} 1
-tfshim_attestation_requests_total{attestation_version="none",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="v2",client_family="go",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 1
+tfshim_attestation_requests_total{attestation_version="v3",client_family="go",endpoint="unversioned",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="v3",client_family="python",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="none",client_family="unknown",endpoint="v3",result="client_error",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="none",client_family="unknown",endpoint="v3",result="server_error",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="none",client_family="unknown",endpoint="v3",result="other",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+tfshim_attestation_requests_total{attestation_version="none",client_family="unknown",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
+`)))
+}
+
+func TestAttestationClientFamilies(t *testing.T) {
+	for _, test := range []struct {
+		userAgent, want string
+	}{
+		{"", "unknown"},
+		{" \t ", "unknown"},
+		{"Go-http-client/1.1", "go"},
+		{"Go-http-client/2.0", "go"},
+		{"python-requests/2.32.5", "python"},
+		{"python-httpx/0.28.1", "python"},
+		{"node", "node"},
+		{"undici", "node"},
+		{"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36", "browser"},
+		{"curl/8.10.1", "curl"},
+		{"  curl/8.10.1\t", "curl"},
+		{"custom-client/1.0 private-marker", "other"},
+		{"custom-client/1.0 Go-http-client/1.1", "other"},
+		{"Go-http-client-custom/1.1", "other"},
+		{"node-custom", "other"},
+	} {
+		t.Run(test.userAgent, func(t *testing.T) {
+			require.Equal(t, test.want, clientFamily(test.userAgent))
+		})
+	}
+}
+
+func TestAttestationClientFamiliesAggregateUserAgents(t *testing.T) {
+	m := newAttestationMetrics()
+	handler := m.observe(AttestationEndpointUnversioned, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(attestationFormatHeader, string(legacy.SevGuestV2))
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, userAgent := range []string{
+		"Go-http-client/1.1", "Go-http-client/2.0",
+		"python-requests/2.32.5", "python-httpx/0.28.1",
+		"custom-client/1.0 private-marker-a", "custom-client/2.0 private-marker-b",
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		request.Header.Set("User-Agent", userAgent)
+		request.Header.Set(sdkVersionHeader, "9.8.7")
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	require.NoError(t, testutil.CollectAndCompare(m.requests, strings.NewReader(`
+# HELP tfshim_attestation_requests_total Attestation HTTP requests by endpoint, served format, self-reported SDK, coarse User-Agent family, and response result; does not indicate client verification success.
+# TYPE tfshim_attestation_requests_total counter
+tfshim_attestation_requests_total{attestation_version="v2",client_family="go",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
+tfshim_attestation_requests_total{attestation_version="v2",client_family="python",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
+tfshim_attestation_requests_total{attestation_version="v2",client_family="other",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
 `)))
 }
 
@@ -115,6 +167,6 @@ func TestAttestationMetricsBoundConcurrentVersions(t *testing.T) {
 		total += metric.GetCounter().GetValue()
 	}
 	require.Equal(t, float64(requestCount+2), total)
-	require.Equal(t, float64(2), testutil.ToFloat64(m.requests.WithLabelValues("v3", "v3", "tinfoil-go", "0.15.7", "served")))
-	require.Equal(t, float64(requestCount-maxSDKIdentities+1), testutil.ToFloat64(m.requests.WithLabelValues("v3", "v3", "tinfoil-go", "other", "served")))
+	require.Equal(t, float64(2), testutil.ToFloat64(m.requests.WithLabelValues("v3", "v3", "tinfoil-go", "0.15.7", "unknown", "served")))
+	require.Equal(t, float64(requestCount-maxSDKIdentities+1), testutil.ToFloat64(m.requests.WithLabelValues("v3", "v3", "tinfoil-go", "other", "unknown", "served")))
 }

@@ -39,6 +39,24 @@ const (
 	sdkJSVerifier           = "@tinfoilsh/verifier"
 )
 
+const (
+	clientFamilyGo      = "go"
+	clientFamilyPython  = "python"
+	clientFamilyNode    = "node"
+	clientFamilyBrowser = "browser"
+	clientFamilyCurl    = "curl"
+	clientFamilyOther   = "other"
+	clientFamilyUnknown = "unknown"
+
+	userAgentGoPrefix             = "Go-http-client/"
+	userAgentPythonRequestsPrefix = "python-requests/"
+	userAgentPythonHTTPXPrefix    = "python-httpx/"
+	userAgentNode                 = "node"
+	userAgentUndici               = "undici"
+	userAgentBrowserPrefix        = "Mozilla/"
+	userAgentCurlPrefix           = "curl/"
+)
+
 type sdkIdentity struct {
 	name, version string
 }
@@ -55,8 +73,8 @@ func newAttestationMetrics() *attestationMetrics {
 	return &attestationMetrics{
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: attestationRequestsName,
-			Help: "Attestation HTTP requests by endpoint, served format, self-reported SDK, and response result; does not indicate client verification success.",
-		}, []string{"endpoint", "attestation_version", "sdk", "sdk_version", "result"}),
+			Help: "Attestation HTTP requests by endpoint, served format, self-reported SDK, coarse User-Agent family, and response result; does not indicate client verification success.",
+		}, []string{"endpoint", "attestation_version", "sdk", "sdk_version", "client_family", "result"}),
 		identities: make(map[sdkIdentity]struct{}),
 	}
 }
@@ -97,9 +115,31 @@ func ObserveAttestation(endpoint string, next http.Handler) http.Handler {
 	return attestationRequests.observe(endpoint, next)
 }
 
+// User-Agent families describe HTTP clients, not Tinfoil SDK identities.
+func clientFamily(userAgent string) string {
+	userAgent = strings.TrimSpace(userAgent)
+	switch {
+	case userAgent == "":
+		return clientFamilyUnknown
+	case strings.HasPrefix(userAgent, userAgentGoPrefix):
+		return clientFamilyGo
+	case strings.HasPrefix(userAgent, userAgentPythonRequestsPrefix), strings.HasPrefix(userAgent, userAgentPythonHTTPXPrefix):
+		return clientFamilyPython
+	case userAgent == userAgentNode, userAgent == userAgentUndici:
+		return clientFamilyNode
+	case strings.HasPrefix(userAgent, userAgentBrowserPrefix):
+		return clientFamilyBrowser
+	case strings.HasPrefix(userAgent, userAgentCurlPrefix):
+		return clientFamilyCurl
+	default:
+		return clientFamilyOther
+	}
+}
+
 func (m *attestationMetrics) observe(endpoint string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity := m.sdkLabels(r.Header)
+		family := clientFamily(r.UserAgent())
 		response := httpsnoop.CaptureMetrics(next, w, r)
 		version, result := noAttestationVersion, attestationOtherResult
 		switch {
@@ -116,6 +156,6 @@ func (m *attestationMetrics) observe(endpoint string, next http.Handler) http.Ha
 		case response.Code >= http.StatusBadRequest:
 			result = attestationClientError
 		}
-		m.requests.WithLabelValues(endpoint, version, identity.name, identity.version, result).Inc()
+		m.requests.WithLabelValues(endpoint, version, identity.name, identity.version, family, result).Inc()
 	})
 }

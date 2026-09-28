@@ -352,7 +352,7 @@ func registerObservabilityHandlers(
 		if r.URL.Path != attestationPath {
 			query, err := url.ParseQuery(r.URL.RawQuery)
 			nonces := query["nonce"]
-			if err != nil || len(nonces) != 1 || nonces[0] == "" {
+			if err != nil || len(query) != 1 || len(nonces) != 1 || nonces[0] == "" {
 				writeAPIError(w, errInvalidNonce)
 				return
 			}

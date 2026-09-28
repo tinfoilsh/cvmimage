@@ -141,7 +141,7 @@ func TestAttestationEndpointCompatibility(t *testing.T) {
 		"observability": testObservabilityServer(t, nil),
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, query := range []string{"", "?nonce="} {
+			for _, query := range []string{"", "?nonce=", "?cache=1"} {
 				rec := httptest.NewRecorder()
 				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, attestationPath+query, nil))
 				if rec.Code != http.StatusOK {
@@ -156,7 +156,7 @@ func TestAttestationEndpointCompatibility(t *testing.T) {
 				}
 			}
 			for _, path := range []string{attestationV3Path, attestationV3Path + "/"} {
-				for _, query := range []string{"", "?nonce=", "?nonce=ab", "?nonce=" + strings.Repeat("zz", envelope.NonceSize), "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&nonce=ab", "?nonce=ab&%zz=value"} {
+				for _, query := range []string{"", "?nonce=", "?nonce=ab", "?nonce=" + strings.Repeat("zz", envelope.NonceSize), "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&nonce=ab", "?nonce=ab&%zz=value", "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&cache=1"} {
 					rec := httptest.NewRecorder()
 					handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+query, nil))
 					if rec.Code != http.StatusBadRequest {

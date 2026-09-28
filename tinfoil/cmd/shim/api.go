@@ -403,9 +403,10 @@ func registerObservabilityHandlers(
 		// Legacy (no nonce)
 		json.NewEncoder(w).Encode(att)
 	}))
-	mux.Handle(attestationPath, attestationHandler)
-	mux.Handle("GET "+attestationV3Path, attestationHandler)
-	mux.Handle("GET "+attestationV3Path+"/{$}", attestationHandler)
+	mux.Handle(attestationPath, metrics.ObserveAttestation(metrics.AttestationEndpointUnversioned, attestationHandler))
+	versionedAttestationHandler := metrics.ObserveAttestation(metrics.AttestationEndpointV3, attestationHandler)
+	mux.Handle("GET "+attestationV3Path, versionedAttestationHandler)
+	mux.Handle("GET "+attestationV3Path+"/{$}", versionedAttestationHandler)
 	mux.HandleFunc(attestationPath+"/", func(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errNotFound)
 	})

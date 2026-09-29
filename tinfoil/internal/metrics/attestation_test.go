@@ -127,6 +127,7 @@ func TestAttestationSDKLabels(t *testing.T) {
 		{"tinfoil-js", "1.2.3-beta.1", sdkIdentity{"tinfoil-js", "1.2.3-beta.1"}},
 		{"tinfoil-python", "1.2.3", sdkIdentity{"tinfoil-python", "1.2.3"}},
 		{"tinfoil-rs", "0.2.1", sdkIdentity{"tinfoil-rs", "0.2.1"}},
+		{"tinfoil-swift", "0.8.2", sdkIdentity{"tinfoil-swift", "0.8.2"}},
 		{"@tinfoilsh/verifier", "1.2.1", sdkIdentity{"@tinfoilsh/verifier", "1.2.1"}},
 	} {
 		headers := make(http.Header)

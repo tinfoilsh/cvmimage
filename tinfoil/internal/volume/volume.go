@@ -35,6 +35,8 @@ const (
 
 	// A request carries one key, but the table needs a cipher key and a MAC key.
 	tableKeyInfo = "tinfoil volume table key v1"
+	// Independent of the data cipher/MAC and of the client-visible seal.
+	metadataKeyInfo = "tinfoil volume integrity metadata key v1"
 	// tinfoil-cli's sealFor derives the same identity from the same key.
 	sealKeyInfo = "tinfoil seal identity v1"
 
@@ -233,6 +235,9 @@ func (w *volume) inspect() (bool, error) {
 	if err := w.removeUnopened(w.integrityName()); err != nil {
 		return false, err
 	}
+	if err := w.removeUnopened(devicemapper.IntegrityBackingName(w.integrityName())); err != nil {
+		return false, err
+	}
 	if target.id != parent.id && target.device != parent.device {
 		return false, fmt.Errorf("unexpected mount at %s", w.dataPath())
 	}
@@ -256,6 +261,11 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool
 		return err
 	}
 	defer clear(tableKey)
+	metadataKey, err := hkdf.Key(sha256.New, key, nil, metadataKeyInfo+"\x00"+w.Name, devicemapper.IntegrityKeyBytes)
+	if err != nil {
+		return err
+	}
+	defer clear(metadataKey)
 	// Zeroing is safe only over a superblock this call wrote and before mkfs has finished behind it.
 	rollback := false
 	defer func() {
@@ -263,13 +273,13 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool
 			result = errors.Join(result, w.restoreBlank())
 		}
 	}()
-	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), initialize); err != nil {
+	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), metadataKey, initialize); err != nil {
 		return err
 	}
 	rollback = initialize
 	defer func() {
 		if result != nil {
-			result = errors.Join(result, devicemapper.Remove(w.control, w.integrityName()))
+			result = errors.Join(result, devicemapper.RemoveIntegrity(w.control, w.integrityName()))
 		}
 	}()
 	tags, err := devicemapper.OpenBlockDevice(devicemapper.MapperNode(w.integrityName()))

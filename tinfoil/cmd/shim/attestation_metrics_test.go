@@ -51,7 +51,7 @@ func TestAttestationMetricsThroughShim(t *testing.T) {
 					for _, label := range metric.Label {
 						labels[label.GetName()] = label.GetValue()
 					}
-					if labels["endpoint"] == endpoint && labels["attestation_version"] == version && labels["sdk"] == sdk && labels["sdk_version"] == sdkVersion && labels["result"] == result {
+					if labels["endpoint"] == endpoint && labels["attestation_version"] == version && labels["sdk"] == sdk && labels["sdk_version"] == sdkVersion && labels["client_family"] == "go" && labels["result"] == result {
 						require.Equal(t, "test-enclave", labels["id"])
 						return metric.GetCounter().GetValue()
 					}
@@ -71,6 +71,7 @@ func TestAttestationMetricsThroughShim(t *testing.T) {
 			} {
 				before := counter(test.endpoint, test.version, test.sdk, test.sdkVersion, test.result)
 				request := httptest.NewRequest(http.MethodGet, test.path, nil)
+				request.Header.Set("User-Agent", "Go-http-client/1.1")
 				if test.sdk != "unknown" {
 					request.Header.Set("Tinfoil-SDK", test.sdk)
 					request.Header.Set("Tinfoil-SDK-Version", test.sdkVersion)

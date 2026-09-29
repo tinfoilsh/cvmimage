@@ -36,6 +36,8 @@ const (
 	sdkGo                   = "tinfoil-go"
 	sdkJS                   = "tinfoil-js"
 	sdkPython               = "tinfoil-python"
+	sdkRust                 = "tinfoil-rs"
+	sdkSwift                = "tinfoil-swift"
 	sdkJSVerifier           = "@tinfoilsh/verifier"
 )
 
@@ -82,7 +84,7 @@ func newAttestationMetrics() *attestationMetrics {
 func (m *attestationMetrics) sdkLabels(headers http.Header) sdkIdentity {
 	name := headers.Get(sdkNameHeader)
 	switch name {
-	case sdkGo, sdkJS, sdkPython, sdkJSVerifier:
+	case sdkGo, sdkJS, sdkPython, sdkRust, sdkSwift, sdkJSVerifier:
 	default:
 		return sdkIdentity{unknownSDKLabel, unknownSDKLabel}
 	}

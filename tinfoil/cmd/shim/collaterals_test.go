@@ -3,9 +3,12 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/config"
@@ -34,6 +37,15 @@ func TestNewCollateralSourceSkipsDummy(t *testing.T) {
 	}
 	if source != nil {
 		t.Fatal("dummy collateral source was created")
+	}
+}
+
+func TestLoadConfigCollateralRequest(t *testing.T) {
+	want := wire.Request{Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
+		Config: &document.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}}
+	got, err := loadCollateralRequest(writeCollateralRequestArtifact(t, want))
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("request = %#v, error = %v", got, err)
 	}
 }
 

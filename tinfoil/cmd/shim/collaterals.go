@@ -38,8 +38,8 @@ func loadCollateralRequest(path string) (wire.Request, error) {
 	if request.QuoteBase64 == "" {
 		return wire.Request{}, fmt.Errorf("collateral request is missing quote_base64")
 	}
-	if request.Platform != attestation.PlatformDummy && request.Repo == "" {
-		return wire.Request{}, fmt.Errorf("collateral request is missing repo")
+	if request.Platform != attestation.PlatformDummy && request.Repo == "" && request.Config == nil {
+		return wire.Request{}, fmt.Errorf("collateral request is missing repo or config")
 	}
 	return request, nil
 }

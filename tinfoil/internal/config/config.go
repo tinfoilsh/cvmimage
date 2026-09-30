@@ -14,7 +14,14 @@ type Config = sharedconfig.ShimConfig
 
 const SecretMetricsAPIKey = "METRICS_API_KEY"
 
+type ConfigIdentity struct {
+	Name   string `yaml:"name"`
+	Digest string `yaml:"digest"`
+}
+
 type Metadata struct {
+	Config *ConfigIdentity `yaml:"config,omitempty"`
+
 	ID     string `yaml:"id"`
 	Domain string `yaml:"domain"`
 	Image  string `yaml:"image"`
@@ -24,7 +31,7 @@ type Metadata struct {
 	Tag    string `yaml:"tag,omitempty"`
 	Digest string `yaml:"digest,omitempty"`
 	// Extra preserves operator metadata that tinfoild merges into this
-	// unmeasured document. Only the security-sensitive network block is closed.
+	// unmeasured document. The network and config identity blocks reject unknown fields.
 	Extra map[string]yaml.Node `yaml:",inline"`
 }
 
@@ -41,7 +48,7 @@ type ExternalConfig struct {
 	Network       *ExternalNetworkConfig `yaml:"network"`
 
 	// tinfoild preserves operator-owned top-level external data. Keep accepting
-	// those unrelated keys while KnownFields rejects unknown network fields.
+	// those unrelated keys while KnownFields rejects unknown network and config identity fields.
 	Extra map[string]yaml.Node `yaml:",inline"`
 }
 

@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 
 	config "github.com/tinfoilsh/tinfoil-config"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
 )
 
 // SPKIFormat carries full DER, unlike the built-in TLS fingerprint format.

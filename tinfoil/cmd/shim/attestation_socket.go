@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
 )
 
 const (

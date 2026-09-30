@@ -10,7 +10,7 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
 )
 
 const (

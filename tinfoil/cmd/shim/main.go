@@ -226,7 +226,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
 
 		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig)
-		handler.Store(http.HandlerFunc(requireTrustedTime(observabilityHandler).ServeHTTP))
+		handler.Store(http.HandlerFunc(requireTrustedTime(config, observabilityHandler).ServeHTTP))
 
 		log.Println("Shim observability ready")
 
@@ -298,7 +298,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 
 		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr, targets)
-		handler.Store(http.HandlerFunc(requireTrustedTime(fullHandler).ServeHTTP))
+		handler.Store(http.HandlerFunc(requireTrustedTime(config, fullHandler).ServeHTTP))
 
 		log.Println("Shim fully operational")
 		return nil

@@ -120,8 +120,14 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
     boot::validate(&placed, params.memory)?;
     let spans = boot::shim_spans(&placed);
-    let (top, host) = boot::host_regions(&params.extents());
-    let required_memory = boot::e820(&boot::merge(&spans, &host), top);
+    // The loader has to have memory backed where this image places pages, and
+    // nowhere else. Demanding a whole machine's worth made QEMU refuse a launch
+    // whose RAM was laid out differently and, finding no region at all, create
+    // one -- handing a guest memory the operator never allocated.
+    let required_memory = spans
+        .iter()
+        .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
+        .collect();
     // The setup_data chain is one measured SETUP_CC_BLOB record.
     let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
     boot::fill(&mut placed, ZERO_PAGE, zero)?;

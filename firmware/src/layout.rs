@@ -32,9 +32,10 @@ layout! {
     BSP_STACK = 0x0010_7000;
     BSP_STACK_SIZE = 0x0001_0000;
     BSP_STACK_TOP = BSP_STACK + BSP_STACK_SIZE;
-    // Reserved out of the guest's map for a Guest-Hypervisor Communication Block.
-    // The shim no longer needs one - it reaches the host only through the GHCB
-    // MSR protocol - but Linux is left the hole rather than moving the layout.
+    // The Guest-Hypervisor Communication Block, through which the shim asks the
+    // host to make guest RAM private before it validates it. The image measures
+    // the page private, as every page it places is; the shim shares it for the
+    // length of the accept walk and hands it back private.
     SNP_GHCB = 0x0011_7000;
     SHIM_BASE = 0x0012_0000;
     SHIM_SIZE = PAGE;
@@ -55,10 +56,58 @@ layout! {
     // The 10-byte pseudo-descriptor follows the GDT, so a shim `lgdt`s without a stack.
     GDT_PTR = BSP_STACK + GDT_LIMIT + 1;
 
-    // Physical GiB 0 seen again through PML4[4] with the C-bit clear. Nothing in
-    // the shim writes through it now that it shares no page; it stays because the
-    // page tables and MAP_LIMIT are built around it.
+    // Physical GiB 0 seen again through PML4[4] with the C-bit clear, which is
+    // how the shim writes the one page it shares: a block the host reads has to
+    // be addressed the way the host reads it.
     SHARED_ALIAS = 0x200_0000_0000;
+    GHCB_ALIAS = SHARED_ALIAS + SNP_GHCB;
+
+    // The fields of a GHCB a page state change states, as in the GHCB
+    // specification's save area, and the byte of the valid bitmap that marks
+    // all four of them present -- bit n of that bitmap is the field at offset
+    // 8n, so the four consecutive fields are four consecutive bits.
+    GHCB_SW_EXIT_CODE = 0x390;
+    GHCB_SW_EXIT_INFO_1 = 0x398;
+    GHCB_SW_EXIT_INFO_2 = 0x3a0;
+    GHCB_SW_SCRATCH = 0x3a8;
+    GHCB_VALID_BITMAP = 0x3f0;
+    GHCB_VALID_BYTE = GHCB_SW_EXIT_CODE / 8 / 8;
+    GHCB_VALID_BITS = 0xf << (GHCB_SW_EXIT_CODE / 8 % 8);
+    // The shared buffer a request's scratch area has to lie inside, the version
+    // page state changes arrived in, and the only usage code a host accepts.
+    GHCB_SHARED_BUFFER = 0x800;
+    GHCB_SHARED_BUFFER_END = 0xff0;
+    GHCB_PROTOCOL_VERSION = 0xffa;
+    GHCB_USAGE = 0xffc;
+    GHCB_PROTOCOL = 2;
+    SVM_VMGEXIT_PSC = 0x8000_0010;
+
+    // The page state change descriptor, which the shim builds in that buffer:
+    // a header the host moves through, then one entry a span of pages. The
+    // shim writes it through the alias and names it to the host by address.
+    PSC_BUFFER = GHCB_ALIAS + GHCB_SHARED_BUFFER;
+    PSC_BUFFER_GPA = SNP_GHCB + GHCB_SHARED_BUFFER;
+    PSC_CUR_ENTRY = 0;
+    PSC_END_ENTRY = 2;
+    PSC_ENTRIES = 8;
+    // As many entries as the buffer holds, which is also as many as a host reads.
+    PSC_MAX_ENTRIES = (GHCB_SHARED_BUFFER_END - GHCB_SHARED_BUFFER - PSC_ENTRIES) / 8;
+    // An entry holds the page number in bits 51:12, so a page-aligned address
+    // is already one; these two bits say what to do with it and how large it is.
+    PSC_ENTRY_PRIVATE = 52;
+    PSC_ENTRY_LARGE = 56;
+
+    // The GHCB MSR protocol: one request a VMGEXIT, needing no block at all,
+    // which is what the shim terminates through and sets the block up with.
+    GHCB_MSR = 0xc001_0130;
+    GHCB_MSR_REG_GPA_REQ = 0x012;
+    GHCB_MSR_REG_GPA_RESP = 0x013;
+    GHCB_MSR_PSC_REQ = 0x014;
+    GHCB_MSR_PSC_RESP = 0x015;
+    // The two state changes this protocol has to carry, because the block
+    // cannot be shared through itself. WRMSR takes each of them in halves.
+    GHCB_SHARE_REQ = (2 << 52) | SNP_GHCB | GHCB_MSR_PSC_REQ;
+    GHCB_PRIVATE_REQ = (1 << 52) | SNP_GHCB | GHCB_MSR_PSC_REQ;
 
     // The fixed part of the MADT, measured inside the shim page that builds the rest.
     SHIM_MADT = 0x0000_0b80;
@@ -172,6 +221,26 @@ const _: () = assert!(PAGE_TABLES + PAGE_TABLE_SIZE <= BSP_STACK);
 const _: () = assert!(GDT_PTR + 10 <= BSP_STACK_TOP);
 const _: () = assert!(BSP_STACK_TOP <= SNP_GHCB && SNP_GHCB + PAGE <= SHIM_BASE);
 const _: () = assert!(SHARED_ALIAS == MAP_LIMIT);
+// The shared alias covers the first GiB of the map, which is where the block is.
+const _: () = assert!(SNP_GHCB < GIB);
+// A page state change entry has 40 bits of page number and nothing above them.
+const _: () = assert!(MAX_MEMORY <= 1 << 52);
+// Four fields, four consecutive bitmap bits, all inside one byte of it.
+const _: () = assert!(
+    GHCB_SW_EXIT_INFO_1 == GHCB_SW_EXIT_CODE + 8
+        && GHCB_SW_EXIT_INFO_2 == GHCB_SW_EXIT_CODE + 16
+        && GHCB_SW_SCRATCH == GHCB_SW_EXIT_CODE + 24
+);
+const _: () = assert!(GHCB_VALID_BITS < 0x100 && GHCB_VALID_BYTE < 16);
+// The descriptor has to lie wholly inside the shared buffer, and its entry
+// count has to be the one a host derives from that buffer's size.
+const _: () = assert!(GHCB_VALID_BITMAP + 16 <= GHCB_SHARED_BUFFER);
+const _: () =
+    assert!(PSC_ENTRIES + PSC_MAX_ENTRIES * 8 == GHCB_SHARED_BUFFER_END - GHCB_SHARED_BUFFER);
+const _: () = assert!(PSC_MAX_ENTRIES == 253);
+// The header the shim zeroes is one word, and the count fits the field holding it.
+const _: () = assert!(PSC_CUR_ENTRY == 0 && PSC_END_ENTRY == 2 && PSC_ENTRIES == 8);
+const _: () = assert!(PSC_MAX_ENTRIES <= u16::MAX as u64);
 // One PML4 page, one PDPT per PDPT_SPAN, and on SNP one more for the alias.
 const _: () = assert!(MAP_LIMIT.is_multiple_of(PDPT_SPAN));
 const _: () = assert!(PAGE_TABLE_SIZE == (MAP_LIMIT / PDPT_SPAN + 2) * PAGE);

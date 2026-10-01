@@ -1,12 +1,15 @@
 .include "layout.inc"
 .include "madt.inc"
 .include "map.inc"
+.include "psc.inc"
 .section .reset,"ax"
 
 .code32
 .global snp_reset_start
-# Nothing here may depend on CPUID, an MSR, I/O, the GHCB or an exception: the shim
-# never speaks to the host except to terminate.
+# Nothing here may depend on CPUID, I/O or an exception. What it does ask the
+# host for is page state changes, so that the guest makes its own memory
+# private rather than a loader doing it: see psc.inc. Every other use of the
+# GHCB MSR here is a termination request.
 snp_reset_start:
     cli
     cld
@@ -44,8 +47,11 @@ snp_long_mode:
     call merge_regions
     mov $ZERO_PAGE, %edi
     call e820_build
-    # Linux finds unvalidated memory only through EFI, so guest RAM is validated here.
+    # Linux finds unvalidated memory only through EFI, so guest RAM is made
+    # private and validated here, in that order and by the guest itself.
+    call ghcb_share
     call accept_walk
+    call ghcb_private
 
     # The one table the measurement leaves to the shim. SNP carries no wakeup
     # structure: Linux starts an application processor with a save area it
@@ -59,11 +65,25 @@ snp_boot_kernel:
     lea shim_data(%rip), %rax
     jmp *(%rax)
 
-map_code die_map, validate_range
+map_code die_map, accept_private
+psc_code die_psc, psc_vmgexit
 
 # A map this image will not run in, which is step 2 of the sequence above.
 die_map:
     mov $2, %r15d
+    jmp die_step
+
+# The three ways the host can refuse to convert memory, numbered as steps 3 to
+# 5: KVM prints a termination request's reason set and code, so which of them
+# happened is readable on the host even though the guest has no console.
+die_ghcb_share:
+    mov $3, %r15d
+    jmp die_step
+die_psc:
+    mov $4, %r15d
+    jmp die_step
+die_ghcb_private:
+    mov $5, %r15d
     jmp die_step
 
 # Terminate with reason set 0xf and the step in %r15d as the code.
@@ -98,6 +118,112 @@ fatal:
     cli
     hlt
     jmp fatal
+
+# Accept [%r12, %r13): the host makes it private, then PVALIDATE takes it. The
+# order is the whole point -- validating a page the RMP still calls shared
+# fails, which is what an image that declared a machine's worth of required
+# memory was hiding.
+accept_private:
+    mov %r12, %r9
+    mov %r13, %r10
+    call psc_range
+    jmp validate_range
+
+# The one request the MSR protocol has to carry: a descriptor the host reads
+# needs a shared page to sit in, and the only way to share the page the
+# descriptor sits in is a protocol that needs no page. The firmware validated
+# the block as the image measured it, so its validation is rescinded first --
+# private to shared is in that order, and shared to private in the other.
+ghcb_share:
+    mov $SNP_GHCB, %rax
+    xor %ecx, %ecx                  # 4 KiB, as the firmware validated it
+    xor %edx, %edx                  # rescind
+    pvalidate
+    jc die_ghcb_share               # it was not validated: not the measured state
+    test %eax, %eax
+    jnz die_ghcb_share
+    mov $(GHCB_SHARE_REQ >> 32), %edx
+    mov $(GHCB_SHARE_REQ & 0xffffffff), %eax
+    call ghcb_msr
+    test %edx, %edx                 # the response carries an error code up here
+    jnz die_ghcb_share
+    and $0xfff, %eax
+    cmp $GHCB_MSR_PSC_RESP, %eax
+    jne die_ghcb_share
+    # A host reads no block it was not given the address of first.
+    xor %edx, %edx
+    mov $(SNP_GHCB | GHCB_MSR_REG_GPA_REQ), %eax
+    call ghcb_msr
+    cmp $(SNP_GHCB | GHCB_MSR_REG_GPA_RESP), %eax
+    jne die_ghcb_share              # a response naming some other page
+    test %edx, %edx
+    jnz die_ghcb_share
+    # GHCB info 0: the block itself, which is what the page protocol exits with.
+    xor %edx, %edx
+    mov $SNP_GHCB, %eax
+    mov $GHCB_MSR, %ecx
+    wrmsr
+    ret
+
+# ...and back, so the guest hands Linux the block in the state the image
+# measured rather than a page its host can still write.
+ghcb_private:
+    mov $(GHCB_PRIVATE_REQ >> 32), %edx
+    mov $(GHCB_PRIVATE_REQ & 0xffffffff), %eax
+    call ghcb_msr
+    test %edx, %edx
+    jnz die_ghcb_private
+    and $0xfff, %eax
+    cmp $GHCB_MSR_PSC_RESP, %eax
+    jne die_ghcb_private
+    mov $SNP_GHCB, %rax
+    xor %ecx, %ecx
+    mov $1, %edx                    # validate
+    pvalidate
+    jc die_ghcb_private
+    test %eax, %eax
+    jnz die_ghcb_private
+    mov $SNP_GHCB, %edi             # the descriptor is not what was measured here
+    xor %eax, %eax
+    mov $512, %ecx
+    rep stosq
+    ret
+
+# EDX:EAX as a GHCB MSR request -> EDX:EAX the response. The caller reads what
+# the response puts where, because the two requests this shim makes put
+# different things there.
+ghcb_msr:
+    mov $GHCB_MSR, %ecx
+    wrmsr
+    vmgexit
+    mov $GHCB_MSR, %ecx
+    rdmsr
+    ret
+
+# One batch of page state changes through the block. The host reports whether
+# it took the request in the block's own fields, and a request it did not take
+# is not retried: psc_complete only repeats one the host accepted and left
+# unfinished.
+psc_vmgexit:
+    mov $GHCB_ALIAS, %rcx
+    # Nothing in the block is valid but the four fields this request states.
+    movq $0, GHCB_VALID_BITMAP(%rcx)
+    movq $0, GHCB_VALID_BITMAP+8(%rcx)
+    movb $GHCB_VALID_BITS, GHCB_VALID_BITMAP+GHCB_VALID_BYTE(%rcx)
+    movl $0, GHCB_USAGE(%rcx)
+    movw $GHCB_PROTOCOL, GHCB_PROTOCOL_VERSION(%rcx)
+    movl $SVM_VMGEXIT_PSC, GHCB_SW_EXIT_CODE(%rcx)
+    movl $0, GHCB_SW_EXIT_CODE+4(%rcx)
+    movq $0, GHCB_SW_EXIT_INFO_1(%rcx)
+    movq $0, GHCB_SW_EXIT_INFO_2(%rcx)
+    movq $PSC_BUFFER_GPA, GHCB_SW_SCRATCH(%rcx)
+    vmgexit
+    # The result is the low half of the first field, and the page state
+    # change's own error code is the whole of the second.
+    mov GHCB_SW_EXIT_INFO_1(%rcx), %eax
+    or GHCB_SW_EXIT_INFO_2(%rcx), %rax
+    jnz die_psc
+    ret
 
 # Validate [%r12, %r13) as private memory, preferring 2 MiB; PVALIDATE reports status in EAX.
 validate_range:

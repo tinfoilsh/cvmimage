@@ -15,18 +15,56 @@ use crate::kernel::data_block;
 use crate::layout::*;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-// As harness.S sizes it: two words a range.
+// As harness.S sizes them: two words a range, and two an entry.
 const HARNESS_RANGES: usize = 256;
+const HARNESS_PSC_ENTRIES: usize = 4096;
 
 extern "C" {
     fn harness_regions() -> u64;
     fn harness_e820(zero: *mut u8, memory: u64) -> u64;
     fn harness_accept_walk(memory: u64) -> u64;
+    fn harness_psc_range(lo: u64, hi: u64, host: u64) -> u64;
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
     static mut harness_shim_data: [u8; SHIM_DATA_SIZE as usize];
     static mut harness_ranges: [u64; 2 * HARNESS_RANGES];
+    static mut harness_psc_entries: [u64; 2 * HARNESS_PSC_ENTRIES];
+    static harness_psc_count: u64;
+    static harness_psc_calls: u64;
+    static harness_psc_bytes: u64;
     static harness_madt_template: [u8; MADT_HEADER_LEN as usize];
+}
+
+/// What the host the shim is run against does with a batch, as harness.S
+/// numbers them.
+pub enum Host {
+    /// Converts every entry of a batch in one exit.
+    Whole = 0,
+    /// Converts one entry an exit, which is a host within its rights.
+    OneAtATime = 1,
+    /// Converts nothing, which the shim has to refuse rather than retry.
+    Nothing = 2,
+}
+
+/// One page state change entry: the page it names, how much of it the entry
+/// covers, and which entry of its own batch it was.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Psc {
+    pub base: u64,
+    pub size: u64,
+    pub index: u64,
+}
+
+/// What the shim asked a host for over one range.
+pub struct PscWalk {
+    /// The first HARNESS_PSC_ENTRIES of them, in the order they were asked for.
+    pub entries: Vec<Psc>,
+    /// How many there were, which for a large guest is more than were recorded.
+    pub count: u64,
+    /// What they covered between them.
+    pub bytes: u64,
+    /// How many exits it took.
+    pub calls: u64,
 }
 
 // The pages the shims address by guest-physical address: the ACPI page they
@@ -63,6 +101,9 @@ fn map_pages(base: u64, len: u64) {
 fn map_low_pages() {
     map_pages(ACPI_BASE, 3 * PAGE);
     map_pages(SHIM_HOST_REGIONS, SHIM_REGIONS_END - SHIM_HOST_REGIONS);
+    // The block, at the address the shim writes it through rather than the one
+    // it names to the host.
+    map_pages(GHCB_ALIAS, PAGE);
 }
 
 /// The shim, with the pages it addresses mapped and nothing else running
@@ -187,6 +228,49 @@ impl Shim {
         (0..count)
             .map(|n| (ranges[2 * n], ranges[2 * n + 1]))
             .collect()
+    }
+
+    /// The page state changes the shim asks for to make `[lo, hi)` private, in
+    /// the order it asks for them; None where it refused the host.
+    pub fn psc(&self, lo: u64, hi: u64, host: Host) -> Option<PscWalk> {
+        if unsafe { harness_psc_range(lo, hi, host as u64) } == 0 {
+            return None;
+        }
+        let count = unsafe { harness_psc_count };
+        let entries = unsafe { &*std::ptr::addr_of!(harness_psc_entries) };
+        let recorded = (count as usize).min(entries.len() / 2);
+        let out = (0..recorded)
+            .map(|n| {
+                let word = entries[2 * n];
+                // Bits 51:12 are the page, 55:52 the operation, 56 the size.
+                assert_eq!(
+                    word >> PSC_ENTRY_LARGE >> 1,
+                    0,
+                    "an entry set a bit above the size"
+                );
+                assert_eq!(
+                    word >> PSC_ENTRY_PRIVATE & 0xf,
+                    1,
+                    "an entry asked for something other than private"
+                );
+                assert_eq!(word & (PAGE - 1), 0, "an entry named part of a page");
+                Psc {
+                    base: word & !(0xfff << PSC_ENTRY_PRIVATE | (PAGE - 1)),
+                    size: if word >> PSC_ENTRY_LARGE & 1 == 1 {
+                        0x200000
+                    } else {
+                        PAGE
+                    },
+                    index: entries[2 * n + 1],
+                }
+            })
+            .collect();
+        Some(PscWalk {
+            entries: out,
+            count,
+            bytes: unsafe { harness_psc_bytes },
+            calls: unsafe { harness_psc_calls },
+        })
     }
 
     /// The MADT the shim writes into the ACPI page, or None where it refuses

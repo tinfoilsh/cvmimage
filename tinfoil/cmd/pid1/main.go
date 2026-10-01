@@ -213,7 +213,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}()
 	defer func() {
 		if result != nil && console != nil && deps.debugFailure != nil && !errors.Is(context.Cause(bootCtx), errTrustedTime) {
-			deps.debugFailure(parent, result)
+			deps.debugFailure(bootCtx, result)
 		}
 	}()
 

@@ -26,12 +26,14 @@ let
   # Keep library directories whole for NSS, provider, and other dlopen-only edges.
   ubuntuPayloadPaths = [
     "etc/bindresvport.blacklist"
+    "etc/chrony/nts-bootstrap-ubuntu.crt"
     "etc/gai.conf"
     "etc/ld.so.conf"
     "etc/ld.so.conf.d"
     "etc/mke2fs.conf"
     "etc/netconfig"
     "etc/ssl/openssl.cnf"
+    "usr/bin/chronyc"
     "usr/bin/ip"
     "usr/lib/ssl/cert.pem"
     "usr/lib/ssl/certs"
@@ -39,6 +41,7 @@ let
     "usr/lib/ssl/private"
     "usr/lib/x86_64-linux-gnu"
     "usr/lib64/ld-linux-x86-64.so.2"
+    "usr/sbin/chronyd"
     "usr/sbin/ip"
     "usr/sbin/ldconfig"
     "usr/sbin/mke2fs"
@@ -83,6 +86,7 @@ let
 
   repositoryFiles = [
     { source = ../image/rootfs/etc/.pwd.lock; target = "etc/.pwd.lock"; mode = "0600"; }
+    { source = ../image/rootfs/etc/chrony/chrony.conf; target = "etc/chrony/chrony.conf"; mode = "0644"; }
     { source = ../image/rootfs/etc/containerd/config.toml; target = "etc/containerd/config.toml"; mode = "0644"; }
     { source = ../image/rootfs/etc/docker/daemon.json; target = "etc/docker/daemon.json"; mode = "0644"; }
     { source = ../image/rootfs/etc/group; target = "etc/group"; mode = "0644"; }

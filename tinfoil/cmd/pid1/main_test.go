@@ -30,6 +30,7 @@ type fakeServices struct {
 	fail      map[string]error
 	observe   func(supervisor.State)
 	onStart   func(string)
+	onAbort   func()
 }
 
 func newFakeServices() *fakeServices {
@@ -64,6 +65,9 @@ func (f *fakeServices) Drain(groups [][]string, _, _ time.Duration) error {
 }
 
 func (f *fakeServices) Abort(groups [][]string, _ time.Duration) error {
+	if f.onAbort != nil {
+		f.onAbort()
+	}
 	f.aborted <- groups
 	return nil
 }
@@ -676,6 +680,13 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 
 func TestClockLossAbortsServicesAndClearsReadiness(t *testing.T) {
 	harness := newLifecycleHarness()
+	var syslogCtx context.Context
+	harness.deps.syslog = func(ctx context.Context) { syslogCtx = ctx }
+	harness.services.onAbort = func() {
+		if syslogCtx.Err() != nil {
+			t.Error("syslog stopped before services aborted")
+		}
+	}
 	clockFailure := errors.New("authenticated source expired")
 	failClock := make(chan struct{})
 	harness.deps.clock = func(ctx context.Context) error {
@@ -703,6 +714,9 @@ func TestClockLossAbortsServicesAndClearsReadiness(t *testing.T) {
 	}
 	if err := receiveTest(t, result); !errors.Is(err, clockFailure) || !errors.Is(err, errTrustedTime) {
 		t.Fatalf("lifecycle lost clock failure: %v", err)
+	}
+	if syslogCtx.Err() == nil {
+		t.Error("syslog remained running after services aborted")
 	}
 	select {
 	case <-harness.services.drained:

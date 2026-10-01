@@ -188,10 +188,10 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}()
 	bootCtx, cancelBoot := context.WithCancelCause(parent)
 	defer cancelBoot(nil)
-	runtimeCtx, cancelRuntime := context.WithCancel(bootCtx)
+	runtimeCtx, cancelRuntime := context.WithCancel(parent)
+	defer cancelRuntime()
 	defer func() {
 		readiness.FailClosed()
-		cancelRuntime()
 		var drainErr error
 		if errors.Is(context.Cause(bootCtx), errTrustedTime) {
 			drainErr = deps.services.Abort(shutdownGroups(), deps.kill)
@@ -255,7 +255,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 	go func() {
-		if err := deps.clock(runtimeCtx); runtimeCtx.Err() == nil {
+		if err := deps.clock(bootCtx); bootCtx.Err() == nil {
 			cancelBoot(errors.Join(errTrustedTime, err))
 		}
 	}()

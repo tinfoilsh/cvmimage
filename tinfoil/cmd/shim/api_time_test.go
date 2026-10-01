@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
@@ -57,12 +58,22 @@ func TestTimedAttestationRequestRequiresUnambiguousVersionAndNonce(t *testing.T)
 }
 
 func TestTimedAttestationReturns503ForUnusableClock(t *testing.T) {
-	for _, cause := range []string{"missing status", "stale status", "unsynchronized clock", "unbounded uncertainty"} {
-		t.Run(cause, func(t *testing.T) {
+	sampleTime := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name   string
+		sample trustedtime.Sample
+		err    error
+	}{
+		{name: "reader unavailable", sample: trustedtime.Sample{Time: sampleTime}, err: errors.New("reader unavailable")},
+		{name: "zero UTC"},
+		{name: "negative uncertainty", sample: trustedtime.Sample{Time: sampleTime, Uncertainty: -time.Nanosecond}},
+		{name: "excess uncertainty", sample: trustedtime.Sample{Time: sampleTime, Uncertainty: trustedtime.MaxUncertainty + time.Nanosecond}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			reads := 0
 			handler := testClockAttestationHandler(t, func() (trustedtime.Sample, error) {
 				reads++
-				return trustedtime.Sample{}, errors.New(cause)
+				return test.sample, test.err
 			})
 			rec := httptest.NewRecorder()
 			url := "/.well-known/tinfoil-attestation?format=v4&nonce=" + strings.Repeat("42", envelope.NonceSize)

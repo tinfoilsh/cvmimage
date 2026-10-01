@@ -297,7 +297,7 @@ mod tests {
     fn each_shim_runs_the_routines_it_is_built_from() {
         for (blob, dis, entered, accept) in [
             (RESET_SHIM, RESET_LISTING, "long_mode", "accept_range"),
-            (SNP_SHIM, SNP_LISTING, "snp_long_mode", "validate_range"),
+            (SNP_SHIM, SNP_LISTING, "snp_long_mode", "accept_private"),
         ] {
             let code = listing(dis);
             let symbols = symbols(dis);
@@ -360,6 +360,66 @@ mod tests {
             // The shim page really is what the listing describes.
             let (at, text) = &code[code.len() - 1];
             assert!(*at < SHIM_SIZE && !text.is_empty() && !blob.is_empty());
+        }
+    }
+
+    /// Only the SNP shim converts memory, and the order is the whole of it:
+    /// the block is shared before the walk that needs it and handed back after,
+    /// and each range is made private before it is validated. A psc_range that
+    /// ran after its PVALIDATE, or a walk that ran before the block was
+    /// shared, assembles and passes every other test exactly as well.
+    #[test]
+    fn only_the_snp_shim_converts_memory_and_it_does_so_before_it_validates() {
+        let tdx = symbols(RESET_LISTING);
+        let (code, snp) = (listing(SNP_LISTING), symbols(SNP_LISTING));
+        let symbols = &snp;
+        let calls: Vec<(u64, &str)> = code
+            .iter()
+            .filter_map(|(at, text)| target(text).map(|name| (*at, name)))
+            .collect();
+        let once = |name: &str| -> u64 {
+            let at: Vec<u64> = calls
+                .iter()
+                .filter(|(_, n)| *n == name)
+                .map(|(at, _)| *at)
+                .collect();
+            assert_eq!(at.len(), 1, "{name} is reached from {} places", at.len());
+            at[0]
+        };
+        // Shared, walked, handed back, all three on the boot path in that order.
+        let share = once("ghcb_share");
+        let walk = once("accept_walk");
+        let private = once("ghcb_private");
+        for at in [share, walk, private] {
+            assert_eq!(
+                routine(symbols, at),
+                "snp_long_mode",
+                "{at:#x} is off the boot path"
+            );
+        }
+        assert!(
+            share < walk && walk < private,
+            "the block is shared out of order"
+        );
+
+        // ...and inside the walk, private comes before validated.
+        let psc = once("psc_range");
+        assert_eq!(routine(symbols, psc), "accept_private");
+        let validate = calls
+            .iter()
+            .find(|(at, n)| routine(symbols, *at) == "accept_private" && *n == "validate_range")
+            .expect("accept_private never validates");
+        assert!(
+            psc < validate.0,
+            "the range is validated before it is private"
+        );
+
+        // The TDX shim asks a host for nothing: it is handed accepted memory.
+        for name in ["psc_range", "psc_complete", "ghcb_share", "ghcb_private"] {
+            assert!(
+                !tdx.iter().any(|(_, n)| *n == name),
+                "the TDX shim carries {name}"
+            );
         }
     }
 

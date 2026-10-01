@@ -72,6 +72,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/snp_reset.S");
     println!("cargo:rerun-if-changed=src/madt.inc");
     println!("cargo:rerun-if-changed=src/map.inc");
+    println!("cargo:rerun-if-changed=src/psc.inc");
     println!("cargo:rerun-if-changed=src/harness.S");
     println!("cargo:rerun-if-changed=src/layout.rs");
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());

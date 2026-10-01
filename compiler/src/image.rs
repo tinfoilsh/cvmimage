@@ -395,6 +395,7 @@ pub mod tests {
     use super::*;
     use tempfile::tempdir;
     use tinfoil_firmware::boot::{RAM, RESERVED};
+    use tinfoil_firmware::shim::Host;
 
     pub fn params() -> Params {
         Params::tdx(DEFAULT_RAM, DEFAULT_VCPUS, "").unwrap()
@@ -818,6 +819,75 @@ pub mod tests {
                 );
             }
         }
+    }
+
+    /// The shim converts its own memory now, so every page the accept walk is
+    /// about to PVALIDATE has to have been asked for first: a page left out is
+    /// a PVALIDATE on a page the RMP still calls shared, which fails, and the
+    /// shim has no console to say so. The entries have to tile each range
+    /// exactly -- once over, ascending, no gap and nothing past the end -- and
+    /// be 2 MiB wherever the range is aligned for one, which is the size
+    /// PVALIDATE will ask the RMP for in turn.
+    #[test]
+    fn the_shim_asks_for_every_page_it_is_about_to_validate() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        for ram in SIZES {
+            let (params, launch) = launched(dir.path(), ram, true);
+            shim.data(launch.entry, &launch.spans).loader_ram(ram);
+            let (top, host) = boot::host_regions(&params.extents());
+            let ranges = boot::accept_ranges(&boot::merge(&launch.spans, &host), top);
+            assert!(!ranges.is_empty());
+            for (lo, hi) in ranges {
+                let walk = shim.psc(lo, hi, Host::Whole).unwrap();
+                // Every page of the range, whatever its size, and no other.
+                assert_eq!(walk.bytes, hi - lo, "{lo:#x}..{hi:#x} of {ram:#x}");
+                // One exit a batch, and no batch longer than a host will read.
+                let batches = walk.count.div_ceil(PSC_MAX_ENTRIES);
+                assert_eq!(walk.calls, batches, "{lo:#x}..{hi:#x} of {ram:#x}");
+                let mut at = lo;
+                for entry in &walk.entries {
+                    let large = at.is_multiple_of(0x200000) && hi - at >= 0x200000;
+                    assert_eq!(
+                        (entry.base, entry.size),
+                        (at, if large { 0x200000 } else { PAGE }),
+                        "{lo:#x}..{hi:#x} of {ram:#x}"
+                    );
+                    assert!(entry.index < PSC_MAX_ENTRIES);
+                    at += entry.size;
+                }
+                if walk.count as usize == walk.entries.len() {
+                    assert_eq!(at, hi, "{lo:#x}..{hi:#x} of {ram:#x} stopped short");
+                }
+            }
+        }
+    }
+
+    /// A host may convert part of a batch and hand the guest back, so the shim
+    /// asks again rather than assuming the whole batch was taken. A host that
+    /// converts nothing at all is refused instead of retried for ever: the
+    /// shim cannot report that it is stuck, so it must not get stuck.
+    #[test]
+    fn a_host_that_takes_a_batch_in_pieces_is_asked_again_and_one_that_stalls_is_refused() {
+        let shim = tinfoil_firmware::shim::shim();
+        // More than one batch, so the retry and the batching are both in play.
+        let (lo, hi) = (0x200000, 0x200000 + 300 * 0x200000);
+        let whole = shim.psc(lo, hi, Host::Whole).unwrap();
+        let piecemeal = shim.psc(lo, hi, Host::OneAtATime).unwrap();
+        assert_eq!(whole.count, 300);
+        assert_eq!(whole.calls, 2);
+        assert_eq!(
+            whole.entries, piecemeal.entries,
+            "a host taking a batch in pieces was asked for something else"
+        );
+        assert_eq!(
+            piecemeal.calls, 300,
+            "an entry that was taken was asked for twice"
+        );
+        assert!(
+            shim.psc(lo, hi, Host::Nothing).is_none(),
+            "a host that converts nothing was not refused"
+        );
     }
 
     /// QEMU moves a large guest's high memory above 1 TiB on AMD hosts, past

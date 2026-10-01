@@ -97,6 +97,7 @@ func SetupFilesystems(log LogFunc) error {
 	}{
 		{"/run/lock", os.ModeSticky | 0777},
 		{"/run/cryptsetup", 0700},
+		{"/run/chrony", 0700},
 	} {
 		if err := ensureDir(dir.path, dir.mode); err != nil {
 			logf(log, "warning: creating runtime dir %s: %v", dir.path, err)

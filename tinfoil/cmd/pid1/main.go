@@ -26,6 +26,7 @@ import (
 	"tinfoil/internal/pid1/supervisor"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/trustedtime"
 )
 
 const (
@@ -40,6 +41,7 @@ const (
 	cdiGenerateLimit     = 30 * time.Second
 
 	containerdName    = "containerd"
+	timeName          = string(hardening.ServiceTime)
 	dockerName        = "dockerd"
 	containersName    = "tinfoil-containers"
 	shimName          = "tinfoil-shim"
@@ -58,6 +60,8 @@ const (
 )
 
 var consoleMu sync.Mutex
+
+var errTrustedTime = errors.New("authenticated UTC unavailable")
 
 func main() {
 	log.SetFlags(0)
@@ -99,6 +103,7 @@ func runPID1() {
 type serviceControl interface {
 	Start(context.Context, supervisor.Service) error
 	Drain([][]string, time.Duration, time.Duration) error
+	Abort([][]string, time.Duration) error
 }
 
 type consoleControl interface {
@@ -117,6 +122,7 @@ type lifecycleDeps struct {
 	ramdisk        func(pidruntime.LogFunc) error
 	limits         func() error
 	syslog         func(context.Context)
+	clock          func(context.Context) error
 	exists         func(string) (bool, error)
 	measuredConfig func() (*runtimeconfig.Config, error)
 	term           time.Duration
@@ -164,6 +170,7 @@ func run(parent context.Context) (result error) {
 		ramdisk:     pidruntime.SetupRamdisk,
 		limits:      hardening.ApplyRuntimeLimits,
 		syslog:      startOptionalSyslogSink,
+		clock:       trustedtime.Monitor,
 		exists:      pathExists,
 		term:        serviceTermGrace,
 		kill:        serviceKillGrace,
@@ -179,20 +186,26 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 			result = errors.Join(result, console.stop(deps.term, deps.kill))
 		}
 	}()
-	bootCtx := parent
-	runtimeCtx, cancelRuntime := context.WithCancel(parent)
+	bootCtx, cancelBoot := context.WithCancelCause(parent)
+	defer cancelBoot(nil)
+	runtimeCtx, cancelRuntime := context.WithCancel(bootCtx)
 	defer func() {
 		readiness.FailClosed()
 		cancelRuntime()
-		drainErr := deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
-		if parent.Err() != nil {
+		var drainErr error
+		if errors.Is(context.Cause(bootCtx), errTrustedTime) {
+			drainErr = deps.services.Abort(shutdownGroups(), deps.kill)
+			result = errors.Join(result, context.Cause(bootCtx), drainErr)
+		} else if parent.Err() != nil {
+			drainErr = deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
 			result = drainErr
 		} else {
+			drainErr = deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
 			result = errors.Join(result, drainErr)
 		}
 	}()
 	defer func() {
-		if result != nil && console != nil && deps.debugFailure != nil {
+		if result != nil && console != nil && deps.debugFailure != nil && !errors.Is(context.Cause(bootCtx), errTrustedTime) {
 			deps.debugFailure(parent, result)
 		}
 	}()
@@ -233,6 +246,19 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 	deps.syslog(runtimeCtx)
+
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: timeName, Required: true,
+		Command: hardenedCommand(hardening.ServiceTime, "/usr/sbin/chronyd",
+			"-n", "-u", "root", "-f", "/etc/chrony/chrony.conf"),
+	}); err != nil {
+		return err
+	}
+	go func() {
+		if err := deps.clock(runtimeCtx); runtimeCtx.Err() == nil {
+			cancelBoot(errors.Join(errTrustedTime, err))
+		}
+	}()
 
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containerdName, Required: true, Restart: true,
@@ -293,7 +319,10 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
 	initLogf("boot complete")
-	<-parent.Done()
+	<-bootCtx.Done()
+	if errors.Is(context.Cause(bootCtx), errTrustedTime) {
+		return context.Cause(bootCtx)
+	}
 	initLogf("shutdown requested")
 	return nil
 }
@@ -599,7 +628,7 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 }
 
 func requiredServiceNames() []string {
-	return []string{containerdName, dockerName, containersName, shimName}
+	return []string{containerdName, dockerName, containersName, shimName, timeName}
 }
 
 func shutdownGroups() [][]string {
@@ -610,6 +639,7 @@ func shutdownGroups() [][]string {
 		{fabricManagerName, persistencedName},
 		{dockerName},
 		{containerdName},
+		{timeName},
 	}
 }
 

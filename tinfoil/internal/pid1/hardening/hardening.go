@@ -25,6 +25,7 @@ const (
 	ServiceEgress     Service = "tinfoil-egress"
 	ServiceShim       Service = "tinfoil-shim"
 	ServiceVolumes    Service = "tinfoil-volume-worker"
+	ServiceTime       Service = "chronyd"
 )
 
 type servicePolicy struct {
@@ -138,6 +139,11 @@ func policyFor(service Service) (servicePolicy, bool) {
 	case ServiceContainers:
 		return restrictedServicePolicy(
 			[]int{unix.CAP_NET_ADMIN},
+			[]uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
+		), true
+	case ServiceTime:
+		return restrictedServicePolicy(
+			[]int{unix.CAP_SYS_TIME},
 			[]uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		), true
 	case ServiceEgress:

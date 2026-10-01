@@ -30,9 +30,10 @@ use vmsa::{cc_blob, SNP_SHIM};
 pub struct Launch {
     /// Every region of the guest physical map, in ascending address order.
     pub placed: Vec<Placed>,
-    /// The memory an SEV-SNP loader must make private before the shim
-    /// validates it, as the E820 map the shim will write for a guest of
-    /// `Params::memory`. Intel TDX asks a loader for none, and leaves it empty.
+    /// The memory an SEV-SNP loader must have backed where this image places
+    /// pages -- and nowhere else: the shim converts the rest of a guest's RAM
+    /// itself, so no declaration here binds the image to a machine size.
+    /// Intel TDX asks a loader for none, and leaves it empty.
     pub required_memory: Vec<boot::Region>,
     /// The measured spans the shim merges the loader's map into, and derives
     /// that E820 table and the ranges it accepts from -- for whatever machine
@@ -120,8 +121,14 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
     boot::validate(&placed, params.memory)?;
     let spans = boot::shim_spans(&placed);
-    let (top, host) = boot::host_regions(&params.extents());
-    let required_memory = boot::e820(&boot::merge(&spans, &host), top);
+    // Only what this image loads. A loader converts these to private as it
+    // imports them, so what this declares is that it has them backed at all;
+    // the guest's own RAM is the shim's to convert, through the page state
+    // changes psc.inc makes, and one image serves a guest of any size.
+    let required_memory = spans
+        .iter()
+        .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
+        .collect();
     // The setup_data chain is one measured SETUP_CC_BLOB record.
     let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
     boot::fill(&mut placed, ZERO_PAGE, zero)?;

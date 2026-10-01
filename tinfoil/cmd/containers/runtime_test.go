@@ -46,3 +46,23 @@ func TestReplacementPIDAvailableUsesFileGeneration(t *testing.T) {
 		t.Fatalf("replacement pid: available=%v error=%v", available, err)
 	}
 }
+
+func TestNetworkGenerationsNeverReuseConnectionMarks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generation")
+	first, err := nextNetworkGeneration(path, 3)
+	if err != nil || first != 1 {
+		t.Fatalf("first range starts at %d: %v", first, err)
+	}
+	next, err := nextNetworkGeneration(path, 2)
+	if err != nil || next != 4 {
+		t.Fatalf("replacement reused a connection mark: %d, %v", next, err)
+	}
+	for _, invalid := range []string{"", "0", "invalid", "4294967294", "4294967295"} {
+		if err := os.WriteFile(path, []byte(invalid), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := nextNetworkGeneration(path, 2); err == nil {
+			t.Fatalf("invalid or exhausted generation accepted: %q", invalid)
+		}
+	}
+}

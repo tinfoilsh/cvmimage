@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -62,23 +64,29 @@ func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
 	if err := atomicWrite(boot.ShimConfigPath, shimYAML, 0o644); err != nil {
 		return err
 	}
-	type egressEntry struct {
-		Allow []string `yaml:"allow"`
-	}
-	type egressConfig struct {
-		Networks map[string]egressEntry `yaml:"networks"`
-	}
-	egress := egressConfig{Networks: map[string]egressEntry{}}
-	for name, network := range config.Networks {
-		if network != nil && network.Egress == "allowlist" {
-			egress.Networks[name] = egressEntry{Allow: network.Allow}
+	return nil
+}
+
+func nextNetworkGeneration(path string, networks uint32) (uint32, error) {
+	data, err := os.ReadFile(path)
+	var previous uint64
+	if err == nil {
+		previous, err = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+		if err != nil || previous == 0 {
+			return 0, fmt.Errorf("invalid network policy generation %q", data)
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
 	}
-	data, err := yaml.Marshal(egress)
-	if err != nil {
-		return err
+	last := previous + uint64(max(networks, 1))
+	if last > uint64(^uint32(0)) {
+		return 0, errors.New("network policy generation exhausted")
 	}
-	return atomicWrite(boot.EgressConfigPath, data, 0o600)
+	next := uint32(previous + 1)
+	if err := atomicWrite(path, []byte(fmt.Sprintf("%d\n", last)), 0o600); err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 func restartRuntimeServices(ctx context.Context) error {
@@ -110,14 +118,21 @@ func freezeFromPIDFile(path string) (*serviceInstance, error) {
 	return instance, nil
 }
 
-func restartFrozenFromPIDFile(ctx context.Context, path string, instance *serviceInstance) error {
+func restartEgress(ctx context.Context, instance *serviceInstance) error {
 	if instance == nil {
 		return nil
 	}
 	if err := signalProcessGroup(instance.pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("killing frozen pid %d process group: %w", instance.pid, err)
 	}
-	return waitForReplacementPID(ctx, path, instance)
+	return waitForReplacementPID(ctx, boot.EgressPIDPath, instance, func() bool {
+		connection, err := net.DialTimeout("tcp", containernet.DNSReadyAddress, restartPollInterval)
+		if err != nil {
+			return false
+		}
+		connection.Close()
+		return true
+	})
 }
 
 func openServiceInstance(path string) (*serviceInstance, error) {
@@ -159,14 +174,14 @@ func restartFromPIDFile(ctx context.Context, path string) error {
 	if err := signalProcessGroup(instance.pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("signaling pid %d process group: %w", instance.pid, err)
 	}
-	return waitForReplacementPID(ctx, path, instance)
+	return waitForReplacementPID(ctx, path, instance, func() bool { return true })
 }
 
 func signalProcessGroup(pid int, signal syscall.Signal) error {
 	return syscall.Kill(-pid, signal)
 }
 
-func waitForReplacementPID(ctx context.Context, path string, previous *serviceInstance) error {
+func waitForReplacementPID(ctx context.Context, path string, previous *serviceInstance, ready func() bool) error {
 	deadline := time.NewTimer(restartWaitTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(restartPollInterval)
@@ -182,7 +197,7 @@ func waitForReplacementPID(ctx context.Context, path string, previous *serviceIn
 			if err != nil {
 				return err
 			}
-			if restarted {
+			if restarted && ready() {
 				return nil
 			}
 		}

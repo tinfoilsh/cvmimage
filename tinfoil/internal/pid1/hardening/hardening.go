@@ -142,7 +142,7 @@ func policyFor(service Service) (servicePolicy, bool) {
 		), true
 	case ServiceEgress:
 		return restrictedServicePolicy(
-			[]int{unix.CAP_NET_ADMIN},
+			[]int{unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE},
 			[]uint32{unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		), true
 	case ServiceShim:

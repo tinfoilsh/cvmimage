@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/containernet"
 	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/nvidia"
 	"tinfoil/internal/pid1/hardening"
@@ -282,6 +283,17 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
 		return err
 	}
+	if err := deps.oneShot(bootCtx, command("dns-address", "/usr/sbin/ip", "address", "add", containernet.DNSAddress+"/32", "dev", "lo")); err != nil {
+		return err
+	}
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: egressName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
+		Ready:   endpointReady("tcp", containernet.DNSReadyAddress, shimReadyLimit),
+		PIDFile: boot.EgressPIDPath,
+	}); err != nil {
+		return err
+	}
 	if err := startVolumeWorkers(bootCtx, deps); err != nil {
 		return fmt.Errorf("storage volumes: %w", err)
 	}
@@ -295,14 +307,6 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: egressName, Restart: true,
-		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
-		PIDFile: boot.EgressPIDPath,
-	}); err != nil {
-		return err
-	}
-
 	if err := readiness.Publish(); err != nil {
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
@@ -613,7 +617,7 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 }
 
 func requiredServiceNames() []string {
-	return []string{containerdName, dockerName, containersName, shimName}
+	return []string{containerdName, dockerName, containersName, shimName, egressName}
 }
 
 func shutdownGroups() [][]string {

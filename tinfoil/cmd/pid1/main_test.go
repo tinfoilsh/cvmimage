@@ -536,12 +536,13 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	bootstrap := slices.Index(events, "nvidia-bootstrap")
 	lock := slices.Index(events, "module-lock")
 	nftables := slices.Index(events, "nftables")
+	dns := slices.Index(events, egressName)
 	containerd := slices.Index(events, containerdName)
 	docker := slices.Index(events, dockerName)
 	containers := slices.Index(events, containersName)
 	shim := slices.Index(events, shimName)
 	boot := slices.Index(events, string(hardening.ServiceBoot))
-	if filesystems < 0 || console != filesystems+1 || loopback != console+1 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || shim <= docker || boot <= shim || containers <= boot {
+	if filesystems < 0 || console != filesystems+1 || loopback != console+1 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || shim <= docker || boot <= shim || dns <= boot || containers <= dns {
 		t.Fatalf("startup events = %v", events)
 	}
 }

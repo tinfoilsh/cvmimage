@@ -25,6 +25,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/firewall"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
@@ -35,7 +36,7 @@ const (
 	openEgressGwPriority       = 100
 )
 
-func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config, debug bool) error {
+func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config, debug bool, generation uint32) error {
 	for name := range cfg.Networks {
 		if err := ensureNetwork(ctx, cli, name); err != nil {
 			return err
@@ -46,16 +47,16 @@ func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config,
 			return err
 		}
 	}
-	return setupContainerNetworkFirewall(ctx, cfg, debug)
+	return firewall.ApplyContainerNetworks(cfg, debug, generation)
 }
 
-func PrepareNetworks(ctx context.Context, config *Config, debug bool) error {
+func PrepareNetworks(ctx context.Context, config *Config, debug bool, generation uint32) error {
 	cli, err := newDockerClient()
 	if err != nil {
 		return fmt.Errorf("creating docker client: %w", err)
 	}
 	defer cli.Close()
-	return setupContainerNetwork(ctx, cli, config, debug)
+	return setupContainerNetwork(ctx, cli, config, debug, generation)
 }
 
 func ensureNetwork(ctx context.Context, cli *client.Client, name string) error {
@@ -479,6 +480,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		PidMode:        container.PidMode(c.PidMode),
 		CapAdd:         c.CapAdd,
 		CapDrop:        []string{"ALL"},
+		DNS:            []netip.Addr{netip.MustParseAddr(containernet.DNSAddress)},
 		SecurityOpt:    []string{"no-new-privileges:true"},
 		ReadonlyRootfs: c.ReadOnly == nil && !c.CVMAdmin || c.ReadOnly != nil && *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,

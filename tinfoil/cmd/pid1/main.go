@@ -240,6 +240,17 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 	deps.syslog(runtimeCtx)
+	if err := deps.oneShot(bootCtx, command("dns-address", "/usr/sbin/ip", "address", "add", containernet.DNSAddress+"/32", "dev", "lo")); err != nil {
+		return err
+	}
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: egressName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
+		Ready:   endpointReady("tcp", containernet.DNSReadyAddress, shimReadyLimit),
+		PIDFile: boot.EgressPIDPath,
+	}); err != nil {
+		return err
+	}
 
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containerdName, Required: true, Restart: true,
@@ -281,17 +292,6 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	)
 	bootCommand = withSecretHandoff(bootCommand, secretHandoff)
 	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
-		return err
-	}
-	if err := deps.oneShot(bootCtx, command("dns-address", "/usr/sbin/ip", "address", "add", containernet.DNSAddress+"/32", "dev", "lo")); err != nil {
-		return err
-	}
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: egressName, Required: true, Restart: true,
-		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
-		Ready:   endpointReady("tcp", containernet.DNSReadyAddress, shimReadyLimit),
-		PIDFile: boot.EgressPIDPath,
-	}); err != nil {
 		return err
 	}
 	if err := startVolumeWorkers(bootCtx, deps); err != nil {

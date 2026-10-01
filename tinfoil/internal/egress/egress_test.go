@@ -236,11 +236,13 @@ func TestDNSFollowsSeparateAliasAnswersAndStripsClientOptions(t *testing.T) {
 	}
 }
 
-func TestDNSOpenNetworksDoNotGrantFirewallAccess(t *testing.T) {
-	e, scripts := testEngine(t, "other.example. 30 IN TXT hello")
-	answer := ask(e, "10.45.0.2:12345", "other.example.", dns.TypeTXT)
-	if answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 || len(*scripts) != 0 {
-		t.Fatalf("answer=%v scripts=%v", answer, *scripts)
+func TestDNSGuestAndOpenNetworksDoNotGrantFirewallAccess(t *testing.T) {
+	for _, source := range []string{"127.0.0.1:12345", "10.45.0.2:12345"} {
+		e, scripts := testEngine(t, "other.example. 30 IN TXT hello")
+		answer := ask(e, source, "other.example.", dns.TypeTXT)
+		if answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 || len(*scripts) != 0 {
+			t.Fatalf("answer=%v scripts=%v", answer, *scripts)
+		}
 	}
 }
 

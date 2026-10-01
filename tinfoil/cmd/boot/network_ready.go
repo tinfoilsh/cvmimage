@@ -23,9 +23,8 @@ const (
 	networkPollInterval = 100 * time.Millisecond
 	ipBinary            = "/usr/sbin/ip"
 	resolverPath        = "/etc/resolv.conf"
-	primaryNameserver   = "1.1.1.1"
-	secondaryNameserver = "1.0.0.1"
-	fixedResolver       = "nameserver 1.1.1.1\nnameserver 1.0.0.1\n"
+	primaryNameserver   = "127.0.0.1"
+	fixedResolver       = "nameserver 127.0.0.1\n"
 )
 
 var sysBusPCIDevices = "/sys/bus/pci/devices"
@@ -58,7 +57,7 @@ func configureGuestNetwork(ctx context.Context, config *shimconfig.ExternalNetwo
 	}
 	return fmt.Sprintf(
 		"static network configured; interface=%s address=%s gateway=%s dns=%s",
-		iface, config.Address, config.Gateway, primaryNameserver+","+secondaryNameserver,
+		iface, config.Address, config.Gateway, primaryNameserver,
 	), nil
 }
 

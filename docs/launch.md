@@ -175,6 +175,16 @@ On SEV-SNP this needs a host kernel that accepts
 Without both, KVM measures a save area per processor and the launch fails
 against the published measurement rather than passing with a different count.
 
+SNP images require Secure TSC: the measured boot-processor VMSA selects
+SNPActive and SecureTscEn (`SEV_FEATURES=0x201`). The host needs hardware
+advertising Secure TSC, patched AMD firmware, and KVM with Secure TSC support
+(mainline Linux 6.18 or a backport). QEMU reads the feature selection from
+IGVM; do not also set `secure-tsc=on` on its guest object. The AMD firmware
+initializes the boot processor's protected TSC parameters, and Linux retrieves
+authenticated `TSC_INFO` to initialize secondary processors. This protects
+elapsed time; it does not establish UTC. Feature-off images have a different
+launch digest and must not satisfy a verifier requiring this image.
+
 ## Run on TDX
 
 ```sh

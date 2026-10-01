@@ -200,8 +200,10 @@ const _: () = assert!(
     ACPI_MADT + MADT_HEADER_LEN + MAX_VCPUS as u64 * MADT_LAPIC_LEN + MADT_WAKEUP_LEN <= PAGE
 );
 
-// SEV_FEATURES, which QEMU forwards to KVM_SEV_INIT2: SNPActive only, no DebugSwap.
-pub const SNP_SEV_FEATURES: u64 = 1;
+// SEV_FEATURES, which QEMU forwards from the IGVM VMSA to KVM_SEV_INIT2.
+const SNP_ACTIVE: u64 = 1 << 0;
+const SECURE_TSC: u64 = 1 << 9;
+pub const SNP_SEV_FEATURES: u64 = SNP_ACTIVE | SECURE_TSC;
 
 // ABI 1.51 minimum with DEBUG and MIGRATE_MA clear; KVM rejects a policy without SMT.
 const POLICY_ABI_MINOR: u64 = 51;

@@ -75,7 +75,7 @@ pub fn bsp_vmsa() -> Box<SevVmsa> {
     // RDX stays zero, so no CPU family, model or stepping reaches the measurement.
     v.mxcsr = VMSA_MXCSR;
     v.x87_fcw = VMSA_X87_FCW;
-    v.sev_features = SevFeatures::new().with_snp(true);
+    v.sev_features = SevFeatures::new().with_snp(true).with_secure_tsc(true);
     v
 }
 
@@ -173,6 +173,7 @@ mod tests {
         assert_eq!(v.mxcsr, 0x1f80);
         assert_eq!(v.x87_fcw, 0x037f);
         assert_eq!(v.rsi, ZERO_PAGE);
+        assert!(v.sev_features.secure_tsc());
         assert!(validate_vmsa(&v, SHIM_BASE, BSP_STACK_TOP, ZERO_PAGE).is_ok());
         // Drift in the state QEMU supplies changes the measurement, so none goes unchecked.
         for break_it in [
@@ -190,6 +191,8 @@ mod tests {
             |v| v.idtr.limit = 1,
             |v| v.cs.attrib = 0,
             |v| v.ds.selector = 0,
+            |v| v.sev_features.set_secure_tsc(false),
+            |v| v.sev_features.set_debug_swap(true),
         ] {
             let mut v = bsp_vmsa();
             break_it(&mut v);

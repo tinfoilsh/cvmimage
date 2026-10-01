@@ -96,6 +96,10 @@ layout! {
     // is already one; these two bits say what to do with it and how large it is.
     PSC_ENTRY_PRIVATE = 52;
     PSC_ENTRY_LARGE = 56;
+    // The low bits of an entry are the host's own cursor into it: how far into
+    // the span it has reached, which is how it reports having converted part
+    // of one entry and no more.
+    PSC_ENTRY_CUR_PAGE = PAGE - 1;
 
     // The GHCB MSR protocol: one request a VMGEXIT, needing no block at all,
     // which is what the shim terminates through and sets the block up with.
@@ -225,13 +229,19 @@ const _: () = assert!(SHARED_ALIAS == MAP_LIMIT);
 const _: () = assert!(SNP_GHCB < GIB);
 // A page state change entry has 40 bits of page number and nothing above them.
 const _: () = assert!(MAX_MEMORY <= 1 << 52);
-// Four fields, four consecutive bitmap bits, all inside one byte of it.
+// Four fields, four consecutive bitmap bits, all inside one byte of it. The
+// byte and the bits are derived from the exit code, so this holds the layout
+// together rather than to the specification -- it would hold just as well for
+// a wrong exit code. What the block the shim fills has to say is read out of
+// it and compared with the specification's own numbers in a test.
 const _: () = assert!(
     GHCB_SW_EXIT_INFO_1 == GHCB_SW_EXIT_CODE + 8
         && GHCB_SW_EXIT_INFO_2 == GHCB_SW_EXIT_CODE + 16
         && GHCB_SW_SCRATCH == GHCB_SW_EXIT_CODE + 24
 );
 const _: () = assert!(GHCB_VALID_BITS < 0x100 && GHCB_VALID_BYTE < 16);
+// A host's cursor into an entry sits below the page number, not in it.
+const _: () = assert!(PSC_ENTRY_CUR_PAGE < 1 << 12);
 // The descriptor has to lie wholly inside the shared buffer, and its entry
 // count has to be the one a host derives from that buffer's size.
 const _: () = assert!(GHCB_VALID_BITMAP + 16 <= GHCB_SHARED_BUFFER);

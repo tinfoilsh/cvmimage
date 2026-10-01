@@ -427,7 +427,13 @@ mod tests {
         );
 
         // The TDX shim asks a host for nothing: it is handed accepted memory.
-        for name in ["psc_range", "psc_complete", "ghcb_share", "ghcb_private"] {
+        for name in [
+            "psc_range",
+            "psc_complete",
+            "psc_vmgexit",
+            "ghcb_share",
+            "ghcb_private",
+        ] {
             assert!(
                 !tdx.iter().any(|(_, n)| *n == name),
                 "the TDX shim carries {name}"

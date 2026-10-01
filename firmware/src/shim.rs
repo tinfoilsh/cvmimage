@@ -32,11 +32,14 @@ extern "C" {
     static harness_psc_count: u64;
     static harness_psc_calls: u64;
     static harness_psc_bytes: u64;
+    static harness_psc_lost: u64;
     static harness_madt_template: [u8; MADT_HEADER_LEN as usize];
 }
 
 /// What the host the shim is run against does with a batch, as harness.S
-/// numbers them.
+/// numbers them. The first three are hosts the shim has to finish against;
+/// the rest are hosts it has to refuse.
+#[derive(Debug, Clone, Copy)]
 pub enum Host {
     /// Converts every entry of a batch in one exit.
     Whole = 0,
@@ -44,6 +47,35 @@ pub enum Host {
     OneAtATime = 1,
     /// Converts nothing, which the shim has to refuse rather than retry.
     Nothing = 2,
+    /// Converts one page of an entry, reporting it in the cursor the entry
+    /// carries, and the rest of that entry when it is asked again. Also a
+    /// host within its rights, and the reason progress is not the entry
+    /// index alone.
+    PartOfAnEntry = 3,
+    /// Winds the entry cursor back, which is the one way the protocol does
+    /// not let it move.
+    Backwards = 4,
+    /// Answers with an end_entry past the batch the shim described, naming an
+    /// entry the shim never wrote.
+    PastTheBatch = 5,
+    /// Reports the request as not taken, in the block's own fields.
+    Refuses = 6,
+}
+
+/// The request the shim left in the block for a host to read: what it asks
+/// for, which fields of the block it says it filled in, and the header of the
+/// descriptor it points at.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ghcb {
+    pub exit_code: u64,
+    pub exit_info_1: u64,
+    pub exit_info_2: u64,
+    pub scratch: u64,
+    pub valid: [u8; 16],
+    pub usage: u32,
+    pub protocol: u16,
+    /// The dword the page state change header reserves.
+    pub reserved: u32,
 }
 
 /// One page state change entry: the page it names, how much of it the entry
@@ -65,6 +97,9 @@ pub struct PscWalk {
     pub bytes: u64,
     /// How many exits it took.
     pub calls: u64,
+    /// Whether the range its caller holds across the conversion came back the
+    /// range it was.
+    pub held: bool,
 }
 
 // The pages the shims address by guest-physical address: the ACPI page they
@@ -230,9 +265,43 @@ impl Shim {
             .collect()
     }
 
+    /// The block filled with a byte no field of a request holds, so that a
+    /// field the shim leaves alone is not read back as a zero it never wrote.
+    fn poison(&self) {
+        unsafe { std::ptr::write_bytes(page(GHCB_ALIAS), 0xff, PAGE as usize) }
+    }
+
+    /// The block as a host would read it after the last exit the shim made.
+    pub fn ghcb(&self) -> Ghcb {
+        let word = |at: u64| u64::from_le_bytes(read(GHCB_ALIAS, at, 8).try_into().unwrap());
+        let half = |at: u64| u32::from_le_bytes(read(GHCB_ALIAS, at, 4).try_into().unwrap());
+        Ghcb {
+            exit_code: word(GHCB_SW_EXIT_CODE),
+            exit_info_1: word(GHCB_SW_EXIT_INFO_1),
+            exit_info_2: word(GHCB_SW_EXIT_INFO_2),
+            scratch: word(GHCB_SW_SCRATCH),
+            valid: read(GHCB_ALIAS, GHCB_VALID_BITMAP, 16).try_into().unwrap(),
+            usage: half(GHCB_USAGE),
+            protocol: u16::from_le_bytes(
+                read(GHCB_ALIAS, GHCB_PROTOCOL_VERSION, 2)
+                    .try_into()
+                    .unwrap(),
+            ),
+            // The dword the header leaves between end_entry and the entries.
+            reserved: half(GHCB_SHARED_BUFFER + PSC_END_ENTRY + 2),
+        }
+    }
+
+    /// Whether the range the caller of `psc_range` holds survived it, which a
+    /// refused host leaves no walk to read it from.
+    pub fn held(&self) -> bool {
+        unsafe { harness_psc_lost == 0 }
+    }
+
     /// The page state changes the shim asks for to make `[lo, hi)` private, in
     /// the order it asks for them; None where it refused the host.
     pub fn psc(&self, lo: u64, hi: u64, host: Host) -> Option<PscWalk> {
+        self.poison();
         if unsafe { harness_psc_range(lo, hi, host as u64) } == 0 {
             return None;
         }
@@ -270,6 +339,7 @@ impl Shim {
             count,
             bytes: unsafe { harness_psc_bytes },
             calls: unsafe { harness_psc_calls },
+            held: self.held(),
         })
     }
 

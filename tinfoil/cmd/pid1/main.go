@@ -192,6 +192,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	defer cancelRuntime()
 	defer func() {
 		readiness.FailClosed()
+		cancelBoot(nil)
 		var drainErr error
 		if errors.Is(context.Cause(bootCtx), errTrustedTime) {
 			drainErr = deps.services.Abort(shutdownGroups(), deps.kill)

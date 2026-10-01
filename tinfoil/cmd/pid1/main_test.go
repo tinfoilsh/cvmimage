@@ -31,6 +31,7 @@ type fakeServices struct {
 	observe   func(supervisor.State)
 	onStart   func(string)
 	onAbort   func()
+	onDrain   func()
 }
 
 func newFakeServices() *fakeServices {
@@ -60,6 +61,9 @@ func (f *fakeServices) Start(_ context.Context, service supervisor.Service) erro
 }
 
 func (f *fakeServices) Drain(groups [][]string, _, _ time.Duration) error {
+	if f.onDrain != nil {
+		f.onDrain()
+	}
 	f.drained <- groups
 	return nil
 }
@@ -655,6 +659,27 @@ func receiveTest[T any](t *testing.T, channel <-chan T) T {
 func TestStartupFailureDrainsStartedServices(t *testing.T) {
 	harness := newLifecycleHarness()
 	harness.services.fail[dockerName] = errors.New("dockerd start failed")
+	var clockCtx, syslogCtx context.Context
+	clockStarted := make(chan context.Context, 1)
+	harness.deps.clock = func(ctx context.Context) error {
+		clockStarted <- ctx
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	harness.deps.syslog = func(ctx context.Context) { syslogCtx = ctx }
+	harness.services.onStart = func(name string) {
+		if name == dockerName {
+			clockCtx = receiveTest(t, clockStarted)
+		}
+	}
+	harness.services.onDrain = func() {
+		if clockCtx.Err() == nil {
+			t.Error("time monitor remained running during service drain")
+		}
+		if syslogCtx.Err() != nil {
+			t.Error("syslog stopped before services drained")
+		}
+	}
 	result := make(chan error, 1)
 	go func() {
 		result <- runLifecycle(context.Background(), harness.deps, harness.readiness)

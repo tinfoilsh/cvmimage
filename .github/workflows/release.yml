@@ -94,8 +94,8 @@ jobs:
           snp_meas="$(field tinfoil-snp.igvm.manifest.json expected_snp_measurement)"
           tdx_meas="$(field tinfoil-tdx.igvm.manifest.json expected_mrtd)"
           snp_policy="$(field tinfoil-snp.igvm.manifest.json guest_policy)"
-          jq -e '.launch.measurement == .expected_snp_measurement and .launch.policy == .guest_policy' tinfoil-snp.igvm.manifest.json > /dev/null
-          jq -e '.launch.mrtd == .expected_mrtd' tinfoil-tdx.igvm.manifest.json > /dev/null
+          jq -e '(.launch.measurement == .expected_snp_measurement and .launch.policy == .guest_policy) or error("SNP launch measurement or policy disagrees with the manifest")' tinfoil-snp.igvm.manifest.json > /dev/null
+          jq -e '(.launch.mrtd == .expected_mrtd) or error("TDX launch MRTD disagrees with the manifest")' tinfoil-tdx.igvm.manifest.json > /dev/null
 
           # cvmc appends no5lvl, so the command line that was measured is the
           # one it recorded -- not the string composed above. Publishing the

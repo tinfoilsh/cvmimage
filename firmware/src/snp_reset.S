@@ -75,7 +75,9 @@ die_map:
 
 # The three ways the host can refuse to convert memory, numbered as steps 3 to
 # 5: KVM prints a termination request's reason set and code, so which of them
-# happened is readable on the host even though the guest has no console.
+# happened is readable on the host even though the guest has no console. A host
+# that says it converted memory and did not leaves by the fourth way instead,
+# PVALIDATE refusing the page in `die`.
 die_ghcb_share:
     mov $3, %r15d
     jmp die_step
@@ -187,6 +189,12 @@ ghcb_private:
     xor %eax, %eax
     mov $512, %ecx
     rep stosq
+    # ...and the MSR back to the value a reset leaves in it, so the block is
+    # not still named to a host that can no longer read it.
+    xor %edx, %edx
+    xor %eax, %eax
+    mov $GHCB_MSR, %ecx
+    wrmsr
     ret
 
 # EDX:EAX as a GHCB MSR request -> EDX:EAX the response. The caller reads what

@@ -6,7 +6,10 @@
 #   \fail    where a host that will not finish a request terminates
 #   \issue   one VMGEXIT for the batch described at PSC_BUFFER, returning only
 #            if the host took the request. It may clobber rax, rcx, rdx and
-#            rdi, and has to leave r9, r10 and r14 alone.
+#            rdi, and nothing else: the caller of psc_range holds the range it
+#            is about to validate in r12 and r13 across the whole conversion,
+#            so an \issue that trod on those would validate memory no one
+#            converted, which is the silence this file exists to prevent.
 #
 # This builds the GHCB page protocol's descriptor, not the MSR protocol's
 # request. The MSR protocol converts one 4 KiB page per VMGEXIT: two million

@@ -13,7 +13,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -26,7 +25,6 @@ const (
 	BootstrapLimit  = 5 * time.Minute
 	SocketPath      = "/run/chrony/chronyd.sock"
 	statusPath      = "/run/tinfoil/trusted-time.json"
-	chronycPath     = "/usr/bin/chronyc"
 	queryLimit      = 2 * time.Second
 	pollInterval    = time.Second
 	maxStatusAge    = 5 * time.Second
@@ -147,8 +145,10 @@ func Wait(ctx context.Context) error {
 
 // Monitor publishes local clock checkpoints. Once synchronized, any invalid
 // observation is fatal; restarting must not reopen Chrony's bootstrap window.
-func Monitor(ctx context.Context) error {
-	return monitor(ctx, observe, readClocks, publish, invalidate, pollInterval)
+func Monitor(ctx context.Context, query func(context.Context) ([]byte, error)) error {
+	return monitor(ctx, func(ctx context.Context) (checkpoint, error) {
+		return observe(ctx, query)
+	}, readClocks, publish, invalidate, pollInterval)
 }
 
 func monitor(ctx context.Context, observe func(context.Context) (checkpoint, error), now func() (clocks, error), publish func(checkpoint) error, invalidate func() error, interval time.Duration) (result error) {
@@ -192,16 +192,14 @@ func monitor(ctx context.Context, observe func(context.Context) (checkpoint, err
 	}
 }
 
-func observe(ctx context.Context) (checkpoint, error) {
+func observe(ctx context.Context, query func(context.Context) ([]byte, error)) (checkpoint, error) {
 	before, err := readClocks()
 	if err != nil {
 		return checkpoint{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, queryLimit)
 	defer cancel()
-	command := exec.CommandContext(ctx, chronycPath, "-u", "root", "-n", "-c", "-h", SocketPath, "tracking")
-	command.Env = []string{"LC_ALL=C"}
-	data, err := command.Output()
+	data, err := query(ctx)
 	if err != nil {
 		return checkpoint{}, fmt.Errorf("query authenticated time: %w", err)
 	}

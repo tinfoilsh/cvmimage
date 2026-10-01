@@ -170,11 +170,17 @@ func run(parent context.Context) (result error) {
 		ramdisk:     pidruntime.SetupRamdisk,
 		limits:      hardening.ApplyRuntimeLimits,
 		syslog:      startOptionalSyslogSink,
-		clock:       trustedtime.Monitor,
-		exists:      pathExists,
-		term:        serviceTermGrace,
-		kill:        serviceKillGrace,
-		cmdline:     cmdline,
+		clock: func(ctx context.Context) error {
+			return trustedtime.Monitor(ctx, func(ctx context.Context) ([]byte, error) {
+				return queryTime(ctx, func(ctx context.Context, command supervisor.Command) error {
+					return runOneShot(ctx, manager, command, oneShotStopGrace)
+				})
+			})
+		},
+		exists:  pathExists,
+		term:    serviceTermGrace,
+		kill:    serviceKillGrace,
+		cmdline: cmdline,
 	}
 	return runLifecycle(parent, deps, readiness)
 }

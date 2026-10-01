@@ -140,7 +140,10 @@ pub fn build(
     validate_vmsa(&bsp_vmsa, SHIM_BASE, BSP_STACK_TOP, ZERO_PAGE)?;
     let vmsa = vmsa_page(&bsp_vmsa);
     let measurement = launch_measurement(&pages, std::slice::from_ref(&vmsa));
-    // The loader must find memory wherever E820 claims some and none in the apertures.
+    // The loader must find memory backed where this image puts pages. It is not
+    // asked for the guest's RAM: on SEV-SNP this directive is how a loader
+    // converts memory to private, not a check it makes, and a guest that has
+    // its RAM converted for it is a guest whose image states a machine size.
     let mut spans: Vec<(u64, u64)> = Vec::new();
     for (base, size, _) in &required_memory {
         match spans.last_mut() {
@@ -832,11 +835,98 @@ mod tests {
         assert_eq!(base, same, "the processor count moved the measurement");
     }
 
+    /// On SEV-SNP a required-memory directive is not a check: QEMU converts the
+    /// range to private in the RMP (target/i386/sev.c). Declaring a machine's
+    /// worth of it is therefore how a guest used to get private RAM, and is
+    /// what bound one published image to one guest size. The shim converts its
+    /// own memory now, so this states only the pages the image loads -- all of
+    /// them, because a loader that has none backed there cannot import them,
+    /// and none beyond, because beyond them is the guest's own business.
+    #[test]
+    fn required_memory_is_the_pages_the_image_loads_and_no_more() {
+        let dir = tempdir().unwrap();
+        let (k, i, out) = (
+            dir.path().join("bzImage"),
+            dir.path().join("initrd"),
+            dir.path().join("out.igvm"),
+        );
+        fs::write(&k, test_kernel()).unwrap();
+        fs::write(&i, vec![7u8; 100_000]).unwrap();
+        let declared = |ram| {
+            let params = Params::snp(ram, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
+            build(&k, &i, &out, &params, None, None, 0).unwrap();
+            let bytes = fs::read(&out).unwrap();
+            let file = IgvmFile::new_from_binary(&bytes, None).unwrap();
+            let mut required: Vec<(u64, u64)> = Vec::new();
+            let mut loaded: Vec<(u64, u64)> = Vec::new();
+            for d in file.directives() {
+                match d {
+                    IgvmDirectiveHeader::RequiredMemory {
+                        gpa,
+                        number_of_bytes,
+                        ..
+                    } => required.push((*gpa, *gpa + u64::from(*number_of_bytes))),
+                    IgvmDirectiveHeader::PageData { gpa, .. } => push_page(&mut loaded, *gpa),
+                    IgvmDirectiveHeader::ParameterInsert(p) => push_page(&mut loaded, p.gpa),
+                    _ => {}
+                }
+            }
+            // Adjacent directives describe one span: a long one is split only
+            // because the field counting its bytes is 32 bits wide.
+            let mut spans: Vec<(u64, u64)> = Vec::new();
+            for (lo, hi) in required {
+                match spans.last_mut() {
+                    Some(last) if last.1 == lo => last.1 = hi,
+                    _ => spans.push((lo, hi)),
+                }
+            }
+            (spans, loaded)
+        };
+        let (spans, loaded) = declared(8 * GIB);
+        assert_eq!(
+            spans, loaded,
+            "the image requires something it does not load"
+        );
+        // The RAM the guest is given does not enter it, which is the point:
+        // one image, any -m, and the shim converting what the guest was given.
+        for ram in [DEFAULT_RAM, 2 * GIB, 64 * GIB, MAX_RAM] {
+            assert_eq!(
+                declared(ram).0,
+                spans,
+                "{ram:#x} of RAM moved the declaration"
+            );
+        }
+        // Nothing the image loads is left out, so nothing is imported into
+        // memory a loader was never told to have.
+        assert!(spans.iter().any(|(lo, _)| *lo == SNP_CPUID));
+        assert!(spans
+            .iter()
+            .any(|(lo, hi)| *lo <= KERNEL_BASE && KERNEL_BASE < *hi));
+    }
+
+    /// The pages a loader is handed, coalesced into spans as it reads them.
+    fn push_page(spans: &mut Vec<(u64, u64)>, gpa: u64) {
+        match spans.iter_mut().find(|s| s.1 == gpa) {
+            Some(s) => s.1 = gpa + PAGE,
+            None => spans.push((gpa, gpa + PAGE)),
+        }
+        spans.sort_unstable();
+        // Importing a page can join two spans that were apart before it.
+        let mut n = 0;
+        while n + 1 < spans.len() {
+            if spans[n].1 == spans[n + 1].0 {
+                spans[n].1 = spans[n + 1].1;
+                spans.remove(n + 1);
+            } else {
+                n += 1;
+            }
+        }
+    }
+
     /// The RAM a guest is given no longer reaches the digest: the E820 map and
     /// the accept list it decided are written by the shim, from a memory map
-    /// the loader deposits after the measurement is closed. The file still
-    /// states that RAM as required memory, because the loader has to make it
-    /// private before the shim validates it, but nothing measured moves.
+    /// the loader deposits after the measurement is closed, and the required
+    /// memory it declares is the image's own pages rather than a machine's.
     #[test]
     fn the_guest_size_leaves_the_measurement_alone() {
         let dir = tempdir().unwrap();

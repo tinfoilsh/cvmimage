@@ -94,6 +94,8 @@ jobs:
           snp_meas="$(field tinfoil-snp.igvm.manifest.json expected_snp_measurement)"
           tdx_meas="$(field tinfoil-tdx.igvm.manifest.json expected_mrtd)"
           snp_policy="$(field tinfoil-snp.igvm.manifest.json guest_policy)"
+          jq -e '.launch.measurement == .expected_snp_measurement and .launch.policy == .guest_policy' tinfoil-snp.igvm.manifest.json > /dev/null
+          jq -e '.launch.mrtd == .expected_mrtd' tinfoil-tdx.igvm.manifest.json > /dev/null
 
           # cvmc appends no5lvl, so the command line that was measured is the
           # one it recorded -- not the string composed above. Publishing the
@@ -232,6 +234,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           IS_PRERELEASE: ${{ steps.check-prerelease.outputs.is_prerelease }}
         run: |
+          set -Eeuo pipefail
+          manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
+          snp_measurement="$(jq -er '.igvm.snp_launch.measurement' "$manifest")"
+          snp_policy="$(jq -er '.igvm.snp_launch.policy' "$manifest")"
+          tdx_measurement="$(jq -er '.igvm.tdx_launch.mrtd' "$manifest")"
           PRERELEASE_FLAG=""
           if [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"

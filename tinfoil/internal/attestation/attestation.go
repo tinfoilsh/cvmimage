@@ -1,8 +1,7 @@
 // Package attestation produces the enclave's attestation documents: it
-// acquires hardware quotes and assembles the v3 document served at the
-// well-known endpoint. Wire shapes (document, sections, collateral entries,
-// format URIs) and all verification logic live in tinfoil-go; this package
-// owns only the production side.
+// acquires hardware quotes and assembles documents served at the well-known
+// endpoint. The v3 wire shapes and verification logic live in tinfoil-go;
+// the opt-in v4 extension adds guest clock evidence on the production side.
 package attestation
 
 import (
@@ -182,6 +181,18 @@ func BuildAttestation(
 	deviceEvidence []envelope.DeviceEvidenceItem,
 	collateral []envelope.CollateralEntry,
 ) (*envelope.Document, error) {
+	return buildAttestation(material, nonce, deviceEvidence, collateral, reportWithRetry)
+}
+
+type quoteReader func([64]byte) ([]byte, string, error)
+
+func buildAttestation(
+	material []envelope.CryptoMaterialItem,
+	nonce []byte,
+	deviceEvidence []envelope.DeviceEvidenceItem,
+	collateral []envelope.CollateralEntry,
+	readQuote quoteReader,
+) (*envelope.Document, error) {
 	if len(nonce) != envelope.NonceSize {
 		return nil, fmt.Errorf("nonce must be %d bytes, got %d", envelope.NonceSize, len(nonce))
 	}
@@ -220,7 +231,7 @@ func BuildAttestation(
 		return nil, err
 	}
 
-	rawQuote, platform, err := reportWithRetry(reportData)
+	rawQuote, platform, err := readQuote(reportData)
 	if err != nil {
 		return nil, fmt.Errorf("obtaining hardware quote: %w", err)
 	}

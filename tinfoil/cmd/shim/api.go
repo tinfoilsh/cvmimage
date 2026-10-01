@@ -395,7 +395,7 @@ func registerObservabilityHandlers(
 				return
 			}
 
-			w.Header().Set(attestationFormatHeader, fresh.Format)
+			w.Header().Set(attestationFormatHeader, envelope.AttestationV3Format)
 			json.NewEncoder(w).Encode(fresh)
 			return
 		}

@@ -99,7 +99,11 @@ func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimc
 		request.Repo = external.Metadata.Repo
 		request.Tag = external.Metadata.Tag
 		if ref := external.Metadata.Config; ref != nil {
+			request.Profile = wire.ProfileIGVMV1
 			request.Config = &document.ConfigReference{Name: ref.Name, Digest: ref.Digest}
+		}
+		if ref := external.Metadata.Runtime; ref != nil {
+			request.Runtime = &document.RuntimeReference{Repo: ref.Repo, Tag: ref.Tag, Digest: ref.Digest}
 		}
 	}
 	data, err := json.Marshal(request)

@@ -19,8 +19,15 @@ type ConfigIdentity struct {
 	Digest string `yaml:"digest"`
 }
 
+type RuntimeIdentity struct {
+	Repo   string `yaml:"repo"`
+	Tag    string `yaml:"tag"`
+	Digest string `yaml:"digest"`
+}
+
 type Metadata struct {
-	Config *ConfigIdentity `yaml:"config,omitempty"`
+	Config  *ConfigIdentity  `yaml:"config,omitempty"`
+	Runtime *RuntimeIdentity `yaml:"runtime,omitempty"`
 
 	ID     string `yaml:"id"`
 	Domain string `yaml:"domain"`

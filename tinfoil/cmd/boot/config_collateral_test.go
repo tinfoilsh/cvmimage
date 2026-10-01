@@ -21,19 +21,24 @@ import (
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
 	ref := &document.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}
+	runtime := &document.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)}
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
 metadata:
   config:
     name: %s
     digest: %s
+  runtime:
+    repo: %s
+    tag: %s
+    digest: %s
 network:
   address: 100.64.0.42/20
   gateway: 100.64.0.1
-`, ref.Name, ref.Digest)))
+`, ref.Name, ref.Digest, runtime.Repo, runtime.Tag, runtime.Digest)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := wire.Request{Config: ref, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
+	expected := wire.Request{Profile: wire.ProfileIGVMV1, Config: ref, Runtime: runtime, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
 	collateral := []document.CollateralEntry{{ID: document.ConfigCollateralID, Role: document.RoleReferenceValues,
 		Format: document.CollateralConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

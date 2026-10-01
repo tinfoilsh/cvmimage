@@ -51,6 +51,7 @@ let
 
   packageNames = [
     "ca-certificates"
+    "chrony"
     "e2fsprogs"
     "iproute2"
     "nftables"

@@ -14,6 +14,7 @@ import (
 	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
 	"tinfoil/internal/nvidia"
+	"tinfoil/internal/trustedtime"
 	"tinfoil/internal/volume"
 )
 
@@ -114,6 +115,14 @@ func run(ctx context.Context, invocation invocation) error {
 		return fmt.Errorf("network configuration failed: %w", err)
 	}
 	tracker.Record(boot.StageNetwork, boot.StatusOK, time.Since(start), networkDetail)
+
+	start = time.Now()
+	log.Println("Waiting for authenticated UTC")
+	if err := trustedtime.Wait(ctx); err != nil {
+		tracker.Record(boot.StageTime, boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	tracker.Record(boot.StageTime, boot.StatusOK, time.Since(start), "authenticated UTC established")
 
 	// 3. Identity
 	start = time.Now()

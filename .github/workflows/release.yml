@@ -202,13 +202,16 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://${{ secrets.R2_IMAGES_ACCOUNT_ID }}.r2.cloudflarestorage.com
           R2_BUCKET: ${{ secrets.R2_IMAGES_BUCKET }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
           aws="$(/nix/var/nix/profiles/default/bin/nix-build \
             --no-out-link -I . -A release-upload-cli)/bin/aws"
           manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
           for file in /tmp/out/*; do
-            [ "$file" = "$manifest" ] && continue
+            if [ "$file" = "$manifest" ]; then
+              continue
+            fi
             "$aws" s3 cp "$file" \
               "s3://${R2_BUCKET}/cvm/$(basename "$file")" \
               --only-show-errors --no-progress

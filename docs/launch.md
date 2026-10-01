@@ -153,7 +153,18 @@ fields this image fixes.
 | `--guest-svn` | `0` | SNP anti-rollback version |
 | `--id-key` | none | Key signing the SNP ID block |
 
-`no5lvl` is appended because the image uses four-level page tables.
+`no5lvl` is appended because the image uses four-level page tables, and
+`no-kvmclock` prevents the host's shared clock from supplying time. The compiler
+rejects clock and frequency overrides, initcall blacklisting, and `--`, which
+would hide the required flags from Linux. Command lines must use printable ASCII
+and balanced double quotes.
+
+Both production and debug kernels require TDX or SNP Secure TSC, a protected TSC
+frequency, and the TSC clocksource before userspace starts. They stop on TSC
+instability or a switch to an unprotected clocksource. Ordinary VMs and SNP
+guests without Secure TSC cannot boot these kernels. This protects elapsed time;
+it does not authenticate a UTC date. Guest code that anchors authenticated time
+must use `CLOCK_MONOTONIC_RAW`, which excludes wall-clock frequency adjustments.
 
 `--config-hash` takes the whole field, hex-encoded: 32 bytes for SEV-SNP
 `HOST_DATA`, 48 for TDX `MRCONFIGID`. The guest reads the SHA-256 of its

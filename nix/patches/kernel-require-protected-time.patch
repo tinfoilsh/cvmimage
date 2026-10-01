@@ -1,0 +1,165 @@
+--- a/arch/x86/kernel/tsc.c
++++ b/arch/x86/kernel/tsc.c
+@@ -16,6 +16,7 @@
+ #include <linux/timex.h>
+ #include <linux/static_key.h>
+ #include <linux/static_call.h>
++#include <linux/cc_platform.h>
+ 
+ #include <asm/cpuid/api.h>
+ #include <asm/hpet.h>
+@@ -70,7 +71,7 @@
+ 
+ static int __init tsc_early_khz_setup(char *buf)
+ {
+-	return kstrtouint(buf, 0, &tsc_early_khz);
++	panic("Protected time forbids overriding the TSC frequency");
+ }
+ early_param("tsc_early_khz", tsc_early_khz_setup);
+ 
+@@ -281,6 +282,9 @@
+ 
+ void paravirt_set_sched_clock(u64 (*func)(void))
+ {
++	if (func != native_sched_clock)
++		panic("Protected time forbids a paravirtual scheduler clock");
++
+ 	static_call_update(pv_sched_clock, func);
+ }
+ #else
+@@ -331,6 +335,9 @@
+ 
+ static int __init tsc_setup(char *str)
+ {
++	if (!strcmp(str, "recalibrate"))
++		panic("Protected time forbids recalibrating the TSC");
++
+ 	if (!strcmp(str, "reliable"))
+ 		tsc_clocksource_reliable = 1;
+ 	if (!strncmp(str, "noirqtime", 9))
+@@ -344,8 +351,6 @@
+ 				 __func__);
+ 		tsc_as_watchdog = 0;
+ 	}
+-	if (!strcmp(str, "recalibrate"))
+-		tsc_force_recalibrate = 1;
+ 	if (!strcmp(str, "watchdog")) {
+ 		if (no_tsc_watchdog)
+ 			pr_alert("%s: tsc=watchdog overridden by earlier tsc=nowatchdog\n",
+@@ -1145,13 +1150,7 @@
+ 
+ static void tsc_cs_mark_unstable(struct clocksource *cs)
+ {
+-	if (tsc_unstable)
+-		return;
+-
+-	tsc_unstable = 1;
+-	if (using_native_sched_clock())
+-		clear_sched_clock_stable();
+-	pr_info("Marking TSC unstable due to clocksource watchdog\n");
++	panic("Protected TSC marked unstable by the clocksource watchdog");
+ }
+ 
+ static void tsc_cs_tick_stable(struct clocksource *cs)
+@@ -1214,16 +1213,7 @@
+ 
+ void mark_tsc_unstable(char *reason)
+ {
+-	if (tsc_unstable)
+-		return;
+-
+-	tsc_unstable = 1;
+-	if (using_native_sched_clock())
+-		clear_sched_clock_stable();
+-	pr_info("Marking TSC unstable due to %s\n", reason);
+-
+-	clocksource_mark_unstable(&clocksource_tsc_early);
+-	clocksource_mark_unstable(&clocksource_tsc);
++	panic("Protected TSC marked unstable: %s", reason);
+ }
+ 
+ EXPORT_SYMBOL_GPL(mark_tsc_unstable);
+@@ -1518,16 +1508,33 @@
+ 
+ void __init tsc_early_init(void)
+ {
+-	if (!boot_cpu_has(X86_FEATURE_TSC))
+-		return;
+-	/* Don't change UV TSC multi-chassis synchronization */
+-	if (is_early_uv_system())
+-		return;
++	unsigned int denominator, numerator, crystal_hz, unused;
++
++	if (!cpu_feature_enabled(X86_FEATURE_TDX_GUEST) &&
++	    !(cc_platform_has(CC_ATTR_GUEST_SEV_SNP) &&
++	      cc_platform_has(CC_ATTR_GUEST_SNP_SECURE_TSC)))
++		panic("Protected time requires TDX or SNP Secure TSC");
++
++	if (!boot_cpu_has(X86_FEATURE_TSC) ||
++	    !boot_cpu_has(X86_FEATURE_CONSTANT_TSC) ||
++	    !boot_cpu_has(X86_FEATURE_NONSTOP_TSC) ||
++	    !boot_cpu_has(X86_FEATURE_TSC_RELIABLE) || is_early_uv_system())
++		panic("Protected time requires a reliable invariant TSC");
++
++	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST)) {
++		/* TDX module CPUID, with no CPUID.16 or timer fallback. */
++		cpuid(CPUID_LEAF_TSC, &denominator, &numerator, &crystal_hz, &unused);
++		if (!denominator || !numerator || crystal_hz < KHZ)
++			panic("Protected time requires the TDX TSC frequency");
++		x86_platform.calibrate_cpu = native_calibrate_tsc;
++		x86_platform.calibrate_tsc = native_calibrate_tsc;
++	}
+ 
+ 	snp_secure_tsc_init();
+ 
+-	if (!determine_cpu_tsc_frequencies(true))
+-		return;
++	if (!determine_cpu_tsc_frequencies(true) ||
++	    !boot_cpu_has(X86_FEATURE_TSC_KNOWN_FREQ))
++		panic("Protected time requires a protected TSC frequency");
+ 	tsc_enable_sched_clock();
+ }
+ 
+--- a/arch/x86/kernel/kvmclock.c
++++ b/arch/x86/kernel/kvmclock.c
+@@ -290,6 +290,9 @@
+ {
+ 	u8 flags;
+ 
++	if (kvmclock)
++		panic("Protected time requires no-kvmclock");
++
+ 	if (!kvm_para_available() || !kvmclock)
+ 		return;
+ 
+--- a/kernel/time/clocksource.c
++++ b/kernel/time/clocksource.c
+@@ -1066,6 +1066,10 @@
+ 	}
+ 
+ found:
++	if ((best->id != CSID_X86_TSC && best->id != CSID_X86_TSC_EARLY) ||
++	    (best->flags & CLOCK_SOURCE_UNSTABLE))
++		panic("Protected time refuses clocksource %s", best->name);
++
+ 	if (curr_clocksource != best && !timekeeping_notify(best)) {
+ 		pr_info("Switched to clocksource %s\n", best->name);
+ 		curr_clocksource = best;
+@@ -1112,6 +1116,17 @@
+ }
+ fs_initcall(clocksource_done_booting);
+ 
++static int __init clocksource_require_protected_tsc(void)
++{
++	mutex_lock(&clocksource_mutex);
++	if (!curr_clocksource || curr_clocksource->id != CSID_X86_TSC ||
++	    (curr_clocksource->flags & CLOCK_SOURCE_UNSTABLE))
++		panic("Protected time requires the TSC clocksource before userspace");
++	mutex_unlock(&clocksource_mutex);
++	return 0;
++}
++late_initcall(clocksource_require_protected_tsc);
++
+ /*
+  * Enqueue the clocksource sorted by rating
+  */

@@ -50,6 +50,7 @@ let
     patches = [
       ./patches/kernel-disable-virtio-pci-admin-legacy.patch
       ./patches/kernel-tdx-fast-quote-polling.patch
+      ./patches/kernel-require-protected-time.patch
     ];
   };
 

@@ -284,3 +284,21 @@ func TestMonitorInvalidatesOnFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestMonitorReportsInvalidationFailure(t *testing.T) {
+	clockFailure := errors.New("clock read failed")
+	cleanupFailure := errors.New("checkpoint removal failed")
+	invalidations := 0
+	err := monitor(context.Background(), nil, func() (clocks, error) {
+		return clocks{}, clockFailure
+	}, nil, func() error {
+		invalidations++
+		if invalidations > 1 {
+			return cleanupFailure
+		}
+		return nil
+	}, time.Hour)
+	if !errors.Is(err, clockFailure) || !errors.Is(err, cleanupFailure) || invalidations != 2 {
+		t.Fatalf("monitor = %v, invalidations=%d", err, invalidations)
+	}
+}

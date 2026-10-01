@@ -151,11 +151,11 @@ func Monitor(ctx context.Context) error {
 	return monitor(ctx, observe, readClocks, publish, invalidate, pollInterval)
 }
 
-func monitor(ctx context.Context, observe func(context.Context) (checkpoint, error), now func() (clocks, error), publish func(checkpoint) error, invalidate func() error, interval time.Duration) error {
+func monitor(ctx context.Context, observe func(context.Context) (checkpoint, error), now func() (clocks, error), publish func(checkpoint) error, invalidate func() error, interval time.Duration) (result error) {
 	if err := invalidate(); err != nil {
 		return err
 	}
-	defer invalidate()
+	defer func() { result = errors.Join(result, invalidate()) }()
 	initial, err := now()
 	if err != nil {
 		return err

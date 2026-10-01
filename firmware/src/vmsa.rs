@@ -79,7 +79,6 @@ pub fn bsp_vmsa() -> Box<SevVmsa> {
     v
 }
 
-
 pub fn validate_vmsa(v: &SevVmsa, rip: u64, rsp: u64, rsi: u64) -> Result<(), String> {
     let data = |s: &SevSelector, sel: u64, attrib: u16| {
         s.selector == sel as u16 && s.attrib == attrib && s.limit == SEG_LIMIT && s.base == 0

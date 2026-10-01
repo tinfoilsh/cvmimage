@@ -177,12 +177,24 @@ mod tests {
             .collect()
     }
 
-    /// The symbol a call or jump names, and nothing for any other instruction.
+    /// The routine a call or jump names, and nothing for any other
+    /// instruction. objdump names an address after whatever symbol precedes
+    /// it, and layout.inc puts every address this image knows in the table, so
+    /// a jump inside a routine is named after one of those rather than after
+    /// the routine -- and with no offset at all where it lands on one exactly.
+    /// Those are not routines, and this does not report them.
     fn target<'a>(text: &[&'a str]) -> Option<&'a str> {
         if !matches!(text.first(), Some(&"call") | Some(&"jmp")) {
             return None;
         }
-        text.last()?.strip_prefix('<')?.strip_suffix('>')
+        let name = text.last()?.strip_prefix('<')?.strip_suffix('>')?;
+        match SYMBOLS
+            .iter()
+            .any(|(s, _)| *s == name.split('+').next().unwrap())
+        {
+            true => None,
+            false => Some(name),
+        }
     }
 
     /// Where each routine objdump named begins, in address order.

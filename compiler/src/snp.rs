@@ -904,6 +904,54 @@ mod tests {
             .any(|(lo, hi)| *lo <= KERNEL_BASE && KERNEL_BASE < *hi));
     }
 
+    /// The shim writes the zero page, the ACPI page and its two region buffers
+    /// before it converts or validates anything, and reads the page tables,
+    /// the loader's two parameter pages and its own stack throughout. All of
+    /// those have to arrive private and validated, which is what the loader
+    /// importing them does -- so every one has to be inside a span this image
+    /// declares. One left out is a fault in the first instructions of a guest
+    /// with no console, and no accept walk would ever reach it.
+    #[test]
+    fn every_page_the_shim_touches_before_it_converts_is_declared() {
+        let dir = tempdir().unwrap();
+        let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
+        fs::write(&k, test_kernel()).unwrap();
+        fs::write(&i, vec![7u8; 100_000]).unwrap();
+        let params = Params::snp(DEFAULT_RAM, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
+        let launch = tinfoil_firmware::snp(&k, &i, &params).unwrap();
+        let covered = |lo: u64, hi: u64| {
+            launch
+                .required_memory
+                .iter()
+                .any(|(base, size, _)| *base <= lo && hi <= base + size)
+        };
+        for (name, lo, hi) in [
+            ("the zero page", ZERO_PAGE, ZERO_PAGE + PAGE),
+            ("the ACPI page", ACPI_BASE, ACPI_BASE + PAGE),
+            ("the processor count", PARAM_PAGE, PARAM_PAGE + PAGE),
+            ("the loader's map", PARAM_MAP_PAGE, PARAM_MAP_PAGE + PAGE),
+            (
+                "the page tables",
+                PAGE_TABLES,
+                PAGE_TABLES + PAGE_TABLE_SIZE,
+            ),
+            ("the stack and both buffers", BSP_STACK, BSP_STACK_TOP),
+            ("the block", SNP_GHCB, SNP_GHCB + PAGE),
+            ("the shim itself", SHIM_BASE, SHIM_BASE + SHIM_SIZE),
+        ] {
+            assert!(covered(lo, hi), "{name} ({lo:#x}..{hi:#x}) is not declared");
+        }
+        // ...and the block in particular is never handed to the accept walk:
+        // converting it part-way through would break every batch after it.
+        let (top, host) = boot::host_regions(&params.extents());
+        for (lo, hi) in boot::accept_ranges(&boot::merge(&launch.spans, &host), top) {
+            assert!(
+                !(lo <= SNP_GHCB && SNP_GHCB < hi),
+                "the walk converts the block it is converting through"
+            );
+        }
+    }
+
     /// The pages a loader is handed, coalesced into spans as it reads them.
     fn push_page(spans: &mut Vec<(u64, u64)>, gpa: u64) {
         match spans.iter_mut().find(|s| s.1 == gpa) {

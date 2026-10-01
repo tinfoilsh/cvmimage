@@ -16,6 +16,7 @@ import (
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document/collateral"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
@@ -117,7 +118,7 @@ func prefetchKeyserverCollateral(
 	ctx context.Context,
 	config *Config,
 	request wire.Request,
-) ([]envelope.CollateralEntry, error) {
+) ([]collateral.Entry, error) {
 	if request.Repo == "" || request.Platform == "" || request.Platform == attestation.PlatformDummy || request.QuoteBase64 == "" {
 		return nil, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
 	}

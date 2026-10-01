@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/verifier/document"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document/collateral"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/config"
@@ -42,8 +42,8 @@ func TestNewCollateralSourceSkipsDummy(t *testing.T) {
 
 func TestLoadConfigCollateralRequest(t *testing.T) {
 	want := wire.Request{Profile: wire.ProfileIGVMV1, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
-		Runtime: &document.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)},
-		Config:  &document.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}}
+		Runtime: &collateral.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)},
+		Config:  &collateral.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}}
 	got, err := loadCollateralRequest(writeCollateralRequestArtifact(t, want))
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("request = %#v, error = %v", got, err)
@@ -51,8 +51,8 @@ func TestLoadConfigCollateralRequest(t *testing.T) {
 }
 
 func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
-	config := &document.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}
-	runtime := &document.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)}
+	config := &collateral.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}
+	runtime := &collateral.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)}
 	for name, request := range map[string]wire.Request{
 		"empty":           {},
 		"missing quote":   {Repo: "repo", Platform: attestation.PlatformTDX},

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
-	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document/collateral"
 )
 
 const (
@@ -47,7 +47,7 @@ func NewCache(request wire.Request, fetcher Fetcher) *Cache {
 	}
 }
 
-func (c *Cache) Current(ctx context.Context) ([]envelope.CollateralEntry, error) {
+func (c *Cache) Current(ctx context.Context) ([]collateral.Entry, error) {
 	for {
 		c.mu.Lock()
 		now := c.now()
@@ -118,8 +118,8 @@ func (c *Cache) refresh(ctx context.Context, done chan struct{}) error {
 	return err
 }
 
-func cloneCollateral(entries []envelope.CollateralEntry) []envelope.CollateralEntry {
-	cloned := make([]envelope.CollateralEntry, len(entries))
+func cloneCollateral(entries []collateral.Entry) []collateral.Entry {
+	cloned := make([]collateral.Entry, len(entries))
 	for index, entry := range entries {
 		cloned[index] = entry
 		cloned[index].Data = bytes.Clone(entry.Data)

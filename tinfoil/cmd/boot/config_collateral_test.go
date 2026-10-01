@@ -14,14 +14,14 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/verifier/document"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document/collateral"
 
 	"tinfoil/internal/attestationmaterial"
 )
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
-	ref := &document.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}
-	runtime := &document.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)}
+	ref := &collateral.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}
+	runtime := &collateral.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)}
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
 metadata:
   config:
@@ -39,8 +39,8 @@ network:
 		t.Fatal(err)
 	}
 	expected := wire.Request{Profile: wire.ProfileIGVMV1, Config: ref, Runtime: runtime, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
-	collateral := []document.CollateralEntry{{ID: document.ConfigCollateralID, Role: document.RoleReferenceValues,
-		Format: document.CollateralConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
+	collateral := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
+		Format: collateral.ConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request wire.Request
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {

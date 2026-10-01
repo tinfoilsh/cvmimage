@@ -17,6 +17,7 @@ import (
 	sevclient "github.com/google/go-sev-guest/client"
 	tdxclient "github.com/google/go-tdx-guest/client"
 	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document/collateral"
 
 	"tinfoil/internal/legacy"
 
@@ -151,7 +152,7 @@ func BuildAttestation(
 	material []envelope.CryptoMaterialItem,
 	nonce []byte,
 	deviceEvidence []envelope.DeviceEvidenceItem,
-	collateral []envelope.CollateralEntry,
+	collateral []collateral.Entry,
 ) (json.RawMessage, error) {
 	return envelope.Build(envelope.BuildInput{
 		Nonce: nonce, CryptoMaterial: material, DeviceEvidence: deviceEvidence, Collateral: collateral,

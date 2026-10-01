@@ -8,7 +8,7 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
-	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document/collateral"
 )
 
 type fetchFunc func(context.Context, wire.Request) (wire.Response, error)
@@ -115,7 +115,7 @@ func response(expiresAt time.Time, id string) wire.Response {
 	return wire.Response{
 		Format:    wire.FormatV2,
 		ExpiresAt: expiresAt,
-		Collateral: []envelope.CollateralEntry{{
+		Collateral: []collateral.Entry{{
 			ID:       id,
 			Subjects: []string{"subject"},
 			Data:     []byte(`{"value":true}`),

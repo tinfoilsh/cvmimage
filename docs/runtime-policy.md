@@ -9,6 +9,18 @@ The only non-root account is `nvidia-persistenced` with the measured identity
 non-login. Resolver bytes must remain identical to the fixed resolver contract
 used by `tinfoil-boot`.
 
+The required `tinfoil-egress` service forwards container DNS over authenticated
+TLS to Cloudflare.
+Docker keeps internal service-name resolution and forwards external queries to
+`169.254.0.53` from the container's network namespace. The service applies that
+network's policy and installs allowed public IPv4 answers before replying.
+Address permissions expire with DNS TTLs plus a five-second delivery grace;
+previously authorized connections survive expiry. Connection marks are unique
+per network and policy installation, so policy replacement revokes old flows.
+Restricted networks reject
+external DNS queries outside their allowlist and direct DNS/DoT connections.
+This remains IP-based enforcement, including the limits of shared hosting IPs.
+
 The measured daemon policy includes these mode `0644` files:
 
 - `/etc/containerd/config.toml` disables containerd families outside the Docker

@@ -12,7 +12,7 @@ const dnatDrop = "add rule inet tinfoil container_forward ct status dnat drop"
 
 func mustContainerScript(t *testing.T, config *runtimeconfig.Config, debug bool) string {
 	t.Helper()
-	script, err := renderContainerNetworkScript(config, debug)
+	script, err := renderContainerNetworkScript(config, debug, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestContainerNetworkPolicyModes(t *testing.T) {
 		`iifname "open" meta nfproto ipv6 accept`,
 		"destroy set inet tinfoil allow-control",
 		"create set inet tinfoil allow-control",
-		`iifname "control" ip daddr @allow-control accept`,
+		`iifname "control" ip daddr @allow-control ct mark set 2 accept`,
 	} {
 		if !strings.Contains(script, fragment) {
 			t.Errorf("missing %q from:\n%s", fragment, script)
@@ -79,10 +79,10 @@ func TestContainerNetworkPolicyModes(t *testing.T) {
 	if destroy < 0 || create < 0 || destroy > create {
 		t.Fatalf("allowlist set must be replaced before use:\n%s", script)
 	}
-	accept := strings.Index(script, `iifname "control" ip daddr @allow-control accept`)
+	accept := strings.Index(script, `iifname "control" ip daddr @allow-control ct mark set 2 accept`)
 	drop := strings.Index(script, `iifname "control" ip daddr {`)
-	if accept < 0 || drop < 0 || accept > drop {
-		t.Fatalf("allowlist accept must precede private-range drop:\n%s", script)
+	if accept < 0 || drop < 0 || accept < drop {
+		t.Fatalf("private-range drop must precede allowlist accept:\n%s", script)
 	}
 }
 
@@ -138,5 +138,28 @@ func TestUpstreamCannotReachShimHTTPS(t *testing.T) {
 	cfg := &runtimeconfig.Config{ShimCfg: &shimconfig.Config{UpstreamContainer: "workspace"}}
 	if strings.Contains(mustContainerScript(t, cfg, false), "tcp dport 443 accept") {
 		t.Fatal("upstream can reach shim HTTPS")
+	}
+}
+
+func TestEstablishedEgressRequiresCurrentNetworkPolicy(t *testing.T) {
+	config := &runtimeconfig.Config{Networks: map[string]*runtimeconfig.NetworkSpec{
+		"alpha": {Egress: "allowlist"}, "beta": {Egress: "allowlist"},
+	}}
+	first, err := renderContainerNetworkScript(config, false, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := renderContainerNetworkScript(config, false, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`iifname "alpha" meta nfproto ipv4 ct state established,related ct mark 1 accept`,
+		`oifname "alpha" ct state established,related ct mark 1 accept`,
+		`iifname "beta" meta nfproto ipv4 ct state established,related ct mark 2 accept`,
+	} {
+		if !strings.Contains(first, fragment) || strings.Contains(replacement, fragment) {
+			t.Fatalf("connection permission survived policy replacement: %s", fragment)
+		}
 	}
 }

@@ -35,7 +35,16 @@ type Command struct {
 	Args       []string
 	Env        []string
 	Dir        string
+	Stdout     *os.File
 	ExtraFiles []*os.File
+}
+
+func (c Command) files() []*os.File {
+	standardFiles := [childStandardFileCount]*os.File{os.Stdin, os.Stdout, os.Stderr}
+	if c.Stdout != nil {
+		standardFiles[syscall.Stdout] = c.Stdout
+	}
+	return append(standardFiles[:], c.ExtraFiles...)
 }
 
 func (c *Command) AddExtraFile(file *os.File) int {
@@ -276,8 +285,7 @@ func (b *osBackend) start(command Command, scope string, options startOptions) (
 	defer cgroupFD.Close()
 	files := options.files
 	if files == nil {
-		standardFiles := [childStandardFileCount]*os.File{os.Stdin, os.Stdout, os.Stderr}
-		files = append(standardFiles[:], command.ExtraFiles...)
+		files = command.files()
 	}
 	system := &syscall.SysProcAttr{
 		UseCgroupFD: true,

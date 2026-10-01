@@ -162,6 +162,56 @@ func TestCommandAddExtraFileUsesChildPosition(t *testing.T) {
 	}
 }
 
+func TestCommandStdoutPreservesOtherDescriptors(t *testing.T) {
+	const childMode = "TINFOIL_TEST_CAPTURE_STDOUT"
+	if os.Getenv(childMode) == "1" {
+		extra := os.NewFile(childStandardFileCount, "extra")
+		if _, err := os.Stdout.WriteString("captured stdout"); err != nil {
+			os.Exit(1)
+		}
+		if _, err := extra.WriteString("extra output"); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	directory := t.TempDir()
+	captured, err := os.Create(filepath.Join(directory, "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer captured.Close()
+	extra, err := os.Create(filepath.Join(directory, "extra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	command := Command{ExtraFiles: []*os.File{extra}}
+	defaults := command.files()
+	if len(defaults) != childStandardFileCount+1 || defaults[syscall.Stdout] != os.Stdout {
+		t.Fatalf("default descriptors = %v", defaults)
+	}
+	command.Stdout = captured
+	files := command.files()
+	if len(files) != len(defaults) || files[syscall.Stdin] != os.Stdin || files[syscall.Stderr] != os.Stderr || files[childStandardFileCount] != extra {
+		t.Fatalf("stdout capture changed unrelated descriptors: %v", files)
+	}
+	process, err := os.StartProcess(os.Args[0], []string{os.Args[0], "-test.run=^TestCommandStdoutPreservesOtherDescriptors$"}, &os.ProcAttr{
+		Env: append(os.Environ(), childMode+"=1"), Files: files,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := process.Wait()
+	if err != nil || !state.Success() {
+		t.Fatalf("capture child = (%v, %v)", state, err)
+	}
+	for path, want := range map[string]string{captured.Name(): "captured stdout", extra.Name(): "extra output"} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Fatalf("captured %s = (%q, %v), want %q", path, data, err, want)
+		}
+	}
+}
+
 func TestManagerOwnsDirectWaitsAndReapsOrphans(t *testing.T) {
 	sigchld := make(chan os.Signal, 8)
 	backend := newFakeBackend(sigchld)

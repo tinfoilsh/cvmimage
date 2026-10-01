@@ -1145,4 +1145,72 @@ pub mod tests {
             assert_eq!(r[rtmr], zeros(48), "{rtmr} is not a reset value");
         }
     }
+
+    /// The guest holds the host to the RAM its config bought by totalling the
+    /// E820 it was handed, so that total has to be the RAM exactly, at every
+    /// size and on both platforms. Apertures are absent from the table and the
+    /// reset page is not the guest's RAM, so both are discounted.
+    #[test]
+    fn e820_totals_the_ram_the_guest_was_given() {
+        for ram in [GIB, 2 * GIB, Q35_SPLIT, 3 * GIB, 4 * GIB, 8 * GIB, 64 * GIB] {
+            let cases = [
+                (
+                    "snp",
+                    Params::snp(ram, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap(),
+                    false,
+                ),
+                ("tdx", Params::tdx(ram, DEFAULT_VCPUS, "").unwrap(), true),
+            ];
+            for (name, params, reset_page) in cases {
+                let placed: Vec<Placed> = params
+                    .mmio
+                    .iter()
+                    .map(|(base, size)| Placed::mmio(*base, *size))
+                    .chain(reset_page.then(|| {
+                        Placed::measured(RESET_ALIAS, "", RESERVED, vec![0u8; PAGE as usize])
+                    }))
+                    .collect();
+                let (top, host) = boot::host_regions(&params.extents());
+                let e820 = boot::e820(&boot::merge(&boot::shim_spans(&placed), &host), top);
+                // The same discount the guest applies: the bytes an entry
+                // holds in the reset page, whether or not it has one of its own.
+                let total: u64 = e820
+                    .iter()
+                    .map(|&(base, size, _)| {
+                        let reset = (base + size)
+                            .min(FOUR_GIB)
+                            .saturating_sub(base.max(RESET_ALIAS));
+                        size - reset
+                    })
+                    .sum();
+                assert_eq!(total, ram, "{name} at {ram:#x}");
+            }
+        }
+    }
+
+    /// The same total on an AMD vCPU large enough that QEMU restacks its high
+    /// bank above 1 TiB, which drops the HyperTransport hole below the top of
+    /// RAM and so into E820. The guest discounts that window for the same
+    /// reason it discounts the reset page: neither is RAM it was given.
+    #[test]
+    fn e820_totals_the_ram_behind_a_restacked_amd_map() {
+        let (ht_lo, ht_hi) = (1012 * GIB, 1024 * GIB);
+        let ram = 1024 * GIB;
+        let (lo, hi) = (ht_hi, ht_hi + ram - Q35_LOWMEM);
+        let extents = [(0, Q35_LOWMEM, true), (ht_lo, ht_hi, false), (lo, hi, true)];
+        let (top, host) = boot::host_regions(&extents);
+        let e820 = boot::e820(&host, top);
+        assert!(e820.contains(&(ht_lo, ht_hi - ht_lo, RESERVED)));
+        let total: u64 = e820
+            .iter()
+            .map(|&(base, size, _)| {
+                let discounted = [(RESET_ALIAS, FOUR_GIB), (ht_lo, ht_hi)]
+                    .iter()
+                    .map(|&(lo, hi)| (base + size).min(hi).saturating_sub(base.max(lo)))
+                    .sum::<u64>();
+                size - discounted
+            })
+            .sum();
+        assert_eq!(total, ram);
+    }
 }

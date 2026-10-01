@@ -97,7 +97,13 @@ func run(ctx context.Context, invocation invocation) error {
 		return err
 	}
 	log.Printf("Config CPU count enforced: %s", cpuDetail)
-	tracker.Record("config", boot.StatusOK, time.Since(start), cpuDetail)
+	ramDetail, err := enforceRAMSize(memmapRoot, config.Memory)
+	if err != nil {
+		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	log.Printf("Config RAM size enforced: %s", ramDetail)
+	tracker.Record("config", boot.StatusOK, time.Since(start), cpuDetail+", "+ramDetail)
 
 	// 2. Network
 	start = time.Now()

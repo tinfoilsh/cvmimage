@@ -548,11 +548,11 @@ pub mod tests {
 
     #[test]
     fn required_cmdline_is_appended_whatever_the_operator_asks_for() {
-        assert_eq!(params().cmdline, "panic=-1 no5lvl");
+        assert_eq!(params().cmdline, "panic=-1 no5lvl no-kvmclock");
         let p = Params::tdx("quiet").unwrap();
-        assert_eq!(p.cmdline, "quiet no5lvl");
+        assert_eq!(p.cmdline, "quiet no5lvl no-kvmclock");
         let p = Params::tdx("no5lvl x").unwrap();
-        assert_eq!(p.cmdline, "no5lvl x");
+        assert_eq!(p.cmdline, "no5lvl x no-kvmclock");
     }
 
     /// Every input the measurement is claimed to cover must move it. An input

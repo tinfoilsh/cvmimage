@@ -22,6 +22,7 @@ import (
 	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
 	"tinfoil/internal/metrics"
+	"tinfoil/internal/trustedtime"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
@@ -31,6 +32,8 @@ import (
 type collateralSource interface {
 	Current(context.Context) ([]envelope.CollateralEntry, error)
 }
+
+const attestationTimeVersion = "v4"
 
 // pathMatchesPattern checks if a request path matches a pattern.
 // Patterns can be exact matches or use a trailing * for segment-boundary prefix matching.
@@ -269,7 +272,7 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, trustedtime.Read)
 
 	// Fail closed: an authenticated deployment with no validator must not tunnel.
 	if config.Authenticated && validator == nil {
@@ -290,7 +293,7 @@ func NewObservabilityServer(
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, trustedtime.Read)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
@@ -317,14 +320,28 @@ func registerObservabilityHandlers(
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
 	externalConfig *config.ExternalConfig,
+	readTime func() (trustedtime.Sample, error),
 ) {
 	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		query := r.URL.Query()
+		formats, withTime := query["format"]
+		if withTime {
+			w.Header().Set("Cache-Control", "no-store")
+			if len(formats) != 1 || formats[0] != attestationTimeVersion {
+				writeAPIError(w, errInvalidAttestationFormat)
+				return
+			}
+			if len(query["nonce"]) != 1 || query.Get("nonce") == "" {
+				writeAPIError(w, errInvalidNonce)
+				return
+			}
+		}
 
-		// Fresh v3 attestation with nonce: ?nonce=<64 hex chars>
-		if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
+		// A nonce requests fresh evidence; format=v4 also requires guest time.
+		if nonceHex := query.Get("nonce"); nonceHex != "" {
 			nonce, err := hex.DecodeString(nonceHex)
-			if err != nil || len(nonce) != 32 {
+			if err != nil || len(nonce) != envelope.NonceSize {
 				writeAPIError(w, errInvalidNonce)
 				return
 			}
@@ -346,15 +363,23 @@ func registerObservabilityHandlers(
 				return
 			}
 
-			fresh, err := tinfoilattestation.BuildAttestation(
-				identityBody.CryptoMaterial(),
-				nonce,
-				deviceEvidence,
-				collateral,
-			)
+			var fresh *envelope.Document
+			if withTime {
+				fresh, err = tinfoilattestation.BuildTimedAttestation(
+					identityBody.CryptoMaterial(), nonce, deviceEvidence, collateral, readTime,
+				)
+			} else {
+				fresh, err = tinfoilattestation.BuildAttestation(
+					identityBody.CryptoMaterial(), nonce, deviceEvidence, collateral,
+				)
+			}
 			if err != nil {
 				log.Printf("Fresh attestation failed: %v", err)
-				writeAPIError(w, errAttestationBuildFailed)
+				if errors.Is(err, tinfoilattestation.ErrClockUnavailable) {
+					writeAPIError(w, errClockUnavailable)
+				} else {
+					writeAPIError(w, errAttestationBuildFailed)
+				}
 				return
 			}
 

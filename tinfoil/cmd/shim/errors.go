@@ -31,6 +31,7 @@ const (
 	errCodeServiceStarting         = "service_starting"
 	errCodeServiceFailed           = "service_failed"
 	errCodeInvalidNonce            = "invalid_nonce"
+	errCodeAttestationFormat       = "invalid_attestation_format"
 	errCodeAttestationUnavailable  = "attestation_unavailable"
 )
 
@@ -49,6 +50,8 @@ const (
 	errMsgServiceStarting         = "The service is starting. Please try again shortly."
 	errMsgServiceFailed           = "The service failed to start."
 	errMsgInvalidNonce            = "Invalid nonce: must be exactly 32 bytes (64 hex chars)."
+	errMsgAttestationFormat       = "Unsupported attestation format."
+	errMsgClockUnavailable        = "Trusted guest time is temporarily unavailable."
 	errMsgCollateralUnavailable   = "Attestation collateral is temporarily unavailable."
 	errMsgGPUEvidenceUnavailable  = "GPU attestation evidence is unavailable."
 	errMsgAttestationBuildFailed  = "Failed to build attestation."
@@ -153,6 +156,18 @@ var (
 		errType: errTypeInvalidRequest,
 		code:    errCodeInvalidNonce,
 		message: errMsgInvalidNonce,
+	}
+	errInvalidAttestationFormat = apiError{
+		status:  http.StatusBadRequest,
+		errType: errTypeInvalidRequest,
+		code:    errCodeAttestationFormat,
+		message: errMsgAttestationFormat,
+	}
+	errClockUnavailable = apiError{
+		status:  http.StatusServiceUnavailable,
+		errType: errTypeServiceUnavailable,
+		code:    errCodeAttestationUnavailable,
+		message: errMsgClockUnavailable,
 	}
 	errCollateralUnavailable = apiError{
 		status:  http.StatusServiceUnavailable,

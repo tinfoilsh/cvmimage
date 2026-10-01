@@ -66,18 +66,27 @@ snp_boot_kernel:
     jmp *(%rax)
 
 map_code die_map, accept_private
-psc_code die_psc, psc_vmgexit
+psc_code die_psc, vmgexit
 
 # A map this image will not run in, which is step 2 of the sequence above.
 die_map:
     mov $2, %r15d
     jmp die_step
 
-# The three ways the host can refuse to convert memory, numbered as steps 3 to
-# 5: KVM prints a termination request's reason set and code, so which of them
-# happened is readable on the host even though the guest has no console. A host
-# that says it converted memory and did not leaves by the fourth way instead,
-# PVALIDATE refusing the page in `die`.
+# The three refusals the shim can report, numbered as steps 3 to 5: KVM prints
+# a termination request's reason set and code, so which of them happened is
+# readable on the host even though the guest has no console. PVALIDATE
+# refusing a page is a fourth, reported by `die`.
+#
+# A host that answers the share request with success and leaves the block
+# assigned to the guest is reported by nothing at all. The first write to the
+# descriptor is then an unencrypted write to a page the RMP still says the
+# guest owns, which is an RMP violation: the host takes a nested page fault
+# and the guest stops where it stood, with no exception a shim without an IDT
+# could have turned into a request. Nothing here probes for it, because
+# touching the page to find out is that same violation -- a probe would stop
+# an honest host rather than catch a lying one -- so the evidence is where KVM
+# says the guest stopped.
 die_ghcb_share:
     mov $3, %r15d
     jmp die_step
@@ -88,32 +97,17 @@ die_ghcb_private:
     mov $5, %r15d
     jmp die_step
 
-# Terminate with reason set 0xf and the step in %r15d as the code.
+# The GHCB MSR termination request is the shim's only channel to the host:
+# reason set 0xf, which is this shim's own, and the code in %r15d. The set is
+# where the protocol puts the subsystem -- sets 0 and 1 are the ones the GHCB
+# specification and Linux define -- so the failure goes in the code, where a
+# host reading it cannot take it for either of those.
 die_step:
     mov %r15d, %eax
     shl $16, %eax
     or $0xf100, %eax
     xor %edx, %edx
-    mov $0xc0010130, %ecx
-    wrmsr
-    vmgexit
-    jmp fatal
-
-# The GHCB MSR termination request is the shim's only channel to the host.
-die:
-    mov %r12, %rax
-    shr $21, %rax
-    and $0xff, %eax
-    shl $16, %eax
-    and $7, %r15d
-    shl $3, %ebx
-    or %r15d, %ebx
-    and $0xf, %ebx
-    shl $12, %ebx
-    or %ebx, %eax
-    or $0x100, %eax
-    xor %edx, %edx
-    mov $0xc0010130, %ecx
+    mov $GHCB_MSR, %ecx
     wrmsr
     vmgexit
 fatal:
@@ -121,10 +115,21 @@ fatal:
     hlt
     jmp fatal
 
+# PVALIDATE refused a page: the status it reported and the carry flag that
+# says the page was already in the state asked for, under a code of their own
+# well clear of the steps above.
+die:
+    and $7, %r15d
+    shl $3, %ebx
+    or %ebx, %r15d
+    or $0x80, %r15d
+    jmp die_step
+
 # Accept [%r12, %r13): the host makes it private, then PVALIDATE takes it. The
-# order is the whole point -- validating a page the RMP still calls shared
-# fails, which is what an image that declared a machine's worth of required
-# memory was hiding.
+# order is the whole point -- a PVALIDATE of a page the RMP still says the
+# host owns is a violation of it, not a status the guest reads back -- and an
+# image that declared a machine's worth of required memory never had to get it
+# right, because its loader had converted everything before the shim ran.
 accept_private:
     mov %r12, %r9
     mov %r13, %r10
@@ -185,12 +190,22 @@ ghcb_private:
     jc die_ghcb_private
     test %eax, %eax
     jnz die_ghcb_private
+    # The block was written through the shared alias and is zeroed here through
+    # the encrypted map, with nothing flushing a cache line between the two
+    # views of it. Every part that implements SNP reports SME_COHERENT (CPUID
+    # 0x8000001f EAX[10]) and keeps those views coherent in hardware, which is
+    # why Linux skips the same flush (amd_enc_cache_flush_required). Nothing
+    # here may read CPUID, so that is an assumption about the parts this image
+    # is published for rather than something it checks.
     mov $SNP_GHCB, %edi             # the descriptor is not what was measured here
     xor %eax, %eax
     mov $512, %ecx
     rep stosq
-    # ...and the MSR back to the value a reset leaves in it, so the block is
-    # not still named to a host that can no longer read it.
+    # ...and the MSR to the value a reset leaves in it, so the register does
+    # not still name a page the host can no longer read. It withdraws nothing:
+    # the GHCB address a host has registered lives in the control area it owns,
+    # no request in the protocol takes it back, and KVM keeps it for the life
+    # of the processor. This only leaves the register in a defined state.
     xor %edx, %edx
     xor %eax, %eax
     mov $GHCB_MSR, %ecx
@@ -206,31 +221,6 @@ ghcb_msr:
     vmgexit
     mov $GHCB_MSR, %ecx
     rdmsr
-    ret
-
-# One batch of page state changes through the block. The host reports whether
-# it took the request in the block's own fields, and a request it did not take
-# is not retried: psc_complete only repeats one the host accepted and left
-# unfinished.
-psc_vmgexit:
-    mov $GHCB_ALIAS, %rcx
-    # Nothing in the block is valid but the four fields this request states.
-    movq $0, GHCB_VALID_BITMAP(%rcx)
-    movq $0, GHCB_VALID_BITMAP+8(%rcx)
-    movb $GHCB_VALID_BITS, GHCB_VALID_BITMAP+GHCB_VALID_BYTE(%rcx)
-    movl $0, GHCB_USAGE(%rcx)
-    movw $GHCB_PROTOCOL, GHCB_PROTOCOL_VERSION(%rcx)
-    movl $SVM_VMGEXIT_PSC, GHCB_SW_EXIT_CODE(%rcx)
-    movl $0, GHCB_SW_EXIT_CODE+4(%rcx)
-    movq $0, GHCB_SW_EXIT_INFO_1(%rcx)
-    movq $0, GHCB_SW_EXIT_INFO_2(%rcx)
-    movq $PSC_BUFFER_GPA, GHCB_SW_SCRATCH(%rcx)
-    vmgexit
-    # The result is the low half of the first field, and the page state
-    # change's own error code is the whole of the second.
-    mov GHCB_SW_EXIT_INFO_1(%rcx), %eax
-    or GHCB_SW_EXIT_INFO_2(%rcx), %rax
-    jnz die_psc
     ret
 
 # Validate [%r12, %r13) as private memory, preferring 2 MiB; PVALIDATE reports status in EAX.

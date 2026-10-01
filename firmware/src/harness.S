@@ -15,7 +15,7 @@
 
 .text
 map_code harness_fail, harness_accept
-psc_code harness_fail, harness_psc_issue
+psc_code harness_fail, "call harness_psc_issue"
 
 # The System V registers a caller owns, saved once so that a refusal deep inside
 # a macro can return through the same epilogue an ordinary return does.
@@ -88,6 +88,11 @@ harness_accept:
     mov %rax, harness_count(%rip)
 1:  ret
 
+# A range of nothing in particular, so that a routine that recomputed it
+# rather than leaving it alone would not land on it by chance.
+.set HARNESS_HELD_LO, 0x0000123400000000
+.set HARNESS_HELD_HI, 0x0000123410000000
+
 # (lo, hi, host) -> 1, or zero where the walk refused the host, with every
 # entry it described recorded in harness_psc_entries.
 .globl harness_psc_range
@@ -99,37 +104,78 @@ harness_psc_range:
     movq $0, harness_psc_count(%rip)
     movq $0, harness_psc_calls(%rip)
     movq $0, harness_psc_bytes(%rip)
+    movq $0, harness_psc_lost(%rip)
+    # The range accept_private holds while the conversion runs, which psc.inc
+    # is handed a copy of in %r9 and %r10 and must not reach.
+    mov $HARNESS_HELD_LO, %r12
+    mov $HARNESS_HELD_HI, %r13
     call psc_range
+    call harness_psc_held
     mov $1, %eax
     jmp harness_ret
 
-# What a host does with a batch, which the test chooses: 0 finishes it in one
-# exit, 1 converts a single entry an exit, 2 converts nothing -- and a host
-# that converts nothing is what psc_complete has to refuse rather than spin on.
-# Every entry a call does convert is recorded with its index in its batch, so a
-# test reads both what was asked for and how it was divided into exits.
+# Whether that range is still the range: anything that trod on it would leave
+# accept_private validating memory it never asked anyone to convert, which no
+# listing and no entry this harness records can show. Clobbers rax.
+harness_psc_held:
+    mov $HARNESS_HELD_LO, %rax
+    cmp %rax, %r12
+    jne 1f
+    mov $HARNESS_HELD_HI, %rax
+    cmp %rax, %r13
+    je 2f
+1:  incq harness_psc_lost(%rip)
+2:  ret
+
+# What a host does with a batch, which the test chooses. The first three are
+# within a host's rights and the shim has to finish against all of them; the
+# last four are hosts it has to refuse rather than spin on or follow. Every
+# entry a call does convert is recorded with its index in its batch, so a test
+# reads both what was asked for and how it was divided into exits.
+.set HOST_WHOLE, 0                  # the whole batch in one exit
+.set HOST_ONE_AT_A_TIME, 1          # one entry an exit
+.set HOST_NOTHING, 2                # nothing at all, for ever
+.set HOST_PART_OF_AN_ENTRY, 3       # one page of an entry, then the entry
+.set HOST_BACKWARDS, 4              # the entry cursor wound back
+.set HOST_PAST_THE_BATCH, 5         # an end_entry the guest never wrote
+.set HOST_REFUSES, 6                # the request reported as not taken
 harness_psc_issue:
+    push %rcx                       # psc_vmgexit holds the block here
     push %rsi
     push %rbx
     push %r8
-    mov harness_psc_calls(%rip), %rax
-    inc %rax
-    mov %rax, harness_psc_calls(%rip)
+    call harness_psc_held
+    incq harness_psc_calls(%rip)
     mov $PSC_BUFFER, %rsi
-    cmpq $2, harness_psc_host(%rip)
-    je 4f
+    mov harness_psc_host(%rip), %rax
+    cmp $HOST_NOTHING, %rax
+    je 9f                           # leaving the header exactly as it was
+    cmp $HOST_REFUSES, %rax
+    je 6f
+    cmp $HOST_BACKWARDS, %rax
+    je 7f
+    cmp $HOST_PAST_THE_BATCH, %rax
+    je 8f
     movzwl PSC_CUR_ENTRY(%rsi), %ecx
     movzwl PSC_END_ENTRY(%rsi), %edx
 1:  cmp %edx, %ecx
     ja 3f
     mov PSC_ENTRIES(%rsi,%rcx,8), %rdi
+    cmpq $HOST_PART_OF_AN_ENTRY, harness_psc_host(%rip)
+    jne 2f
+    test $PSC_ENTRY_CUR_PAGE, %edi
+    jnz 2f                          # it was left part done, so finish it now
+    orq $1, PSC_ENTRIES(%rsi,%rcx,8)  # one page in, and back to the guest
+    jmp 3f
+2:  and $~PSC_ENTRY_CUR_PAGE, %rdi  # the entry as the guest wrote it
+    mov %rdi, PSC_ENTRIES(%rsi,%rcx,8)
     # How much this entry covers, which is counted for every range however
     # long, where only the first of them are recorded one by one.
     mov $PAGE, %r8
     bt $PSC_ENTRY_LARGE, %rdi
-    jnc 2f
+    jnc 4f
     mov $0x200000, %r8
-2:  add %r8, harness_psc_bytes(%rip)
+4:  add %r8, harness_psc_bytes(%rip)
     mov harness_psc_count(%rip), %rax
     inc %rax
     mov %rax, harness_psc_count(%rip)
@@ -141,13 +187,38 @@ harness_psc_issue:
     mov %rdi, (%rbx,%rax)
     mov %rcx, 8(%rbx,%rax)
 5:  inc %ecx
-    cmpq $1, harness_psc_host(%rip)
-    jne 1b
+    cmpq $HOST_WHOLE, harness_psc_host(%rip)
+    je 1b
 3:  mov %cx, PSC_CUR_ENTRY(%rsi)
-4:  pop %r8
+9:  pop %r8
     pop %rbx
     pop %rsi
+    pop %rcx
     ret
+
+# The request reported as failed in the block's own fields, which is a batch
+# the shim must not ask about again.
+6:  mov $GHCB_ALIAS, %rcx
+    movq $1, GHCB_SW_EXIT_INFO_2(%rcx)
+    jmp 9b
+
+# An entry an exit while there are any left, and then the cursor wound back,
+# which is the one direction the protocol does not let it go.
+7:  movzwl PSC_CUR_ENTRY(%rsi), %ecx
+    cmp PSC_END_ENTRY(%rsi), %cx
+    jae 70f
+    inc %ecx
+    jmp 3b
+70: xor %ecx, %ecx
+    jmp 3b
+
+# A batch ending past the one the guest described, so that the entry the guest
+# is told to read its own progress out of is one it never wrote. The cursor
+# moves with it, so nothing but the bound on end_entry catches this.
+8:  movw $PSC_MAX_ENTRIES, PSC_END_ENTRY(%rsi)
+    movzwl PSC_CUR_ENTRY(%rsi), %ecx
+    inc %ecx
+    jmp 3b
 
 # () -> 1, or zero if the processor count was refused. The wakeup structure is
 # an assembly-time choice, so each platform's table gets its own entry point.
@@ -200,6 +271,9 @@ harness_psc_calls:
 harness_psc_bytes:
     .quad 0
 harness_psc_host:
+    .quad 0
+.globl harness_psc_lost
+harness_psc_lost:
     .quad 0
 
 .balign 8

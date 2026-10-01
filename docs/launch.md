@@ -100,8 +100,11 @@ reserves (`hw/i386/pc.c`) -- and it is what keeps the accept list clear of the
 64-bit windows a passed-through device's BARs are assigned out of, which lie
 above the RAM the map describes.
 
-The RAM does not either, though the file still declares it as required memory:
-the loader has to make those pages private before the shim validates them.
+The RAM does not either, and the file no longer asks a loader for it. What an
+SEV-SNP image requires is the pages it loads and nothing else, because a loader
+with no memory backed under them cannot import them; the rest of the guest's
+RAM is the shim's own to convert, which it asks its host for a batch at a time
+before validating each range. So the file does not move with the guest size.
 
 On TDX every image page contributes to the measurement register for the trust
 domain (MRTD). The shim enters long mode, parks
@@ -145,7 +148,7 @@ fields this image fixes.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--ram` | `1G` | Guest RAM, matching QEMU `-m`; leaves the measurement alone |
+| `--ram` | `1G` | Guest RAM the manifest records; leaves the image bytes alone |
 | `--vcpus` | `4` | Processor count, 1 to 255; leaves the measurement alone |
 | `--cmdline` | `panic=-1` | Linux command line |
 | `--config-hash` | zero | TDX `MRCONFIGID` or SNP `HOST_DATA` |
@@ -217,11 +220,11 @@ match it.
 ## Memory map
 
 For q35 guests with at least 2816 MiB, 2 GiB goes below 4 GiB, the rest above,
-and the PCI aperture lies between them. Pass QEMU the same `-m`: on SEV-SNP the
-file declares that much required memory. The shim reads the map the machine
+and the PCI aperture lies between them. The shim reads the map the machine
 actually has rather than assuming this one, so a host that lays memory out
 differently is described, not refused -- but one that describes a machine the
-image cannot run in terminates it.
+image cannot run in terminates it. QEMU's `-m` does not have to be the `--ram`
+the file was built with: the same bytes boot a guest of either size.
 
 The measured page tables map the first 2 TiB with 1-GiB pages, whatever the
 guest turns out to have, because they are measured and so cannot depend on it.

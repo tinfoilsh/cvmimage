@@ -840,6 +840,10 @@ pub mod tests {
             assert!(!ranges.is_empty());
             for (lo, hi) in ranges {
                 let walk = shim.psc(lo, hi, Host::Whole).unwrap();
+                assert!(
+                    walk.held,
+                    "{lo:#x}..{hi:#x} of {ram:#x} was not the range validated"
+                );
                 // Every page of the range, whatever its size, and no other.
                 assert_eq!(walk.bytes, hi - lo, "{lo:#x}..{hi:#x} of {ram:#x}");
                 // One exit a batch, and no batch longer than a host will read.
@@ -863,17 +867,18 @@ pub mod tests {
         }
     }
 
-    /// A host may convert part of a batch and hand the guest back, so the shim
-    /// asks again rather than assuming the whole batch was taken. A host that
-    /// converts nothing at all is refused instead of retried for ever: the
-    /// shim cannot report that it is stuck, so it must not get stuck.
+    /// A host may convert part of a batch and hand the guest back, and part of
+    /// one entry at that: an entry carries a page cursor of the host's own, so
+    /// a host that moved only that has made progress and is asked again. What
+    /// it is asked for is the same either way.
     #[test]
-    fn a_host_that_takes_a_batch_in_pieces_is_asked_again_and_one_that_stalls_is_refused() {
+    fn a_host_that_takes_a_batch_in_pieces_is_asked_again() {
         let shim = tinfoil_firmware::shim::shim();
         // More than one batch, so the retry and the batching are both in play.
         let (lo, hi) = (0x200000, 0x200000 + 300 * 0x200000);
         let whole = shim.psc(lo, hi, Host::Whole).unwrap();
         let piecemeal = shim.psc(lo, hi, Host::OneAtATime).unwrap();
+        let partial = shim.psc(lo, hi, Host::PartOfAnEntry).unwrap();
         assert_eq!(whole.count, 300);
         assert_eq!(whole.calls, 2);
         assert_eq!(
@@ -884,10 +889,79 @@ pub mod tests {
             piecemeal.calls, 300,
             "an entry that was taken was asked for twice"
         );
-        assert!(
-            shim.psc(lo, hi, Host::Nothing).is_none(),
-            "a host that converts nothing was not refused"
+        assert_eq!(
+            partial.entries, whole.entries,
+            "a host taking part of an entry was asked for something else"
         );
+        assert_eq!(partial.bytes, whole.bytes);
+        assert_eq!(
+            partial.calls, 600,
+            "an entry left part done was not finished in one more exit"
+        );
+        for walk in [&whole, &piecemeal, &partial] {
+            assert!(
+                walk.held,
+                "the range the conversion was for did not survive it"
+            );
+        }
+    }
+
+    /// The hosts the shim refuses rather than spins on or believes: one that
+    /// converts nothing, one that winds its entry cursor back, one that
+    /// answers with an end_entry past the batch the shim wrote, and one that
+    /// reports the request as not taken. The shim cannot say that it is
+    /// stuck, so it must not get stuck; and the entry its progress is read
+    /// out of is the one the header names, so a header naming an entry the
+    /// shim never wrote is refused rather than indexed with.
+    #[test]
+    fn a_host_that_makes_no_progress_or_answers_outside_the_batch_is_refused() {
+        let shim = tinfoil_firmware::shim::shim();
+        let (lo, hi) = (0x200000, 0x200000 + 300 * 0x200000);
+        for host in [
+            Host::Nothing,
+            Host::Backwards,
+            Host::PastTheBatch,
+            Host::Refuses,
+        ] {
+            assert!(
+                shim.psc(lo, hi, host).is_none(),
+                "a {host:?} host was not refused"
+            );
+            assert!(
+                shim.held(),
+                "the range the conversion was for did not survive a {host:?} host"
+            );
+        }
+    }
+
+    /// The request the shim leaves in the block, which is the one part of the
+    /// conversion no test of the shim's own output can reach: a host reads
+    /// these fields and nothing else, and an image that names the wrong exit
+    /// code or declares the wrong fields asks for something else or for
+    /// nothing. The numbers here are the GHCB specification's, written out
+    /// rather than taken from layout.rs -- which derives the valid bitmap
+    /// from the exit code, and would agree with itself about a wrong one.
+    #[test]
+    fn the_block_states_the_page_state_change_the_ghcb_specification_defines() {
+        let shim = tinfoil_firmware::shim::shim();
+        let walk = shim.psc(0x200000, 0x400000, Host::Whole).unwrap();
+        assert_eq!(walk.calls, 1);
+        let ghcb = shim.ghcb();
+        // SVM_VMGEXIT_PSC, in the whole of the field rather than its low half.
+        assert_eq!(ghcb.exit_code, 0x8000_0010);
+        // Bit n of the bitmap is the field at offset 8n, so the four fields a
+        // page state change states are bits 114 to 117: byte 14, bits 2 to 5.
+        // Every other byte says the field it covers was not written.
+        let mut valid = [0u8; 16];
+        valid[14] = 0x3c;
+        assert_eq!(ghcb.valid, valid);
+        assert_eq!((ghcb.exit_info_1, ghcb.exit_info_2), (0, 0));
+        // The descriptor, named by the address the host reads it at rather
+        // than the alias the shim writes it through.
+        assert_eq!(ghcb.scratch, SNP_GHCB + 0x800);
+        assert_eq!(ghcb.reserved, 0, "the header reserves this dword");
+        assert_eq!(ghcb.usage, 0, "a usage no host accepts");
+        assert_eq!(ghcb.protocol, 2, "page state changes arrived in version 2");
     }
 
     /// QEMU moves a large guest's high memory above 1 TiB on AMD hosts, past

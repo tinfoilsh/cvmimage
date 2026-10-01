@@ -52,11 +52,103 @@ jobs:
           /nix/var/nix/profiles/default/bin/nix-build \
             -I . -A cvm-compiler -o result-cvmc
 
+      # One image per platform per release. The command line holds only what is
+      # intrinsic to this image -- its own roothash and the kernel options it
+      # always boots with -- so nothing about a workload enters the launch
+      # measurement, and one published image serves every deployment. The RAM
+      # size and processor count are launch arguments the digest does not cover
+      # (firmware/src/acpi.rs builds the MADT at boot; SEV-SNP measures the boot
+      # processor alone), so the values passed here do not pin a guest's shape.
+      - name: Compile measured IGVM images
+        env:
+          PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        run: |
+          set -Eeuo pipefail
+          roothash="$(tr -d '\n' < result/tinfoilcvm.roothash)"
+          # Matches what the firmware path has booted for every release to
+          # date. Three of these options look inert against this kernel
+          # (CONFIG_DRM is unset, and readonly= is not a kernel parameter) but
+          # they are inside a measured command line, so they are left alone
+          # here and removed, if at all, as a change of their own.
+          cmdline="readonly=on modprobe.blacklist=nouveau nouveau.modeset=0"
+          cmdline="$cmdline root=/dev/mapper/root roothash=${roothash}"
+          cmdline="$cmdline pci=noacpi pcie_ports=compat"
+          echo "IGVM command line: $cmdline"
+          echo "roothash=$roothash" >> "$GITHUB_ENV"
+          for platform in snp tdx; do
+            ./result-cvmc/bin/cvmc build \
+              --platform "$platform" \
+              --kernel result/tinfoilcvm.vmlinuz \
+              --initramfs result/tinfoilcvm.initrd \
+              --cmdline "$cmdline" \
+              --output "tinfoil-${platform}.igvm"
+          done
+
+      # The digest a guest's own attestation report has to show. Taken from the
+      # manifest cvmc writes, then recomputed from the image itself and compared,
+      # so an image and a manifest that disagree cannot ship.
+      - name: Read and cross-check the launch measurements
+        run: |
+          set -Eeuo pipefail
+          field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
+          snp_meas="$(field tinfoil-snp.igvm.manifest.json expected_snp_measurement)"
+          tdx_meas="$(field tinfoil-tdx.igvm.manifest.json expected_mrtd)"
+          snp_policy="$(field tinfoil-snp.igvm.manifest.json guest_policy)"
+
+          # cvmc appends no5lvl, so the command line that was measured is the
+          # one it recorded -- not the string composed above. Publishing the
+          # latter would hand a verifier a line that does not reproduce the
+          # digest beside it.
+          igvm_cmdline="$(field tinfoil-snp.igvm.manifest.json command_line)"
+          tdx_cmdline="$(field tinfoil-tdx.igvm.manifest.json command_line)"
+          if [ "$igvm_cmdline" != "$tdx_cmdline" ]; then
+            echo "::error::the two images measured different command lines"
+            exit 1
+          fi
+          # H2: nothing else ties these measurements to the filesystem the same
+          # manifest publishes as "root".
+          case "$igvm_cmdline" in
+            *"roothash=${roothash}"*) ;;
+            *) echo "::error::measured command line does not carry roothash=${roothash}"; exit 1 ;;
+          esac
+
+          # M1: the policy is the only published value a verifier must pin and
+          # the image does not enforce, so shape-check it the way the consumer does.
+          if ! printf '%s' "$snp_policy" | grep -Eq '^(0x[0-9a-fA-F]{1,16}|[0-9]{1,20})$'; then
+            echo "::error::guest policy is not a SEV-SNP policy: $snp_policy"
+            exit 1
+          fi
+
+          # `cvmc measure` prints "platform: <p>" then "<field>: <hex>".
+          recomputed() { ./result-cvmc/bin/cvmc measure "$1" | awk -F': ' 'NR==2 {print $2}'; }
+          for pair in "snp:$snp_meas" "tdx:$tdx_meas"; do
+            platform="${pair%%:*}"
+            claimed="${pair#*:}"
+            if ! printf '%s' "$claimed" | grep -Eq '^[0-9a-fA-F]{96}$'; then
+              echo "::error::${platform} measurement is not 48 hexadecimal bytes: $claimed"
+              exit 1
+            fi
+            actual="$(recomputed "tinfoil-${platform}.igvm")"
+            if [ "$claimed" != "$actual" ]; then
+              echo "::error::${platform} manifest says $claimed but the image measures $actual"
+              exit 1
+            fi
+            echo "${platform}: $claimed"
+          done
+
+          {
+            echo "snp_measurement=$snp_meas"
+            echo "tdx_measurement=$tdx_meas"
+            echo "snp_policy=$snp_policy"
+            echo "igvm_cmdline=$igvm_cmdline"
+          } >> "$GITHUB_ENV"
+
       - name: Generate manifest
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
+          rm -rf /tmp/out
           mkdir -p /tmp/out
           # Generate manifest JSON
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
@@ -66,7 +158,12 @@ jobs:
             "initrd": "$(sha256sum result/tinfoilcvm.initrd | awk '{print $1}')",
             "kernel": "$(sha256sum result/tinfoilcvm.vmlinuz | awk '{print $1}')",
             "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
-            "cvm_compiler": "$(sha256sum result-cvmc/bin/cvmc | awk '{print $1}')"
+            "cvm_compiler": "$(sha256sum result-cvmc/bin/cvmc | awk '{print $1}')",
+            "igvm": {
+              "snp_launch": { "measurement": "${snp_measurement}", "policy": "${snp_policy}" },
+              "tdx_launch": { "mrtd": "${tdx_measurement}" },
+              "cmdline": "${igvm_cmdline}"
+            }
           }
           EOF
 
@@ -75,6 +172,10 @@ jobs:
           cp result/tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
           cp result/tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
           cp result-cvmc/bin/cvmc "/tmp/out/cvmc-${REF_NAME}"
+          cp tinfoil-snp.igvm "/tmp/out/tinfoil-snp-${REF_NAME}.igvm"
+          cp tinfoil-tdx.igvm "/tmp/out/tinfoil-tdx-${REF_NAME}.igvm"
+          cp tinfoil-snp.igvm.manifest.json "/tmp/out/tinfoil-snp-${REF_NAME}.igvm.manifest.json"
+          cp tinfoil-tdx.igvm.manifest.json "/tmp/out/tinfoil-tdx-${REF_NAME}.igvm.manifest.json"
 
           # Generate checksums
           cd /tmp/out
@@ -89,6 +190,10 @@ jobs:
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
             /tmp/out/cvmc-${{ github.ref_name }}
+            /tmp/out/tinfoil-snp-${{ github.ref_name }}.igvm
+            /tmp/out/tinfoil-tdx-${{ github.ref_name }}.igvm
+            /tmp/out/tinfoil-snp-${{ github.ref_name }}.igvm.manifest.json
+            /tmp/out/tinfoil-tdx-${{ github.ref_name }}.igvm.manifest.json
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
 
       - name: Upload attested artifacts to R2
@@ -101,11 +206,18 @@ jobs:
           set -Eeuo pipefail
           aws="$(/nix/var/nix/profiles/default/bin/nix-build \
             --no-out-link -I . -A release-upload-cli)/bin/aws"
+          manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
           for file in /tmp/out/*; do
+            [ "$file" = "$manifest" ] && continue
             "$aws" s3 cp "$file" \
               "s3://${R2_BUCKET}/cvm/$(basename "$file")" \
               --only-show-errors --no-progress
           done
+          # Last: it is the index, and it names launch measurements for images
+          # that have to exist before anything reads it.
+          "$aws" s3 cp "$manifest" \
+            "s3://${R2_BUCKET}/cvm/$(basename "$manifest")" \
+            --only-show-errors --no-progress
 
       - name: Create release
         env:
@@ -128,6 +240,12 @@ jobs:
           - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.initrd
           - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.raw
           - CVM compiler (cvmc): https://images.tinfoil.sh/cvm/cvmc-${REF_NAME}
+          - IGVM (SEV-SNP): https://images.tinfoil.sh/cvm/tinfoil-snp-${REF_NAME}.igvm
+          - IGVM (TDX): https://images.tinfoil.sh/cvm/tinfoil-tdx-${REF_NAME}.igvm
+
+          ### Launch measurements
+          - SEV-SNP: \`${snp_measurement}\` (policy \`${snp_policy}\`)
+          - Intel TDX MRTD: \`${tdx_measurement}\`
 
           ### Manifest
           \`\`\`json

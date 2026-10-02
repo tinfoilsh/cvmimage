@@ -39,8 +39,9 @@ pub(crate) fn prepare(
     if initramfs_end > params.memory {
         return Err("initramfs exceeds the memory the image describes".into());
     }
-    // boot_params addresses the initramfs with a 32-bit field.
-    if initramfs_end > u32::MAX as u64 {
+    // boot_params addresses the initramfs with a 32-bit field, so its last
+    // byte must be below 4 GiB; an exclusive end of exactly 4 GiB is fine.
+    if initramfs_end > FOUR_GIB {
         return Err("initramfs does not fit below 4 GiB".into());
     }
     if info.setup_bytes > KERNEL_SETUP_AREA_SIZE as usize {

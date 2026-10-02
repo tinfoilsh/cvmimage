@@ -346,7 +346,9 @@ impl Params {
         if vcpus == 0 || vcpus > MAX_VCPUS {
             return Err(format!("--vcpus must be between 1 and {MAX_VCPUS}"));
         }
-        if !(32..=63).contains(&cbit) {
+        // Above 51 is not a physical address bit in four-level paging, so the
+        // identity map would set a reserved bit or NX on every mapping.
+        if !(32..=51).contains(&cbit) {
             return Err("--cbit must name a bit in the physical address width".into());
         }
         let cmdline = match cmdline.trim() {
@@ -354,7 +356,7 @@ impl Params {
             c if c.split_whitespace().any(|w| w == REQUIRED_CMDLINE) => c.to_string(),
             c => format!("{c} {REQUIRED_CMDLINE}"),
         };
-        if cmdline.bytes().any(|b| b == 0 || !b.is_ascii()) {
+        if cmdline.bytes().any(|b| !b.is_ascii_graphic() && b != b' ') {
             return Err("--cmdline must be printable ASCII".into());
         }
         // A split guest restacks above 4 GiB, so the map reaches past the RAM it has.

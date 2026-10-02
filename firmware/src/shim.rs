@@ -189,6 +189,12 @@ impl Shim {
     /// The memory map an untrusted loader leaves in its parameter page, as
     /// IGVM_VHS_MEMORY_MAP_ENTRY: a page number, a page count and a type.
     pub fn loader_memory_map(&self, entries: &[(u64, u64, u16)]) -> &Self {
+        // The shim reads a bounded run out of one page; writing past it would
+        // corrupt whatever the harness mapped next.
+        assert!(
+            (entries.len() as u64 + 1) * MAP_ENTRY_LEN <= PAGE,
+            "memory map does not fit the parameter page"
+        );
         zero(PARAM_MAP_PAGE, 0, PAGE);
         for (n, (start, pages, kind)) in entries.iter().enumerate() {
             let at = n as u64 * MAP_ENTRY_LEN;

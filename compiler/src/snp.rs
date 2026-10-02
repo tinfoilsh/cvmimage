@@ -232,7 +232,7 @@ pub fn build(
         mmio_holes: mmio_holes(params),
         kernel_entry: format!("0x{:08x}", launch.entry),
         expected_snp_measurement: hex::encode(measurement),
-        guest_policy: format!("0x{SNP_GUEST_POLICY:016x}"),
+        guest_policy: policy_hex(),
         c_bit_position: params.cbit,
         sev_features: format!("0x{SNP_SEV_FEATURES:016x}"),
         shim_owned_bytes: owned,
@@ -298,6 +298,13 @@ fn le72(big_endian: &[u8]) -> [u8; ECDSA_COMPONENT_LEN] {
     v
 }
 
+// Verifiers compare this as a string, so it is spelled the one way they
+// canonicalise to: lowercase, 0x-prefixed, no leading zeros. Other manifest
+// numbers are padded to their natural width; this one cannot be.
+fn policy_hex() -> String {
+    format!("0x{SNP_GUEST_POLICY:x}")
+}
+
 // ID_KEY_DIGEST is SHA-384 over the firmware's key structure, not the IGVM one.
 fn key_digest(public: &IGVM_VHS_SNP_ID_BLOCK_PUBLIC_KEY) -> [u8; 48] {
     let mut sev_key = [0u8; SEV_KEY_LEN];
@@ -322,7 +329,7 @@ fn snp_launch(
     // The file asks for this policy, but only a signed ID block makes the
     // firmware refuse a launch that used a different one, so a verifier has to
     // pin it either way.
-    r.insert("policy", format!("0x{SNP_GUEST_POLICY:016x}"));
+    r.insert("policy", policy_hex());
     r.insert("guest_svn", guest_svn.to_string());
     r.insert("host_data", host_data);
     // Zero says the firmware compared its launch digest against nothing.
@@ -1020,6 +1027,27 @@ mod tests {
         assert_eq!(published, recomputed);
     }
 
+    // The release refuses an image whose two policy fields disagree. They are
+    // written from one place, so state here that they stay that way.
+    #[test]
+    fn the_manifest_states_one_guest_policy_in_both_places() {
+        let dir = tempdir().unwrap();
+        let (k, i, out) = (
+            dir.path().join("bzImage"),
+            dir.path().join("initrd"),
+            dir.path().join("out.igvm"),
+        );
+        fs::write(&k, test_kernel()).unwrap();
+        fs::write(&i, vec![7u8; 100_000]).unwrap();
+        build(&k, &i, &out, &params(), None, None, 0).unwrap();
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(out.with_extension("igvm.manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["guest_policy"], manifest["launch"]["policy"]);
+        assert_eq!(manifest["guest_policy"], "0x30133");
+    }
+
     #[test]
     fn measure_refuses_an_image_whose_pages_were_reordered() {
         let dir = tempdir().unwrap();
@@ -1252,12 +1280,23 @@ mod tests {
         );
         // What is left is what a different image would change.
         assert_eq!(r["measurement"], zeros(48));
-        assert_eq!(r["policy"], format!("0x{SNP_GUEST_POLICY:016x}"));
+        assert_eq!(r["policy"], "0x30133");
         assert_eq!(r["host_data"], zeros(32));
         assert_eq!(r["guest_svn"], "0");
         // Zero here says the firmware enforced no digest at launch.
         assert_eq!(r["id_key_digest"], zeros(48));
         let signed = snp_launch(&[0u8; 48], zeros(32), 0, Some([7u8; 48]));
         assert_eq!(signed["id_key_digest"], hex::encode([7u8; 48]));
+    }
+
+    // A verifier compares this field as text and rejects any other spelling of
+    // the same number, so the form is part of what the manifest publishes.
+    #[test]
+    fn the_guest_policy_is_published_in_minimal_lowercase_hex() {
+        let published = policy_hex();
+        let digits = published.strip_prefix("0x").expect("0x prefix");
+        assert_eq!(published, published.to_lowercase());
+        assert!(!digits.starts_with('0'), "{published} has a leading zero");
+        assert_eq!(u64::from_str_radix(digits, 16).unwrap(), SNP_GUEST_POLICY);
     }
 }

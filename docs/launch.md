@@ -131,7 +131,7 @@ and no DICE identity is derived.
 
 ## Build
 
-Needs Rust, GNU `as` and GNU `objcopy`.
+Needs Rust, GNU `as`, GNU `objcopy` and GNU `objdump`.
 
 ```sh
 cargo run --release -p cvm-compiler -- build --platform tdx \

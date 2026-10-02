@@ -1,6 +1,6 @@
 //! The measured initial state of a confidential guest: the physical map, ACPI
-//! tables, zero page, page tables, reset shims, and on SEV-SNP one save area
-//! per processor. The kernel and initramfs are inputs; this crate decides only
+//! tables, zero page, page tables, reset shims, and on SEV-SNP the boot
+//! processor's save area, which is the only one the launch digest takes. The kernel and initramfs are inputs; this crate decides only
 //! where they sit. Two things are left out, because measuring either would bind
 //! an image to a machine size: the MADT, which a shim writes from the processor
 //! count the loader leaves in an unmeasured parameter page, and the E820 map

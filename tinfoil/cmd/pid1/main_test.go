@@ -890,3 +890,31 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 		}
 	}
 }
+
+func TestVolumeFailurePreventsApplicationStartup(t *testing.T) {
+	for _, phase := range []string{"boot", "worker"} {
+		t.Run(phase, func(t *testing.T) {
+			harness := newLifecycleHarness()
+			failure := errors.New("volume unavailable")
+			if phase == "boot" {
+				harness.deps.oneShot = func(_ context.Context, command supervisor.Command) error {
+					if command.Name == string(hardening.ServiceBoot) {
+						return failure
+					}
+					return nil
+				}
+			} else {
+				harness.config.Volumes = []runtimeconfig.VolumeSpec{{Name: "state"}}
+				harness.services.fail[volumesName+"-state"] = failure
+			}
+			if err := runLifecycle(t.Context(), harness.deps, harness.readiness); !errors.Is(err, failure) {
+				t.Fatalf("lifecycle error = %v, want volume failure", err)
+			}
+			for _, service := range harness.services.started {
+				if service.Name == containersName {
+					t.Fatal("application manager started after volume failure")
+				}
+			}
+		})
+	}
+}

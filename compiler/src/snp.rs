@@ -448,10 +448,18 @@ pub fn measure_snp(file: &[u8]) -> Result<[u8; 48], String> {
                     } else {
                         vec![0; PAGE as usize]
                     },
+                    // A type this does not model would be measured as a zero
+                    // normal page, publishing a digest for semantics the launch
+                    // does not have; refuse the file instead.
                     kind: match *data_type {
+                        IgvmPageDataType::NORMAL => PAGE_NORMAL,
                         IgvmPageDataType::SECRETS => PAGE_SECRETS,
                         IgvmPageDataType::CPUID_DATA => PAGE_CPUID,
-                        _ => PAGE_NORMAL,
+                        other => {
+                            return Err(format!(
+                                "SNP IGVM page at {gpa:#x} has unsupported data type {other:?}"
+                            ))
+                        }
                     },
                 });
             }

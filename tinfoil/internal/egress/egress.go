@@ -229,6 +229,9 @@ func allowed(name string, domains []string) bool {
 }
 
 func (e *Engine) policyFor(source netip.Addr) (*policy, error) {
+	if source.IsLoopback() {
+		return &policy{NetworkSpec: &runtimeconfig.NetworkSpec{Egress: "open"}}, nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.policies == nil {

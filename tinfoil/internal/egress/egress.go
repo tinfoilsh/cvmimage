@@ -42,13 +42,26 @@ type policy struct {
 	*runtimeconfig.NetworkSpec
 }
 
+type cacheKey struct {
+	network string
+	name    string
+}
+
+type cachedAnswer struct {
+	mu      sync.Mutex
+	answer  *dns.Msg
+	expires time.Time
+}
+
 type Engine struct {
 	exchange     func(context.Context, *dns.Msg) (*dns.Msg, error)
 	nft          func(context.Context, string) ([]byte, error)
 	listSet      func(context.Context, string) ([]byte, error)
 	loadPolicies func() ([]policy, error)
+	now          func() time.Time
 	mu           sync.Mutex
 	policies     []policy
+	cache        map[cacheKey]*cachedAnswer
 	slots        chan struct{}
 }
 
@@ -64,6 +77,8 @@ func New() *Engine {
 			return exec.CommandContext(ctx, "nft", "-j", "list", "set", "inet", "tinfoil", name).Output()
 		},
 		loadPolicies: loadPolicies,
+		now:          time.Now,
+		cache:        make(map[cacheKey]*cachedAnswer),
 		slots:        make(chan struct{}, maxConcurrentQueries),
 	}
 }
@@ -152,20 +167,56 @@ func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 	// Rebuild the question so client-supplied records and EDNS options never
 	// become upstream instructions or firewall input.
 	query := new(dns.Msg).SetQuestion(question.Name, question.Qtype)
-	answer, err := e.exchange(ctx, query)
+	var answer *dns.Msg
+	if p.Egress == "allowlist" {
+		answer, err = e.resolveAllowed(ctx, query, p.name)
+	} else {
+		answer, err = e.exchange(ctx, query)
+	}
 	if err != nil {
 		return
-	}
-	if p.Egress == "allowlist" {
-		answer, err = e.authorizedAnswer(ctx, query, answer, p.name)
-		if err != nil {
-			return
-		}
 	}
 	answer.Id = request.Id
 	answer.Question = request.Question
 	answer.RecursionDesired = request.RecursionDesired
 	reply = answer
+}
+
+func (e *Engine) resolveAllowed(ctx context.Context, query *dns.Msg, network string) (*dns.Msg, error) {
+	key := cacheKey{network, dns.CanonicalName(query.Question[0].Name)}
+	e.mu.Lock()
+	entry := e.cache[key]
+	if entry == nil {
+		// Only allowlisted A queries reach this cache, bounding it by the policy.
+		entry = &cachedAnswer{}
+		e.cache[key] = entry
+	}
+	e.mu.Unlock()
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.answer == nil || !e.now().Before(entry.expires) {
+		answer, err := e.exchange(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		received := e.now()
+		answer, err = e.authorizedAnswer(ctx, query, answer, network)
+		if err != nil {
+			return nil, err
+		}
+		if answer.Rcode != dns.RcodeSuccess || len(answer.Answer) == 0 {
+			return answer, nil
+		}
+		entry.answer = answer
+		entry.expires = received.Add(time.Duration(answer.Answer[0].Header().Ttl) * time.Second)
+	}
+	answer := entry.answer.Copy()
+	ttl := uint32(max(0, entry.expires.Sub(e.now())/time.Second))
+	for _, record := range answer.Answer {
+		record.Header().Ttl = ttl
+	}
+	return answer, nil
 }
 
 func allowed(name string, domains []string) bool {

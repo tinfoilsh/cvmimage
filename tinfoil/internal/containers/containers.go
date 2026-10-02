@@ -491,6 +491,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		// Explicitly override the daemon-wide NNP default for this profile only.
 		hostConfig.SecurityOpt = []string{"no-new-privileges:false"}
 	}
+	if c.Attestation {
+		hostConfig.Binds = append(hostConfig.Binds, boot.AttestationSocket+":"+boot.ContainerAttestationSocket+":ro")
+	}
 	for _, model := range c.Models {
 		hostConfig.Binds = append(hostConfig.Binds,
 			boot.PrivateModelsDir+"/"+model+":"+boot.ContainerModelsDir+"/"+model+":ro",

@@ -107,6 +107,13 @@ func updatePrometheusMetrics(metrics *Metrics) {
 // HandlePrometheusMetrics handles the /metrics endpoint for Prometheus scraping
 func HandlePrometheusMetrics(metadata *config.Metadata, metricsAPIKey string) http.HandlerFunc {
 	registry := prometheus.NewRegistry()
+	image := ""
+	if metadata.Repo != "" && metadata.Tag != "" {
+		image = metadata.Repo + "@" + metadata.Tag
+	}
+	prometheus.WrapRegistererWith(prometheus.Labels{
+		"id": metadata.ID, "domain": metadata.Domain, "image": image,
+	}, registry).MustRegister(attestationRequests.requests)
 	registry.MustRegister(
 		cpuUtilGauge,
 		gpuUtilGauge,

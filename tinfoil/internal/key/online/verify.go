@@ -4,14 +4,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"tinfoil/internal/key"
 )
 
-const validationTimeout = 10 * time.Second
+const (
+	validationTimeout           = 10 * time.Second
+	maxValidationErrorBodyBytes = 64 << 10
+	insufficientQuota           = "insufficient_quota"
+)
 
 type Validator struct {
 	server string
@@ -44,7 +50,36 @@ func (v *Validator) Validate(req key.Request) error {
 		return nil
 	}
 
-	return &key.ValidationError{
+	validationErr := &key.ValidationError{
 		StatusCode: resp.StatusCode,
+		RetryAfter: retryAfter(resp.Header),
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxValidationErrorBodyBytes+1))
+		var payload struct {
+			Error struct {
+				Type string `json:"type"`
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err == nil && len(body) <= maxValidationErrorBodyBytes && json.Unmarshal(body, &payload) == nil {
+			validationErr.QuotaExceeded = payload.Error.Code == insufficientQuota || payload.Error.Type == insufficientQuota
+		}
+	}
+	return validationErr
+}
+
+func retryAfter(header http.Header) string {
+	values := header.Values("Retry-After")
+	if len(values) != 1 {
+		return ""
+	}
+	value := strings.TrimSpace(values[0])
+	if _, err := strconv.ParseUint(value, 10, 64); err == nil {
+		return value
+	}
+	if _, err := http.ParseTime(value); err == nil {
+		return value
+	}
+	return ""
 }

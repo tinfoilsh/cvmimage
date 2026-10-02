@@ -47,6 +47,42 @@ func TestAttestedKeyMountsAreExclusiveReadOnly(t *testing.T) {
 	}
 }
 
+func TestAttestationSocketRequiresExplicitGrant(t *testing.T) {
+	config, err := runtimeconfig.Decode([]byte(`
+cvm-version: 0.14.11
+shim:
+  upstream-container: granted
+  upstream-port: 8000
+containers:
+  - name: granted
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    attestation: true
+  - name: omitted
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - name: denied
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    attestation: false
+`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range config.Containers {
+		t.Run(c.Name, func(t *testing.T) {
+			_, host, _, _, err := buildContainerCreateSpec(c, config, &shimconfig.ExternalConfig{}, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{boot.PublicDir + ":/tinfoil:ro"}
+			if c.Name == "granted" {
+				want = append(want, boot.PrivateDir+"/attestation.sock:/tinfoil/attestation.sock:ro")
+			}
+			if !slices.Equal(host.Binds, want) {
+				t.Fatalf("mounts = %v, want %v", host.Binds, want)
+			}
+		})
+	}
+}
+
 func TestOnlyOptedInAdminSSHBecomesDirect(t *testing.T) {
 	for _, test := range []struct {
 		name                          string

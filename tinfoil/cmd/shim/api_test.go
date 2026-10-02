@@ -123,13 +123,55 @@ func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
 		&config.Config{},
 		&config.ExternalConfig{},
 	)
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/tinfoil-attestation?nonce="+strings.Repeat("00", 32), nil)
-	rec := httptest.NewRecorder()
+	for _, path := range []string{attestationPath, attestationV3Path, attestationV3Path + "/"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path+"?nonce="+strings.Repeat("00", envelope.NonceSize), nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+			}
+		})
+	}
+}
 
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+func TestAttestationEndpointCompatibility(t *testing.T) {
+	for name, handler := range map[string]http.Handler{
+		"shim":          testFullServer(t, nil, 9999),
+		"observability": testObservabilityServer(t, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, query := range []string{"", "?nonce=", "?cache=1"} {
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, attestationPath+query, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("legacy status = %d: %s", rec.Code, rec.Body.String())
+				}
+				var document legacy.Document
+				if err := json.Unmarshal(rec.Body.Bytes(), &document); err != nil {
+					t.Fatal(err)
+				}
+				if document.Format != legacy.DummyV2 || document.Body != "deadbeef" || rec.Header().Get(attestationFormatHeader) != string(document.Format) {
+					t.Fatalf("legacy response changed: headers=%v body=%s", rec.Header(), rec.Body.String())
+				}
+			}
+			for _, path := range []string{attestationV3Path, attestationV3Path + "/"} {
+				for _, query := range []string{"", "?nonce=", "?nonce=ab", "?nonce=" + strings.Repeat("zz", envelope.NonceSize), "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&nonce=ab", "?nonce=ab&%zz=value", "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&cache=1"} {
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+query, nil))
+					if rec.Code != http.StatusBadRequest {
+						t.Errorf("%s%s: status = %d, want %d: %s", path, query, rec.Code, http.StatusBadRequest, rec.Body.String())
+					}
+				}
+			}
+			for _, path := range []string{attestationPath + "/v4", attestationV3Path + "/extra"} {
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+				if rec.Code != http.StatusNotFound {
+					t.Errorf("%s: status = %d, want %d", path, rec.Code, http.StatusNotFound)
+				}
+			}
+		})
 	}
 }
 
@@ -440,7 +482,7 @@ func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
 	}{
 		{"unauthorized is invalid key", http.StatusUnauthorized, http.StatusUnauthorized, errCodeInvalidAPIKey, errTypeInvalidRequest},
 		{"forbidden is insufficient permissions", http.StatusForbidden, http.StatusForbidden, errCodeInsufficientPermissions, errTypeInvalidRequest},
-		{"payment required maps to 429 quota", http.StatusPaymentRequired, http.StatusTooManyRequests, errCodeInsufficientQuota, errTypeInsufficientQuota},
+		{"payment required stays 402", http.StatusPaymentRequired, http.StatusPaymentRequired, errCodeInsufficientQuota, errTypeInsufficientQuota},
 		{"too many requests is rate limit", http.StatusTooManyRequests, http.StatusTooManyRequests, errCodeRateLimitExceeded, errTypeRateLimit},
 	}
 	for _, tc := range cases {
@@ -455,6 +497,58 @@ func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
 				t.Fatalf("code/type = %v/%s, want %s/%s", body.Code, body.Type, tc.wantCode, tc.wantType)
 			}
 		})
+	}
+}
+
+func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  apiError
+	}{
+		{"payment", apiError{status: http.StatusPaymentRequired, errType: errTypeInsufficientQuota, code: errCodeInsufficientQuota, message: errMsgQuotaExceeded}},
+		{"rate limit", apiError{status: http.StatusTooManyRequests, errType: errTypeRateLimit, code: errCodeRateLimitExceeded, message: errMsgRateLimited}},
+	} {
+		for _, encrypted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/encrypted=%t", tc.name, encrypted), func(t *testing.T) {
+				id, err := identity.NewIdentity()
+				if err != nil {
+					t.Fatal(err)
+				}
+				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status}}
+				handler := NewShimServer(validator, nil, &legacy.Document{}, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
+				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+				req.Header.Set("Authorization", "Bearer test-key")
+				var requestContext *identity.RequestContext
+				if encrypted {
+					requestContext, err = id.EncryptRequestWithContext(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				resp := rec.Result()
+				defer resp.Body.Close()
+				if resp.StatusCode != tc.err.status {
+					t.Fatalf("status = %d, want %d", resp.StatusCode, tc.err.status)
+				}
+				if encrypted {
+					if json.Valid(rec.Body.Bytes()) || strings.Contains(rec.Body.String(), tc.err.message) {
+						t.Fatal("EHBP error body is not encrypted")
+					}
+					if err := requestContext.DecryptResponse(resp); err != nil {
+						t.Fatalf("decrypting error response: %v", err)
+					}
+				}
+				var body errorEnvelope
+				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Error.Type != tc.err.errType || body.Error.Code == nil || *body.Error.Code != tc.err.code || body.Error.Message != tc.err.message {
+					t.Fatalf("unexpected error body: %+v", body.Error)
+				}
+			})
+		}
 	}
 }
 

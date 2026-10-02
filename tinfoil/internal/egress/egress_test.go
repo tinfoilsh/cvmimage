@@ -22,9 +22,13 @@ type responseWriter struct {
 	source string
 	answer *dns.Msg
 	write  func(*dns.Msg)
+	read   func()
 }
 
 func (w *responseWriter) RemoteAddr() net.Addr {
+	if w.read != nil {
+		w.read()
+	}
 	return net.UDPAddrFromAddrPort(netip.MustParseAddrPort(w.source))
 }
 func (w *responseWriter) WriteMsg(m *dns.Msg) error {

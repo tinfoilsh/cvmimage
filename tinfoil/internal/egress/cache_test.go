@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -85,11 +86,13 @@ func TestDNSCacheCoalescesConcurrentQueries(t *testing.T) {
 		return upstream(ctx, query)
 	}
 	results := make(chan error, clients)
+	var requests sync.WaitGroup
+	requests.Add(clients)
 	for i := range clients {
 		go func() {
 			query := new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)
 			query.Id = uint16(i)
-			w := &responseWriter{source: "10.42.0.2:12345"}
+			w := &responseWriter{source: "10.42.0.2:12345", read: sync.OnceFunc(requests.Done)}
 			e.ServeDNS(w, query)
 			if w.answer.Rcode != dns.RcodeSuccess || w.answer.Id != query.Id || len(w.answer.Answer) != 1 || w.answer.Answer[0].Header().Ttl != 60 {
 				results <- fmt.Errorf("client %d answer: %v", i, w.answer)
@@ -98,6 +101,7 @@ func TestDNSCacheCoalescesConcurrentQueries(t *testing.T) {
 			results <- nil
 		}()
 	}
+	requests.Wait()
 	<-entered
 	close(release)
 	for range clients {

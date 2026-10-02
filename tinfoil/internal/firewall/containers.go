@@ -16,8 +16,8 @@ const (
 	nonPublicIPv6Ranges = "{ fc00::/7, fe80::/10, ff00::/8, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, ::1/128 }"
 )
 
-func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
-	script, err := renderContainerNetworkScript(config, debug)
+func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool, generation uint32) error {
+	script, err := renderContainerNetworkScript(config, debug, generation)
 	if err != nil {
 		return err
 	}
@@ -33,7 +33,10 @@ func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
 	return nil
 }
 
-func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (string, error) {
+func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool, generation uint32) (string, error) {
+	if generation == 0 || uint64(generation)+uint64(len(config.Networks)) > uint64(^uint32(0))+1 {
+		return "", fmt.Errorf("invalid network policy generation")
+	}
 	adminSSH, err := runtimeconfig.AdminSSH(config, debug)
 	if err != nil {
 		return "", err
@@ -66,11 +69,11 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (str
 	}
 	// Every other published port is reachable only over the shim's CONNECT tunnel.
 	script.WriteString("add rule inet tinfoil container_forward ct status dnat drop\n")
-	for _, name := range names {
-		writeBridgeRules(&script, name, config.Networks[name])
+	for i, name := range names {
+		writeBridgeRules(&script, name, config.Networks[name], generation+uint32(i))
 	}
 	if runtimeconfig.ShimUpstreamSet(config) {
-		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"})
+		writeBridgeRules(&script, containernet.ShimNetName, &runtimeconfig.NetworkSpec{Egress: "closed"}, generation)
 	}
 	return script.String(), nil
 }
@@ -80,9 +83,14 @@ func writeReservedDebugForwardRules(script *strings.Builder) {
 	fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ct state established,related accept\n", "docker0")
 }
 
-func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeconfig.NetworkSpec) {
+func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeconfig.NetworkSpec, generation uint32) {
 	fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q oifname %q accept\n", bridge, bridge)
-	fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct state established,related accept\n", bridge)
+	if network.Egress == "allowlist" {
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct state established,related ct mark %d accept\n", bridge, generation)
+	} else {
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward oifname %q ct state established,related accept\n", bridge)
+	}
+	fmt.Fprintf(script, "add rule inet tinfoil container_input iifname %q ip daddr %s meta l4proto { tcp, udp } th dport 53 accept\n", bridge, containernet.DNSAddress)
 	fmt.Fprintf(script, "add rule inet tinfoil container_input iifname %q ct state new drop\n", bridge)
 	switch network.Egress {
 	case "open":
@@ -93,9 +101,11 @@ func writeBridgeRules(script *strings.Builder, bridge string, network *runtimeco
 	case "allowlist":
 		setName := containernet.AllowSetPrefix + bridge
 		fmt.Fprintf(script, "destroy set inet tinfoil %s\n", setName)
-		fmt.Fprintf(script, "create set inet tinfoil %s { type ipv4_addr; }\n", setName)
-		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr @%s accept\n", bridge, setName)
+		fmt.Fprintf(script, "create set inet tinfoil %s { type ipv4_addr; flags timeout; size %d; }\n", setName, containernet.MaxDNSAddresses)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q meta l4proto { tcp, udp } th dport { 53, 853 } drop\n", bridge)
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr %s drop\n", bridge, nonPublicIPv4Ranges)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q meta nfproto ipv4 ct state established,related ct mark %d accept\n", bridge, generation)
+		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip daddr @%s ct mark set %d accept\n", bridge, setName, generation)
 		fmt.Fprintf(script, "add rule inet tinfoil container_forward iifname %q ip6 daddr %s drop\n", bridge, nonPublicIPv6Ranges)
 	case "closed":
 	}

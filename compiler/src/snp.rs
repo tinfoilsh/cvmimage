@@ -576,6 +576,15 @@ mod tests {
         p[0].data[0] = 1;
         assert_ne!(a, launch_measurement(&p, &v));
     }
+
+    #[test]
+    fn secure_tsc_changes_the_launch_digest() {
+        let mut vmsa = bsp_vmsa();
+        let protected = launch_measurement(&[], &[vmsa_page(&vmsa)]);
+        vmsa.sev_features.set_secure_tsc(false);
+        assert_ne!(protected, launch_measurement(&[], &[vmsa_page(&vmsa)]));
+    }
+
     const TEST_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDD0QDbBc0T8m1BaeqCi\nGs30ddBtXsErRa5QX3eaeSYi11MZKeppqiBMm/fTnGxPP5KhZANiAASckeCIZYA6\nb96kAUX3v1H2Sk2iG+J23noMD403RN6PcnjsZWTIFa28YQYERl1BHB11uqFBzFG/\nOxpazENHn+p1pqw7y1frLk6qB4Gyi48pTb49fUOfkfqAPXA1xjy1tUg=\n-----END PRIVATE KEY-----\n";
 
     // The firmware enforces nothing until it verifies this signature over these bytes.
@@ -701,6 +710,10 @@ mod tests {
 
     #[test]
     fn an_snp_image_carries_one_vp_context_whatever_the_processor_count() {
+        const EXPECTED_SEV_FEATURES: u64 = 0x201;
+        // AMD ABI 8.18.2.2 measures these fields as zero before initializing them.
+        const TSC_SCALE_OFFSET_START: usize = 0x2f0;
+        const TSC_SCALE_OFFSET_END: usize = 0x300;
         let dir = tempdir().unwrap();
         let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
         fs::write(&k, test_kernel()).unwrap();
@@ -715,9 +728,20 @@ mod tests {
                 .directives()
                 .iter()
                 .filter_map(|d| match d {
-                    IgvmDirectiveHeader::SnpVpContext { vp_index, gpa, .. } => {
+                    IgvmDirectiveHeader::SnpVpContext {
+                        vp_index,
+                        gpa,
+                        vmsa,
+                        ..
+                    } => {
                         // QEMU rejects any VP context that is not at this GPA.
                         assert_eq!(*gpa, SNP_VMSA);
+                        assert_eq!(vmsa.sev_features.into_bits(), EXPECTED_SEV_FEATURES);
+                        assert!(
+                            vmsa_page(vmsa)[TSC_SCALE_OFFSET_START..TSC_SCALE_OFFSET_END]
+                                .iter()
+                                .all(|byte| *byte == 0)
+                        );
                         Some(*vp_index)
                     }
                     _ => None,

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -15,7 +16,7 @@ func fakeCPURoot(t *testing.T, present, online string, count int) string {
 		}
 	}
 	for id := 1; id < count; id++ {
-		dir := filepath.Join(root, "cpu"+string(rune('0'+id)))
+		dir := filepath.Join(root, "cpu"+strconv.Itoa(id))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}

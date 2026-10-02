@@ -93,7 +93,6 @@ jobs:
           field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
           snp_meas="$(field tinfoil-snp.igvm.manifest.json expected_snp_measurement)"
           tdx_meas="$(field tinfoil-tdx.igvm.manifest.json expected_mrtd)"
-          snp_policy="$(field tinfoil-snp.igvm.manifest.json guest_policy)"
 
           # cvmc appends no5lvl, so the command line that was measured is the
           # one it recorded -- not the string composed above. Publishing the
@@ -111,13 +110,6 @@ jobs:
             *"roothash=${roothash}"*) ;;
             *) echo "::error::measured command line does not carry roothash=${roothash}"; exit 1 ;;
           esac
-
-          # M1: the policy is the only published value a verifier must pin and
-          # the image does not enforce, so shape-check it the way the consumer does.
-          if ! printf '%s' "$snp_policy" | grep -Eq '^(0x[0-9a-fA-F]{1,16}|[0-9]{1,20})$'; then
-            echo "::error::guest policy is not a SEV-SNP policy: $snp_policy"
-            exit 1
-          fi
 
           # `cvmc measure` prints "platform: <p>" then "<field>: <hex>".
           recomputed() { ./result-cvmc/bin/cvmc measure "$1" | awk -F': ' 'NR==2 {print $2}'; }
@@ -139,7 +131,6 @@ jobs:
           {
             echo "snp_measurement=$snp_meas"
             echo "tdx_measurement=$tdx_meas"
-            echo "snp_policy=$snp_policy"
             echo "igvm_cmdline=$igvm_cmdline"
           } >> "$GITHUB_ENV"
 
@@ -160,9 +151,8 @@ jobs:
             "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
             "cvm_compiler": "$(sha256sum result-cvmc/bin/cvmc | awk '{print $1}')",
             "igvm": {
-              "snp_launch": { "measurement": "${snp_measurement}", "policy": "${snp_policy}" },
-              "tdx_launch": { "mrtd": "${tdx_measurement}" },
-              "cmdline": "${igvm_cmdline}"
+              "snp_measurement": "${snp_measurement}",
+              "tdx_mrtd": "${tdx_measurement}"
             }
           }
           EOF
@@ -174,8 +164,6 @@ jobs:
           cp result-cvmc/bin/cvmc "/tmp/out/cvmc-${REF_NAME}"
           cp tinfoil-snp.igvm "/tmp/out/tinfoil-snp-${REF_NAME}.igvm"
           cp tinfoil-tdx.igvm "/tmp/out/tinfoil-tdx-${REF_NAME}.igvm"
-          cp tinfoil-snp.igvm.manifest.json "/tmp/out/tinfoil-snp-${REF_NAME}.igvm.manifest.json"
-          cp tinfoil-tdx.igvm.manifest.json "/tmp/out/tinfoil-tdx-${REF_NAME}.igvm.manifest.json"
 
           # Generate checksums
           cd /tmp/out
@@ -192,8 +180,6 @@ jobs:
             /tmp/out/cvmc-${{ github.ref_name }}
             /tmp/out/tinfoil-snp-${{ github.ref_name }}.igvm
             /tmp/out/tinfoil-tdx-${{ github.ref_name }}.igvm
-            /tmp/out/tinfoil-snp-${{ github.ref_name }}.igvm.manifest.json
-            /tmp/out/tinfoil-tdx-${{ github.ref_name }}.igvm.manifest.json
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
 
       - name: Upload attested artifacts to R2
@@ -247,8 +233,10 @@ jobs:
           - IGVM (TDX): https://images.tinfoil.sh/cvm/tinfoil-tdx-${REF_NAME}.igvm
 
           ### Launch measurements
-          - SEV-SNP: \`${snp_measurement}\` (policy \`${snp_policy}\`)
+          - SEV-SNP: \`${snp_measurement}\`
           - Intel TDX MRTD: \`${tdx_measurement}\`
+
+          Measured command line: \`${igvm_cmdline}\`
 
           ### Manifest
           \`\`\`json

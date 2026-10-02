@@ -161,3 +161,17 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+
+## Locked storage volumes
+
+A declared storage volume without `key-secret` starts with a read-only
+placeholder. Writes fail with `EROFS` until unlock, including for root with
+`CAP_DAC_OVERRIDE`. A CVM administrator with mount privileges can bypass this
+restriction.
+
+Unlocking propagates the writable encrypted filesystem into existing application
+mounts without recreating the container. A failed unlock leaves the placeholder
+read-only; preparing an already-unlocked volume leaves it writable.
+
+See the [isolated volume fixture](../tests/volume-vm/README.md) for reproducible
+mount-propagation and encrypted-persistence checks.

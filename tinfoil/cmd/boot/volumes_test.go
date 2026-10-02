@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -79,5 +80,30 @@ func TestMountVolumesRejectsUnusableKeysBeforeMounting(t *testing.T) {
 				t.Fatal("error contains secret value")
 			}
 		})
+	}
+}
+
+func TestMountVolumesStopsOnMountFailureAndClearsKey(t *testing.T) {
+	config := &Config{Volumes: []sharedconfig.VolumeSpec{
+		{Name: "state", KeySecret: "VOLUME_KEY"},
+		{Name: "later", KeySecret: "VOLUME_KEY"},
+	}}
+	external := &shimconfig.ExternalConfig{Secrets: map[string]string{
+		"VOLUME_KEY": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x5a}, volume.KeyBytes)),
+	}}
+	failure := errors.New("mount failed")
+	var decoded []byte
+	err := mountVolumes(t.Context(), config, external, func(_ context.Context, spec volume.Spec, key []byte) error {
+		if decoded != nil || spec.Name != "state" {
+			t.Fatal("boot continued after volume failure")
+		}
+		decoded = key
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("error = %v, want mount failure", err)
+	}
+	if !bytes.Equal(decoded, make([]byte, volume.KeyBytes)) {
+		t.Fatal("decoded key retained after failed mount")
 	}
 }

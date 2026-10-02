@@ -94,6 +94,8 @@ jobs:
           snp_meas="$(field tinfoil-snp.igvm.manifest.json expected_snp_measurement)"
           tdx_meas="$(field tinfoil-tdx.igvm.manifest.json expected_mrtd)"
           snp_policy="$(field tinfoil-snp.igvm.manifest.json guest_policy)"
+          jq -e '(.launch.measurement == .expected_snp_measurement and .launch.policy == .guest_policy) or error("SNP launch measurement or policy disagrees with the manifest")' tinfoil-snp.igvm.manifest.json > /dev/null
+          jq -e '(.launch.mrtd == .expected_mrtd) or error("TDX launch MRTD disagrees with the manifest")' tinfoil-tdx.igvm.manifest.json > /dev/null
 
           # cvmc appends no5lvl, so the command line that was measured is the
           # one it recorded -- not the string composed above. Publishing the
@@ -137,19 +139,19 @@ jobs:
           done
 
           {
-            echo "snp_measurement=$snp_meas"
-            echo "tdx_measurement=$tdx_meas"
-            echo "snp_policy=$snp_policy"
             echo "igvm_cmdline=$igvm_cmdline"
           } >> "$GITHUB_ENV"
 
       - name: Generate manifest
         env:
           REF_NAME: ${{ github.ref_name }}
+          IGVM_MANIFEST_FORMAT_VERSION: "1"
         run: |
           set -Eeuo pipefail
           rm -rf /tmp/out
           mkdir -p /tmp/out
+          snp_launch="$(jq -ce 'select(.format_version == 3) | .launch | {measurement, policy, guest_svn: (.guest_svn | tonumber), id_key_digest}' tinfoil-snp.igvm.manifest.json)"
+          tdx_launch="$(jq -ce 'select(.format_version == 3) | .launch | {mrtd, rtmr0, rtmr1, rtmr2, rtmr3}' tinfoil-tdx.igvm.manifest.json)"
           # Generate manifest JSON
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
           {
@@ -160,9 +162,12 @@ jobs:
             "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
             "cvm_compiler": "$(sha256sum result-cvmc/bin/cvmc | awk '{print $1}')",
             "igvm": {
-              "snp_launch": { "measurement": "${snp_measurement}", "policy": "${snp_policy}" },
-              "tdx_launch": { "mrtd": "${tdx_measurement}" },
-              "cmdline": "${igvm_cmdline}"
+              "format_version": ${IGVM_MANIFEST_FORMAT_VERSION},
+              "snp": "$(sha256sum tinfoil-snp.igvm | awk '{print $1}')",
+              "tdx": "$(sha256sum tinfoil-tdx.igvm | awk '{print $1}')",
+              "snp_launch": ${snp_launch},
+              "tdx_launch": ${tdx_launch},
+              "cmdline": $(jq -n --arg value "$igvm_cmdline" '$value')
             }
           }
           EOF
@@ -229,6 +234,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           IS_PRERELEASE: ${{ steps.check-prerelease.outputs.is_prerelease }}
         run: |
+          set -Eeuo pipefail
+          manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
+          snp_measurement="$(jq -er '.igvm.snp_launch.measurement' "$manifest")"
+          snp_policy="$(jq -er '.igvm.snp_launch.policy' "$manifest")"
+          tdx_measurement="$(jq -er '.igvm.tdx_launch.mrtd' "$manifest")"
           PRERELEASE_FLAG=""
           if [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"

@@ -11,6 +11,8 @@ used by `tinfoil-boot`.
 
 The guest resolver is `127.0.0.1`. The required `tinfoil-egress` service starts
 before provisioning and forwards DNS over authenticated TLS to Cloudflare.
+Loopback-originated guest queries bypass container allowlists and do not install
+container firewall permissions.
 Docker keeps internal service-name resolution and forwards external queries to
 `169.254.0.53` from the container's network namespace. The service applies that
 network's policy and installs allowed public IPv4 answers before replying.

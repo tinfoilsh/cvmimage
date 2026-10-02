@@ -5,11 +5,11 @@ import (
 )
 
 func TestParseInvocation(t *testing.T) {
-	invocation, err := parseInvocation([]string{"tinfoil-boot", "--config-hash=abc", "--debug=true", "--secrets-fd=3"})
+	invocation, err := parseInvocation([]string{"tinfoil-boot", "--debug=true", "--secrets-fd=3"})
 	if err != nil {
 		t.Fatalf("normal boot invocation failed: %v", err)
 	}
-	if invocation.configHash != "abc" || !invocation.debug || invocation.secretsFD != 3 {
+	if !invocation.debug || invocation.secretsFD != 3 {
 		t.Fatalf("invocation = %#v", invocation)
 	}
 

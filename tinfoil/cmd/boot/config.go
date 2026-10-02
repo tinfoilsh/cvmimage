@@ -91,12 +91,9 @@ func loadAndVerifyConfig(expectedHash string, debug bool) (*Config, error) {
 		return nil, fmt.Errorf("reading config disk: %w", err)
 	}
 
-	// Verify hash against kernel cmdline
-	if expectedHash == "" {
-		return nil, fmt.Errorf("getting expected config hash: parameter tinfoil-config-hash not found in cmdline")
-	}
+	// Verify hash against the value the host committed to at launch
 	if !hexHashPattern.MatchString(expectedHash) {
-		return nil, fmt.Errorf("invalid config hash format in cmdline: %s", expectedHash)
+		return nil, fmt.Errorf("invalid launch config hash: %s", expectedHash)
 	}
 
 	actualHash := sha256Hash(configData)

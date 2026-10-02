@@ -52,9 +52,32 @@ func (a BodyV2) Marshal() [64]byte {
 	return result
 }
 
+// Guest device paths, one per platform.
+const (
+	SEVGuestDevice = "/dev/sev-guest"
+	TDXGuestDevice = "/dev/tdx_guest"
+)
+
+// DevicePlatform names the platform from the guest device present, without
+// opening it.
+func DevicePlatform() (string, error) {
+	if _, err := os.Stat(SEVGuestDevice); err == nil {
+		return PlatformSEVSNP, nil
+	}
+	if _, err := os.Stat(TDXGuestDevice); err == nil {
+		return PlatformTDX, nil
+	}
+	return "", fmt.Errorf("no attestation device found (checked %s, %s)", SEVGuestDevice, TDXGuestDevice)
+}
+
 // Report fetches the raw hardware attestation report and platform identifier.
 func Report(userData [64]byte) (report []byte, platform string, err error) {
-	if _, statErr := os.Stat("/dev/sev-guest"); statErr == nil {
+	platform, err = DevicePlatform()
+	if err != nil {
+		return nil, "", err
+	}
+	switch platform {
+	case PlatformSEVSNP:
 		var qp sevclient.LinuxConfigFsQuoteProvider
 		report, err = qp.GetRawQuote(userData)
 		if err != nil {
@@ -64,7 +87,7 @@ func Report(userData [64]byte) (report []byte, platform string, err error) {
 			report = report[:sevabi.ReportSize]
 		}
 		return report, PlatformSEVSNP, nil
-	} else if _, statErr := os.Stat("/dev/tdx_guest"); statErr == nil {
+	case PlatformTDX:
 		var qp tdxclient.QuoteProvider
 		qp, err = tdxclient.GetQuoteProvider()
 		if err != nil {
@@ -78,8 +101,9 @@ func Report(userData [64]byte) (report []byte, platform string, err error) {
 			return nil, "", fmt.Errorf("failed to get quote: %w", err)
 		}
 		return report, PlatformTDX, nil
+	default:
+		return nil, "", fmt.Errorf("unsupported platform %q", platform)
 	}
-	return nil, "", fmt.Errorf("no attestation device found (checked /dev/sev-guest, /dev/tdx_guest)")
 }
 
 const (

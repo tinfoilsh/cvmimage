@@ -66,6 +66,7 @@ of image inputs:
 | Repository configuration           | Direct additive copy                                   | `image/rootfs/`                                                                                      |
 | Rootfs and debug layer archives    | Fixed tar materializer                                 | `nix/rootfs.nix`                                                                                     |
 | Shipping and debug disk images     | Nix-owned fakeroot and `systemd-repart`                | `nix/image.nix`, `repart.d/`                                                                         |
+| CVM compiler and firmware       | Nixpkgs `pkgsStatic.rustPlatform`                      | `nix/compiler.nix`, `Cargo.toml`, `Cargo.lock`                                                          |
 
 
 Go binaries and Go validation use the same Nixpkgs Go 1.26 toolchain. The
@@ -141,6 +142,7 @@ nix-build -I . -A rootfs-archive -o result-rootfs
 nix-build -I . -A shipping-image -o result
 nix-build -I . -A debug-image -o result-debug
 nix-build -I . -A checks
+nix-build -I . -A cvm-compiler -o result-cvmc
 ```
 
 Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
@@ -177,13 +179,13 @@ The installer does not modify shell profiles, so put it on `PATH` and build:
 ```sh
 export PATH="/nix/var/nix/profiles/default/bin:$PATH"
 nix-build -I . -A shipping-image -o result
+nix-build -I . -A cvm-compiler -o result-cvmc
+sha256sum result/* result-cvmc/bin/cvmc
 ```
 
-Compare `sha256sum result/*` and the dm-verity root hash in
-`result/tinfoilcvm.roothash` against the published release checksums and
-manifest. Matching hashes mean the published artifacts are exactly what this
-source tree produces; the root hash is also the value bound into runtime
-attestation.
+Compare those against the published release checksums and manifest. The
+dm-verity root hash in `result/tinfoilcvm.roothash` is also the value bound
+into runtime attestation.
 
 ### 2. Enumerate every external input
 
@@ -193,13 +195,14 @@ access. Enumerate them all, with their hashes, from the instantiated
 derivation graph:
 
 ```sh
-drv="$(nix-instantiate -I . -A shipping-image)"
-nix --extra-experimental-features nix-command derivation show -r "$drv" \
-  | jq -r '.derivations | to_entries[]
-      | select(.value.outputs.out.hash?)
-      | [(.value.env.urls // .value.env.url // .value.name),
-         .value.outputs.out.hash] | @tsv' \
-  | sort -u
+for target in shipping-image cvm-compiler; do
+  drv="$(nix-instantiate -I . -A "$target")"
+  nix --extra-experimental-features nix-command derivation show -r "$drv" \
+    | jq -r '.derivations | to_entries[]
+        | select(.value.outputs.out.hash?)
+        | [(.value.env.urls // .value.env.url // .value.name),
+           .value.outputs.out.hash] | @tsv'
+done | sort -u
 ```
 
 An empty hash column cannot occur: a derivation without a declared output
@@ -234,15 +237,15 @@ the rejection of Nix-store references in runtime binaries.
 ## Continuous integration
 
 Pull-request CI always checks the pinned Nix installation and isolated Nixpkgs
-evaluation. It compares the `checks`, `runtime-go`, `debug-pid1`, and `initrd`
-derivation paths with the pull request's base and builds only the changed
-outputs. Changes to the Nix installer or this workflow build all four. The
-`initrd` output builds the initrd command and constructs the fixed archive with
-the pinned GNU cpio implementation.
+evaluation. It compares the `checks`, `runtime-go`, `debug-pid1`, `initrd` and
+`cvm-compiler` derivation paths with the pull request's base and builds only
+the changed outputs. Changes to the Nix installer or this workflow build all
+five. The `initrd` output builds the initrd command and constructs the fixed
+archive with the pinned GNU cpio implementation.
 
 Pushes to `main`, and explicit manual runs, build `checks`, `shipping-image`,
-and `debug-image` on one runner. The two image outputs transitively build the
-kernel, NVIDIA modules, nvattest, initrd, runtime binaries, and rootfs without a
-second producer list. These workflows neither publish artifacts nor qualify a
-release. Derivation comparison only schedules CI work; it is not an integrity
-check or a release policy.
+`debug-image` and `cvm-compiler` on one runner. The two image outputs
+transitively build the kernel, NVIDIA modules, nvattest, initrd, runtime
+binaries, and rootfs without a second producer list. These workflows neither
+publish artifacts nor qualify a release. Derivation comparison only schedules
+CI work; it is not an integrity check or a release policy.

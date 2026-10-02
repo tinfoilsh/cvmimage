@@ -58,7 +58,7 @@ func TestEnforceRAMSizeAcceptsTheConfiguredSize(t *testing.T) {
 }
 
 // The reset page has an E820 entry on TDX and is not RAM the host provided.
-func TestEnforceRAMSizeIgnoresTheResetPage(t *testing.T) {
+func TestEnforceRAMSizeToleratesTheResetPage(t *testing.T) {
 	spans := append(snpSpans(), [2]uint64{resetPageBase(), fourGiB})
 	root := fakeMemmapRoot(t, spans)
 	if _, err := enforceRAMSize(root, 4096); err != nil {
@@ -67,7 +67,7 @@ func TestEnforceRAMSizeIgnoresTheResetPage(t *testing.T) {
 }
 
 // Nothing stops the reset page being coalesced with the high RAM above it.
-func TestEnforceRAMSizeIgnoresACoalescedResetPage(t *testing.T) {
+func TestEnforceRAMSizeToleratesACoalescedResetPage(t *testing.T) {
 	root := fakeMemmapRoot(t, [][2]uint64{
 		{0, shimSpan},
 		{shimSpan, twoGiB},
@@ -93,10 +93,35 @@ func TestEnforceRAMSizeRejectsAShortLaunch(t *testing.T) {
 	}
 }
 
-func TestEnforceRAMSizeRejectsALongLaunch(t *testing.T) {
+// The pages this image places in windows the host does not call memory each
+// earn an E820 entry, so the total runs over; the check is a floor.
+func TestEnforceRAMSizeAcceptsALaunchOverTheConfiguredSize(t *testing.T) {
 	root := fakeMemmapRoot(t, snpSpans())
-	if _, err := enforceRAMSize(root, 2048); err == nil {
-		t.Fatal("a launch providing 4 GiB was accepted for a 2 GiB config")
+	if _, err := enforceRAMSize(root, 2048); err != nil {
+		t.Fatalf("enforceRAMSize: %v", err)
+	}
+}
+
+// The map an eight GiB SNP guest really reports: four pages inside the 32-bit
+// aperture, which no window names and which demanding equality refused.
+func TestEnforceRAMSizeAcceptsThePagesInsideTheAperture(t *testing.T) {
+	const eightGiB = 8 << 30
+	spans := [][2]uint64{
+		{0, shimSpan},
+		{shimSpan, twoGiB},
+		{0xffff_b000, 0xffff_c000},
+		{0xffff_c000, 0xffff_d000},
+		{0xffff_d000, 0xffff_e000},
+		{0xffff_e000, 0xffff_f000},
+		{resetPageBase(), fourGiB},
+		{fourGiB, fourGiB + eightGiB - twoGiB},
+	}
+	detail, err := enforceRAMSize(fakeMemmapRoot(t, spans), eightGiB/oneMiB)
+	if err != nil {
+		t.Fatalf("enforceRAMSize: %v", err)
+	}
+	if detail != "8192 MiB of RAM" {
+		t.Fatalf("detail %q", detail)
 	}
 }
 
@@ -127,11 +152,12 @@ func TestEnforceRAMSizeRejectsAnEmptyConfig(t *testing.T) {
 	}
 }
 
-func resetPageBase() uint64 { return notGuestRAM[0][0] }
+// The last page of the address space, where the shim puts its reset vector.
+func resetPageBase() uint64 { return 0xffff_f000 }
 
 // QEMU reserves the HyperTransport hole for an AMD vCPU and restacks the high
 // bank above 1 TiB, which puts the reserved entry below the top of RAM.
-func TestEnforceRAMSizeIgnoresTheHyperTransportHole(t *testing.T) {
+func TestEnforceRAMSizeToleratesTheHyperTransportHole(t *testing.T) {
 	const ram = 1024 * 1024 * oneMiB // 1 TiB
 	root := fakeMemmapRoot(t, [][2]uint64{
 		{0, shimSpan},

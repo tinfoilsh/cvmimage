@@ -10,30 +10,22 @@ import (
 
 const memmapRoot = "/sys/firmware/memmap"
 
-// Windows that get an E820 entry without being RAM the host provided, so the
-// total discounts whatever an entry holds in them:
-//
-//   - the shim's reset page, the last page of the address space rather than of
-//     the guest's RAM; firmware/src/boot.rs leaves it out of min_memory too
-//   - the HyperTransport hole QEMU reserves for any guest whose vCPU claims
-//     AuthenticAMD, which falls below the top of RAM once the guest is large
-//     enough that QEMU restacks its high bank above 1 TiB (hw/i386/pc.c)
-var notGuestRAM = [][2]uint64{
-	{0xffff_f000, 0x1_0000_0000},
-	{1012 << 30, 1024 << 30},
-}
-
 // enforceRAMSize holds the launch to the memory the config asked for. The
 // launch profile is fixed so that the measurement is, which leaves the size of
 // the machine to the host; the config is what HOST_DATA commits to, so
 // comparing the two here is what makes the host's choice binding. Without it a
 // guest sold 64 GiB starts contentedly on 4.
 //
-// E820 is the right thing to count, and its total is the RAM exactly: the
-// apertures a host describes are absent from it, everything else below the top
-// of RAM has an entry whatever its type, and every page it calls memory was
-// PVALIDATEd before Linux ran. A host that claims RAM it has not backed fails
-// the accept walk rather than reaching this check.
+// The total is a floor, not an equality. Every page E820 calls memory was
+// PVALIDATEd before Linux ran, so a host that claims RAM it has not backed
+// fails the accept walk rather than reaching this check; what E820 cannot do
+// is report the host's RAM exactly, because this image places a handful of
+// pages in windows the host does not call memory and each one still earns an
+// entry. Measured on an eight and a sixteen GiB guest that is four pages, and
+// on a two GiB guest none, since QEMU only splits the bank around the 32-bit
+// aperture once the guest outgrows it. Demanding equality made the slack a
+// boot failure for every guest larger than four GiB; a shortfall is the thing
+// worth refusing, and it is orders of magnitude, not pages.
 func enforceRAMSize(root string, requestedMiB int) (string, error) {
 	if requestedMiB < 1 {
 		return "", fmt.Errorf("config requests %d MiB of RAM, at least 1 is required", requestedMiB)
@@ -43,7 +35,7 @@ func enforceRAMSize(root string, requestedMiB int) (string, error) {
 		return "", err
 	}
 	requested := uint64(requestedMiB) << 20
-	if given != requested {
+	if given < requested {
 		return "", fmt.Errorf("config requests %d MiB of RAM, the launch provides %d bytes",
 			requestedMiB, given)
 	}
@@ -73,28 +65,12 @@ func firmwareMemoryBytes(root string) (uint64, error) {
 			return 0, fmt.Errorf("firmware memory map entry %s ends before it starts", entry.Name())
 		}
 		counted++
-		// Subtracting the overlap rather than skipping the entry: an entry may
-		// hold one of these windows exactly, as the reset page does on TDX, but
-		// nothing stops it being coalesced with a neighbour of the same type.
-		length := end - start + 1
-		for _, window := range notGuestRAM {
-			length -= overlap(start, end+1, window[0], window[1])
-		}
-		total += length
+		total += end - start + 1
 	}
 	if counted == 0 {
 		return 0, fmt.Errorf("firmware memory map is empty")
 	}
 	return total, nil
-}
-
-// overlap is the length the half-open [aLow, aHigh) and [bLow, bHigh) share.
-func overlap(aLow, aHigh, bLow, bHigh uint64) uint64 {
-	low, high := max(aLow, bLow), min(aHigh, bHigh)
-	if low >= high {
-		return 0
-	}
-	return high - low
 }
 
 func memmapValue(dir, name string) (uint64, error) {

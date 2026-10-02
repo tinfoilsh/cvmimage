@@ -69,7 +69,7 @@ func TestIsolatedKernelDNS(t *testing.T) {
 		run("ip", "-n", name, "route", "add", "default", "via", gateway)
 	}
 	run("nft", "-f", "../../../image/rootfs/etc/nftables.conf")
-	config := &runtimeconfig.Config{Networks: map[string]*runtimeconfig.NetworkSpec{"alpha": {Egress: "allowlist", Allow: []string{"storage.example"}}, "beta": {Egress: "closed"}}}
+	config := &runtimeconfig.Config{Networks: map[string]*runtimeconfig.NetworkSpec{"alpha": {Egress: "allowlist", Allow: []string{"storage.example", "rotated.example", "expire.example", "replace.example"}}, "beta": {Egress: "closed"}}}
 	if err := firewall.ApplyContainerNetworks(config, false, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestIsolatedKernelDNS(t *testing.T) {
 		if n > 1 {
 			ip = "8.8.4.4"
 		}
-		rr, _ := dns.NewRR("storage.example. 60 IN A " + ip)
+		rr, _ := dns.NewRR(q.Question[0].Name + " 60 IN A " + ip)
 		a := new(dns.Msg).SetReply(q)
 		a.Answer = []dns.RR{rr}
 		return a, nil
@@ -220,9 +220,14 @@ func TestIsolatedDNSClient(t *testing.T) {
 		t.Skip("namespace child only")
 	}
 	var established net.Conn
-	for _, network := range []string{"udp", "tcp"} {
+	for i, network := range []string{"udp", "tcp"} {
 		c := dns.Client{Net: network, Timeout: time.Second}
-		a, _, err := c.Exchange(new(dns.Msg).SetQuestion("storage.example.", dns.TypeA), net.JoinHostPort(containernet.DNSAddress, "53"))
+		domain := "storage.example."
+		if i > 0 {
+			domain = "rotated.example."
+		}
+		query := new(dns.Msg).SetQuestion(domain, dns.TypeA)
+		a, _, err := c.Exchange(query, net.JoinHostPort(containernet.DNSAddress, "53"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -235,6 +240,10 @@ func TestIsolatedDNSClient(t *testing.T) {
 		}
 
 		if name == "alpha" {
+			cached, _, err := c.Exchange(query, net.JoinHostPort(containernet.DNSAddress, "53"))
+			if err != nil || cached.Rcode != dns.RcodeSuccess || len(cached.Answer) != 1 || !cached.Answer[0].(*dns.A).A.Equal(a.Answer[0].(*dns.A).A) || cached.Answer[0].Header().Ttl > a.Answer[0].Header().Ttl {
+				t.Fatalf("cached DNS answer: %v, %v", cached, err)
+			}
 			endpoint := net.JoinHostPort(a.Answer[0].(*dns.A).A.String(), "8080")
 			connection, err := net.DialTimeout("tcp", endpoint, time.Second)
 			if err != nil {
@@ -258,7 +267,7 @@ func TestIsolatedDNSClient(t *testing.T) {
 	}
 	if name == "alpha" {
 		client := dns.Client{Net: "tcp", Timeout: time.Second}
-		query := new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)
+		query := new(dns.Msg).SetQuestion("expire.example.", dns.TypeA)
 		if _, _, err := client.Exchange(query, containernet.DNSAddress+":53"); err != nil {
 			t.Fatal(err)
 		}
@@ -268,6 +277,7 @@ func TestIsolatedDNSClient(t *testing.T) {
 		if _, err := io.ReadFull(established, got); err != nil || string(got) != "ping" {
 			t.Fatalf("DNS expiry interrupted an authorized connection: %q, %v", got, err)
 		}
+		query = new(dns.Msg).SetQuestion("replace.example.", dns.TypeA)
 		if _, _, err := client.Exchange(query, containernet.DNSAddress+":53"); err != nil {
 			t.Fatal(err)
 		}

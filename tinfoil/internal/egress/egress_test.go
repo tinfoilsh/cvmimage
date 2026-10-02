@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 
@@ -37,6 +38,7 @@ func (w *responseWriter) WriteMsg(m *dns.Msg) error {
 func testEngine(t *testing.T, records ...string) (*Engine, *[]string) {
 	t.Helper()
 	e := New()
+	e.now = func() time.Time { return time.Unix(0, 0) }
 	e.policies = []policy{
 		{"alpha", netip.MustParsePrefix("10.42.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"storage.example"}}},
 		{"beta", netip.MustParsePrefix("10.43.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"other.example"}}},
@@ -73,6 +75,8 @@ func ask(e *Engine, source, name string, kind uint16) *dns.Msg {
 
 func TestDNSInstallsRotatingAnswersBeforeReply(t *testing.T) {
 	e, scripts := testEngine(t)
+	now := e.now()
+	e.now = func() time.Time { return now }
 	for _, address := range []string{"8.8.8.8", "8.8.4.4"} {
 		e.exchange = func(_ context.Context, query *dns.Msg) (*dns.Msg, error) {
 			answer := new(dns.Msg).SetReply(query)
@@ -89,6 +93,7 @@ func TestDNSInstallsRotatingAnswersBeforeReply(t *testing.T) {
 			}
 		}}
 		e.ServeDNS(w, new(dns.Msg).SetQuestion("StOrAgE.Example.", dns.TypeA))
+		now = now.Add(30 * time.Second)
 	}
 	for _, script := range *scripts {
 		if strings.Contains(script, "flush") || strings.Contains(script, "allow-beta") {

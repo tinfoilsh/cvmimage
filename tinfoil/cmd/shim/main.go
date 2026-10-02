@@ -25,7 +25,7 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 

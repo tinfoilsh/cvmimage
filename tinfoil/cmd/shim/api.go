@@ -26,7 +26,8 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/verifier/document"
+	"github.com/tinfoilsh/tinfoil-go/verifier/document/collateral"
 )
 
 const (
@@ -36,7 +37,7 @@ const (
 )
 
 type collateralSource interface {
-	Current(context.Context) ([]envelope.CollateralEntry, error)
+	Current(context.Context) ([]collateral.Entry, error)
 }
 
 // pathMatchesPattern checks if a request path matches a pattern.
@@ -367,7 +368,7 @@ func registerObservabilityHandlers(
 			}
 			var nonce32 [envelope.NonceSize]byte
 			copy(nonce32[:], nonce)
-			var collateral []envelope.CollateralEntry
+			var collateral []collateral.Entry
 			if collateralSource != nil {
 				collateral, err = collateralSource.Current(r.Context())
 				if err != nil {
@@ -395,7 +396,7 @@ func registerObservabilityHandlers(
 				return
 			}
 
-			w.Header().Set(attestationFormatHeader, fresh.Format)
+			w.Header().Set(attestationFormatHeader, envelope.AttestationV3Format)
 			json.NewEncoder(w).Encode(fresh)
 			return
 		}

@@ -186,6 +186,14 @@ jobs:
           cd /tmp/out
           sha256sum ./* | tee "tinfoil-inference-${REF_NAME}-checksums.sha256"
 
+      - name: Hash the manifest
+        id: manifest-digest
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          echo "sha256=$(sha256sum "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
         with:
@@ -200,6 +208,17 @@ jobs:
             /tmp/out/tinfoil-snp-${{ github.ref_name }}.igvm.manifest.json
             /tmp/out/tinfoil-tdx-${{ github.ref_name }}.igvm.manifest.json
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
+
+      # The manifest is its own predicate: a verifier reads the launch
+      # measurements from igvm.snp_launch and igvm.tdx_launch and ignores
+      # the rest.
+      - name: Attest the launch measurements
+        uses: actions/attest@7667f588f2f73a90cea6c7ac70e78266c4f76616  # v3.1.0
+        with:
+          subject-name: tinfoil-inference-${{ github.ref_name }}-manifest.json
+          subject-digest: sha256:${{ steps.manifest-digest.outputs.sha256 }}
+          predicate-type: https://tinfoil.sh/predicate/snp-tdx-multiplatform/v2
+          predicate-path: /tmp/out/tinfoil-inference-${{ github.ref_name }}-manifest.json
 
       - name: Upload attested artifacts to R2
         env:

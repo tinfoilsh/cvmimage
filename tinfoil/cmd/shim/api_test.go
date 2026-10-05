@@ -13,7 +13,8 @@ import (
 	"time"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"
@@ -22,15 +23,15 @@ import (
 	"tinfoil/internal/legacy"
 )
 
-type staticCollateralSource []envelope.CollateralEntry
+type staticCollateralSource []collateral.Entry
 
-func (s staticCollateralSource) Current(context.Context) ([]envelope.CollateralEntry, error) {
+func (s staticCollateralSource) Current(context.Context) ([]collateral.Entry, error) {
 	return s, nil
 }
 
 type errorCollateralSource struct{}
 
-func (errorCollateralSource) Current(context.Context) ([]envelope.CollateralEntry, error) {
+func (errorCollateralSource) Current(context.Context) ([]collateral.Entry, error) {
 	return nil, errors.New("expired")
 }
 

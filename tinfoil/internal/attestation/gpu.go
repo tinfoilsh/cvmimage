@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"time"
 
-	envelope "github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
 
 	"tinfoil/internal/nvml"
 )

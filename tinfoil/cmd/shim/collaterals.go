@@ -38,8 +38,19 @@ func loadCollateralRequest(path string) (wire.Request, error) {
 	if request.QuoteBase64 == "" {
 		return wire.Request{}, fmt.Errorf("collateral request is missing quote_base64")
 	}
-	if request.Platform != attestation.PlatformDummy && request.Repo == "" {
-		return wire.Request{}, fmt.Errorf("collateral request is missing repo")
+	if request.Platform != attestation.PlatformDummy {
+		switch request.Profile {
+		case "":
+			if request.Repo == "" || request.Config != nil || request.Runtime != nil {
+				return wire.Request{}, fmt.Errorf("legacy collateral request requires a repository")
+			}
+		case wire.ProfileIGVMV1:
+			if request.Config == nil || request.Runtime == nil || request.Repo != "" || request.Tag != "" {
+				return wire.Request{}, fmt.Errorf("IGVM collateral request requires runtime and config references")
+			}
+		default:
+			return wire.Request{}, fmt.Errorf("unsupported collateral request profile %q", request.Profile)
+		}
 	}
 	return request, nil
 }

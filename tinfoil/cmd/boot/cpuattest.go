@@ -8,7 +8,7 @@ import (
 	"log"
 	"os"
 
-	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 
 	verifier "tinfoil/internal/legacy"
 

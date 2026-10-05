@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"

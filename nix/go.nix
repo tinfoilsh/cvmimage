@@ -8,18 +8,12 @@ let
     "mailcap-1.17.patch"
     "tzdata-1.19.patch"
   ];
-  # The pinned Nixpkgs revision does not provide go_1_27.
-  upstreamGo = pkgs.go_1_26.overrideAttrs (old: {
-    version = "1.27.1";
-    src = pkgs.fetchurl {
-      url = "https://go.dev/dl/go1.27.1.src.tar.gz";
-      hash = "sha256-TkCKuuEm2Ra2FkYnGT8sVPDjyhMS1pO4bbRfhiqyOLE=";
-    };
+  upstreamGo = pkgs.go_1_27.overrideAttrs (old: {
     patches = builtins.filter (
       patch:
       !pkgs.lib.any (
         suffix: pkgs.lib.hasSuffix suffix (builtins.baseNameOf (toString patch))
-      ) (nixRuntimePatchSuffixes ++ [ "go_no_vendor_checks-1.26.patch" ])
+      ) nixRuntimePatchSuffixes
     ) old.patches;
   });
   buildGoModule = pkgs.buildGoModule.override { go = upstreamGo; };

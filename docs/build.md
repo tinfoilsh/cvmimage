@@ -69,13 +69,11 @@ of image inputs:
 | CVM compiler and firmware       | Nixpkgs `pkgsStatic.rustPlatform`                      | `nix/compiler.nix`, `Cargo.toml`, `Cargo.lock`                                                          |
 
 
-Go binaries and Go validation use the same Go 1.27.1 toolchain, built with
-the pinned Nixpkgs Go recipe. The
+Go binaries and Go validation use the same Nixpkgs Go 1.27 toolchain. The
 three NixOS-only patches that prepend Nix-store paths for timezone, MIME, and
 IANA databases are omitted so measured guest binaries retain upstream Linux
-lookup paths and contain no Nix-store references. The Go 1.26 vendor-check
-patch is also omitted because it does not apply to Go 1.27. All other Nixpkgs
-Go patches and the upstream `buildGoModule` machinery remain unchanged.
+lookup paths and contain no Nix-store references. All other Nixpkgs Go patches
+and the upstream `buildGoModule` machinery remain unchanged.
 
 All builders — CI, release, operators, and auditors — install Nix through one
 script, `nix/install.sh`, which lives beside the pin files it enforces. It

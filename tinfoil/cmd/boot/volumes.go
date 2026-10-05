@@ -16,9 +16,9 @@ func mountVolumes(ctx context.Context, config *Config, external *shimconfig.Exte
 			continue
 		}
 		key, err := base64.StdEncoding.Strict().DecodeString(strings.TrimSpace(external.GetSecret(spec.KeySecret)))
-		if err != nil || len(key) != volume.KeyBytes {
+		if err != nil || len(key) < volume.MinKeyBytes {
 			clear(key)
-			return fmt.Errorf("volume %s key %s is not base64 for %d bytes", spec.Name, spec.KeySecret, volume.KeyBytes)
+			return fmt.Errorf("volume %s key %s is not base64 for at least %d bytes", spec.Name, spec.KeySecret, volume.MinKeyBytes)
 		}
 		err = mount(ctx, volume.Spec{VolumeSpec: spec, Models: len(config.Models), Index: index}, key)
 		clear(key)

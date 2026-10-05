@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/ecrregistry"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
@@ -537,13 +540,17 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		})
 	}
 
+	hostConfig.Binds = append(hostConfig.Binds, c.Volumes...)
 	// Volume mounts. A volume named twice brings its control socket only once.
-	for _, vol := range c.Volumes {
-		for _, bind := range volumeBinds(vol, cfg) {
+	for _, vol := range c.PersistentVolumes {
+		for _, bind := range volumeBinds(vol) {
 			if !slices.Contains(hostConfig.Binds, bind) {
 				hostConfig.Binds = append(hostConfig.Binds, bind)
 			}
 		}
+	}
+	if name, _, ok := runtimeconfig.SealOwner(cfg); ok && name == c.Name {
+		hostConfig.Binds = append(hostConfig.Binds, boot.SealRegisterPath+":"+boot.SealRegisterPath)
 	}
 
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
@@ -592,13 +599,8 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	return containerConfig, hostConfig, networkingConfig, rest, nil
 }
 
-func volumeBinds(vol string, cfg *Config) []string {
-	source, target, found := strings.Cut(vol, ":")
-	if !found || cfg == nil || !slices.ContainsFunc(cfg.Volumes, func(v runtimeconfig.VolumeSpec) bool {
-		return v.Name == source
-	}) {
-		return []string{vol}
-	}
+func volumeBinds(vol string) []string {
+	source, target, _ := strings.Cut(vol, ":")
 	control := boot.VolumeControlDir + "/" + source
 	return []string{
 		boot.VolumeDataDir + "/" + source + ":" + target + ":rslave",
@@ -651,7 +653,11 @@ func registryAuth(imageName string) string {
 
 // pullImage pulls an image using the Docker SDK with auth from the boot-written Docker config
 func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
-	opts := client.ImagePullOptions{RegistryAuth: registryAuth(imageName)}
+	auth, err := imagePullRegistryAuth(ctx, imageName)
+	if err != nil {
+		return fmt.Errorf("registry authentication: %w", err)
+	}
+	opts := client.ImagePullOptions{RegistryAuth: auth}
 
 	reader, err := cli.ImagePull(ctx, imageName, opts)
 	if err != nil {
@@ -685,6 +691,36 @@ func pullImage(ctx context.Context, cli *client.Client, imageName string) error 
 		return err
 	}
 	return nil
+}
+
+func imagePullRegistryAuth(ctx context.Context, imageName string) (string, error) {
+	named, err := reference.ParseNormalizedNamed(imageName)
+	if err != nil {
+		return "", fmt.Errorf("invalid image reference")
+	}
+	if !ecrregistry.IsRegistryHost(reference.Domain(named)) {
+		return registryAuth(imageName), nil
+	}
+	config, err := ecrregistry.Load(filepath.Join(dockerConfigDir, ecrregistry.ConfigFileName))
+	if err != nil {
+		return "", err
+	}
+	if config == nil || reference.Domain(named) != config.Host {
+		return registryAuth(imageName), nil
+	}
+	auth, err := config.Fetch(ctx, http.DefaultTransport)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(struct {
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		ServerAddress string `json:"serveraddress"`
+	}{auth.Username, auth.Password, auth.Host})
+	if err != nil {
+		return "", fmt.Errorf("encoding registry authentication")
+	}
+	return base64.URLEncoding.EncodeToString(encoded), nil
 }
 
 func verifyPulledImageDigest(imageName string, repoDigests []string) error {

@@ -132,7 +132,7 @@ containers:
     ports: ["22:22"]
     keys: [host-ssh]
     working_dir: /workspace
-    volumes: [workspace:/workspace]
+    persistent_volumes: [workspace:/workspace]
 ```
 
 Admin permission does not enable debug mode, its config-reload API, console, or
@@ -161,3 +161,67 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+
+## Locked storage volumes
+
+A declared storage volume without `key-secret` starts with a read-only
+placeholder. Writes fail with `EROFS` until unlock, including for root with
+`CAP_DAC_OVERRIDE`. A CVM administrator with mount privileges can bypass this
+restriction.
+
+Unlocking propagates the writable encrypted filesystem into existing application
+mounts without recreating the container. A failed unlock leaves the placeholder
+read-only; preparing an already-unlocked volume leaves it writable.
+
+The mount regression test uses an isolated namespace and tmpfs, not block devices.
+Run it on Linux with `CAP_SYS_ADMIN`, from `tinfoil/`:
+
+```sh
+TINFOIL_VOLUME_MOUNT_TEST=1 go test -v -count=1 -run '^TestLockedMountPropagation$' ./internal/volume
+```
+
+### Temporary legacy volume unlock
+
+New volumes use Argon2id. Boot unlocks through `key-secret` also use Argon2id;
+they never fall back to the old format. Existing HKDF volumes can temporarily
+be opened by explicitly requesting format 1 on their runtime control socket.
+Format 1 only supports unlock and requires the original 64-byte key. It cannot
+initialize a volume or convert one to Argon2id.
+
+The socket is `/run/tinfoil/volumes/<name>/control.sock`, exposed to containers
+that mount the volume through `persistent_volumes`. Send one `SOCK_SEQPACKET`
+datagram containing `0x01`, the ASCII byte `u`, and the 64 raw key bytes. The
+response is plain `ok`, `rejected`, or `failed`. Normal format 2 requests start
+with `0x02` and use `u` to unlock or `i` to initialize. There is no default format
+byte or automatic fallback between Argon2id and HKDF.
+
+To use this path for a formerly boot-unlocked volume, remove its `key-secret`
+entry and grant that secret to its owning container through `secrets`. The
+container must unlock the volume before starting the application. Its UID/GID
+must have access to the control socket according to the volume's `owner`.
+For example, a container with Python, a `data` volume, and a base64 `DATA_KEY`
+secret can run:
+
+```sh
+python3 - <<'PY'
+import base64
+import os
+import socket
+
+key = base64.b64decode(os.environ.pop("DATA_KEY").strip(), validate=True)
+if len(key) != 64:
+    raise SystemExit("legacy volume key must contain 64 bytes")
+with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:
+    connection.connect("/run/tinfoil/volumes/data/control.sock")
+    connection.sendall(b"\x01u" + key)
+    if connection.recv(64) != b"ok":
+        raise SystemExit("legacy volume unlock failed")
+PY
+```
+
+Migrate by stopping application writes and copying the files into a fresh
+Argon2id volume, preserving filesystem metadata. Verify the destination and
+reopen it after a restart before retiring the old volume.
+
+Legacy HKDF unlock support is available during a temporary migration window
+and will be removed in a later cvmimage version.

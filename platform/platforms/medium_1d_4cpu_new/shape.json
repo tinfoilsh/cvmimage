@@ -1,0 +1,5 @@
+{
+  "cpus": 4,
+  "memory_mb": 65536,
+  "disks": 4
+}

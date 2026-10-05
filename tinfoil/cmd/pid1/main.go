@@ -275,6 +275,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}
 	bootCommand := hardenedCommand(
 		hardening.ServiceBoot, boot.BootBinary,
+		"--config-hash="+deps.cmdline.ConfigHash,
 		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
 	)
 	bootCommand = withSecretHandoff(bootCommand, secretHandoff)

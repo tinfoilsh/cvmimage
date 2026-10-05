@@ -6,8 +6,3 @@ lib/
 packages/
 tinfoil-inference-*
 /evidence/
-
-/target/
-*.igvm
-*.igvm.manifest.json
-/result*

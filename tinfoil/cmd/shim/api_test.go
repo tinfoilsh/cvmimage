@@ -20,7 +20,6 @@ import (
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
-	"tinfoil/internal/legacy"
 )
 
 type staticCollateralSource []collateral.Entry
@@ -58,12 +57,7 @@ func testAuthServer(t *testing.T, validator key.Validator, authenticatedEndpoint
 		AuthenticatedEndpoints: &authenticatedEndpoints,
 	}
 	extCfg := &config.ExternalConfig{}
-	att := &legacy.Document{
-		Format: "https://tinfoil.sh/predicate/dummy/v2",
-		Body:   "deadbeef",
-	}
-
-	return NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, extCfg, "127.0.0.1:9999", nil)
+	return NewShimServer(validator, nil, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, extCfg, "127.0.0.1:9999", nil)
 }
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
@@ -84,12 +78,8 @@ func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler
 		Paths:        paths,
 	}
 	extCfg := &config.ExternalConfig{}
-	att := &legacy.Document{
-		Format: "https://tinfoil.sh/predicate/dummy/v2",
-		Body:   "deadbeef",
-	}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
-	return NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg, upstreamAddr, nil)
+	return NewShimServer(nil, nil, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg, upstreamAddr, nil)
 }
 
 func testObservabilityServer(t *testing.T, paths []string) http.Handler {
@@ -102,11 +92,7 @@ func testObservabilityServer(t *testing.T, paths []string) http.Handler {
 
 	cfg := &config.Config{Paths: paths}
 	extCfg := &config.ExternalConfig{}
-	att := &legacy.Document{
-		Format: "https://tinfoil.sh/predicate/dummy/v2",
-		Body:   "deadbeef",
-	}
-	return NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg)
+	return NewObservabilityServer(tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg)
 }
 
 func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
@@ -115,7 +101,6 @@ func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
 		t.Fatalf("creating identity: %v", err)
 	}
 	handler := NewObservabilityServer(
-		&legacy.Document{Format: legacy.DummyV2, Body: "deadbeef"},
 		tinfoilattestation.BodyV2{},
 		0,
 		id,
@@ -136,32 +121,21 @@ func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
 	}
 }
 
-func TestAttestationEndpointCompatibility(t *testing.T) {
+func TestAttestationRequiresNonce(t *testing.T) {
 	for name, handler := range map[string]http.Handler{
 		"shim":          testFullServer(t, nil, 9999),
 		"observability": testObservabilityServer(t, nil),
 	} {
 		t.Run(name, func(t *testing.T) {
-			for _, query := range []string{"", "?nonce=", "?cache=1"} {
-				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, attestationPath+query, nil))
-				if rec.Code != http.StatusOK {
-					t.Fatalf("legacy status = %d: %s", rec.Code, rec.Body.String())
-				}
-				var document legacy.Document
-				if err := json.Unmarshal(rec.Body.Bytes(), &document); err != nil {
-					t.Fatal(err)
-				}
-				if document.Format != legacy.DummyV2 || document.Body != "deadbeef" || rec.Header().Get(attestationFormatHeader) != string(document.Format) {
-					t.Fatalf("legacy response changed: headers=%v body=%s", rec.Header(), rec.Body.String())
-				}
-			}
-			for _, path := range []string{attestationV3Path, attestationV3Path + "/"} {
-				for _, query := range []string{"", "?nonce=", "?nonce=ab", "?nonce=" + strings.Repeat("zz", envelope.NonceSize), "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&nonce=ab", "?nonce=ab&%zz=value", "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&cache=1"} {
+			for _, path := range []string{attestationPath, attestationV3Path, attestationV3Path + "/"} {
+				for _, query := range []string{"", "?nonce=", "?cache=1", "?nonce=ab", "?nonce=" + strings.Repeat("00", envelope.NonceSize+1), "?nonce=" + strings.Repeat("zz", envelope.NonceSize), "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&nonce=ab", "?nonce=ab&%zz=value", "?nonce=" + strings.Repeat("00", envelope.NonceSize) + "&cache=1"} {
 					rec := httptest.NewRecorder()
 					handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+query, nil))
 					if rec.Code != http.StatusBadRequest {
 						t.Errorf("%s%s: status = %d, want %d: %s", path, query, rec.Code, http.StatusBadRequest, rec.Body.String())
+					}
+					if got := rec.Header().Get(attestationFormatHeader); got != envelope.AttestationV3Format {
+						t.Errorf("%s%s: attestation format = %q, want %q", path, query, got, envelope.AttestationV3Format)
 					}
 				}
 			}
@@ -516,7 +490,7 @@ func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
 					t.Fatal(err)
 				}
 				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status}}
-				handler := NewShimServer(validator, nil, &legacy.Document{}, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
+				handler := NewShimServer(validator, nil, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
 				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
 				req.Header.Set("Authorization", "Bearer test-key")
 				var requestContext *identity.RequestContext
@@ -576,10 +550,9 @@ func TestLocalRateLimitSendsRetryAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{UpstreamPort: 9999}
-	att := &legacy.Document{Format: "https://tinfoil.sh/predicate/dummy/v2", Body: "deadbeef"}
 	// One token per minute with a burst of one: the second request is over budget.
 	limiter := NewRateLimiter(1.0/60, 1)
-	handler := NewShimServer(nil, limiter, att, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, &config.ExternalConfig{}, "127.0.0.1:9999", nil)
+	handler := NewShimServer(nil, limiter, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, &config.ExternalConfig{}, "127.0.0.1:9999", nil)
 
 	send := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))

@@ -13,7 +13,6 @@ import (
 	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/attestation"
-	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	tlsutil "tinfoil/internal/tls"
 )
@@ -32,9 +31,6 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 	if id.Domain == "localhost" || shimCfg.DummyAttestation {
 		log.Println("Using dummy attestation report")
 		doc := attestation.DummyReport(userData)
-		if err := writeAttestationDoc(doc); err != nil {
-			return nil, err
-		}
 		return &CPUAttestation{
 			RawReport: userData[:],
 			Platform:  attestation.PlatformDummy,
@@ -53,10 +49,6 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 		return nil, fmt.Errorf("building V2 document: %w", err)
 	}
 
-	if err := writeAttestationDoc(v2Doc); err != nil {
-		return nil, err
-	}
-
 	return &CPUAttestation{
 		RawReport: rawReport,
 		Platform:  platform,
@@ -72,18 +64,6 @@ func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
 		HPKEKey:  hpkeKey,
 		Workload: id.WorkloadKeys,
 	}
-}
-
-func writeAttestationDoc(att *verifier.Document) error {
-	data, err := json.Marshal(att)
-	if err != nil {
-		return fmt.Errorf("marshaling attestation document: %w", err)
-	}
-	if err := os.WriteFile(boot.AttestationPath, data, 0644); err != nil {
-		return fmt.Errorf("writing attestation document: %w", err)
-	}
-	log.Println("V2 attestation document written to ramdisk")
-	return nil
 }
 
 func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig) (wire.Request, error) {

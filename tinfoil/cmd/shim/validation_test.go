@@ -15,7 +15,6 @@ import (
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key/online"
-	"tinfoil/internal/legacy"
 )
 
 func TestOnlineValidationPreservesErrorsThroughEHBP(t *testing.T) {
@@ -71,7 +70,7 @@ func TestOnlineValidationPreservesErrorsThroughEHBP(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				handler := NewShimServer(validator, nil, &legacy.Document{}, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
+				handler := NewShimServer(validator, nil, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
 				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
 				req.Header.Set("Authorization", "Bearer test-key")
 				req.Header.Set("Origin", origin)

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
 
 func TestClientFetch(t *testing.T) {

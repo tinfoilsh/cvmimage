@@ -21,8 +21,4 @@ nix-build -I . -A shipping-image -o result
 
 This will produce the measured release artifacts: `tinfoilcvm.raw`, `tinfoilcvm.vmlinuz`, `tinfoilcvm.initrd`, `tinfoilcvm.roothash`.
 
-The repository also holds `firmware/`, the measured state a confidential guest
-launches with, and `compiler/`, the `cvmc` command that turns it into an IGVM
-image and reports what that image measures.
-
-See `docs/build.md` and `docs/launch.md` for more details.
+See `docs/build.md` for more details.

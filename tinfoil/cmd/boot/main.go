@@ -42,8 +42,9 @@ func main() {
 }
 
 type invocation struct {
-	debug     bool
-	secretsFD int
+	configHash string
+	debug      bool
+	secretsFD  int
 }
 
 func parseInvocation(args []string) (invocation, error) {
@@ -53,6 +54,7 @@ func parseInvocation(args []string) (invocation, error) {
 	var parsed invocation
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	flags.StringVar(&parsed.configHash, "config-hash", "", "verified config hash from the kernel command line")
 	flags.BoolVar(&parsed.debug, "debug", false, "enable the measured debug policy")
 	flags.IntVar(&parsed.secretsFD, "secrets-fd", -1, "sealed container-secret handoff descriptor")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -76,12 +78,7 @@ func run(ctx context.Context, invocation invocation) error {
 	// 1. Config
 	start := time.Now()
 	log.Println("Loading configuration")
-	configHash, err := measuredConfigHash()
-	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	config, err := loadAndVerifyConfig(configHash, invocation.debug)
+	config, err := loadAndVerifyConfig(invocation.configHash, invocation.debug)
 	if err != nil {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
 		return err
@@ -91,19 +88,7 @@ func run(ctx context.Context, invocation invocation) error {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("loading external config: %w", err)
 	}
-	cpuDetail, err := enforceCPUCount(cpuRoot, config.CPUs)
-	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	log.Printf("Config CPU count enforced: %s", cpuDetail)
-	ramDetail, err := enforceRAMSize(memmapRoot, config.Memory)
-	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	log.Printf("Config RAM size enforced: %s", ramDetail)
-	tracker.Record("config", boot.StatusOK, time.Since(start), cpuDetail+", "+ramDetail)
+	tracker.Record("config", boot.StatusOK, time.Since(start), "")
 
 	// 2. Network
 	start = time.Now()
@@ -181,7 +166,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, configHash, invocation.debug,
+	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, invocation.configHash, invocation.debug,
 		func(ctx context.Context, names []string) (map[string]string, error) {
 			return fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest, names)
 		})

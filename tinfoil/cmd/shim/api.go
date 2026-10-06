@@ -21,7 +21,6 @@ import (
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
-	"tinfoil/internal/legacy"
 	"tinfoil/internal/metrics"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
@@ -199,7 +198,6 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 func NewShimServer(
 	validator key.Validator,
 	rateLimiter *RateLimiter,
-	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
@@ -299,17 +297,16 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 
 	// Fail closed: an authenticated deployment with no validator must not tunnel.
 	if config.Authenticated && validator == nil {
 		tunnelTargets = nil
 	}
-	return wrapShimMux(config, att, tunnels(tunnelTargets, authorize, mux))
+	return wrapShimMux(config, tunnels(tunnelTargets, authorize, mux))
 }
 
 func NewObservabilityServer(
-	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
@@ -320,17 +317,17 @@ func NewObservabilityServer(
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
+	registerObservabilityHandlers(mux, ehbpMiddleware, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
-	return wrapShimMux(config, att, mux)
+	return wrapShimMux(config, mux)
 }
 
-func wrapShimMux(config *config.Config, att *legacy.Document, mux http.Handler) http.Handler {
+func wrapShimMux(config *config.Config, mux http.Handler) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set(attestationFormatHeader, string(att.Format))
+			w.Header().Set(attestationFormatHeader, envelope.AttestationV3Format)
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -340,7 +337,6 @@ func wrapShimMux(config *config.Config, att *legacy.Document, mux http.Handler) 
 func registerObservabilityHandlers(
 	mux *http.ServeMux,
 	ehbpMiddleware func(http.Handler) http.Handler,
-	att *legacy.Document,
 	identityBody tinfoilattestation.BodyV2,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
@@ -350,59 +346,51 @@ func registerObservabilityHandlers(
 ) {
 	attestationHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != attestationPath {
-			query, err := url.ParseQuery(r.URL.RawQuery)
-			nonces := query["nonce"]
-			if err != nil || len(query) != 1 || len(nonces) != 1 || nonces[0] == "" {
-				writeAPIError(w, errInvalidNonce)
-				return
-			}
-		}
-
-		// Fresh v3 attestation with nonce: ?nonce=<64 hex chars>
-		if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
-			nonce, err := hex.DecodeString(nonceHex)
-			if err != nil || len(nonce) != envelope.NonceSize {
-				writeAPIError(w, errInvalidNonce)
-				return
-			}
-			var nonce32 [envelope.NonceSize]byte
-			copy(nonce32[:], nonce)
-			var collateral []collateral.Entry
-			if collateralSource != nil {
-				collateral, err = collateralSource.Current(r.Context())
-				if err != nil {
-					log.Printf("Attestation collateral unavailable: %v", err)
-					writeAPIError(w, errCollateralUnavailable)
-					return
-				}
-			}
-			deviceEvidence, err := tinfoilattestation.CollectDeviceEvidence(nonce32, expectedGPUs)
-			if err != nil {
-				log.Printf("Device evidence collection failed for %d expected GPU(s): %v", expectedGPUs, err)
-				writeAPIError(w, errGPUEvidenceUnavailable)
-				return
-			}
-
-			fresh, err := tinfoilattestation.BuildAttestation(
-				identityBody.CryptoMaterial(),
-				nonce,
-				deviceEvidence,
-				collateral,
-			)
-			if err != nil {
-				log.Printf("Fresh attestation failed: %v", err)
-				writeAPIError(w, errAttestationBuildFailed)
-				return
-			}
-
-			w.Header().Set(attestationFormatHeader, envelope.AttestationV3Format)
-			json.NewEncoder(w).Encode(fresh)
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		nonces := query["nonce"]
+		if err != nil || len(query) != 1 || len(nonces) != 1 || nonces[0] == "" {
+			writeAPIError(w, errInvalidNonce)
 			return
 		}
 
-		// Legacy (no nonce)
-		json.NewEncoder(w).Encode(att)
+		// Fresh v3 attestation with nonce: ?nonce=<64 hex chars>
+		nonce, err := hex.DecodeString(nonces[0])
+		if err != nil || len(nonce) != envelope.NonceSize {
+			writeAPIError(w, errInvalidNonce)
+			return
+		}
+		var nonce32 [envelope.NonceSize]byte
+		copy(nonce32[:], nonce)
+		var collateral []collateral.Entry
+		if collateralSource != nil {
+			collateral, err = collateralSource.Current(r.Context())
+			if err != nil {
+				log.Printf("Attestation collateral unavailable: %v", err)
+				writeAPIError(w, errCollateralUnavailable)
+				return
+			}
+		}
+		deviceEvidence, err := tinfoilattestation.CollectDeviceEvidence(nonce32, expectedGPUs)
+		if err != nil {
+			log.Printf("Device evidence collection failed for %d expected GPU(s): %v", expectedGPUs, err)
+			writeAPIError(w, errGPUEvidenceUnavailable)
+			return
+		}
+
+		fresh, err := tinfoilattestation.BuildAttestation(
+			identityBody.CryptoMaterial(),
+			nonce,
+			deviceEvidence,
+			collateral,
+		)
+		if err != nil {
+			log.Printf("Fresh attestation failed: %v", err)
+			writeAPIError(w, errAttestationBuildFailed)
+			return
+		}
+
+		w.Header().Set(attestationFormatHeader, envelope.AttestationV3Format)
+		json.NewEncoder(w).Encode(fresh)
 	}))
 	mux.Handle(attestationPath, metrics.ObserveAttestation(metrics.AttestationEndpointUnversioned, attestationHandler))
 	versionedAttestationHandler := metrics.ObserveAttestation(metrics.AttestationEndpointV3, attestationHandler)

@@ -14,7 +14,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
-	"os"
 	"os/signal"
 	"sync"
 	"sync/atomic"
@@ -27,7 +26,6 @@ import (
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
 	"golang.org/x/time/rate"
-	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/attestedkeys"
@@ -185,12 +183,6 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 		cert.Store(&realCert)
 
-		att, err := waitForArtifact("Attestation document", func() (*verifier.Document, error) {
-			return loadAttestation()
-		})
-		if err != nil {
-			return err
-		}
 		collateralRequest, err := waitForArtifact("Collateral request", func() (wire.Request, error) {
 			return loadCollateralRequest(boot.CollateralRequestPath)
 		})
@@ -231,7 +223,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
 
-		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig)
+		observabilityHandler := NewObservabilityServer(identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig)
 		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
 
 		log.Println("Shim observability ready")
@@ -303,7 +295,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return fmt.Errorf("loading published ports: %w", err)
 		}
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr, targets)
+		fullHandler := NewShimServer(validator, rateLimiter, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr, targets)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")
@@ -360,16 +352,4 @@ func generateEphemeralCert() (tls.Certificate, error) {
 		Certificate: [][]byte{der},
 		PrivateKey:  key,
 	}, nil
-}
-
-func loadAttestation() (*verifier.Document, error) {
-	data, err := os.ReadFile(boot.AttestationPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", boot.AttestationPath, err)
-	}
-	var att verifier.Document
-	if err := json.Unmarshal(data, &att); err != nil {
-		return nil, fmt.Errorf("parsing attestation document: %w", err)
-	}
-	return &att, nil
 }

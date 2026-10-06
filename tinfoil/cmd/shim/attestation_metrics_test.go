@@ -14,7 +14,6 @@ import (
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
-	"tinfoil/internal/legacy"
 )
 
 func TestAttestationMetricsThroughShim(t *testing.T) {
@@ -24,14 +23,13 @@ func TestAttestationMetricsThroughShim(t *testing.T) {
 		t.Run(map[bool]string{false: "observability", true: "shim"}[ready], func(t *testing.T) {
 			id, err := identity.NewIdentity()
 			require.NoError(t, err)
-			att := &legacy.Document{Format: legacy.DummyV2, Body: "deadbeef"}
 			ext := &config.ExternalConfig{MetricsAPIKey: metricsKey}
 			ext.Metadata.ID = "test-enclave"
 			var handler http.Handler
 			if ready {
-				handler = NewShimServer(nil, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext, "127.0.0.1:9999", nil)
+				handler = NewShimServer(nil, nil, tinfoilattestation.BodyV2{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext, "127.0.0.1:9999", nil)
 			} else {
-				handler = NewObservabilityServer(att, tinfoilattestation.BodyV2{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext)
+				handler = NewObservabilityServer(tinfoilattestation.BodyV2{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext)
 			}
 			unauthorized := httptest.NewRecorder()
 			handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, metricsPath, nil))
@@ -62,8 +60,8 @@ func TestAttestationMetricsThroughShim(t *testing.T) {
 				path, endpoint, version, sdk, sdkVersion, result string
 				status                                           int
 			}{
-				{attestationPath, "unversioned", "v2", "unknown", "unknown", "served", http.StatusOK},
-				{attestationPath, "unversioned", "v2", "tinfoil-go", "0.15.7", "served", http.StatusOK},
+				{attestationPath, "unversioned", "none", "unknown", "unknown", "client_error", http.StatusBadRequest},
+				{attestationPath, "unversioned", "none", "tinfoil-go", "0.15.7", "client_error", http.StatusBadRequest},
 				{attestationV3Path, "v3", "none", "tinfoil-go", "0.15.7", "client_error", http.StatusBadRequest},
 				{attestationV3Path + "/", "v3", "none", "tinfoil-go", "0.15.7", "client_error", http.StatusBadRequest},
 				{attestationPath + "?nonce=" + strings.Repeat("00", envelope.NonceSize), "unversioned", "none", "tinfoil-go", "0.15.7", "server_error", http.StatusServiceUnavailable},

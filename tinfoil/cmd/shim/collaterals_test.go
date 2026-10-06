@@ -41,7 +41,7 @@ func TestNewCollateralSourceSkipsDummy(t *testing.T) {
 }
 
 func TestLoadConfigCollateralRequest(t *testing.T) {
-	want := wire.Request{Profile: wire.ProfileIGVMV1, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
+	want := wire.Request{Profile: wire.FormatV3, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
 		Runtime: &collateral.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)},
 		Config:  &collateral.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}}
 	got, err := loadCollateralRequest(writeCollateralRequestArtifact(t, want))
@@ -57,9 +57,9 @@ func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
 		"empty":           {},
 		"missing quote":   {Repo: "repo", Platform: attestation.PlatformTDX},
 		"missing repo":    {Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
-		"missing runtime": {Profile: wire.ProfileIGVMV1, Config: config, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
-		"missing config":  {Profile: wire.ProfileIGVMV1, Runtime: runtime, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
-		"mixed sources":   {Profile: wire.ProfileIGVMV1, Runtime: runtime, Config: config, Repo: "org/repo", Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
+		"missing runtime": {Profile: wire.FormatV3, Config: config, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
+		"missing config":  {Profile: wire.FormatV3, Runtime: runtime, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
+		"mixed sources":   {Profile: wire.FormatV3, Runtime: runtime, Config: config, Repo: "org/repo", Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
 		"missing profile": {Runtime: runtime, Config: config, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
 		"unknown profile": {Profile: "unknown", Runtime: runtime, Config: config, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
 	} {

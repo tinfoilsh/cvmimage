@@ -44,7 +44,7 @@ func loadCollateralRequest(path string) (wire.Request, error) {
 			if request.Repo == "" || request.Config != nil || request.Runtime != nil {
 				return wire.Request{}, fmt.Errorf("legacy collateral request requires a repository")
 			}
-		case wire.ProfileIGVMV1:
+		case wire.FormatV3:
 			if request.Config == nil || request.Runtime == nil || request.Repo != "" || request.Tag != "" {
 				return wire.Request{}, fmt.Errorf("IGVM collateral request requires runtime and config references")
 			}

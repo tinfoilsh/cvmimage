@@ -38,7 +38,7 @@ network:
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := wire.Request{Profile: wire.ProfileIGVMV1, Config: ref, Runtime: runtime, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
+	expected := wire.Request{Profile: wire.FormatV3, Config: ref, Runtime: runtime, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
 	collateral := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
 		Format: collateral.ConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +51,7 @@ network:
 		if r.URL.Path != "/attestation-collaterals" || !reflect.DeepEqual(request, expected) {
 			t.Errorf("unexpected ATC request: %s %#v", r.URL.Path, request)
 		}
-		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV2, ExpiresAt: time.Now().Add(time.Hour), Collateral: collateral})
+		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour), Collateral: collateral})
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "collateral-request.json")

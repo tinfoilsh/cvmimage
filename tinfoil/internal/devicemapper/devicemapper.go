@@ -46,7 +46,7 @@ const (
 	authenticatedTagBytes    = 32
 	authenticatedIVBytes     = 16
 	integrityTagBytes        = authenticatedTagBytes + authenticatedIVBytes
-	integrityJournalMode     = "J"
+	integrityMode            = "D" // unjournaled: a write torn by a crash reads back as EIO
 	integrityTarget          = "integrity"
 	integrityMagic           = "integrt\x00"
 	integrityDataSectorsAt   = 16
@@ -691,7 +691,7 @@ func ActivateIntegrity(control, source *os.File, name string, initialize bool) (
 		return err
 	}
 	params := fmt.Sprintf("%s 0 %d %s 2 block_size:%d fix_padding",
-		deviceNumber, integrityTagBytes, integrityJournalMode, cryptSectorSizeBytes)
+		deviceNumber, integrityTagBytes, integrityMode, cryptSectorSizeBytes)
 	dataSectors, formatted, err := IntegrityDataSectors(source)
 	if err != nil {
 		return err

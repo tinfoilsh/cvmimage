@@ -41,6 +41,15 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 }
 
 func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response, error) {
+	var expectedFormat string
+	switch request.Profile {
+	case "":
+		expectedFormat = wire.FormatV2
+	case wire.FormatV3:
+		expectedFormat = wire.FormatV3
+	default:
+		return wire.Response{}, fmt.Errorf("unsupported collateral request profile %q", request.Profile)
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return wire.Response{}, fmt.Errorf("marshaling collaterals request: %w", err)
@@ -67,7 +76,7 @@ func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response
 		return wire.Response{}, fmt.Errorf("POST %s: %s: %s", c.endpoint, resp.Status, string(respBody))
 	}
 
-	response, err := ParseResponse(respBody)
+	response, err := ParseResponse(respBody, expectedFormat)
 	if err != nil {
 		return wire.Response{}, err
 	}
@@ -80,12 +89,12 @@ func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response
 	return response, nil
 }
 
-func ParseResponse(data []byte) (wire.Response, error) {
+func ParseResponse(data []byte, expectedFormat string) (wire.Response, error) {
 	var response wire.Response
 	if err := json.Unmarshal(data, &response); err != nil {
 		return wire.Response{}, fmt.Errorf("parsing collaterals response: %w", err)
 	}
-	if response.Format != wire.FormatV2 {
+	if response.Format != expectedFormat {
 		return wire.Response{}, fmt.Errorf("unexpected collaterals format %q", response.Format)
 	}
 	return response, nil

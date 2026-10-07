@@ -160,6 +160,8 @@ const artifactPollInterval = 50 * time.Millisecond
 
 // upgradeWhenReady advances the public handler through three explicit phases:
 // boot stages only, observability only, and finally workload proxying.
+var processStart = time.Now()
+
 func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) {
 	start := time.Now()
 
@@ -316,7 +318,9 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		log.Printf("Shim upgrade failed: %v", err)
 		boot.RecordStage(boot.StageShim, boot.StatusFailed, time.Since(start), err.Error())
 	} else {
-		boot.RecordStage(boot.StageShim, boot.StatusOK, time.Since(start), "")
+		boot.RecordStage(boot.StageShim, boot.StatusOK, time.Since(start),
+			fmt.Sprintf("process_started=%s upgrade_started=%s",
+				processStart.UTC().Format("15:04:05.000"), start.UTC().Format("15:04:05.000")))
 	}
 	boot.Complete()
 }

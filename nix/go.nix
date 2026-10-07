@@ -130,14 +130,23 @@ let
     installPhase = "touch $out";
   };
 
-  configChecks = buildGoModule {
-    pname = "tinfoil-config-checks";
-    version = "0";
+  configCommon = {
+    inherit (common) version ldflags allowedReferences;
     src = pkgs.lib.cleanSource ../config;
     vendorHash = "sha256-HcXs/zfkUAtnO1ydKikaeUe0ZDWSnAIV+icr4Bywb2s=";
     env = commonEnv // {
       CGO_ENABLED = "0";
     };
+  };
+
+  configValidator = buildGoModule (configCommon // {
+    pname = "tinfoil-config";
+    subPackages = [ "cmd/tinfoil-config" ];
+    doCheck = false;
+  });
+
+  configChecks = buildGoModule (configCommon // {
+    pname = "tinfoil-config-checks";
     doCheck = true;
     buildPhase = "true";
     checkPhase = ''
@@ -147,12 +156,13 @@ let
       runHook postCheck
     '';
     installPhase = "touch $out";
-  };
+  });
 in
 {
   inherit checks;
   packages = {
     "config-checks" = configChecks;
+    "config-validator" = configValidator;
     "debug-pid1" = debugPID1;
     "runtime-go" = runtime;
     "tinfoil-initrd" = initrd;

@@ -57,6 +57,7 @@ of image inputs:
 | Output                             | Owner                                                  | Declaration                                                                                          |
 | ---------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | Runtime and debug Go binaries      | Nixpkgs `buildGoModule`                                | `nix/go.nix`, `tinfoil/go.mod`, `tinfoil/go.sum`                                                     |
+| Workload config validator         | Nixpkgs `buildGoModule`                                | `nix/go.nix`, `config/go.mod`, `config/go.sum`                                                       |
 | Fixed initrd                       | Pinned GNU cpio and Zstandard                          | `nix/initrd.nix`                                                                                     |
 | Custom kernel                      | Nixpkgs `linuxManualConfig`                            | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
 | Three NVIDIA modules               | Nixpkgs kernel-module build                            | `nix/nvidia-modules.nix`                                                                             |
@@ -141,7 +142,18 @@ nix-build -I . -A rootfs-archive -o result-rootfs
 nix-build -I . -A shipping-image -o result
 nix-build -I . -A debug-image -o result-debug
 nix-build -I . -A checks
+nix-build -I . -A config-checks
+nix-build -I . -A config-validator -o result-config-validator
 ```
+
+The guest and standalone validator use the strict schema in the `config` Go
+module from the same checkout. Run
+`result-config-validator/bin/tinfoil-config config.yml` to validate a workload;
+`--host-debug` permits the reserved toolbox mounts after trusted debug injection.
+Each release publishes the static Linux AMD64 executable as
+`tinfoil-config-<tag>-linux-amd64`, with its SHA-256 in the manifest's
+`config_validator` field and its build provenance alongside the image artifacts.
+The validator executable is not installed in the guest image.
 
 Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
 `nvidia-modules`, `nvattest`, and `initrd` remain directly buildable. There is
@@ -234,14 +246,16 @@ the rejection of Nix-store references in runtime binaries.
 ## Continuous integration
 
 Pull-request CI always checks the pinned Nix installation and isolated Nixpkgs
-evaluation. It compares the `checks`, `runtime-go`, `debug-pid1`, and `initrd`
+evaluation. It compares the `checks`, `config-checks`, `config-validator`,
+`runtime-go`, `debug-pid1`, and `initrd`
 derivation paths with the pull request's base and builds only the changed
-outputs. Changes to the Nix installer or this workflow build all four. The
+outputs. Changes to the Nix installer or this workflow build all six. The
 `initrd` output builds the initrd command and constructs the fixed archive with
 the pinned GNU cpio implementation.
 
-Pushes to `main`, and explicit manual runs, build `checks`, `shipping-image`,
-and `debug-image` on one runner. The two image outputs transitively build the
+Pushes to `main`, and explicit manual runs, build `checks`, `config-checks`,
+`config-validator`, `shipping-image`, and `debug-image` on one runner. The two
+image outputs transitively build the
 kernel, NVIDIA modules, nvattest, initrd, runtime binaries, and rootfs without a
 second producer list. These workflows neither publish artifacts nor qualify a
 release. Derivation comparison only schedules CI work; it is not an integrity

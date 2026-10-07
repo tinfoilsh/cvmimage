@@ -195,30 +195,33 @@ response is plain `ok`, `rejected`, or `failed`. Normal format 2 requests start
 with `0x02` and use `u` to unlock or `i` to initialize. There is no default format
 byte, automatic format detection, or retry with a different derivation.
 
-Runtime unlock requires a trusted unlock service authorized to hold the raw
-volume key. The control socket does not isolate that key from its caller.
-Do not move a boot-time `key-secret` into an application container's `secrets`,
-environment, or files. Running an unlock command before the application starts
-does not preserve the original separation between the application and its key.
+To use this path for a formerly boot-unlocked volume, remove its `key-secret`
+entry and grant that secret to its owning container through `secrets`. The
+container must unlock the volume before starting the application. Its UID/GID
+must have access to the control socket according to the volume's `owner`.
+For example, a container with Python, a `data` volume, and a base64 `DATA_KEY`
+secret can run:
 
-For formerly boot-unlocked volumes, migrate with the keys confined to the
-guests' boot paths:
+```sh
+python3 - <<'PY'
+import base64
+import os
+import socket
 
-1. Stop application writes and reopen the source volume using a pinned
-   pre-Argon2 cvmimage version that supports its existing `key-secret` unlock.
-   Run only a trusted copy workload during migration.
-2. In a separate CVM running the new image, create a fresh Argon2id volume with
-   its own boot-time `key-secret`. Grant neither volume key to a container.
-3. Copy files between the mounted filesystems over an authenticated, encrypted
-   connection bound to the expected CVM attestations, preserving filesystem
-   metadata. The copy workloads receive filesystem access and separate
-   transport credentials, never the durable volume keys.
-4. Verify the destination and reopen it after a restart before switching the
-   application to it. Retain the source volume until the migration is confirmed.
+key = base64.b64decode(os.environ.pop("DATA_KEY").strip(), validate=True)
+if len(key) != 64:
+    raise SystemExit("legacy volume key must contain 64 bytes")
+with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:
+    connection.connect("/run/tinfoil/volumes/data/control.sock")
+    connection.sendall(b"\x01u" + key)
+    if connection.recv(64) != b"ok":
+        raise SystemExit("legacy volume unlock failed")
+PY
+```
 
-This image has no legacy boot-time `key-secret` opt-in. The pinned old image is
-needed for this migration procedure; the explicit runtime format-1 request
-remains available to separate trusted unlock services.
+Migrate by stopping application writes and copying the files into a fresh
+Argon2id volume, preserving filesystem metadata. Verify the destination and
+reopen it after a restart before retiring the old volume.
 
 Legacy HKDF unlock support is available during a temporary migration window
 and will be removed in a later cvmimage version.

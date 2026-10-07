@@ -375,7 +375,7 @@ func TestBuildContainerCreateSpec_CVMAdmin(t *testing.T) {
 			c := Container{
 				Name: name, Image: "example.invalid/admin", CVMAdmin: true,
 				Networks: []string{"dev"}, Ports: []string{"2022:2222"},
-				Volumes: []string{"workspace:/workspace"},
+				PersistentVolumes: []string{"workspace:/workspace"},
 			}
 			cfg := &Config{
 				ShimCfg: &shimconfig.Config{UpstreamContainer: name}, Containers: []Container{c},
@@ -500,7 +500,8 @@ func TestBuildContainerCreateSpec_DeclaredVolumeBecomesPropagatedBind(t *testing
 	c := Container{
 		Name:    "app",
 		Image:   "example.invalid/app",
-		Volumes: []string{"workspace:/workspace", "other:/other"},
+		Volumes:           []string{"other:/other"},
+		PersistentVolumes: []string{"workspace:/workspace"},
 	}
 
 	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)

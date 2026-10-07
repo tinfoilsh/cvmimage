@@ -36,7 +36,7 @@ let
       ];
     };
     sourceRoot = "source/tinfoil";
-    vendorHash = "sha256-9kmaJ6pCszBol4M/ESbd10guw8uUh4z0VGjBFlGxExI=";
+    vendorHash = "sha256-2mu8pQloM7TmNzhz5wo9sp3O3YAjs6v2Tt12j93DXhI=";
     ldflags = [
       "-s"
       "-w"

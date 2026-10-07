@@ -223,7 +223,5 @@ Migrate by stopping application writes and copying the files into a fresh
 Argon2id volume, preserving filesystem metadata. Verify the destination and
 reopen it after a restart before retiring the old volume.
 
-After the migration window, delete `internal/volume/legacy_hkdf.go`, its test
-file, and the two `VersionHKDF` cases in `internal/volume/volume.go`. Remove this
-section as well. No config schema, old JSON protocol, or clock-based expiry is
-part of this compatibility path.
+Legacy HKDF unlock support is available during a temporary migration window
+and will be removed in a later cvmimage version.

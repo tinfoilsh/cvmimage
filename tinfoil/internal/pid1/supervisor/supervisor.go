@@ -534,7 +534,10 @@ type Supervisor struct {
 
 func New(parent context.Context, manager *Manager, config Config) *Supervisor {
 	if config.RestartBase <= 0 {
-		config.RestartBase = 2 * time.Second
+		// The shim exits once at boot completion and its restart gates the
+		// enclave serving traffic, so the first-restart backoff is boot
+		// latency. Exponential growth still protects against crash loops.
+		config.RestartBase = 250 * time.Millisecond
 	}
 	if config.RestartMax <= 0 {
 		config.RestartMax = 30 * time.Second

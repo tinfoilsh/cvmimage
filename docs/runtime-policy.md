@@ -161,3 +161,21 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+
+## Locked storage volumes
+
+A declared storage volume without `key-secret` starts with a read-only
+placeholder. Writes fail with `EROFS` until unlock, including for root with
+`CAP_DAC_OVERRIDE`. A CVM administrator with mount privileges can bypass this
+restriction.
+
+Unlocking propagates the writable encrypted filesystem into existing application
+mounts without recreating the container. A failed unlock leaves the placeholder
+read-only; preparing an already-unlocked volume leaves it writable.
+
+The mount regression test uses an isolated namespace and tmpfs, not block devices.
+Run it on Linux with `CAP_SYS_ADMIN`, from `tinfoil/`:
+
+```sh
+TINFOIL_VOLUME_MOUNT_TEST=1 go test -v -count=1 -run '^TestLockedMountPropagation$' ./internal/volume
+```

@@ -95,8 +95,8 @@ github.com/tinfoilsh/encrypted-http-body-protocol v0.3.2 h1:yKxfC3pVJ4ORwLeHwflv
 github.com/tinfoilsh/encrypted-http-body-protocol v0.3.2/go.mod h1:THDK0GFNny7Pcc+nO3AQi4f6Wf1cDkfLatmHAUlIn5s=
 github.com/tinfoilsh/modelwrap v0.2.1 h1:2Up98rhP+BtEtQowjHm+DpZtZiWORa3p0XWVzgXKbq0=
 github.com/tinfoilsh/modelwrap v0.2.1/go.mod h1:y3ov37f4WkQVA0jwJ/Rg7yQtKZuZloaQC+U7GgSoa8w=
-github.com/tinfoilsh/tinfoil-config v0.1.15-0.20261007023531-70f54c5b8a1e h1:N1kZo05nJTG9Eu/d09LZZx7RkLF3hXbgideiKMiecbM=
-github.com/tinfoilsh/tinfoil-config v0.1.15-0.20261007023531-70f54c5b8a1e/go.mod h1:xgZOb0BSJ3+n7ZOIRObH6RSzekvtpa1dEX0p1osS4Lw=
+github.com/tinfoilsh/tinfoil-config v0.1.15-0.20261007053311-08da03db310f h1:sgxvsoZwUy1+IyCb1/I0sZWIFLxfoVNy5CSiX5s+Zqw=
+github.com/tinfoilsh/tinfoil-config v0.1.15-0.20261007053311-08da03db310f/go.mod h1:xgZOb0BSJ3+n7ZOIRObH6RSzekvtpa1dEX0p1osS4Lw=
 github.com/tinfoilsh/tinfoil-go v0.16.2-0.20261005163020-6947646acf0c h1:1upPyFfT2Ic4xAjw/68CnQLRWZ1wZr10G0x0FwB65bU=
 github.com/tinfoilsh/tinfoil-go v0.16.2-0.20261005163020-6947646acf0c/go.mod h1:rxhbkBevlTIfwatj6wkhGLY45HL8K6H1ynmxbmOq6N8=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=

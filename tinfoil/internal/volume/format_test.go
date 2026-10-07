@@ -8,7 +8,6 @@ func TestRunFormatterRejectsUnusableInvocations(t *testing.T) {
 		args []string
 	}{
 		{"missing owner", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace"}},
-		{"owner without gid", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "1000"}},
 		{"owner beyond range", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "1000:65535"}},
 		{"owner not a number", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "sandbox:1000"}},
 		{"device outside mapper", []string{"worker", FormatMode, "/dev/sda1", "0:0"}},

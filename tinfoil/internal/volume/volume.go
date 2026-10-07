@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/sys/unix"
@@ -38,7 +37,6 @@ const (
 	VersionArgon2 byte = 2
 	tableKeyInfo       = "tinfoil volume table key v1"
 
-	maxOwner       = 65534
 	maxOverlays    = 8
 	MinKeyBytes    = 16
 	blankProbeSize = 1 << 20
@@ -48,6 +46,9 @@ const (
 	argonTime      = 3
 	argonMemoryKiB = 256 << 10
 	argonThreads   = 4
+
+	// Linux include/linux/statfs.h defines ST_NOSYMFOLLOW; x/sys/unix omits it.
+	statfsNoSymfollow = 0x2000
 )
 
 var (
@@ -96,8 +97,8 @@ func (parsed Spec) Validate() error {
 	if !namePattern.MatchString(parsed.Name) {
 		return fmt.Errorf("invalid storage volume name %q", parsed.Name)
 	}
-	if parsed.Owner < 0 || parsed.Owner > maxOwner {
-		return fmt.Errorf("invalid storage volume owner %d", parsed.Owner)
+	if _, _, err := parsed.OwnerIDs(); err != nil {
+		return fmt.Errorf("invalid storage volume %w", err)
 	}
 	if err := device.StorageSlots(parsed.Models, parsed.Index+1); err != nil {
 		return err
@@ -208,19 +209,47 @@ func (w *volume) prepare() (bool, error) {
 	if err := os.MkdirAll(w.dataPath(), 0o755); err != nil {
 		return false, err
 	}
-	target, parent, err := mountStates(w.dataPath())
+	return prepareDataMount(w.dataPath(), w.inspect, unix.Mount)
+}
+
+func prepareDataMount(path string, inspect func() (bool, error), mount func(string, string, string, uintptr, string) error) (bool, error) {
+	target, parent, err := mountStates(path)
 	if err != nil {
 		return false, err
 	}
 	if target.id == parent.id {
-		if err := unix.Mount(w.dataPath(), w.dataPath(), "", unix.MS_BIND, ""); err != nil {
+		if err := mount(path, path, "", unix.MS_BIND, ""); err != nil {
 			return false, err
 		}
 	}
-	if err := unix.Mount("", w.dataPath(), "", unix.MS_SHARED, ""); err != nil {
+	if err := mount("", path, "", unix.MS_SHARED, ""); err != nil {
 		return false, err
 	}
-	return w.inspect()
+	mounted, err := inspect()
+	if err != nil || mounted {
+		return mounted, err
+	}
+	// Only the placeholder bind is read-only; a propagated filesystem mount remains writable.
+	var info unix.Statfs_t
+	if err := unix.Statfs(path, &info); err != nil {
+		return false, err
+	}
+	const retainedFlags = unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_NOATIME | unix.MS_NODIRATIME
+	flags := uintptr(info.Flags)&retainedFlags | unix.MS_REMOUNT | unix.MS_BIND | unix.MS_RDONLY
+	// These statfs bits differ from their mount(2) counterparts.
+	if info.Flags&unix.ST_RELATIME != 0 {
+		flags |= unix.MS_RELATIME
+	}
+	if info.Flags&statfsNoSymfollow != 0 {
+		flags |= unix.MS_NOSYMFOLLOW
+	}
+	if info.Flags&(unix.ST_NOATIME|unix.ST_RELATIME) == 0 {
+		flags |= unix.MS_STRICTATIME
+	}
+	if err := mount("", path, "", flags, ""); err != nil {
+		return false, fmt.Errorf("protecting locked volume: %w", err)
+	}
+	return false, nil
 }
 
 func (w *volume) inspect() (bool, error) {
@@ -302,10 +331,11 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize bool, vers
 		result = errors.Join(result, devicemapper.Remove(w.control, w.mapperName()))
 	}()
 	if initialize {
-		if err := prepareFormat(w.mapperNode(), w.Owner); err != nil {
+		uid, gid, _ := w.OwnerIDs()
+		if err := prepareFormat(w.mapperNode(), uid, gid); err != nil {
 			return fmt.Errorf("preparing volume for format: %w", err)
 		}
-		command := exec.CommandContext(ctx, boot.VolumeWorkerBinary, FormatMode, w.mapperNode(), strconv.Itoa(w.Owner))
+		command := exec.CommandContext(ctx, boot.VolumeWorkerBinary, FormatMode, w.mapperNode(), w.Owner)
 		command.Env = []string{}
 		command.Stdout = io.Discard
 		var diagnostics bytes.Buffer
@@ -394,7 +424,8 @@ func (w *volume) overlay(spec runtimeconfig.VolumeOverlay) (string, error) {
 		return "", fmt.Errorf("merging %s into %s: %w", lower, mountPoint, err)
 	}
 	// overlayfs performs every upper-layer operation as the mounter, so upper and work stay ours.
-	if err := os.Chown(mountPoint, w.Owner, w.Owner); err != nil {
+	uid, gid, _ := w.OwnerIDs()
+	if err := os.Chown(mountPoint, uid, gid); err != nil {
 		return mountPoint, err
 	}
 	return mountPoint, nil

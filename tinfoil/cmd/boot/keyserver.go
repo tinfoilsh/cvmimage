@@ -14,8 +14,9 @@ import (
 	"strings"
 	"time"
 
-	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
@@ -87,8 +88,7 @@ func fetchKeyserverSecrets(
 
 	identityBody := nodeID.attestationBody()
 	document, err := attestation.BuildAttestation(
-		identityBody.TLSKeyFP,
-		identityBody.HPKEKey,
+		identityBody.CryptoMaterial(),
 		nonce,
 		deviceEvidence,
 		collateral,
@@ -96,16 +96,11 @@ func fetchKeyserverSecrets(
 	if err != nil {
 		return nil, fmt.Errorf("building keyserver attestation: %w", err)
 	}
-	documentJSON, err := json.Marshal(document)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling keyserver attestation: %w", err)
-	}
-
 	secrets, err := keyserverFetch(ctx, client, config.KeyserverURL, keyserverFetchRequest{
 		Repo:       ext.Metadata.Repo,
 		SecretRefs: names,
 		Nonce:      hex.EncodeToString(nonce),
-		Document:   documentJSON,
+		Document:   document,
 	})
 	if err != nil {
 		return nil, err
@@ -118,7 +113,7 @@ func prefetchKeyserverCollateral(
 	ctx context.Context,
 	config *Config,
 	request wire.Request,
-) ([]envelope.CollateralEntry, error) {
+) ([]collateral.Entry, error) {
 	if request.Repo == "" || request.Platform == "" || request.Platform == attestation.PlatformDummy || request.QuoteBase64 == "" {
 		return nil, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
 	}

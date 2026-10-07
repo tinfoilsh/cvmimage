@@ -8,7 +8,7 @@ let
     "mailcap-1.17.patch"
     "tzdata-1.19.patch"
   ];
-  upstreamGo = pkgs.go_1_26.overrideAttrs (old: {
+  upstreamGo = pkgs.go_1_27.overrideAttrs (old: {
     patches = builtins.filter (
       patch:
       !pkgs.lib.any (
@@ -29,7 +29,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-GEha6opIF0iq0ifiP/hb5QHMcPF3zRdpCjVwql3qk+w=";
+    vendorHash = "sha256-1axYNXm5vUpzmnbvutQ+P+cPUSeHPYCCA7g/tpj8QlY=";
     ldflags = [
       "-s"
       "-w"

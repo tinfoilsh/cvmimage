@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,11 +26,18 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/document/collateral"
+)
+
+const (
+	attestationFormatHeader = "Tinfoil-Pt"
+	attestationPath         = "/.well-known/tinfoil-attestation"
+	attestationV3Path       = attestationPath + "/v3"
 )
 
 type collateralSource interface {
-	Current(context.Context) ([]envelope.CollateralEntry, error)
+	Current(context.Context) ([]collateral.Entry, error)
 }
 
 // pathMatchesPattern checks if a request path matches a pattern.
@@ -112,21 +120,43 @@ func writeValidationFailure(w http.ResponseWriter, err error) {
 		writeAPIError(w, errServer)
 		return
 	}
+	if validationErr.StatusCode < http.StatusBadRequest || validationErr.StatusCode > maxHTTPErrorStatus {
+		writeAPIError(w, errServer)
+		return
+	}
 
-	// The control plane reports exhausted quota as 402; OpenAI reports it as
-	// 429 insufficient_quota, which is what SDKs expect.
+	// Preserve 402 for exhausted credit so relays can distinguish it from
+	// rate limiting without decrypting the error body.
+	apiErr := errServer
 	switch validationErr.StatusCode {
 	case http.StatusUnauthorized:
-		writeAPIError(w, errInvalidAPIKey)
+		apiErr = errInvalidAPIKey
 	case http.StatusForbidden:
-		writeAPIError(w, errInsufficientPermissions)
+		apiErr = errInsufficientPermissions
 	case http.StatusPaymentRequired:
-		writeAPIError(w, errQuotaExceeded)
+		apiErr = errQuotaExceeded
 	case http.StatusTooManyRequests:
-		writeAPIError(w, errRateLimited)
+		apiErr = errRateLimited
+		if validationErr.QuotaExceeded {
+			apiErr = errQuotaExceeded
+			apiErr.message = errMsgKeyQuotaExceeded
+		}
 	default:
-		writeAPIError(w, errServer)
+		apiErr.message = http.StatusText(validationErr.StatusCode)
+		if apiErr.message == "" {
+			apiErr.message = errMsgValidationFailed
+		}
+		if validationErr.StatusCode < http.StatusInternalServerError {
+			apiErr.errType = errTypeInvalidRequest
+		} else if validationErr.StatusCode == http.StatusServiceUnavailable {
+			apiErr.errType = errTypeServiceUnavailable
+		}
 	}
+	apiErr.status = validationErr.StatusCode
+	if validationErr.RetryAfter != "" {
+		w.Header().Set("Retry-After", validationErr.RetryAfter)
+	}
+	writeAPIError(w, apiErr)
 }
 
 func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
@@ -144,7 +174,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin") // cache
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, HEAD, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt")
+			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt, Retry-After")
 
 			// Echo requested headers or use a safe default
 			reqHdr := r.Header.Get("Access-Control-Request-Headers")
@@ -300,7 +330,7 @@ func NewObservabilityServer(
 func wrapShimMux(config *config.Config, att *legacy.Document, mux http.Handler) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Tinfoil-Pt", string(att.Format))
+			w.Header().Set(attestationFormatHeader, string(att.Format))
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -318,19 +348,27 @@ func registerObservabilityHandlers(
 	collateralSource collateralSource,
 	externalConfig *config.ExternalConfig,
 ) {
-	mux.Handle("/.well-known/tinfoil-attestation", ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	attestationHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != attestationPath {
+			query, err := url.ParseQuery(r.URL.RawQuery)
+			nonces := query["nonce"]
+			if err != nil || len(query) != 1 || len(nonces) != 1 || nonces[0] == "" {
+				writeAPIError(w, errInvalidNonce)
+				return
+			}
+		}
 
 		// Fresh v3 attestation with nonce: ?nonce=<64 hex chars>
 		if nonceHex := r.URL.Query().Get("nonce"); nonceHex != "" {
 			nonce, err := hex.DecodeString(nonceHex)
-			if err != nil || len(nonce) != 32 {
+			if err != nil || len(nonce) != envelope.NonceSize {
 				writeAPIError(w, errInvalidNonce)
 				return
 			}
-			var nonce32 [32]byte
+			var nonce32 [envelope.NonceSize]byte
 			copy(nonce32[:], nonce)
-			var collateral []envelope.CollateralEntry
+			var collateral []collateral.Entry
 			if collateralSource != nil {
 				collateral, err = collateralSource.Current(r.Context())
 				if err != nil {
@@ -347,8 +385,7 @@ func registerObservabilityHandlers(
 			}
 
 			fresh, err := tinfoilattestation.BuildAttestation(
-				identityBody.TLSKeyFP,
-				identityBody.HPKEKey,
+				identityBody.CryptoMaterial(),
 				nonce,
 				deviceEvidence,
 				collateral,
@@ -359,13 +396,21 @@ func registerObservabilityHandlers(
 				return
 			}
 
+			w.Header().Set(attestationFormatHeader, envelope.AttestationV3Format)
 			json.NewEncoder(w).Encode(fresh)
 			return
 		}
 
 		// Legacy (no nonce)
 		json.NewEncoder(w).Encode(att)
-	})))
+	}))
+	mux.Handle(attestationPath, metrics.ObserveAttestation(metrics.AttestationEndpointUnversioned, attestationHandler))
+	versionedAttestationHandler := metrics.ObserveAttestation(metrics.AttestationEndpointV3, attestationHandler)
+	mux.Handle("GET "+attestationV3Path, versionedAttestationHandler)
+	mux.Handle("GET "+attestationV3Path+"/{$}", versionedAttestationHandler)
+	mux.HandleFunc(attestationPath+"/", func(w http.ResponseWriter, r *http.Request) {
+		writeAPIError(w, errNotFound)
+	})
 
 	mux.HandleFunc("/.well-known/tinfoil-certificate", func(w http.ResponseWriter, r *http.Request) {
 		if tlsCert == nil || len(tlsCert.Certificate) == 0 {

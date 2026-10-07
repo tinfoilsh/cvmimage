@@ -95,15 +95,16 @@ func newLifecycleHarness() *lifecycleHarness {
 		startConsole: func(context.Context) (consoleControl, error) {
 			return &fakeConsole{}, nil
 		},
-		oneShot:      func(context.Context, supervisor.Command) error { return nil },
-		nvidia:       func(context.Context) error { return nil },
-		lockModules:  func() error { return nil },
-		debugFailure: func(context.Context, error) {},
-		setupFS:      noSetup,
-		sysctls:      noSetup,
-		ramdisk:      noSetup,
-		limits:       func() error { return nil },
-		syslog:       func(context.Context) {},
+		oneShot:          func(context.Context, supervisor.Command) error { return nil },
+		nvidia:           func(context.Context) error { return nil },
+		lockModules:      func() error { return nil },
+		debugFailure:     func(context.Context, error) {},
+		setupFS:          noSetup,
+		sysctls:          noSetup,
+		ramdisk:          noSetup,
+		localAttestation: func() (*os.File, error) { return os.Open(os.DevNull) },
+		limits:           func() error { return nil },
+		syslog:           func(context.Context) {},
 		exists: func(path string) (bool, error) {
 			return harness.existing[path], nil
 		},
@@ -140,11 +141,20 @@ func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	if len(bootCommand.ExtraFiles) != 1 {
 		t.Fatalf("boot extra files = %d, want 1", len(bootCommand.ExtraFiles))
 	}
-	var containersCommand supervisor.Command
+	var containersCommand, shimCommand supervisor.Command
 	for _, service := range harness.services.started {
 		if service.Name == containersName {
 			containersCommand = service.Command
 		}
+		if service.Name == shimName {
+			shimCommand = service.Command
+		}
+	}
+	if len(shimCommand.ExtraFiles) != 1 || shimCommand.ExtraFiles[0] == nil || shimCommand.ExtraFiles[0] == bootCommand.ExtraFiles[0] {
+		t.Fatal("shim did not receive its local attestation listener")
+	}
+	if !slices.Contains(shimCommand.Args, "--attestation-fd=3") {
+		t.Fatalf("shim args = %v", shimCommand.Args)
 	}
 	if got := fmt.Sprint(containersCommand.Args); !strings.Contains(got, "--debug=true") {
 		t.Fatalf("containers args = %s", got)
@@ -849,7 +859,7 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 			{Name: "boot-state", KeySecret: "STATE_KEY"},
 			{Name: "state"},
 			{Name: "boot-workspace", KeySecret: "WORKSPACE_KEY"},
-			{Name: "workspace", Exec: true, Owner: 1000},
+			{Name: "workspace", Exec: true, Owner: "1000"},
 		},
 	}
 	if err := startVolumeWorkers(context.Background(), harness.deps, &harness.config); err != nil {
@@ -860,7 +870,7 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 		t.Fatalf("started %d services, want 2", len(started))
 	}
 	want := [][]string{
-		{"tinfoil-volume-state", "--models=2", "--index=1", "--name=state", "--exec=false", "--owner=0"},
+		{"tinfoil-volume-state", "--models=2", "--index=1", "--name=state", "--exec=false", "--owner="},
 		{"tinfoil-volume-workspace", "--models=2", "--index=3", "--name=workspace", "--exec=true", "--owner=1000"},
 	}
 	for index, service := range started {

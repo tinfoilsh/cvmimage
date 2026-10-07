@@ -16,6 +16,102 @@ import (
 	"tinfoil/internal/secretstore"
 )
 
+func TestAttestedKeyMountsAreExclusiveReadOnly(t *testing.T) {
+	cfg := &Config{AttestedKeys: []runtimeconfig.AttestedKey{
+		{ID: "ssh", Key: "ecdsa-p256"}, {ID: "vpn", Key: "x25519"},
+	}, Containers: []Container{
+		{Name: "ssh-app", Image: "app", Keys: []string{"ssh"}},
+		{Name: "vpn-app", Image: "app", Keys: []string{"vpn"}},
+		{Name: "ungranted", Image: "app"},
+	}}
+	for _, c := range cfg.Containers {
+		_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var private []string
+		for _, mount := range host.Binds {
+			if strings.HasPrefix(mount, boot.PrivateDir) {
+				private = append(private, mount)
+			}
+		}
+		if len(private) != len(c.Keys) {
+			t.Fatalf("container %s received unrelated private mounts: %v", c.Name, private)
+		}
+		for _, id := range c.Keys {
+			want := boot.AttestedKeysDir + "/" + id + ":" + runtimeconfig.AttestedKeysContainerDir + "/" + id + ":ro"
+			if !slices.Contains(private, want) {
+				t.Fatalf("missing read-only grant %s", want)
+			}
+		}
+	}
+}
+
+func TestAttestationSocketRequiresExplicitGrant(t *testing.T) {
+	config, err := runtimeconfig.Decode([]byte(`
+cvm-version: 0.14.11
+shim:
+  upstream-container: granted
+  upstream-port: 8000
+containers:
+  - name: granted
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    attestation: true
+  - name: omitted
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - name: denied
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    attestation: false
+`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range config.Containers {
+		t.Run(c.Name, func(t *testing.T) {
+			_, host, _, _, err := buildContainerCreateSpec(c, config, &shimconfig.ExternalConfig{}, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{boot.PublicDir + ":/tinfoil:ro"}
+			if c.Name == "granted" {
+				want = append(want, boot.PrivateDir+"/attestation.sock:/tinfoil/attestation.sock:ro")
+			}
+			if !slices.Equal(host.Binds, want) {
+				t.Fatalf("mounts = %v, want %v", host.Binds, want)
+			}
+		})
+	}
+}
+
+func TestOnlyOptedInAdminSSHBecomesDirect(t *testing.T) {
+	for _, test := range []struct {
+		name                          string
+		admin, inbound, debug, direct bool
+	}{
+		{"opt in", true, true, false, true},
+		{"no inbound", true, false, false, false},
+		{"ordinary container", false, true, false, false},
+		{"debug suppresses production mapping", true, true, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := Container{Name: "workspace", Image: "app", CVMAdmin: test.admin, Networks: []string{"dev"}, Ports: []string{"22:22", "3000:3000"}}
+			cfg := &Config{Containers: []Container{c}, Networks: map[string]*runtimeconfig.NetworkSpec{"dev": {Egress: "closed"}}}
+			if test.inbound {
+				cfg.CVMNetwork.InboundPorts = []int{22}
+			}
+			_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, test.debug)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ssh := host.PortBindings[dockernetwork.MustParsePort("22/tcp")][0]
+			app := host.PortBindings[dockernetwork.MustParsePort("3000/tcp")][0]
+			if ssh.HostIP.IsValid() == test.direct || app.HostIP.String() != containernet.PublishedHostIP {
+				t.Fatalf("wrong exposure: ssh=%+v app=%+v", ssh, app)
+			}
+		})
+	}
+}
+
 func TestParseGPUs(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -279,7 +375,7 @@ func TestBuildContainerCreateSpec_CVMAdmin(t *testing.T) {
 			c := Container{
 				Name: name, Image: "example.invalid/admin", CVMAdmin: true,
 				Networks: []string{"dev"}, Ports: []string{"2022:2222"},
-				Volumes: []string{"workspace:/workspace"},
+				PersistentVolumes: []string{"workspace:/workspace"},
 			}
 			cfg := &Config{
 				ShimCfg: &shimconfig.Config{UpstreamContainer: name}, Containers: []Container{c},
@@ -402,9 +498,10 @@ func TestBuildContainerCreateSpec_DeclaredVolumeBecomesPropagatedBind(t *testing
 		Volumes:  []runtimeconfig.VolumeSpec{{Name: "workspace"}},
 	}
 	c := Container{
-		Name:    "app",
-		Image:   "example.invalid/app",
-		Volumes: []string{"workspace:/workspace", "other:/other"},
+		Name:              "app",
+		Image:             "example.invalid/app",
+		Volumes:           []string{"other:/other"},
+		PersistentVolumes: []string{"workspace:/workspace"},
 	}
 
 	_, hostConfig, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)

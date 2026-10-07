@@ -22,10 +22,12 @@ type Validator interface {
 // credential's format, so a Chain should advance to the next validator.
 var ErrUnsupportedToken = errors.New("unsupported token format")
 
-// ValidationError is returned when a credential is rejected. It carries only an
-// HTTP status code so internal validator details never leak to callers.
+// ValidationError carries the status and safe retry/quota metadata from a
+// credential rejection, without exposing internal validator messages.
 type ValidationError struct {
-	StatusCode int
+	StatusCode    int
+	RetryAfter    string
+	QuotaExceeded bool
 }
 
 func (e *ValidationError) Error() string {

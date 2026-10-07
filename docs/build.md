@@ -68,7 +68,7 @@ of image inputs:
 | Shipping and debug disk images     | Nix-owned fakeroot and `systemd-repart`                | `nix/image.nix`, `repart.d/`                                                                         |
 
 
-Go binaries and Go validation use the same Nixpkgs Go 1.26 toolchain. The
+Go binaries and Go validation use the same Nixpkgs Go 1.27 toolchain. The
 three NixOS-only patches that prepend Nix-store paths for timezone, MIME, and
 IANA databases are omitted so measured guest binaries retain upstream Linux
 lookup paths and contain no Nix-store references. All other Nixpkgs Go patches

@@ -24,11 +24,13 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/key"
@@ -40,6 +42,7 @@ import (
 var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
+	attestationFD      = flag.Int("attestation-fd", noAttestationFD, "Inherited attestation Unix listener")
 )
 
 const (
@@ -87,11 +90,16 @@ func main() {
 		TLSConfig: tlsConfig,
 	}
 
+	localListener, err := inheritedAttestationListener(*attestationFD)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Wait for boot to provision artifacts, then upgrade to the full handler.
 	go upgradeWhenReady(&handler, &cert)
 
 	log.Printf("Starting tinfoil shim (waiting for boot)")
-	if err := serveUntilShutdown(ctx, srv); err != nil {
+	if err := serveWithAttestation(ctx, srv, localListener); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -212,6 +220,13 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			TLSKeyFP: tlsutil.KeyFPBytes(&tlsPub.PublicKey),
 		}
 		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())
+
+		identityBody.Workload, err = waitForArtifact("Attested workload keys", func() ([]envelope.CryptoMaterialItem, error) {
+			return attestedkeys.ReadPublic(boot.AttestedKeysDir)
+		})
+		if err != nil {
+			return err
+		}
 
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)

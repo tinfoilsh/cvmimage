@@ -8,14 +8,19 @@ const (
 	// Public — mounted read-only into containers as /tinfoil.
 	ConfigPath          = PublicDir + "/config.yml"
 	AttestationPath     = PublicDir + "/attestation.json"
+	AttestationMount    = PublicDir + "/attestation.sock"
 	ContainerStatusPath = PublicDir + "/container-status.json"
 	PublicModelsDir     = PublicDir + "/models"
 	MWPDir              = PublicDir + "/mwp"
 	MPKDir              = PublicDir + "/mpk" // Legacy alias directory for MWP mounts.
 	ContainerModelsDir  = "/tinfoil/models"
 
-	// Private — not globally mounted into containers (mode 0700). Explicitly
-	// granted model directories are the only read-only container exception.
+	ContainerAttestationSocket = "/tinfoil/attestation.sock"
+
+	// Private — not globally mounted into containers (mode 0700). Explicit grants
+	// for models, attested keys, and the attestation socket are read-only exceptions.
+	AttestedKeysDir       = PrivateDir + "/attested-keys"
+	AttestationSocket     = PrivateDir + "/attestation.sock"
 	TLSDir                = PrivateDir + "/tls"
 	TLSCertPath           = TLSDir + "/cert.pem"
 	TLSKeyPath            = TLSDir + "/key.pem"

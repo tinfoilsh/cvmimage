@@ -6,7 +6,6 @@
 package attestation
 
 import (
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,7 +16,8 @@ import (
 	sevabi "github.com/google/go-sev-guest/abi"
 	sevclient "github.com/google/go-sev-guest/client"
 	tdxclient "github.com/google/go-tdx-guest/client"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 
 	"tinfoil/internal/legacy"
 
@@ -33,6 +33,16 @@ const (
 type BodyV2 struct {
 	TLSKeyFP [32]byte
 	HPKEKey  [32]byte
+	// Workload keys are endorsed by v3 quotes only; Marshal omits them.
+	Workload []envelope.CryptoMaterialItem
+}
+
+func (a BodyV2) CryptoMaterial() []envelope.CryptoMaterialItem {
+	items := []envelope.CryptoMaterialItem{
+		{ID: envelope.CryptoMaterialIDTLS, Format: envelope.KeySPKIFPSHA256V1Format, Data: hex.EncodeToString(a.TLSKeyFP[:])},
+		{ID: envelope.CryptoMaterialIDHPKE, Format: envelope.KeyX25519HPKEV1Format, Data: hex.EncodeToString(a.HPKEKey[:])},
+	}
+	return append(items, a.Workload...)
 }
 
 func (a BodyV2) Marshal() [64]byte {
@@ -45,11 +55,7 @@ func (a BodyV2) Marshal() [64]byte {
 // Report fetches the raw hardware attestation report and platform identifier.
 func Report(userData [64]byte) (report []byte, platform string, err error) {
 	if _, statErr := os.Stat("/dev/sev-guest"); statErr == nil {
-		var qp sevclient.QuoteProvider
-		qp, err = sevclient.GetQuoteProvider()
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to get quote provider: %w", err)
-		}
+		var qp sevclient.LinuxConfigFsQuoteProvider
 		report, err = qp.GetRawQuote(userData)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get quote: %w", err)
@@ -143,103 +149,19 @@ func DummyReport(userData [64]byte) *legacy.Document {
 // base64-encoded so verifiers recover the exact hashed bytes with a plain
 // decode.
 func BuildAttestation(
-	tlsKeyFP [32]byte,
-	hpkeKey [32]byte,
+	material []envelope.CryptoMaterialItem,
 	nonce []byte,
 	deviceEvidence []envelope.DeviceEvidenceItem,
-	collateral []envelope.CollateralEntry,
-) (*envelope.Document, error) {
-	if len(nonce) != envelope.NonceSize {
-		return nil, fmt.Errorf("nonce must be %d bytes, got %d", envelope.NonceSize, len(nonce))
-	}
-	if deviceEvidence == nil {
-		deviceEvidence = []envelope.DeviceEvidenceItem{}
-	}
-	if collateral == nil {
-		collateral = []envelope.CollateralEntry{}
-	}
-
-	cryptoMaterial := envelope.CryptoMaterialSection{
-		Format: envelope.CryptoMaterialV1Format,
-		Items: []envelope.CryptoMaterialItem{
-			{
-				ID:     envelope.CryptoMaterialIDTLS,
-				Format: envelope.KeySPKIFPSHA256V1Format,
-				Data:   hex.EncodeToString(tlsKeyFP[:]),
-			},
-			{
-				ID:     envelope.CryptoMaterialIDHPKE,
-				Format: envelope.KeyX25519HPKEV1Format,
-				Data:   hex.EncodeToString(hpkeKey[:]),
-			},
-		},
-	}
-	deviceSection := envelope.DeviceEvidenceSection{
-		Format: envelope.DeviceEvidenceV1Format,
-		Items:  deviceEvidence,
-	}
-	if err := rejectInvalidItemIDs(deviceSection.Items); err != nil {
-		return nil, err
-	}
-
-	cryptoBytes, err := json.Marshal(cryptoMaterial)
-	if err != nil {
-		return nil, fmt.Errorf("serializing crypto_material: %w", err)
-	}
-	deviceBytes, err := json.Marshal(deviceSection)
-	if err != nil {
-		return nil, fmt.Errorf("serializing device_evidence: %w", err)
-	}
-
-	cryptoHash := sha256.Sum256(cryptoBytes)
-	deviceHash := sha256.Sum256(deviceBytes)
-	reportData, err := envelope.ComputeReportData(nonce, cryptoHash[:], deviceHash[:])
-	if err != nil {
-		return nil, err
-	}
-
-	rawQuote, platform, err := reportWithRetry(reportData)
-	if err != nil {
-		return nil, fmt.Errorf("obtaining hardware quote: %w", err)
-	}
-	format, err := evidenceFormat(platform)
-	if err != nil {
-		return nil, err
-	}
-
-	return &envelope.Document{
-		Format: envelope.AttestationV3Format,
-		Challenge: envelope.Challenge{
-			Nonce:               hex.EncodeToString(nonce),
-			ReportData:          hex.EncodeToString(reportData[:]),
-			ReportDataAlgorithm: envelope.ReportDataV1Algorithm,
-		},
-		CPUEvidence: envelope.CPUEvidence{
-			Format:       format,
-			ReportBase64: base64.StdEncoding.EncodeToString(rawQuote),
-			Endorsed: envelope.EndorsedHashes{
-				CryptoMaterialHash: hex.EncodeToString(cryptoHash[:]),
-				DeviceEvidenceHash: hex.EncodeToString(deviceHash[:]),
-			},
-		},
-		CryptoMaterial: base64.StdEncoding.EncodeToString(cryptoBytes),
-		DeviceEvidence: base64.StdEncoding.EncodeToString(deviceBytes),
-		Collateral:     collateral,
-	}, nil
-}
-
-// rejectInvalidItemIDs enforces the builder-side rules verifiers hold item
-// ids to: non-empty and unique within the section.
-func rejectInvalidItemIDs(items []envelope.DeviceEvidenceItem) error {
-	seen := make(map[string]bool, len(items))
-	for _, item := range items {
-		if item.ID == "" {
-			return fmt.Errorf("device_evidence item has an empty id")
+	collateral []collateral.Entry,
+) (json.RawMessage, error) {
+	return envelope.Build(envelope.BuildInput{
+		Nonce: nonce, CryptoMaterial: material, DeviceEvidence: deviceEvidence, Collateral: collateral,
+	}, func(reportData [64]byte) (string, []byte, error) {
+		rawQuote, platform, err := reportWithRetry(reportData)
+		if err != nil {
+			return "", nil, fmt.Errorf("obtaining hardware quote: %w", err)
 		}
-		if seen[item.ID] {
-			return fmt.Errorf("duplicate device_evidence item id %q", item.ID)
-		}
-		seen[item.ID] = true
-	}
-	return nil
+		format, err := evidenceFormat(platform)
+		return format, rawQuote, err
+	})
 }

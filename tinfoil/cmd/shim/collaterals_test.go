@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/config"

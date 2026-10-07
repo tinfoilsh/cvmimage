@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	wire "github.com/tinfoilsh/tinfoil-go/verifier/collaterals"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
 
 const maxResponseSize = 20 << 20

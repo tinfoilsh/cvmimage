@@ -16,8 +16,8 @@ func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
 		{"missing name", []string{"worker", "--models=1", "--index=0"}},
 		{"uppercase name", []string{"worker", "--name=Workspace"}},
 		{"negative index", []string{"worker", "--name=workspace", "--index=-1"}},
-		{"negative owner", []string{"worker", "--name=workspace", "--owner=-1"}},
-		{"owner beyond range", []string{"worker", "--name=workspace", "--owner=65535"}},
+		{"negative uid", []string{"worker", "--name=workspace", "--uid=-1"}},
+		{"gid beyond range", []string{"worker", "--name=workspace", "--gid=65535"}},
 		{"more disks than slots", []string{"worker", "--name=workspace", "--models=24", "--index=0"}},
 		{"trailing arguments", []string{"worker", "--name=workspace", "extra"}},
 	} {
@@ -34,12 +34,12 @@ func TestParseInvocationRejectsUnusableRequests(t *testing.T) {
 }
 
 func TestParseInvocationAcceptsDeclaredVolume(t *testing.T) {
-	parsed, err := parseInvocation([]string{"worker", "--models=2", "--index=1", "--name=workspace", "--exec=true", "--owner=1000"})
+	parsed, err := parseInvocation([]string{"worker", "--models=2", "--index=1", "--name=workspace", "--exec=true", "--uid=1000", "--gid=1001"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := volume.Spec{
-		VolumeSpec: runtimeconfig.VolumeSpec{Name: "workspace", Exec: true, Owner: 1000},
+		VolumeSpec: runtimeconfig.VolumeSpec{Name: "workspace", Exec: true, UID: 1000, GID: 1001},
 		Models:     2, Index: 1,
 	}
 	if !reflect.DeepEqual(parsed, want) {
@@ -48,7 +48,7 @@ func TestParseInvocationAcceptsDeclaredVolume(t *testing.T) {
 }
 
 func TestParseInvocationOverlays(t *testing.T) {
-	base := []string{"worker", "--name=workspace", "--exec=true", "--owner=1000"}
+	base := []string{"worker", "--name=workspace", "--exec=true", "--uid=1000", "--gid=1000"}
 	for _, bad := range []string{
 		"nix:nix/store:st:ore",            // target splits a fourth field
 		"nix:nix/store:Store",             // target is not a single lowercase name

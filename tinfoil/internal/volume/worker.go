@@ -54,7 +54,7 @@ func Serve(ctx context.Context, parsed Spec) error {
 		return nil
 	}
 
-	listener, err := listen(instance.socketPath(), instance.Owner)
+	listener, err := listen(instance.socketPath(), instance.UID, instance.GID)
 	if err != nil {
 		return err
 	}
@@ -149,7 +149,7 @@ func (w *volume) handle(ctx context.Context, packet []byte) (string, error) {
 	return statusOK, nil
 }
 
-func listen(path string, owner int) (*net.UnixListener, error) {
+func listen(path string, uid, gid int) (*net.UnixListener, error) {
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
 			return nil, fmt.Errorf("refusing to replace non-socket %s", path)
@@ -169,7 +169,7 @@ func listen(path string, owner int) (*net.UnixListener, error) {
 		listener.Close()
 		return nil, err
 	}
-	if err := os.Chown(path, owner, owner); err != nil {
+	if err := os.Chown(path, uid, gid); err != nil {
 		listener.Close()
 		return nil, err
 	}

@@ -75,6 +75,10 @@ type volume struct {
 	unlocked bool
 }
 
+func validOwner(id int) bool {
+	return id >= 0 && id <= maxOwner
+}
+
 func (parsed Spec) Validate() error {
 	if parsed.Models < 0 {
 		return fmt.Errorf("invalid model disk count %d", parsed.Models)
@@ -85,8 +89,8 @@ func (parsed Spec) Validate() error {
 	if !namePattern.MatchString(parsed.Name) {
 		return fmt.Errorf("invalid storage volume name %q", parsed.Name)
 	}
-	if parsed.Owner < 0 || parsed.Owner > maxOwner {
-		return fmt.Errorf("invalid storage volume owner %d", parsed.Owner)
+	if !validOwner(parsed.UID) || !validOwner(parsed.GID) {
+		return fmt.Errorf("invalid storage volume owner %d:%d", parsed.UID, parsed.GID)
 	}
 	if err := device.StorageSlots(parsed.Models, parsed.Index+1); err != nil {
 		return err
@@ -292,10 +296,10 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool
 		result = errors.Join(result, devicemapper.Remove(w.control, w.mapperName()))
 	}()
 	if initialize {
-		if err := prepareFormat(w.mapperNode(), w.Owner); err != nil {
+		if err := prepareFormat(w.mapperNode(), w.UID, w.GID); err != nil {
 			return fmt.Errorf("preparing volume for format: %w", err)
 		}
-		command := exec.CommandContext(ctx, boot.VolumeWorkerBinary, FormatMode, w.mapperNode(), strconv.Itoa(w.Owner))
+		command := exec.CommandContext(ctx, boot.VolumeWorkerBinary, FormatMode, w.mapperNode(), strconv.Itoa(w.UID), strconv.Itoa(w.GID))
 		command.Env = []string{}
 		command.Stdout = io.Discard
 		var diagnostics bytes.Buffer
@@ -424,7 +428,7 @@ func (w *volume) overlay(spec runtimeconfig.VolumeOverlay) (string, error) {
 		return "", fmt.Errorf("merging %s into %s: %w", lower, mountPoint, err)
 	}
 	// overlayfs performs every upper-layer operation as the mounter, so upper and work stay ours.
-	if err := os.Chown(mountPoint, w.Owner, w.Owner); err != nil {
+	if err := os.Chown(mountPoint, w.UID, w.GID); err != nil {
 		return mountPoint, err
 	}
 	return mountPoint, nil

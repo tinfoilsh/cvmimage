@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/netip"
+	"strconv"
 	"slices"
 	"strings"
 	"sync"
@@ -289,6 +291,21 @@ func runContainer(
 	record("start", boot.StatusOK, time.Since(startPhase), "")
 
 	if c.Healthcheck == nil {
+		// Readiness without Docker healthchecks: when this container is the
+		// shim's upstream, dial its service port until it answers. Connects
+		// are ~free, detection is within ~10ms of the listen, and nothing
+		// runs after readiness (Docker health probes exec a process at every
+		// interval for the container's whole life).
+		if port := shimUpstreamPort(cfg, c); port > 0 {
+			readyStart := time.Now()
+			detail, err := waitForListen(ctx, cli, c.Name, port)
+			if err != nil {
+				record("ready", boot.StatusFailed, time.Since(readyStart), err.Error())
+				finish(boot.StatusFailed, err.Error())
+				return fmt.Errorf("%s: %v", c.Name, err)
+			}
+			record("ready", boot.StatusOK, time.Since(readyStart), detail)
+		}
 		finish(boot.StatusOK, "")
 		return nil
 	}
@@ -366,6 +383,60 @@ func updateSubstagePhase(substages *[]boot.Stage, containerName, phase, status s
 			}
 			return
 		}
+	}
+}
+
+// shimUpstreamPort returns the port to dial for readiness when the container
+// is the one the shim proxies to, and 0 otherwise.
+func shimUpstreamPort(cfg *Config, c Container) int {
+	if cfg.ShimCfg == nil || cfg.ShimCfg.UpstreamPort <= 0 {
+		return 0
+	}
+	if cfg.ShimCfg.UpstreamContainer == c.Name ||
+		(cfg.ShimCfg.UpstreamContainer == "" && len(cfg.Containers) == 1) {
+		return cfg.ShimCfg.UpstreamPort
+	}
+	return 0
+}
+
+const (
+	readyDialInterval = 10 * time.Millisecond
+	readyDialTimeout  = 60 * time.Second
+)
+
+// waitForListen dials the container's service port until it accepts.
+func waitForListen(ctx context.Context, cli *client.Client, name string, port int) (string, error) {
+	result, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("inspecting %s for readiness: %w", name, err)
+	}
+	var ip string
+	if result.Container.NetworkSettings != nil {
+		for _, network := range result.Container.NetworkSettings.Networks {
+			if network.IPAddress.IsValid() && !network.IPAddress.IsUnspecified() {
+				ip = network.IPAddress.String()
+				break
+			}
+		}
+	}
+	if ip == "" {
+		return "", fmt.Errorf("container %s has no network address to dial for readiness", name)
+	}
+	address := net.JoinHostPort(ip, strconv.Itoa(port))
+	deadline := time.Now().Add(readyDialTimeout)
+	dialer := net.Dialer{Timeout: readyDialInterval}
+	for {
+		if conn, err := dialer.DialContext(ctx, "tcp", address); err == nil {
+			conn.Close()
+			return "listening on " + address, nil
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("%s did not listen on %s within %s", name, address, readyDialTimeout)
+		}
+		time.Sleep(readyDialInterval)
 	}
 }
 

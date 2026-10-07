@@ -1,5 +1,5 @@
-// Package devicemapper provides the minimal device-mapper ioctl operations
-// needed to create and activate a read-only mapping.
+// Package devicemapper provides the device-mapper ioctl operations for fixed
+// verity/crypt mappings and authenticated writable volumes.
 package devicemapper
 
 import (
@@ -49,8 +49,6 @@ const (
 	integrityJournalMode     = "J"
 	integrityTarget          = "integrity"
 	integrityMagic           = "integrt\x00"
-	integrityDataSectorsAt   = 16
-	integrityProbeSectors    = 8
 
 	// AuthenticatedKeyBytes covers the XTS key followed by the MAC key.
 	AuthenticatedKeyBytes = encryptedModelKeyBytes + authenticatedMACKeyBytes
@@ -300,7 +298,7 @@ func resume(control *os.File, name string, flags uint32) error {
 		return err
 	}
 	setFlags(buf, flags|existsFlag)
-	if err := ioctl(control, devSuspendIOCTL, buf, 1); err != nil {
+	if err := ioctl(control, devSuspendIOCTL, buf, 2); err != nil {
 		return fmt.Errorf("device-mapper resume %s failed: %w", name, err)
 	}
 	return nil
@@ -327,7 +325,9 @@ func Lookup(control *os.File, name string) (Info, bool, error) {
 		return Info{}, false, err
 	}
 	setFlags(buf, existsFlag)
-	if err := ioctl(control, devStatusIOCTL, buf, 1); err != nil {
+	// The integrity header backing has exactly two linear targets. Callers
+	// still verify the expected target count before using any mapping.
+	if err := ioctl(control, devStatusIOCTL, buf, 2); err != nil {
 		if errors.Is(err, unix.ENXIO) {
 			return Info{}, false, nil
 		}
@@ -658,110 +658,6 @@ func readMajorMinor(path string) (uint32, uint32, error) {
 		return 0, 0, fmt.Errorf("invalid minor in %s: %w", path, err)
 	}
 	return major, minor, nil
-}
-
-// IntegrityDataSectors reports the capacity dm-integrity publishes on source,
-// and whether source carries a superblock at all.
-func IntegrityDataSectors(source *os.File) (uint64, bool, error) {
-	if source == nil {
-		return 0, false, errors.New("nil block device")
-	}
-	// The target writes the superblock straight to the disk, so this descriptor
-	// caches a stale sector both before the first format and after it.
-	if err := unix.IoctlSetInt(int(source.Fd()), unix.BLKFLSBUF, 0); err != nil {
-		return 0, false, fmt.Errorf("invalidating the stale block cache: %w", err)
-	}
-	var header [dmSectorSizeBytes]byte
-	if _, err := source.ReadAt(header[:], 0); err != nil {
-		return 0, false, fmt.Errorf("reading integrity superblock: %w", err)
-	}
-	if string(header[:len(integrityMagic)]) != integrityMagic {
-		return 0, false, nil
-	}
-	return binary.LittleEndian.Uint64(header[integrityDataSectorsAt:]), true, nil
-}
-
-// ActivateIntegrity opens the dm-integrity device that stores the tags for a
-// writable crypt mapping. The target formats a zeroed device as it builds its
-// first table, so a volume without a superblock is only accepted when
-// initialize is set, and one with a superblock only when it is not.
-func ActivateIntegrity(control, source *os.File, name string, initialize bool) (result error) {
-	deviceNumber, deviceSectors, err := blockDeviceInfo(source)
-	if err != nil {
-		return err
-	}
-	params := fmt.Sprintf("%s 0 %d %s 2 block_size:%d fix_padding",
-		deviceNumber, integrityTagBytes, integrityJournalMode, cryptSectorSizeBytes)
-	dataSectors, formatted, err := IntegrityDataSectors(source)
-	if err != nil {
-		return err
-	}
-	if formatted && initialize {
-		return fmt.Errorf("device %s already carries an integrity superblock", deviceNumber)
-	}
-	if !formatted {
-		if !initialize {
-			return fmt.Errorf("device %s carries no integrity superblock", deviceNumber)
-		}
-		// The capacity is published only once a table exists, and building one
-		// is what writes the superblock the zeroed device lacks.
-		if err := loadIntegrityTable(control, name, integrityProbeSectors, params); err != nil {
-			return err
-		}
-		if err := Remove(control, name); err != nil {
-			return err
-		}
-		if dataSectors, formatted, err = IntegrityDataSectors(source); err != nil {
-			return err
-		} else if !formatted {
-			return fmt.Errorf("device %s was not formatted", deviceNumber)
-		}
-	}
-	if dataSectors == 0 || dataSectors > deviceSectors {
-		return fmt.Errorf("integrity capacity %d sectors does not fit %s", dataSectors, deviceNumber)
-	}
-	if err := loadIntegrityTable(control, name, dataSectors, params); err != nil {
-		return err
-	}
-	defer func() {
-		if result != nil {
-			result = errors.Join(result, Remove(control, name))
-		}
-	}()
-	if err := resume(control, name, 0); err != nil {
-		return err
-	}
-	info, err := Status(control, name)
-	if err != nil {
-		return err
-	}
-	if !info.Active() || info.ReadOnly() || info.TargetCount != 1 {
-		return fmt.Errorf(
-			"mapping %s has unexpected state: active=%t read-only=%t targets=%d",
-			name, info.Active(), info.ReadOnly(), info.TargetCount,
-		)
-	}
-	return EnsureBlockNode(MapperNode(name), info.Dev)
-}
-
-func loadIntegrityTable(control *os.File, name string, lengthSectors uint64, params string) (result error) {
-	if _, err := create(control, name, 0); err != nil {
-		return err
-	}
-	defer func() {
-		if result != nil {
-			result = errors.Join(result, Remove(control, name))
-		}
-	}()
-	buf, err := tableLoadBuffer(name, lengthSectors, integrityTarget, params)
-	if err != nil {
-		return err
-	}
-	setFlags(buf, existsFlag)
-	if err := ioctl(control, tableLoadIOCTL, buf, 1); err != nil {
-		return fmt.Errorf("device-mapper table load %s failed: %w", name, err)
-	}
-	return nil
 }
 
 func ActivateWritableCrypt(control, source *os.File, name string, key []byte) (device uint64, result error) {

@@ -30,7 +30,10 @@ import (
 )
 
 const (
-	healthPollInterval         = 5 * time.Second
+	// Container readiness gates the shim serving traffic, so this poll
+	// directly sets boot-to-ready latency for every workload. Inspect is a
+	// local unix-socket call; polling it briskly is cheap.
+	healthPollInterval         = 500 * time.Millisecond
 	defaultPidsLimit     int64 = 65536
 	openEgressGwPriority       = 100
 )

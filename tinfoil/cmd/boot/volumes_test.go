@@ -25,7 +25,7 @@ func TestMountVolumesUsesDeclaredLayoutAndClearsKeys(t *testing.T) {
 		},
 	}
 	workspaceKey := bytes.Repeat([]byte{0x5a}, volume.MinKeyBytes)
-	stateKey := bytes.Repeat([]byte{0xa5}, volume.MinKeyBytes)
+	stateKey := bytes.Repeat([]byte{0xa5}, 65)
 	external := &shimconfig.ExternalConfig{Secrets: map[string]string{
 		"WORKSPACE_KEY": " \n" + base64.StdEncoding.EncodeToString(workspaceKey) + "\n",
 		"STATE_KEY":     base64.StdEncoding.EncodeToString(stateKey),
@@ -52,7 +52,7 @@ func TestMountVolumesUsesDeclaredLayoutAndClearsKeys(t *testing.T) {
 		t.Fatalf("mounted layouts = %#v, want %#v", layouts, wantLayouts)
 	}
 	for _, key := range keys {
-		if !bytes.Equal(key, make([]byte, volume.MinKeyBytes)) {
+		if !bytes.Equal(key, make([]byte, len(key))) {
 			t.Fatal("decoded key retained after mount")
 		}
 	}

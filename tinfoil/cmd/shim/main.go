@@ -154,7 +154,9 @@ func bootStagesHandler() http.Handler {
 	return mux
 }
 
-const artifactPollInterval = 1 * time.Second
+// Several sequential artifact waits each sleep this long, and they gate the
+// shim taking over 443, so this directly adds to boot-to-ready latency.
+const artifactPollInterval = 50 * time.Millisecond
 
 // upgradeWhenReady advances the public handler through three explicit phases:
 // boot stages only, observability only, and finally workload proxying.

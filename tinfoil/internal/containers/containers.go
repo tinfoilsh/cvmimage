@@ -310,7 +310,7 @@ func runContainer(
 		}
 		switch info.State.Health.Status {
 		case container.Healthy:
-			record("healthy", boot.StatusOK, time.Since(healthStart), "")
+			record("healthy", boot.StatusOK, time.Since(healthStart), healthForensics(info.State))
 			finish(boot.StatusOK, "")
 			log.Printf("Container %s is healthy", c.Name)
 			return nil
@@ -352,6 +352,23 @@ func updateSubstagePhase(substages *[]boot.Stage, containerName, phase, status s
 			return
 		}
 	}
+}
+
+// healthForensics summarizes when the container started and when each health
+// check ran, so boot-latency investigations can see Docker's side of the
+// story from /.well-known/tinfoil-boot-stages without a debug console.
+func healthForensics(state *container.State) string {
+	if state == nil {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("started=%s", state.StartedAt)}
+	if state.Health != nil {
+		for i, entry := range state.Health.Log {
+			parts = append(parts, fmt.Sprintf("check%d=%s..%s exit=%d",
+				i, entry.Start.Format("15:04:05.000"), entry.End.Format("15:04:05.000"), entry.ExitCode))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func lastHealthLog(h *container.Health) string {

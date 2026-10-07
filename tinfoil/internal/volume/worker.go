@@ -100,14 +100,11 @@ func (w *volume) handle(ctx context.Context, packet []byte) (string, error) {
 		return statusRejected, fmt.Errorf("request is %d bytes", len(packet))
 	}
 	version, op, key := packet[0], packet[1], packet[2:]
-	if version != VersionHKDF && version != VersionArgon2 {
-		return statusRejected, fmt.Errorf("unsupported volume format %d", version)
-	}
 	if op != opUnlock && op != opInitialize {
 		return statusRejected, fmt.Errorf("invalid request operation %q", op)
 	}
-	if len(key) < MinKeyBytes {
-		return statusRejected, fmt.Errorf("key is %d bytes, want at least %d", len(key), MinKeyBytes)
+	if err := validateKey(key, op == opInitialize, version); err != nil {
+		return statusRejected, err
 	}
 	if op == opInitialize {
 		blank, err := blockDeviceBlank(w.source)

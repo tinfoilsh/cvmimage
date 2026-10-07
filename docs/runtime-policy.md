@@ -179,3 +179,51 @@ Run it on Linux with `CAP_SYS_ADMIN`, from `tinfoil/`:
 ```sh
 TINFOIL_VOLUME_MOUNT_TEST=1 go test -v -count=1 -run '^TestLockedMountPropagation$' ./internal/volume
 ```
+
+### Temporary legacy volume unlock
+
+New volumes use Argon2id. Boot unlocks through `key-secret` also use Argon2id;
+they never fall back to the old format. Existing HKDF volumes can temporarily
+be opened by explicitly requesting format 1 on their runtime control socket.
+Format 1 only supports unlock and requires the original 64-byte key. It cannot
+initialize a volume or convert one to Argon2id.
+
+The socket is `/run/tinfoil/volumes/<name>/control.sock`, exposed to containers
+that mount the volume through `persistent_volumes`. Send one `SOCK_SEQPACKET`
+datagram containing `0x01`, the ASCII byte `u`, and the 64 raw key bytes. The
+response is plain `ok`, `rejected`, or `failed`. Normal format 2 requests start
+with `0x02` and use `u` to unlock or `i` to initialize. There is no default format
+byte, automatic format detection, or retry with a different derivation.
+
+To use this path for a formerly boot-unlocked volume, remove its `key-secret`
+entry and grant that secret to its owning container through `secrets`. The
+container must unlock the volume before starting the application. Its UID/GID
+must have access to the control socket according to the volume's `owner`.
+For example, a container with Python, a `data` volume, and a base64 `DATA_KEY`
+secret can run:
+
+```sh
+python3 - <<'PY'
+import base64
+import os
+import socket
+
+key = base64.b64decode(os.environ.pop("DATA_KEY").strip(), validate=True)
+if len(key) != 64:
+    raise SystemExit("legacy volume key must contain 64 bytes")
+with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:
+    connection.connect("/run/tinfoil/volumes/data/control.sock")
+    connection.sendall(b"\x01u" + key)
+    if connection.recv(64) != b"ok":
+        raise SystemExit("legacy volume unlock failed")
+PY
+```
+
+Migrate by stopping application writes and copying the files into a fresh
+Argon2id volume, preserving filesystem metadata. Verify the destination and
+reopen it after a restart before retiring the old volume.
+
+After the migration window, delete `internal/volume/legacy_hkdf.go`, its test
+file, and the two `VersionHKDF` cases in `internal/volume/volume.go`. Remove this
+section as well. No config schema, old JSON protocol, or clock-based expiry is
+part of this compatibility path.

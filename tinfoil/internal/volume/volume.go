@@ -4,9 +4,7 @@ package volume
 import (
 	"bytes"
 	"context"
-	"crypto/hkdf"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -33,9 +31,7 @@ const (
 	workSuffix      = ".work"
 	integritySuffix = "-integrity"
 
-	VersionHKDF   byte = 1
 	VersionArgon2 byte = 2
-	tableKeyInfo       = "tinfoil volume table key v1"
 
 	maxOverlays    = 8
 	MinKeyBytes    = 16
@@ -291,6 +287,9 @@ func (w *volume) removeUnopened(name string) error {
 }
 
 func (w *volume) activate(ctx context.Context, key []byte, initialize bool, version byte) (result error) {
+	if err := validateKey(key, initialize, version); err != nil {
+		return err
+	}
 	// Zeroing is safe only over a header and superblock this call wrote and before mkfs has finished behind it.
 	rollback := initialize
 	defer func() {
@@ -458,11 +457,24 @@ func readMountState(path string) (mountState, error) {
 	}, nil
 }
 
+func validateKey(key []byte, initialize bool, version byte) error {
+	switch version {
+	case VersionHKDF:
+		return validateLegacyKey(key, initialize)
+	case VersionArgon2:
+		if len(key) < MinKeyBytes {
+			return fmt.Errorf("key is %d bytes, want at least %d", len(key), MinKeyBytes)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported volume format %d", version)
+	}
+}
+
 func (w *volume) tableKey(key []byte, initialize bool, version byte) ([]byte, int64, error) {
 	switch version {
 	case VersionHKDF:
-		tableKey, err := hkdf.Key(sha256.New, key, nil, tableKeyInfo, devicemapper.AuthenticatedKeyBytes)
-		return tableKey, 0, err
+		return legacyTableKey(key, initialize)
 	case VersionArgon2:
 		h, err := w.header(initialize)
 		if err != nil {

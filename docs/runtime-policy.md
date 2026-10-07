@@ -132,7 +132,7 @@ containers:
     ports: ["22:22"]
     keys: [host-ssh]
     working_dir: /workspace
-    volumes: [workspace:/workspace]
+    persistent_volumes: [workspace:/workspace]
 ```
 
 Admin permission does not enable debug mode, its config-reload API, console, or

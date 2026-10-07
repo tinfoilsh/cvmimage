@@ -39,7 +39,7 @@ func TestParseInvocationAcceptsDeclaredVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := volume.Spec{
-		VolumeSpec: runtimeconfig.VolumeSpec{Name: "workspace", Exec: true, Owner: 1000},
+		VolumeSpec: runtimeconfig.VolumeSpec{Name: "workspace", Exec: true, Owner: "1000"},
 		Models:     2, Index: 1,
 	}
 	if !reflect.DeepEqual(parsed, want) {

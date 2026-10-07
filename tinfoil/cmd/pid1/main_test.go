@@ -859,7 +859,7 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 			{Name: "boot-state", KeySecret: "STATE_KEY"},
 			{Name: "state"},
 			{Name: "boot-workspace", KeySecret: "WORKSPACE_KEY"},
-			{Name: "workspace", Exec: true, Owner: 1000},
+			{Name: "workspace", Exec: true, Owner: "1000"},
 		},
 	}
 	if err := startVolumeWorkers(context.Background(), harness.deps); err != nil {
@@ -870,7 +870,7 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 		t.Fatalf("started %d services, want 2", len(started))
 	}
 	want := [][]string{
-		{"tinfoil-volume-state", "--models=2", "--index=1", "--name=state", "--exec=false", "--owner=0"},
+		{"tinfoil-volume-state", "--models=2", "--index=1", "--name=state", "--exec=false", "--owner="},
 		{"tinfoil-volume-workspace", "--models=2", "--index=3", "--name=workspace", "--exec=true", "--owner=1000"},
 	}
 	for index, service := range started {

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"net/url"
 	"path"
 	"regexp"
 	"slices"
@@ -53,7 +52,6 @@ var (
 	modelNamePattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	volumeNamePattern      = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	attestedKeyIDPattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-	cvmSourceRepoPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9._-]*$`)
 
 	// An overlay source is a path inside a pack, so it may hold slashes, but
 	// every segment begins with a non-dot to keep out `.` and `..`, and the
@@ -63,9 +61,6 @@ var (
 
 func Validate(config *Config, options Options) error {
 	if err := validateCVMVersion(config.CVMVersion); err != nil {
-		return err
-	}
-	if err := validateCVMSource(config.CVMSource); err != nil {
 		return err
 	}
 	if config.GPUs < 0 || config.GPUs > 8 {
@@ -665,18 +660,4 @@ func validEnvironmentName(name string) bool {
 		return false
 	}
 	return true
-}
-
-func validateCVMSource(source *CVMSource) error {
-	if source == nil {
-		return nil
-	}
-	if !cvmSourceRepoPattern.MatchString(source.Repo) {
-		return fmt.Errorf("cvm-source repo %q must be a GitHub owner/name", source.Repo)
-	}
-	artifacts, err := url.Parse(source.Artifacts)
-	if err != nil || artifacts.Scheme != "https" || artifacts.Host == "" || artifacts.RawQuery != "" || artifacts.Fragment != "" {
-		return fmt.Errorf("cvm-source artifacts %q must be an https URL without query or fragment", source.Artifacts)
-	}
-	return nil
 }

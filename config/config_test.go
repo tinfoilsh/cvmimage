@@ -33,6 +33,9 @@ func TestDecodeValidation(t *testing.T) {
 		want    string
 	}{
 		{name: "valid", yaml: validConfig},
+		{name: "custom runtime source", yaml: validConfig + "cvm-source: {repo: other/runtime, artifacts: https://images.example.com}\n", want: "field cvm-source not found"},
+		{name: "default runtime source", yaml: validConfig + "cvm-source: {repo: tinfoilsh/cvmimage, artifacts: https://images.tinfoil.sh/cvm}\n", want: "field cvm-source not found"},
+		{name: "null runtime source", yaml: validConfig + "cvm-source: null\n", want: "field cvm-source not found"},
 		{name: "empty input", want: "parsing config: EOF"},
 		{name: "empty document", yaml: "---\n", want: "upstream port is not set"},
 		{name: "obsolete vault URL", yaml: validConfig + "vault-url: https://keys.example.com\n", want: "field vault-url not found"},

@@ -44,19 +44,6 @@ none is enabled. Other published ports remain private. Writable layers and
 Docker state are ephemeral across CVM reboot; declared volumes provide
 persistent storage.
 
-## CVM source
-
-`cvm-source` specifies the image release repository and HTTPS artifact URL:
-
-```yaml
-cvm-source:
-  repo: tinfoilsh/cvmimage-sandbox
-  artifacts: https://images.example.com/cvm
-```
-
-Both fields are required when the block is present. Without it,
-`tinfoilsh/cvmimage` and `https://images.tinfoil.sh/cvm` apply.
-
 ## Attested boot keys
 
 Declare keys and assign each to a container:

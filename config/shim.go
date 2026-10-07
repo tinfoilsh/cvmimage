@@ -53,6 +53,9 @@ func (c *ShimConfig) Validate() error {
 	if c.UpstreamPort == 0 {
 		return fmt.Errorf("upstream port is not set")
 	}
+	if c.UpstreamPort < 0 || c.UpstreamPort > maxPort {
+		return fmt.Errorf("upstream port must be between 1 and %d (got %d)", maxPort, c.UpstreamPort)
+	}
 	if !slices.Contains([]string{"self-signed", "acme", "cert-proxy"}, c.TLSMode) {
 		return fmt.Errorf("invalid TLS mode: %s (must be self-signed, acme, or cert-proxy)", c.TLSMode)
 	}

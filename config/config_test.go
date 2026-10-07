@@ -2,6 +2,7 @@ package tinfoilconfig
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,6 +33,8 @@ func TestDecodeValidation(t *testing.T) {
 		want    string
 	}{
 		{name: "valid", yaml: validConfig},
+		{name: "empty input", want: "parsing config: EOF"},
+		{name: "empty document", yaml: "---\n", want: "upstream port is not set"},
 		{name: "obsolete vault URL", yaml: validConfig + "vault-url: https://keys.example.com\n", want: "field vault-url not found"},
 		{name: "unknown top-level field", yaml: validConfig + "unknown: true\n", want: "field unknown not found"},
 		{name: "unknown container field", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    typo: true", 1), want: "unknown container field"},
@@ -42,6 +45,7 @@ func TestDecodeValidation(t *testing.T) {
 		{name: "declared volume attached", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/var/lib/app]", 1) + "volumes:\n  - name: state\n    exec: true\n"},
 		{name: "undeclared volume attached", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/var/lib/app]", 1), want: "must name a volume declared in volumes"},
 		{name: "volume mount path not absolute", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:var/lib/app]", 1) + "volumes:\n  - name: state\n", want: "clean absolute path"},
+		{name: "volume mount options rejected", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/var/lib/app:ro]", 1) + "volumes:\n  - name: state\n", want: "without colons"},
 		{name: "volume name rejected", yaml: validConfig + "volumes:\n  - name: State\n", want: "must be lowercase alphanumeric"},
 		{name: "volume owner rejected", yaml: validConfig + "volumes:\n  - name: state\n    owner: 70000\n", want: "owner must be between"},
 		{name: "volume declared twice", yaml: validConfig + "volumes:\n  - name: state\n  - name: state\n", want: "declared twice"},
@@ -62,6 +66,28 @@ func TestDecodeValidation(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDecodeSharedVolumeGrants(t *testing.T) {
+	input := strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    volumes: [state:/data, state:/backup]", 1) + `  - name: sidecar
+    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    volumes: [state:/shared]
+volumes:
+  - name: state
+`
+	config, err := Decode([]byte(input), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"state:/data", "state:/backup"}, {"state:/shared"}}
+	if len(config.Containers) != len(want) {
+		t.Fatalf("containers = %d, want %d", len(config.Containers), len(want))
+	}
+	for index, mounts := range want {
+		if !slices.Equal(config.Containers[index].Volumes, mounts) {
+			t.Fatalf("containers[%d].volumes = %v, want %v", index, config.Containers[index].Volumes, mounts)
+		}
 	}
 }
 

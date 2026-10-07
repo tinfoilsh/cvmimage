@@ -103,6 +103,39 @@ func decodeRegistryAuth(t *testing.T, encoded string) (username, password, serve
 	return auth.Username, auth.Password, auth.ServerAddress
 }
 
+func TestNonECRPullIgnoresBrokenRefreshConfiguration(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unreadable=%v", unreadable), func(t *testing.T) {
+			useDockerConfig(t, map[string]string{
+				"ghcr.io":                     "user:ghcr-password",
+				"harbor.example.com":          "robot$project+puller:harbor-password",
+				"https://index.docker.io/v1/": "hubuser:hub-password",
+			})
+			path := filepath.Join(dockerConfigDir, ecrregistry.ConfigFileName)
+			if unreadable {
+				require.NoError(t, os.Mkdir(path, 0700))
+			} else {
+				require.NoError(t, os.WriteFile(path, []byte("corrupt refresh configuration"), 0600))
+			}
+			for _, tc := range []struct{ image, password string }{
+				{"ghcr.io/org/app:v1", "ghcr-password"},
+				{"harbor.example.com/project/app:v1", "harbor-password"},
+				{"nginx:latest", "hub-password"},
+			} {
+				auth, err := imagePullRegistryAuth(context.Background(), tc.image)
+				require.NoError(t, err)
+				_, password, _ := decodeRegistryAuth(t, auth)
+				require.Equal(t, tc.password, password)
+			}
+			auth, err := imagePullRegistryAuth(context.Background(), "public.ecr.aws/library/app:v1")
+			require.NoError(t, err)
+			require.Empty(t, auth)
+			_, err = imagePullRegistryAuth(context.Background(), "123456789012.dkr.ecr.us-east-1.amazonaws.com/app:v1")
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestRegistryAuthResolvesHostFromReference(t *testing.T) {
 	// Keys as tinfoil-boot writes them: Docker Hub lives under the index URL.
 	useDockerConfig(t, map[string]string{

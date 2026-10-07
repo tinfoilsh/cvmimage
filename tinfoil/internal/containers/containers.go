@@ -695,13 +695,16 @@ func pullImage(ctx context.Context, cli *client.Client, imageName string) error 
 }
 
 func imagePullRegistryAuth(ctx context.Context, imageName string) (string, error) {
-	config, err := ecrregistry.Load(filepath.Join(dockerConfigDir, ecrregistry.ConfigFileName))
-	if err != nil {
-		return "", err
-	}
 	named, err := reference.ParseNormalizedNamed(imageName)
 	if err != nil {
 		return "", fmt.Errorf("invalid image reference")
+	}
+	if !ecrregistry.IsRegistryHost(reference.Domain(named)) {
+		return registryAuth(imageName), nil
+	}
+	config, err := ecrregistry.Load(filepath.Join(dockerConfigDir, ecrregistry.ConfigFileName))
+	if err != nil {
+		return "", err
 	}
 	if config == nil || reference.Domain(named) != config.Host {
 		return registryAuth(imageName), nil

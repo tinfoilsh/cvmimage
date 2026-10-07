@@ -33,6 +33,10 @@ const (
 
 var hostPattern = regexp.MustCompile(`^[0-9]{12}\.dkr\.ecr\.[a-z]+-(?:[a-z]+-)+[0-9]+\.amazonaws\.com(?:\.cn)?$`)
 
+func IsRegistryHost(host string) bool {
+	return hostPattern.MatchString(host)
+}
+
 type Config struct {
 	Host  string `json:"host"`
 	OrgID string `json:"org_id"`
@@ -48,7 +52,7 @@ type Credentials struct {
 
 func decodeConfig(data []byte) (*Config, error) {
 	var config Config
-	if len(data) > maxConfigBytes || json.Unmarshal(data, &config) != nil || !hostPattern.MatchString(config.Host) ||
+	if len(data) > maxConfigBytes || json.Unmarshal(data, &config) != nil || !IsRegistryHost(config.Host) ||
 		config.OrgID == "" || len(config.OrgID) > maxOrgIDBytes || config.Token == "" || len(config.Token) > maxTokenBytes ||
 		strings.ContainsAny(config.Token, "\r\n") {
 		return nil, fmt.Errorf("invalid ECR refresh configuration")

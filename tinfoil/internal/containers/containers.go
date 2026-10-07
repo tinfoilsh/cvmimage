@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/containernet"
+	"tinfoil/internal/ecrregistry"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
 )
@@ -651,7 +654,11 @@ func registryAuth(imageName string) string {
 
 // pullImage pulls an image using the Docker SDK with auth from the boot-written Docker config
 func pullImage(ctx context.Context, cli *client.Client, imageName string) error {
-	opts := client.ImagePullOptions{RegistryAuth: registryAuth(imageName)}
+	auth, err := imagePullRegistryAuth(ctx, imageName)
+	if err != nil {
+		return fmt.Errorf("registry authentication: %w", err)
+	}
+	opts := client.ImagePullOptions{RegistryAuth: auth}
 
 	reader, err := cli.ImagePull(ctx, imageName, opts)
 	if err != nil {
@@ -685,6 +692,33 @@ func pullImage(ctx context.Context, cli *client.Client, imageName string) error 
 		return err
 	}
 	return nil
+}
+
+func imagePullRegistryAuth(ctx context.Context, imageName string) (string, error) {
+	config, err := ecrregistry.Load(filepath.Join(dockerConfigDir, ecrregistry.ConfigFileName))
+	if err != nil {
+		return "", err
+	}
+	named, err := reference.ParseNormalizedNamed(imageName)
+	if err != nil {
+		return "", fmt.Errorf("invalid image reference")
+	}
+	if config == nil || reference.Domain(named) != config.Host {
+		return registryAuth(imageName), nil
+	}
+	auth, err := config.Fetch(ctx, http.DefaultTransport)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(struct {
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		ServerAddress string `json:"serveraddress"`
+	}{auth.Username, auth.Password, auth.Host})
+	if err != nil {
+		return "", fmt.Errorf("encoding registry authentication")
+	}
+	return base64.URLEncoding.EncodeToString(encoded), nil
 }
 
 func verifyPulledImageDigest(imageName string, repoDigests []string) error {

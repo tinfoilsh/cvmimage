@@ -1,11 +1,20 @@
 package containers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"tinfoil/internal/ecrregistry"
 )
 
 // useDockerConfig points the pull auth lookup at a temporary config dir holding
@@ -31,6 +40,50 @@ func useDockerConfig(t *testing.T, creds map[string]string) {
 	previous := dockerConfigDir
 	dockerConfigDir = dir
 	t.Cleanup(func() { dockerConfigDir = previous })
+}
+
+type registryRefreshTransport func(*http.Request) (*http.Response, error)
+
+func (f registryRefreshTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestImagePullRefreshOverridesExpiredStaticCredentials(t *testing.T) {
+	const host = "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+	useDockerConfig(t, map[string]string{host: "AWS:expired-deployment-password", "ghcr.io": "user:ghcr-password"})
+	path := filepath.Join(dockerConfigDir, ecrregistry.ConfigFileName)
+	require.NoError(t, ecrregistry.Configure(path, fmt.Sprintf(`{"host":%q,"org_id":"org_test","token":"refresh-secret"}`, host)))
+	previous := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	calls := 0
+	status := http.StatusOK
+	http.DefaultTransport = registryRefreshTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		require.Equal(t, "api.tinfoil.sh", r.URL.Host)
+		require.Equal(t, "Bearer refresh-secret", r.Header.Get("Authorization"))
+		data, err := json.Marshal(ecrregistry.Credentials{Host: host, Username: "AWS", Password: fmt.Sprintf("fresh-%d", calls), ExpiresAt: time.Now().Add(time.Hour)})
+		require.NoError(t, err)
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+	})
+	for attempt := 1; attempt <= 2; attempt++ {
+		auth, err := imagePullRegistryAuth(context.Background(), host+"/app:v1")
+		require.NoError(t, err)
+		user, password, server := decodeRegistryAuth(t, auth)
+		require.Equal(t, "AWS", user)
+		require.Equal(t, fmt.Sprintf("fresh-%d", attempt), password)
+		require.Equal(t, host, server)
+	}
+	for _, image := range []string{"ghcr.io/org/app:v1", "999999999999.dkr.ecr.us-east-1.amazonaws.com/app:v1"} {
+		_, err := imagePullRegistryAuth(context.Background(), image)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 2, calls)
+	status = http.StatusUnauthorized
+	auth, err := imagePullRegistryAuth(context.Background(), host+"/app:v1")
+	require.Error(t, err)
+	require.Empty(t, auth, "never fall back to an expired static password")
+	require.NoError(t, os.WriteFile(path, []byte("corrupt refresh-secret"), 0600))
+	_, err = imagePullRegistryAuth(context.Background(), host+"/app:v1")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "refresh-secret")
 }
 
 func decodeRegistryAuth(t *testing.T, encoded string) (username, password, server string) {

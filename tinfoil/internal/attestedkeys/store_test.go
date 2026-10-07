@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	config "github.com/tinfoilsh/tinfoil-config"
+	config "github.com/tinfoilsh/cvmimage/config"
 )
 
 func TestGeneratedKeysMatchPublishedInventory(t *testing.T) {

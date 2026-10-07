@@ -16,7 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
-	config "github.com/tinfoilsh/tinfoil-config"
+	config "github.com/tinfoilsh/cvmimage/config"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
 )
 

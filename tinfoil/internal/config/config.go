@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/creasty/defaults"
-	sharedconfig "github.com/tinfoilsh/tinfoil-config"
+	sharedconfig "github.com/tinfoilsh/cvmimage/config"
 	"gopkg.in/yaml.v3"
 )
 

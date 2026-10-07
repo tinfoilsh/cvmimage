@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	sharedconfig "github.com/tinfoilsh/tinfoil-config"
+	sharedconfig "github.com/tinfoilsh/cvmimage/config"
 
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/volume"

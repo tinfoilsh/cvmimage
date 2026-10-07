@@ -28,8 +28,15 @@ let
 
   common = {
     version = "0";
-    src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-Ea5jYklx1IxAixYZiLDVJSuzMrpL3YDZdnT9AmI2FhE=";
+    src = pkgs.lib.fileset.toSource {
+      root = ../.;
+      fileset = pkgs.lib.fileset.unions [
+        ../config
+        ../tinfoil
+      ];
+    };
+    sourceRoot = "source/tinfoil";
+    vendorHash = "sha256-/EcOVs17MlW48Je2yyyg2LXofYS5lUTbLJXjk2wnMKc=";
     ldflags = [
       "-s"
       "-w"
@@ -96,6 +103,7 @@ let
   checkSource = pkgs.lib.fileset.toSource {
     root = ../.;
     fileset = pkgs.lib.fileset.unions [
+      ../config
       ../image
       ../repart.d
       ../tinfoil
@@ -121,10 +129,30 @@ let
     '';
     installPhase = "touch $out";
   };
+
+  configChecks = buildGoModule {
+    pname = "tinfoil-config-checks";
+    version = "0";
+    src = pkgs.lib.cleanSource ../config;
+    vendorHash = "sha256-HcXs/zfkUAtnO1ydKikaeUe0ZDWSnAIV+icr4Bywb2s=";
+    env = commonEnv // {
+      CGO_ENABLED = "0";
+    };
+    doCheck = true;
+    buildPhase = "true";
+    checkPhase = ''
+      runHook preCheck
+      go test ./...
+      go vet ./...
+      runHook postCheck
+    '';
+    installPhase = "touch $out";
+  };
 in
 {
   inherit checks;
   packages = {
+    "config-checks" = configChecks;
     "debug-pid1" = debugPID1;
     "runtime-go" = runtime;
     "tinfoil-initrd" = initrd;

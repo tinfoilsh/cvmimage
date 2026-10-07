@@ -1,6 +1,6 @@
 package runtimeconfig
 
-import sharedconfig "github.com/tinfoilsh/tinfoil-config"
+import sharedconfig "github.com/tinfoilsh/cvmimage/config"
 
 const (
 	ReservedDebugContainerName = sharedconfig.ReservedDebugContainerName

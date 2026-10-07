@@ -122,7 +122,7 @@ networks:
     egress: open
 volumes:
   - name: workspace
-    owner: "0:0"
+    owner: 0
     exec: true
 containers:
   - name: sandbox

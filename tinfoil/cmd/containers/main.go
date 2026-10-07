@@ -273,6 +273,13 @@ func (m *manager) boot(override []byte) (result error) {
 	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, secretValues, m.debug, preserved); err != nil {
 		return err
 	}
+	if previous == nil {
+		// First boot: the shim is still in its boot-status phase and upgrades
+		// in place once every stage resolves, reading published ports and the
+		// upstream only then. Killing it here buys nothing and costs a
+		// supervisor restart plus its crash backoff before traffic serves.
+		return nil
+	}
 	return restartRuntimeServices(m.ctx)
 }
 

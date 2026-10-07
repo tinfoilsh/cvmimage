@@ -11,6 +11,9 @@ jobs:
   release:
     name: Release
     runs-on: large
+    outputs:
+      manifest-sha256: ${{ steps.manifest-digest.outputs.sha256 }}
+      prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
     permissions:
       contents: write
       id-token: write
@@ -251,6 +254,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
           IS_PRERELEASE: ${{ steps.check-prerelease.outputs.is_prerelease }}
+          MANIFEST_SHA256: ${{ steps.manifest-digest.outputs.sha256 }}
         run: |
           set -Eeuo pipefail
           manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
@@ -265,7 +269,13 @@ jobs:
             -R "$REPOSITORY" \
             $PRERELEASE_FLAG \
             --title "$REF_NAME" \
-            --notes "### Downloads
+            --notes "### Config
+          Add this to your tinfoil-config.yml:
+          \`\`\`yaml
+          cvm-version: \"${REF_NAME#v}@sha256:${MANIFEST_SHA256}\"
+          \`\`\`
+
+          ### Downloads
           - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.vmlinuz
           - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.initrd
           - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.raw
@@ -283,3 +293,66 @@ jobs:
           \`\`\`" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256"
+
+  update-readme:
+    name: Update README config example
+    needs: release
+    if: needs.release.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-readme
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check latest release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          latest=$(gh api "repos/${REPOSITORY}/releases/latest" --jq .tag_name)
+          if [ "$latest" = "$REF_NAME" ]; then
+            echo "update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        if: steps.latest.outputs.update == 'true'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Update config pin
+        if: steps.latest.outputs.update == 'true'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          MANIFEST_SHA256: ${{ needs.release.outputs.manifest-sha256 }}
+        run: |
+          set -Eeuo pipefail
+          test "$(grep -c '^cvm-version:' README.md)" -eq 1
+          sed -i "s|^cvm-version:.*|cvm-version: \"${REF_NAME#v}@sha256:${MANIFEST_SHA256}\"|" README.md
+
+      - uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c  # v6.1.0
+        id: readme-pr
+        if: steps.latest.outputs.update == 'true'
+        with:
+          token: ${{ github.token }}
+          add-paths: README.md
+          branch: readme-update/cvm-version
+          base: ${{ github.event.repository.default_branch }}
+          commit-message: "docs: update CVM config example to ${{ github.ref_name }}"
+          title: "docs: update CVM config example to ${{ github.ref_name }}"
+          body: "Pin the README config example to the runtime manifest published with ${{ github.ref_name }}."
+
+      - name: Merge README update
+        if: steps.readme-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.readme-pr.outputs.pull-request-url }}
+          PR_HEAD: ${{ steps.readme-pr.outputs.pull-request-head-sha }}
+        run: |
+          gh pr merge "$PR_URL" --rebase --delete-branch --match-head-commit "$PR_HEAD" ||
+            echo "::warning::Could not merge README update automatically. Merge it manually: $PR_URL"

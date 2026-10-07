@@ -4,6 +4,18 @@ Tinfoil CVM is a confidential virtual machine for secure inference and custom co
 
 Every byte of the final image is explicitly declared and derived from pinned inputs, the hermetic build is byte-for-byte reproducible, and anyone can audit the complete source-to-measurement graph themselves.
 
+## Configuring a workload
+
+Pin the CVM release in `tinfoil-config.yml`:
+
+```yaml
+cvm-version: "<version>@sha256:<manifest-sha256>"
+```
+
+The digest is the SHA-256 of the release's `tinfoil-inference-<version>-manifest.json`.
+[Release notes](https://github.com/tinfoilsh/cvmimage/releases) include the complete
+config line; stable releases also update this example automatically.
+
 ## Building
 
 On an x86_64 Linux host without Nix, first install the pinned Nix release:

@@ -13,6 +13,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -130,12 +132,11 @@ func backupList(output string) string {
 }
 
 func RunFormatter(args []string) error {
-	if len(args) != 5 {
+	if len(args) != 4 {
 		return errors.New("invalid formatter invocation")
 	}
-	uid, uidErr := strconv.Atoi(args[3])
-	gid, gidErr := strconv.Atoi(args[4])
-	if uidErr != nil || gidErr != nil || !validOwner(uid) || !validOwner(gid) {
+	uid, gid, err := (&runtimeconfig.VolumeSpec{Owner: args[3]}).OwnerIDs()
+	if err != nil {
 		return errors.New("invalid formatter owner")
 	}
 	base := filepath.Base(args[2])

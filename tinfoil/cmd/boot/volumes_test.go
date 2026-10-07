@@ -19,7 +19,7 @@ func TestMountVolumesUsesDeclaredLayoutAndClearsKeys(t *testing.T) {
 		Models: []ModelSpec{{Name: "nix"}, {Name: "model"}},
 		Volumes: []sharedconfig.VolumeSpec{
 			{Name: "runtime"},
-			{Name: "workspace", KeySecret: "WORKSPACE_KEY", Exec: true, UID: 1000, GID: 1000,
+			{Name: "workspace", KeySecret: "WORKSPACE_KEY", Exec: true, Owner: "1000:1000",
 				Overlays: []sharedconfig.VolumeOverlay{{Model: "nix", Source: "nix/store", Target: "store"}}},
 			{Name: "state", KeySecret: "STATE_KEY"},
 		},

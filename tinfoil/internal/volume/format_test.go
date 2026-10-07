@@ -7,12 +7,13 @@ func TestRunFormatterRejectsUnusableInvocations(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"missing gid", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "1000"}},
-		{"owner beyond range", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "1000", "65535"}},
-		{"owner not a number", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "sandbox", "1000"}},
-		{"device outside mapper", []string{"worker", FormatMode, "/dev/sda1", "0", "0"}},
-		{"device without the mapping prefix", []string{"worker", FormatMode, "/dev/mapper/workspace", "0", "0"}},
-		{"device name not a volume", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-Workspace", "0", "0"}},
+		{"missing owner", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace"}},
+		{"owner without gid", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "1000"}},
+		{"owner beyond range", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "1000:65535"}},
+		{"owner not a number", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-workspace", "sandbox:1000"}},
+		{"device outside mapper", []string{"worker", FormatMode, "/dev/sda1", "0:0"}},
+		{"device without the mapping prefix", []string{"worker", FormatMode, "/dev/mapper/workspace", "0:0"}},
+		{"device name not a volume", []string{"worker", FormatMode, "/dev/mapper/tinfoil-volume-Workspace", "0:0"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := RunFormatter(test.args); err == nil {

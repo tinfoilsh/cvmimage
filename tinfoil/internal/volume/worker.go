@@ -54,7 +54,8 @@ func Serve(ctx context.Context, parsed Spec) error {
 		return nil
 	}
 
-	listener, err := listen(instance.socketPath(), instance.UID, instance.GID)
+	uid, gid, _ := instance.OwnerIDs()
+	listener, err := listen(instance.socketPath(), uid, gid)
 	if err != nil {
 		return err
 	}

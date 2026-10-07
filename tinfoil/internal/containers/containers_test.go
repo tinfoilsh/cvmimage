@@ -498,8 +498,8 @@ func TestBuildContainerCreateSpec_DeclaredVolumeBecomesPropagatedBind(t *testing
 		Volumes:  []runtimeconfig.VolumeSpec{{Name: "workspace"}},
 	}
 	c := Container{
-		Name:    "app",
-		Image:   "example.invalid/app",
+		Name:              "app",
+		Image:             "example.invalid/app",
 		Volumes:           []string{"other:/other"},
 		PersistentVolumes: []string{"workspace:/workspace"},
 	}

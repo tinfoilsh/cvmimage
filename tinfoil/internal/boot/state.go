@@ -28,6 +28,10 @@ type Stage struct {
 	Duration time.Duration `json:"duration_ns"`
 	Detail   string        `json:"detail,omitempty"`
 	Stages   []Stage       `json:"stages,omitempty"`
+	// EndedAt is the wall-clock moment the stage was recorded, so gaps
+	// BETWEEN stages (work the tracker does not cover) are visible:
+	// gap = this.EndedAt - this.Duration - previous.EndedAt.
+	EndedAt time.Time `json:"ended_at,omitempty"`
 }
 
 const (
@@ -124,7 +128,7 @@ func ResumeTracker() (*Tracker, error) {
 func (t *Tracker) Record(name, status string, duration time.Duration, detail string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	stage := Stage{Name: name, Status: status, Duration: duration, Detail: detail}
+	stage := Stage{Name: name, Status: status, Duration: duration, Detail: detail, EndedAt: time.Now()}
 	updated := false
 	for i := range t.state.Stages {
 		if t.state.Stages[i].Name == name {
@@ -251,7 +255,7 @@ func RecordStage(name, status string, duration time.Duration, detail string) err
 		}
 		state = &State{StartedAt: time.Now()}
 	}
-	stage := Stage{Name: name, Status: status, Duration: duration, Detail: detail}
+	stage := Stage{Name: name, Status: status, Duration: duration, Detail: detail, EndedAt: time.Now()}
 	updated := false
 	for i := range state.Stages {
 		if state.Stages[i].Name == name {

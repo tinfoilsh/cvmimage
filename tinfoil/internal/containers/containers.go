@@ -293,14 +293,29 @@ func runContainer(
 		return nil
 	}
 
-	// Wait for Docker health verdict
+	// Wait for Docker health verdict: subscribe to health_status events so the
+	// verdict lands the moment dockerd records it, with a slow inspect ticker
+	// as a safety net (and one immediate inspect to close the subscribe race).
 	healthStart := time.Now()
+	eventCtx, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
+	events := cli.Events(eventCtx, client.EventsListOptions{
+		Filters: client.Filters{}.Add("type", "container").Add("container", c.Name).Add("event", "health_status"),
+	})
 	ticker := time.NewTicker(healthPollInterval)
 	defer ticker.Stop()
+	first := make(chan struct{}, 1)
+	first <- struct{}{}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-first:
+		case <-events.Messages:
+		case err := <-events.Err:
+			if err != nil {
+				log.Printf("health event stream for %s: %v (falling back to polling)", c.Name, err)
+			}
 		case <-ticker.C:
 		}
 		result, err := cli.ContainerInspect(ctx, c.Name, client.ContainerInspectOptions{})

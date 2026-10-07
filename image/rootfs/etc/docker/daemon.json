@@ -1,5 +1,6 @@
 {
     "data-root": "/mnt/ramdisk/private/docker",
+    "insecure-registries": ["100.64.0.1:5000"],
     "no-new-privileges": true,
     "icc": false,
     "userland-proxy": false,

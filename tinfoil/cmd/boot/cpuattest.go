@@ -9,7 +9,6 @@ import (
 	"os"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 
 	verifier "tinfoil/internal/legacy"
 
@@ -78,13 +77,8 @@ func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimc
 	if external != nil {
 		request.Repo = external.Metadata.Repo
 		request.Tag = external.Metadata.Tag
-		if ref := external.Metadata.Config; ref != nil {
-			request.Profile = wire.FormatV3
-			request.Config = &collateral.ConfigReference{Name: ref.Name, Digest: ref.Digest}
-		}
-		if ref := external.Metadata.Runtime; ref != nil {
-			request.Runtime = &collateral.RuntimeReference{Repo: ref.Repo, Tag: ref.Tag, Digest: ref.Digest}
-		}
+		request.Profile = external.Metadata.Profile
+		request.Digest = external.Metadata.Digest
 	}
 	data, err := json.Marshal(request)
 	if err != nil {

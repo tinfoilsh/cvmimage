@@ -150,7 +150,7 @@ jobs:
           set -Eeuo pipefail
           rm -rf /tmp/out
           mkdir -p /tmp/out
-          snp_launch="$(jq -ce 'select(.format_version == 3) | .launch | {measurement, policy, guest_svn: (.guest_svn | tonumber), id_key_digest}' tinfoil-snp.igvm.manifest.json)"
+          snp_launch="$(jq -ce 'select(.format_version == 3) | .launch | {measurement}' tinfoil-snp.igvm.manifest.json)"
           tdx_launch="$(jq -ce 'select(.format_version == 3) | .launch | {mrtd, rtmr0, rtmr1, rtmr2, rtmr3}' tinfoil-tdx.igvm.manifest.json)"
           # Generate manifest JSON
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
@@ -160,7 +160,6 @@ jobs:
             "initrd": "$(sha256sum result/tinfoilcvm.initrd | awk '{print $1}')",
             "kernel": "$(sha256sum result/tinfoilcvm.vmlinuz | awk '{print $1}')",
             "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
-            "cvm_compiler": "$(sha256sum result-cvmc/bin/cvmc | awk '{print $1}')",
             "igvm": {
               "format_version": ${IGVM_MANIFEST_FORMAT_VERSION},
               "snp": "$(sha256sum tinfoil-snp.igvm | awk '{print $1}')",
@@ -256,7 +255,6 @@ jobs:
           set -Eeuo pipefail
           manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
           snp_measurement="$(jq -er '.igvm.snp_launch.measurement' "$manifest")"
-          snp_policy="$(jq -er '.igvm.snp_launch.policy' "$manifest")"
           tdx_measurement="$(jq -er '.igvm.tdx_launch.mrtd' "$manifest")"
           PRERELEASE_FLAG=""
           if [ "$IS_PRERELEASE" = "true" ]; then
@@ -276,7 +274,7 @@ jobs:
           - IGVM (TDX): https://images.tinfoil.sh/cvm/tinfoil-tdx-${REF_NAME}.igvm
 
           ### Launch measurements
-          - SEV-SNP: \`${snp_measurement}\` (policy \`${snp_policy}\`)
+          - SEV-SNP: \`${snp_measurement}\`
           - Intel TDX MRTD: \`${tdx_measurement}\`
 
           ### Manifest

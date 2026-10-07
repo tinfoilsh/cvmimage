@@ -298,8 +298,9 @@ Two consequences the digest hides:
 ## Releases
 
 A cvmimage version tag publishes `cvmc` alongside the kernel, initramfs and
-root disk it was built against, recording its SHA-256 as `cvm_compiler` in the
-release manifest, so tool and guest carry one version.
+root disk it was built against. The release manifest records the SHA-256 of
+each complete IGVM image, including its guest firmware, as `igvm.snp` and
+`igvm.tdx`. The compiler binary has its own build-provenance attestation.
 
 ```sh
 curl -O https://images.tinfoil.sh/cvm/cvmc-v1.2.3

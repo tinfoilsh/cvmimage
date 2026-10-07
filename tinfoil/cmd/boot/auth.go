@@ -7,11 +7,13 @@ import (
 	"log"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/ecrregistry"
 )
 
 const (
@@ -43,6 +45,9 @@ func dockerAuthKey(host string) string {
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
 func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
+	if err := ecrregistry.Configure(filepath.Join(boot.DockerConfigDir, ecrregistry.ConfigFileName), ext.GetSecret(ecrregistry.SecretName)); err != nil {
+		return err
+	}
 	if ext == nil || ext.Secrets == nil {
 		log.Println("No external config, skipping registry auth")
 		return nil

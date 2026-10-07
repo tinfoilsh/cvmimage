@@ -173,5 +173,9 @@ Unlocking propagates the writable encrypted filesystem into existing application
 mounts without recreating the container. A failed unlock leaves the placeholder
 read-only; preparing an already-unlocked volume leaves it writable.
 
-See the [isolated volume fixture](../tests/volume-vm/README.md) for reproducible
-mount-propagation and encrypted-persistence checks.
+The mount regression test uses an isolated namespace and tmpfs, not block devices.
+Run it on Linux with `CAP_SYS_ADMIN`, from `tinfoil/`:
+
+```sh
+TINFOIL_VOLUME_MOUNT_TEST=1 go test -v -count=1 -run '^TestLockedMountPropagation$' ./internal/volume
+```

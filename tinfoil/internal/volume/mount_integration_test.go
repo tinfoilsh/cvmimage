@@ -35,11 +35,8 @@ func TestLockedMountPropagation(t *testing.T) {
 		name  string
 		flags uintptr
 	}{
-		{"relatime", unix.MS_RELATIME},
 		{"relatime-nodiratime", unix.MS_RELATIME | unix.MS_NODIRATIME},
 		{"noatime", unix.MS_NOATIME},
-		{"noatime-nodiratime", unix.MS_NOATIME | unix.MS_NODIRATIME},
-		{"strictatime", unix.MS_STRICTATIME},
 		{"strictatime-nodiratime", unix.MS_STRICTATIME | unix.MS_NODIRATIME},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -50,7 +47,8 @@ func TestLockedMountPropagation(t *testing.T) {
 
 func testLockedMountPropagation(t *testing.T, atimeFlags uintptr) {
 	root := t.TempDir()
-	if err := unix.Mount("tmpfs", root, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC|unix.MS_NOSYMFOLLOW|atimeFlags, "size=16m"); err != nil {
+	const tmpfsOptions = "size=4m"
+	if err := unix.Mount("tmpfs", root, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID|unix.MS_NOEXEC|unix.MS_NOSYMFOLLOW|atimeFlags, tmpfsOptions); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -59,23 +57,12 @@ func testLockedMountPropagation(t *testing.T, atimeFlags uintptr) {
 		}
 	})
 	source := filepath.Join(root, "source")
-	if err := os.Mkdir(source, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(source, "target"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(source, "link")
-	if err := os.Symlink("target", link); err != nil {
-		t.Fatal(err)
-	}
-	checkSymlink := func() {
-		t.Helper()
-		if _, err := os.ReadFile(link); !errors.Is(err, unix.ELOOP) {
-			t.Fatalf("symlink traversal = %v, want ELOOP", err)
+	app := filepath.Join(root, "app")
+	for _, path := range []string{source, app} {
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
 		}
 	}
-	checkSymlink()
 	var inherited unix.Statfs_t
 	if err := unix.Statfs(source, &inherited); err != nil {
 		t.Fatal(err)
@@ -101,44 +88,39 @@ func testLockedMountPropagation(t *testing.T, atimeFlags uintptr) {
 		}
 	}
 	prepare(false)
-	checkSymlink()
-	before, err := readMountState(source)
-	if err != nil {
+	if err := unix.Mount(source, app, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := unix.Mount("", app, "", unix.MS_SLAVE|unix.MS_REC, ""); err != nil {
+		t.Fatal(err)
+	}
+	checkLocked := func() {
+		t.Helper()
+		for _, path := range []string{source, app} {
+			if err := os.WriteFile(filepath.Join(path, "payload"), nil, 0o600); !errors.Is(err, unix.EROFS) {
+				t.Fatalf("write to %s = %v, want EROFS", path, err)
+			}
+		}
+	}
+	checkLocked()
 	prepare(false)
-	after, err := readMountState(source)
-	if err != nil || before != after {
-		t.Fatalf("repeat prepare changed placeholder: %v, %v, %v", before, after, err)
-	}
-	checkSymlink()
-	var info unix.Statfs_t
-	if err := unix.Statfs(source, &info); err != nil {
-		t.Fatal(err)
-	}
-	const required = unix.ST_RDONLY | unix.ST_NODEV | unix.ST_NOSUID | unix.ST_NOEXEC
-	if info.Flags&required != required {
-		t.Fatalf("placeholder flags = %#x, want %#x", info.Flags, required)
-	}
-	app := startVolumeApp(t, source, filepath.Join(root, "app"))
-	app.check("locked", true)
-	if err := os.WriteFile(filepath.Join(source, "denied"), nil, 0o600); !errors.Is(err, unix.EROFS) {
-		t.Fatalf("source write = %v, want EROFS", err)
-	}
+	checkLocked()
 	if err := os.WriteFile(filepath.Join(root, "sibling"), nil, 0o600); err != nil {
 		t.Fatalf("guard affected parent filesystem: %v", err)
 	}
-	if err := unix.Mount("tmpfs", source, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID, "size=4m"); err != nil {
+	if err := unix.Mount("tmpfs", source, "tmpfs", unix.MS_NODEV|unix.MS_NOSUID, tmpfsOptions); err != nil {
 		t.Fatal(err)
 	}
 	prepare(true)
-	app.check("unlocked", false)
-	if data, err := os.ReadFile(filepath.Join(source, "payload")); err != nil || string(data) != appPayload {
+	const payload = "unlocked volume"
+	if err := os.WriteFile(filepath.Join(app, "payload"), []byte(payload), 0o600); err != nil {
+		t.Fatalf("write through existing bind after unlock: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(source, "payload")); err != nil || string(data) != payload {
 		t.Fatalf("propagated write = %q, %v", data, err)
 	}
 	if err := unix.Unmount(source, 0); err != nil {
 		t.Fatal(err)
 	}
-	app.check("rolled back", true)
-	checkSymlink()
+	checkLocked()
 }

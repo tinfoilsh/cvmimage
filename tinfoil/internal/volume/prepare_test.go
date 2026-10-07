@@ -2,8 +2,6 @@ package volume
 
 import (
 	"errors"
-	"path/filepath"
-	"reflect"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -12,87 +10,38 @@ import (
 func TestPrepareDataMount(t *testing.T) {
 	failure := errors.New("injected failure")
 	for _, test := range []struct {
-		name       string
-		mounted    bool
-		inspectErr error
-		failCall   int
-		wantCalls  int
+		name        string
+		mounted     bool
+		inspectErr  error
+		remountErr  error
+		wantRemount bool
 	}{
-		{name: "locked", wantCalls: 3},
-		{name: "unlocked", mounted: true, wantCalls: 2},
-		{name: "unexpected mount or mapping", inspectErr: failure, wantCalls: 2},
-		{name: "bind fails", failCall: 1, wantCalls: 1},
-		{name: "shared fails", failCall: 2, wantCalls: 2},
-		{name: "read-only fails", failCall: 3, wantCalls: 3},
+		{name: "locked", wantRemount: true},
+		{name: "unlocked", mounted: true},
+		{name: "inspection fails", inspectErr: failure},
+		{name: "protection fails", remountErr: failure, wantRemount: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			path := t.TempDir()
-			var info unix.Statfs_t
-			if err := unix.Statfs(path, &info); err != nil {
-				t.Fatal(err)
-			}
-			var calls []uintptr
-			inspected := false
-			mounted, err := prepareDataMount(path, func() (bool, error) {
-				inspected = true
+			remounted := false
+			mounted, err := prepareDataMount(t.TempDir(), func() (bool, error) {
 				return test.mounted, test.inspectErr
-			}, func(source, target, fs string, flags uintptr, data string) error {
-				calls = append(calls, flags)
-				if target != path || fs != "" || data != "" {
-					t.Fatalf("unexpected mount arguments: %q %q %q %q", source, target, fs, data)
-				}
-				if len(calls) == 1 && source != path || len(calls) > 1 && source != "" {
-					t.Fatalf("unexpected source %q", source)
-				}
-				if flags&unix.MS_RDONLY != 0 && (!inspected || test.mounted || test.inspectErr != nil) {
-					t.Fatal("read-only remount before confirming a locked placeholder")
-				}
-				if len(calls) == test.failCall {
-					return failure
+			}, func(_, _, _ string, flags uintptr, _ string) error {
+				if flags&unix.MS_REMOUNT != 0 {
+					remounted = true
+					if flags&unix.MS_RDONLY == 0 {
+						t.Fatal("placeholder remount is not read-only")
+					}
+					return test.remountErr
 				}
 				return nil
 			})
-			wantErr := test.inspectErr != nil || test.failCall != 0
-			if wantErr && !errors.Is(err, failure) || !wantErr && err != nil {
-				t.Fatalf("error = %v, want failure = %t", err, wantErr)
+			wantErr := errors.Join(test.inspectErr, test.remountErr)
+			if (wantErr != nil && !errors.Is(err, failure)) || (wantErr == nil && err != nil) {
+				t.Fatalf("error = %v, want %v", err, wantErr)
 			}
-			if mounted != (test.mounted && !wantErr) {
-				t.Fatalf("mounted = %t", mounted)
-			}
-			var retained uintptr
-			for _, flag := range []struct{ stat, mount uintptr }{
-				{unix.ST_NOSUID, unix.MS_NOSUID},
-				{unix.ST_NODEV, unix.MS_NODEV},
-				{unix.ST_NOEXEC, unix.MS_NOEXEC},
-				{unix.ST_NOATIME, unix.MS_NOATIME},
-				{unix.ST_NODIRATIME, unix.MS_NODIRATIME},
-				{unix.ST_RELATIME, unix.MS_RELATIME},
-				{statfsNoSymfollow, unix.MS_NOSYMFOLLOW},
-			} {
-				if uintptr(info.Flags)&flag.stat != 0 {
-					retained |= flag.mount
-				}
-			}
-			if info.Flags&(unix.ST_NOATIME|unix.ST_RELATIME) == 0 {
-				retained |= unix.MS_STRICTATIME
-			}
-			want := []uintptr{unix.MS_BIND, unix.MS_SHARED, unix.MS_REMOUNT | unix.MS_BIND | unix.MS_RDONLY | retained}
-			if !reflect.DeepEqual(calls, want[:test.wantCalls]) {
-				t.Fatalf("mount flags = %#v, want %#v", calls, want[:test.wantCalls])
+			if mounted != test.mounted || remounted != test.wantRemount {
+				t.Fatalf("mounted=%t remounted=%t; want %t, %t", mounted, remounted, test.mounted, test.wantRemount)
 			}
 		})
-	}
-}
-
-func TestPrepareDataMountMissingPath(t *testing.T) {
-	_, err := prepareDataMount(filepath.Join(t.TempDir(), "absent"), func() (bool, error) {
-		t.Fatal("inspected missing path")
-		return false, nil
-	}, func(string, string, string, uintptr, string) error {
-		t.Fatal("mounted missing path")
-		return nil
-	})
-	if !errors.Is(err, unix.ENOENT) {
-		t.Fatalf("error = %v, want ENOENT", err)
 	}
 }

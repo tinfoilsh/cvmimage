@@ -36,7 +36,7 @@ let
       ];
     };
     sourceRoot = "source/tinfoil";
-    vendorHash = "sha256-2mu8pQloM7TmNzhz5wo9sp3O3YAjs6v2Tt12j93DXhI=";
+    vendorHash = "sha256-mzjXyg5h4Nl/8jcu/lwGQYSIinQX7mIyjU/gl2Sev6Q=";
     ldflags = [
       "-s"
       "-w"
@@ -133,7 +133,7 @@ let
   configCommon = {
     inherit (common) version ldflags allowedReferences;
     src = pkgs.lib.cleanSource ../config;
-    vendorHash = "sha256-HcXs/zfkUAtnO1ydKikaeUe0ZDWSnAIV+icr4Bywb2s=";
+    vendorHash = "sha256-qT4/QJcg/q/+9INK8e9Q94QezYlrBouwviAXi5yS0vM=";
     env = commonEnv // {
       CGO_ENABLED = "0";
     };

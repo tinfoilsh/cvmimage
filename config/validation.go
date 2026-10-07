@@ -1,7 +1,8 @@
 package tinfoilconfig
 
 import (
-	_ "crypto/sha256" // Register the canonical OCI digest for standalone consumers.
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/url"
@@ -12,9 +13,11 @@ import (
 	"strings"
 
 	"github.com/distribution/reference"
+	"golang.org/x/mod/semver"
 )
 
 const (
+	minimumPinnedCVMVersion   = "v0.15.0"
 	MaxModelDisks             = 24
 	MaxAttestedKeys           = 32
 	reservedShimNetworkName   = "shim-net"
@@ -59,6 +62,9 @@ var (
 )
 
 func Validate(config *Config, options Options) error {
+	if err := validateCVMVersion(config.CVMVersion); err != nil {
+		return err
+	}
 	if err := validateCVMSource(config.CVMSource); err != nil {
 		return err
 	}
@@ -83,6 +89,25 @@ func Validate(config *Config, options Options) error {
 	}
 	_, err = AdminSSH(config)
 	return err
+}
+
+func validateCVMVersion(value string) error {
+	if value == "" {
+		return nil
+	}
+	version, digest, pinned := strings.Cut(value, "@sha256:")
+	tag := "v" + strings.TrimPrefix(version, "v")
+	if !semver.IsValid(tag) {
+		return fmt.Errorf("cvm-version must contain a semantic version")
+	}
+	if semver.Compare(tag, minimumPinnedCVMVersion) < 0 {
+		return nil
+	}
+	decoded, err := hex.DecodeString(digest)
+	if !pinned || semver.Canonical(tag) != tag || err != nil || len(decoded) != sha256.Size || digest != strings.ToLower(digest) {
+		return fmt.Errorf("cvm-version %s and above requires <version>@sha256:<lowercase manifest digest>", minimumPinnedCVMVersion)
+	}
+	return nil
 }
 
 // ValidateAttestedKeys checks declarations, exclusive grants, ownership and

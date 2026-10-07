@@ -396,3 +396,28 @@ func TestAdminSSH(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeDigestPinStartsAtVersion015(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, test := range []struct {
+		version string
+		valid   bool
+	}{
+		{"0.14.12", true}, {"v0.14.12", true}, {"0.15.0-rc1", true},
+		{"0.15.0", false}, {"v0.15.0", false}, {"0.15.1", false}, {"1.0.0", false},
+		{"0.15.0@sha256:" + digest, true},
+		{"v0.15.1@sha256:" + digest, true},
+		{"1.0.0@sha256:" + digest, true},
+		{"0.15.0@sha256:abcd", false},
+		{"0.15.0@sha256:" + strings.ToUpper(digest), false},
+		{"0.15.0+build@sha256:" + digest, false}, {"latest", false},
+	} {
+		t.Run(test.version, func(t *testing.T) {
+			data := []byte(strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: "+test.version, 1))
+			_, err := Decode(data, Options{})
+			if (err == nil) != test.valid {
+				t.Fatalf("Decode error = %v, want valid = %v", err, test.valid)
+			}
+		})
+	}
+}

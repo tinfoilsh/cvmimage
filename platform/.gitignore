@@ -1,0 +1,8 @@
+platform-endorsements*.json
+hardware-measurements.json
+tdx-measure
+OVMF.fd
+.measure-*/
+*.download
+.venv/
+__pycache__/

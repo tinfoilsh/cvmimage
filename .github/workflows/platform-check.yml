@@ -1,0 +1,26 @@
+name: Check platform endorsements
+
+on:
+  pull_request:
+    paths: ['platform/**', '.github/workflows/platform-*.yml']
+  push:
+    branches: [main]
+    paths: ['platform/**', '.github/workflows/platform-*.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: |
+          python3 -m venv platform/.venv
+          platform/.venv/bin/python -m unittest discover -s platform -p '*_test.py'
+          cd platform
+          .venv/bin/python validate.py
+          .venv/bin/python measure.py
+          bash build.sh

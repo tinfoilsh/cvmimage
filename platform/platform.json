@@ -1,0 +1,185 @@
+{
+  "extra_large_1d_b200_new": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 4,
+    "memory": "524288M",
+    "pci_hole64_size": "4096G",
+    "profile": "blackwell",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "extra_large_1d_b300_new": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 4,
+    "memory": "524288M",
+    "pci_hole64_end": "0x3f8006018000",
+    "pci_hole64_size": "0x78006018000",
+    "profile": "blackwell",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "extra_large_1d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 4,
+    "memory": "524288M",
+    "pci_hole64_size": "4096G",
+    "profile": "hopper",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "extra_large_2d_b200_new": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 5,
+    "memory": "524288M",
+    "pci_hole64_size": "4096G",
+    "profile": "blackwell",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "extra_large_2d_b300_new": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 5,
+    "memory": "524288M",
+    "pci_hole64_end": "0x3f800601c000",
+    "pci_hole64_size": "0x7800601c000",
+    "profile": "blackwell",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "extra_large_2d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 5,
+    "memory": "524288M",
+    "pci_hole64_size": "4096G",
+    "profile": "hopper",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "large_1d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 4,
+    "memory": "262144M",
+    "pci_hole64_size": "4096G",
+    "profile": "hopper",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_0d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 3,
+    "memory": "65536M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_1d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 4,
+    "memory": "65536M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_1d_4cpu_new": {
+    "acpi_memory": "65536M",
+    "cpus": 4,
+    "disks": 4,
+    "memory": "65536M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_1d_cpu_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 4,
+    "memory": "65536M",
+    "pci_hole64_size": "4096G",
+    "profile": "none",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_2d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 5,
+    "memory": "65536M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_4d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 7,
+    "memory": "131072M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "small_0d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 8,
+    "disks": 3,
+    "memory": "16384M",
+    "pci_hole64_size": "4096G",
+    "profile": "none",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "small_0d_32gb_new": {
+    "acpi_memory": "32768M",
+    "cpus": 8,
+    "disks": 3,
+    "memory": "32768M",
+    "pci_hole64_size": "4096G",
+    "profile": "none",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "small_0d_8gb_2cpu_4disk_new": {
+    "acpi_memory": "8192M",
+    "cpus": 2,
+    "disks": 4,
+    "memory": "8192M",
+    "pci_hole64_size": "4096G",
+    "profile": "none",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "small_0d_8gb_4cpu_4disk_new": {
+    "acpi_memory": "8192M",
+    "cpus": 4,
+    "disks": 4,
+    "memory": "8192M",
+    "pci_hole64_size": "4096G",
+    "profile": "none",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "small_0d_8gb_4cpu_5disk_new": {
+    "acpi_memory": "8192M",
+    "cpus": 4,
+    "disks": 5,
+    "memory": "8192M",
+    "pci_hole64_size": "4096G",
+    "profile": "none",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "tiny_0d_new": {
+    "acpi_memory": "2048M",
+    "cpus": 2,
+    "disks": 3,
+    "memory": "2048M",
+    "pci_hole64_size": "4096G",
+    "profile": "none",
+    "qemu_source": "qemu:10.1.0"
+  }
+}

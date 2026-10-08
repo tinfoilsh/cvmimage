@@ -60,6 +60,9 @@ pub enum Host {
     PastTheBatch = 5,
     /// Reports the request as not taken, in the block's own fields.
     Refuses = 6,
+    /// Raises end_entry to one a full batch writes, past the shorter batch
+    /// the shim described.
+    RaisesTheEnd = 7,
 }
 
 /// The request the shim left in the block for a host to read: what it asks

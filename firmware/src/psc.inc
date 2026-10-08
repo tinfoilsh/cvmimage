@@ -6,7 +6,8 @@
 #   \fail    where a host that will not finish a request terminates
 #   \exit    the VMGEXIT itself, which returns once the host has answered. It
 #            may clobber rax, rdx and rdi, and nothing else: psc_vmgexit holds
-#            the block in rcx across it, and the caller of psc_range holds the
+#            the block in rcx across it, psc_complete the batch's end_entry in
+#            r11, and the caller of psc_range holds the
 #            range it is about to validate in r12 and r13 across the whole
 #            conversion, so an \exit that trod on those would validate memory
 #            no one converted, which is the silence this file exists to
@@ -70,9 +71,9 @@ psc_range:
 # and is refused rather than spun on, because a shim with no console cannot
 # say it is stuck.
 #
-# The entry that cursor is read from is the one the header names, so the
-# header is bounded before it is indexed with: an end_entry no batch of this
-# shim's could have written is refused rather than believed.
+# The entry that cursor is read from is the one the header names, so it is
+# bounded by the end_entry psc_range wrote, held in r11. The host's copy is
+# read once and must still match it.
 # Clobbers rax, rcx, rdx, rdi and r14.
 psc_complete:
     mov $PSC_BUFFER, %rdi
@@ -80,10 +81,10 @@ psc_complete:
     jmp 2f
 1:  call psc_vmgexit
     mov $PSC_BUFFER, %rdi
-2:  cmpw $PSC_MAX_ENTRIES, PSC_END_ENTRY(%rdi)
-    jae \fail
+2:  cmp PSC_END_ENTRY(%rdi), %r11w
+    jne \fail
     movzwl PSC_CUR_ENTRY(%rdi), %eax
-    cmp PSC_END_ENTRY(%rdi), %ax
+    cmp %r11d, %eax
     ja 9f                           # past the last entry: all of them are done
     mov PSC_ENTRIES(%rdi,%rax,8), %ecx
     and $PSC_ENTRY_CUR_PAGE, %ecx   # how far into that entry it reached

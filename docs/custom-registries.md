@@ -2,7 +2,7 @@
 
 Harbor and other custom registries use standard Docker registry authentication.
 The operator supplies one reserved `CUSTOM_REGISTRY_AUTH` secret in external
-configuration. Its value is a JSON object with exactly three fields:
+configuration. Its value is a JSON object carrying `host`, `username`, and `token`:
 
 ```json
 {"host":"harbor.my-company.com","username":"robot$project+puller","token":"example-token"}
@@ -15,6 +15,8 @@ account names. The host must be a lowercase DNS hostname without a scheme,
 port, path, or IP literal. Hostnames are limited to 253 bytes, usernames to 1024
 bytes, and tokens to 16 KiB. Empty credentials, control characters, and colons
 in usernames are rejected. The JSON value is bounded at 64 KiB.
+Decoding uses Go's `encoding/json` struct rules with unknown fields rejected;
+the producer emits the lowercase field names shown above once each.
 
 Boot validates the entire object and writes the exact-host credential to the
 private Docker config (`private/docker-config/config.json`, mode 0600). The

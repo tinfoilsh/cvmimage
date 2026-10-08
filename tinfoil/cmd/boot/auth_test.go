@@ -83,13 +83,14 @@ func TestRegistryAuthRejectsInvalidCustomCredentials(t *testing.T) {
 }
 
 func TestRegistryAuthRejectsConflictingSources(t *testing.T) {
-	for _, legacy := range []string{
-		"  REGISTRY_HARBOR_EXAMPLE_COM_TOKEN: legacy-token\n",
-		"  GCLOUD_REGISTRY: harbor.example.com\n  GCLOUD_KEY: '{}'\n",
+	for _, tc := range []struct{ host, legacy string }{
+		{"harbor.example.com", "  REGISTRY_HARBOR_EXAMPLE_COM_TOKEN: legacy-token\n"},
+		{"harbor.example.com", "  GCLOUD_REGISTRY: harbor.example.com\n  GCLOUD_KEY: '{}'\n"},
+		{"docker.io", "  GCLOUD_REGISTRY: index.docker.io\n  GCLOUD_KEY: '{}'\n"},
 	} {
 		ext, err := shimconfig.DecodeExternal([]byte(`secrets:
-  CUSTOM_REGISTRY_AUTH: '{"host":"harbor.example.com","username":"robot","token":"sensitive-token"}'
-` + legacy))
+  CUSTOM_REGISTRY_AUTH: '{"host":"` + tc.host + `","username":"robot","token":"sensitive-token"}'
+` + tc.legacy))
 		require.NoError(t, err)
 		dir := t.TempDir()
 		err = setupRegistryAuthAt(ext, filepath.Join(dir, "docker"), filepath.Join(dir, "gcloud.json"))

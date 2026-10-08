@@ -124,8 +124,9 @@ func setupRegistryAuthAt(ext *shimconfig.ExternalConfig, dockerConfigDir, gcloud
 		for _, reg := range registries {
 			reg = strings.TrimSpace(reg)
 			if reg != "" && registryPattern.MatchString(reg) {
-				configured[reg] = reg
-				cfg.Auths[reg] = DockerAuth{
+				authKey := dockerAuthKey(reg)
+				configured[authKey] = reg
+				cfg.Auths[authKey] = DockerAuth{
 					Auth: base64.StdEncoding.EncodeToString([]byte("_json_key_base64:" + base64.StdEncoding.EncodeToString([]byte(gcloudKey)))),
 				}
 				log.Printf("Auth configured: %s (GCP service account)", reg)

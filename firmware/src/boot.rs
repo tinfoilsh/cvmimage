@@ -154,6 +154,10 @@ pub enum Fill {
     Parameters,
     /// A declared MMIO aperture: nothing is loaded there and no shim accepts it.
     Mmio(u64),
+    /// Contents an SNP shim fetches and holds to a measured digest, rather
+    /// than a loader importing them: no loader backs the span and the accept
+    /// walk skips it, because the shim accepts it itself before copying in.
+    Fetched(Vec<u8>),
 }
 
 /// A span of the guest map, from which the E820 map, the file and the accept list follow.
@@ -190,6 +194,14 @@ impl Placed {
             fill: Fill::Parameters,
         }
     }
+    pub fn fetched(base: u64, name: &'static str, e820: u32, data: Vec<u8>) -> Placed {
+        Placed {
+            base,
+            name,
+            e820,
+            fill: Fill::Fetched(data),
+        }
+    }
     pub fn mmio(base: u64, size: u64) -> Placed {
         Placed {
             base,
@@ -200,14 +212,14 @@ impl Placed {
     }
     pub fn span(&self) -> u64 {
         match &self.fill {
-            Fill::Measured(d) => align_up(d.len() as u64, PAGE).max(PAGE),
+            Fill::Measured(d) | Fill::Fetched(d) => align_up(d.len() as u64, PAGE).max(PAGE),
             Fill::Host | Fill::Parameters => PAGE,
             Fill::Mmio(n) => *n,
         }
     }
     pub fn data(&self) -> &[u8] {
         match &self.fill {
-            Fill::Measured(d) => d,
+            Fill::Measured(d) | Fill::Fetched(d) => d,
             _ => &[],
         }
     }
@@ -253,6 +265,20 @@ pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
         if pair[0].1 > pair[1].0 {
             return Err(format!("placed regions overlap at {:#x}", pair[1].0));
         }
+    }
+    // The unaccepted bitmap has to be RAM the accept walk clears, not a span.
+    let bitmap = (
+        UNACCEPTED_BITMAP,
+        UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
+    );
+    if let Some(p) = spans(placed)
+        .iter()
+        .find(|(lo, hi, _)| *lo < bitmap.1 && bitmap.0 < *hi)
+    {
+        return Err(format!(
+            "placed region {:#x} overlaps the unaccepted bitmap",
+            p.0
+        ));
     }
     for p in placed {
         if !p.base.is_multiple_of(PAGE) {

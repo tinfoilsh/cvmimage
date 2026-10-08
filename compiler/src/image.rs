@@ -187,7 +187,7 @@ pub fn launch_pages(placed: &[Placed]) -> Result<Vec<Page>, String> {
                 }))
             }
             Fill::Parameters | Fill::Mmio(_) => {}
-            Fill::Host => {
+            Fill::Host | Fill::Fetched(_) => {
                 return Err(format!(
                     "{:#x} is placed but has no measured contents",
                     region.base
@@ -821,6 +821,116 @@ pub mod tests {
         }
     }
 
+    /// What each shim accepts and what it leaves Linux, run with an image's
+    /// own data block against every guest size. Between them they cover
+    /// exactly the RAM the accept walk owes, once: a unit marked and accepted
+    /// both would be validated twice, which terminates the guest, and a gap
+    /// in both would fault the first time Linux touched it. Nothing below the
+    /// bound is left to Linux, because the decompressor runs before Linux's
+    /// own acceptance does.
+    #[test]
+    fn the_shim_leaves_linux_whole_units_past_the_bound_and_accepts_the_rest() {
+        const UNIT: u64 = 0x20_0000;
+        const GIB_PAGES: u64 = GIB / PAGE;
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        let check = |what: &str, block: &[u8]| {
+            let bound =
+                u64::from_le_bytes(block[SHIM_DATA_LAZY as usize..][..8].try_into().unwrap());
+            assert!(bound > KERNEL_BASE && bound.is_multiple_of(UNIT));
+            let (top, regions) = shim.regions().unwrap();
+            let owed = boot::accept_ranges(&regions, top);
+            let (accepted, units, size) = shim.lazy_walk(top);
+            assert_eq!(size, top.div_ceil(UNIT).div_ceil(8), "{what}: bitmap size");
+            for u in &units {
+                assert!(u * UNIT >= bound, "{what}: unit {u} is below the bound");
+                assert!((u + 1) * UNIT <= top, "{what}: unit {u} is past the RAM");
+                // The page before a marked unit is always one the shim accepted.
+                assert!(
+                    !owed.iter().any(|(lo, _)| *lo == u * UNIT),
+                    "{what}: unit {u} starts a range"
+                );
+            }
+            let mut pieces: Vec<(u64, u64)> = accepted
+                .iter()
+                .copied()
+                .chain(units.iter().map(|u| (u * UNIT, (u + 1) * UNIT)))
+                .collect();
+            pieces.sort_unstable();
+            let mut tiled: Vec<(u64, u64)> = Vec::new();
+            for (lo, hi) in pieces {
+                assert!(lo < hi, "{what}: an empty piece at {lo:#x}");
+                match tiled.last_mut() {
+                    Some(last) if last.1 > lo => panic!("{what}: {lo:#x} is covered twice"),
+                    Some(last) if last.1 == lo => last.1 = hi,
+                    _ => tiled.push((lo, hi)),
+                }
+            }
+            assert_eq!(
+                tiled, owed,
+                "{what}: accepted and marked do not tile what is owed"
+            );
+            // ...and past the bound almost all of it is Linux's: at most a unit
+            // and a part unit at the start of each range, and a part unit at
+            // its end, are accepted there.
+            let eager: u64 = accepted
+                .iter()
+                .map(|(l, h)| h.min(&top) - l.max(&bound).min(h))
+                .sum();
+            assert!(
+                eager <= 3 * UNIT * owed.len() as u64,
+                "{what}: {eager:#x} accepted past the bound"
+            );
+            if top >= 2 * GIB {
+                assert!(!units.is_empty(), "{what}: nothing left to Linux");
+            }
+        };
+        let block = |launch: &tinfoil_firmware::Launch, snp: bool| -> Vec<u8> {
+            let shim_at = if snp { SHIM_BASE } else { RESET_ALIAS };
+            let page = launch
+                .placed
+                .iter()
+                .find(|p| p.base == shim_at)
+                .unwrap()
+                .data();
+            page[SHIM_DATA as usize..(SHIM_DATA + SHIM_DATA_SIZE) as usize].to_vec()
+        };
+        // RAM ending half a unit, and a unit and a page, past the first whole
+        // unit above the initramfs: a range with no whole unit in it past the
+        // bound has to be accepted, not marked.
+        let ends = [
+            INITRAMFS_BASE + UNIT + UNIT / 2,
+            INITRAMFS_BASE + 2 * UNIT + PAGE,
+        ];
+        // Maps no q35 guest is given but a loader may describe: a reserved
+        // hole mid-RAM ending off a unit boundary, and RAM restacked above
+        // 1 TiB past a hole, as QEMU lays out a large guest on AMD.
+        let maps: [&[(u64, u64, u16)]; 2] = [
+            &[
+                (0, GIB_PAGES, 0),
+                (GIB_PAGES, 3, 1),
+                (GIB_PAGES + 3, 5 * GIB_PAGES + 2, 0),
+            ],
+            &[
+                (0, 2 * GIB_PAGES, 0),
+                (4 * GIB_PAGES, 996 * GIB_PAGES, 0),
+                (1024 * GIB_PAGES, 64 * GIB_PAGES + 7, 0),
+            ],
+        ];
+        for snp in [true, false] {
+            for ram in SIZES.into_iter().chain(ends) {
+                let (_, launch) = launched(dir.path(), ram, snp);
+                shim.data_raw(&block(&launch, snp)).loader_ram(ram);
+                check(&format!("{ram:#x}, snp={snp}"), &block(&launch, snp));
+            }
+            let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+            for (n, map) in maps.iter().enumerate() {
+                shim.data_raw(&block(&launch, snp)).loader_memory_map(map);
+                check(&format!("map {n}, snp={snp}"), &block(&launch, snp));
+            }
+        }
+    }
+
     /// The shim converts its own memory now, so every page the accept walk is
     /// about to PVALIDATE has to have been asked for first: a page left out is
     /// a PVALIDATE on a page the RMP still calls shared, which fails, and the
@@ -1175,7 +1285,7 @@ pub mod tests {
             .filter_map(|p| p.data.map(|d| (p.gpa, d)))
             .collect();
         let components = manifest["components"].as_object().unwrap();
-        assert_eq!(components.len(), 6);
+        assert_eq!(components.len(), 7);
         for (name, c) in components {
             let gpa =
                 u64::from_str_radix(c["address"].as_str().unwrap().trim_start_matches("0x"), 16)

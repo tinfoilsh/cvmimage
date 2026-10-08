@@ -11,7 +11,7 @@
 //! green for a macro that was misassembled, or that nothing jumps to.
 
 use crate::boot::{self, Region};
-use crate::kernel::data_block;
+use crate::kernel::{data_block, Fetch};
 use crate::layout::*;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -26,6 +26,9 @@ extern "C" {
     fn harness_psc_range(lo: u64, hi: u64, host: u64) -> u64;
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
+    fn harness_sha256(data: *const u8, len: u64, out: *mut u8) -> u64;
+    fn harness_fetch_all() -> u64;
+    fn harness_lazy_walk(memory: u64) -> u64;
     static mut harness_shim_data: [u8; SHIM_DATA_SIZE as usize];
     static mut harness_ranges: [u64; 2 * HARNESS_RANGES];
     static mut harness_psc_entries: [u64; 2 * HARNESS_PSC_ENTRIES];
@@ -33,6 +36,7 @@ extern "C" {
     static harness_psc_calls: u64;
     static harness_psc_bytes: u64;
     static harness_psc_lost: u64;
+    static harness_count: u64;
     static harness_madt_template: [u8; MADT_HEADER_LEN as usize];
 }
 
@@ -68,7 +72,7 @@ pub enum Host {
 /// The request the shim left in the block for a host to read: what it asks
 /// for, which fields of the block it says it filled in, and the header of the
 /// descriptor it points at.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ghcb {
     pub exit_code: u64,
     pub exit_info_1: u64,
@@ -142,6 +146,170 @@ fn map_low_pages() {
     // The block, at the address the shim writes it through rather than the one
     // it names to the host.
     map_pages(GHCB_ALIAS, PAGE);
+    // The fetch: the bounce buffer as the shim reads it, and the start of the
+    // two places it copies to, as much of each as a test's files fill.
+    map_pages(FETCH_BOUNCE_ALIAS, FETCH_BOUNCE_SIZE);
+    map_pages(KERNEL_BASE, FETCH_TEST_MAX);
+    map_pages(INITRAMFS_BASE, FETCH_TEST_MAX);
+    // The EFI page whose unaccepted table the shim sizes, and its bitmap.
+    map_pages(EFI_PAGE, PAGE + UNACCEPTED_BITMAP_SIZE);
+}
+
+/// The most of each fetched file a test may serve.
+pub const FETCH_TEST_MAX: u64 = 4 << 20;
+
+/// What the fw_cfg device the shim is run against does.
+#[derive(Clone)]
+pub enum Device {
+    /// Serves these files, by name, under selectors from 0x20.
+    Serves(Vec<(String, Vec<u8>)>),
+    /// Takes the port write and reports every DMA access as failed.
+    DmaError,
+    /// Reports the port write as not taken, in the block's own fields.
+    Refuses,
+}
+
+/// One port write the shim made: the port, the value, and the IOIO request
+/// around them as the block stated it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortWrite {
+    pub port: u16,
+    pub value: u32,
+    pub ghcb: Ghcb,
+    pub rax_valid: bool,
+}
+
+struct FwCfg {
+    device: Device,
+    dma_high: u32,
+    selected: Option<usize>,
+    offset: u64,
+    writes: Vec<PortWrite>,
+}
+
+static FWCFG: Mutex<Option<FwCfg>> = Mutex::new(None);
+
+/// The device, as QEMU's fw_cfg is (hw/nvram/fw_cfg.c): a write to the high
+/// half of the DMA register is kept, a write to the low half runs the access
+/// it names -- select, then skip, then read, reads past the end of an item
+/// filling zeros -- and the control word is cleared, or left with its error
+/// bit, when the access is done.
+#[no_mangle]
+extern "C" fn harness_fwcfg_io() {
+    let word = |at: u64| u64::from_le_bytes(read(GHCB_ALIAS, at, 8).try_into().unwrap());
+    let mut guard = FWCFG.lock().unwrap_or_else(|e| e.into_inner());
+    let dev = guard.as_mut().expect("a port write with no device");
+    let info = word(GHCB_SW_EXIT_INFO_1);
+    let valid = read(GHCB_ALIAS, GHCB_VALID_BITMAP, 16);
+    let write = PortWrite {
+        port: (info >> 16) as u16,
+        value: word(GHCB_RAX) as u32,
+        ghcb: ghcb_now(),
+        rax_valid: valid[GHCB_RAX_VALID_BYTE as usize] & GHCB_RAX_VALID_BIT as u8 != 0,
+    };
+    dev.writes.push(write.clone());
+    if let Device::Refuses = dev.device {
+        fill(GHCB_ALIAS, GHCB_SW_EXIT_INFO_1, &1u64.to_le_bytes());
+        return;
+    }
+    fill(GHCB_ALIAS, GHCB_SW_EXIT_INFO_1, &0u64.to_le_bytes());
+    fill(GHCB_ALIAS, GHCB_SW_EXIT_INFO_2, &0u64.to_le_bytes());
+    match write.port as u64 {
+        FWCFG_PORT_DMA => dev.dma_high = write.value.swap_bytes(),
+        p if p == FWCFG_PORT_DMA + 4 => {
+            let gpa = (dev.dma_high as u64) << 32 | write.value.swap_bytes() as u64;
+            assert_eq!(
+                gpa, FWCFG_DMA_GPA,
+                "the device was pointed at some other access"
+            );
+            let access = read(FWCFG_DMA, 0, 16);
+            let control = u32::from_be_bytes(access[0..4].try_into().unwrap());
+            let len = u32::from_be_bytes(access[4..8].try_into().unwrap()) as u64;
+            let address = u64::from_be_bytes(access[8..16].try_into().unwrap());
+            let files = match &dev.device {
+                Device::Serves(files) => files.clone(),
+                _ => {
+                    fill(FWCFG_DMA, 0, &(control | 1).to_be_bytes());
+                    return;
+                }
+            };
+            if control & FWCFG_DMA_SELECT as u32 != 0 {
+                dev.selected = Some((control >> 16) as usize);
+                dev.offset = 0;
+            }
+            if control & FWCFG_DMA_SKIP as u32 != 0 {
+                dev.offset += len;
+            }
+            if control & FWCFG_DMA_READ as u32 != 0 {
+                let item = match dev.selected {
+                    Some(sel) if sel == FWCFG_FILE_DIR as usize => directory(&files),
+                    Some(sel) if sel >= 0x20 && sel - 0x20 < files.len() => {
+                        files[sel - 0x20].1.clone()
+                    }
+                    _ => Vec::new(),
+                };
+                // The device writes guest memory at the GPA, which the shim
+                // reads back through its shared alias.
+                assert!(
+                    address >= FETCH_BOUNCE && address + len <= FETCH_BOUNCE + FETCH_BOUNCE_SIZE,
+                    "a read outside the bounce buffer"
+                );
+                let mut out = vec![0u8; len as usize];
+                let from = (dev.offset as usize).min(item.len());
+                let n = (item.len() - from).min(out.len());
+                out[..n].copy_from_slice(&item[from..from + n]);
+                fill(SHARED_ALIAS + address, 0, &out);
+                dev.offset += len;
+            }
+            fill(FWCFG_DMA, 0, &0u32.to_be_bytes());
+        }
+        p => panic!("a write to port {p:#x}"),
+    }
+}
+
+/// The fw_cfg file directory: a big-endian count, then one entry a file.
+fn directory(files: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut v = (files.len() as u32).to_be_bytes().to_vec();
+    for (n, (name, bytes)) in files.iter().enumerate() {
+        v.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+        v.extend_from_slice(&(0x20 + n as u16).to_be_bytes());
+        v.extend_from_slice(&[0, 0]);
+        let mut field = [0u8; 56];
+        field[..name.len()].copy_from_slice(name.as_bytes());
+        v.extend_from_slice(&field);
+    }
+    v
+}
+
+/// What a fetch did: how it ended, the ranges it accepted, the page state
+/// changes it asked for, and every port write it made.
+pub struct FetchRun {
+    /// 1 fetched and checked, 2 a digest that did not match, 0 refused.
+    pub result: u64,
+    pub accepted: Vec<(u64, u64)>,
+    /// Each entry as written: page in bits 51:12, operation 55:52, size 56.
+    pub psc: Vec<u64>,
+    pub writes: Vec<PortWrite>,
+}
+
+fn ghcb_now() -> Ghcb {
+    let word = |at: u64| u64::from_le_bytes(read(GHCB_ALIAS, at, 8).try_into().unwrap());
+    let half = |at: u64| u32::from_le_bytes(read(GHCB_ALIAS, at, 4).try_into().unwrap());
+    Ghcb {
+        exit_code: word(GHCB_SW_EXIT_CODE),
+        exit_info_1: word(GHCB_SW_EXIT_INFO_1),
+        exit_info_2: word(GHCB_SW_EXIT_INFO_2),
+        scratch: word(GHCB_SW_SCRATCH),
+        valid: read(GHCB_ALIAS, GHCB_VALID_BITMAP, 16).try_into().unwrap(),
+        usage: half(GHCB_USAGE),
+        protocol: u16::from_le_bytes(
+            read(GHCB_ALIAS, GHCB_PROTOCOL_VERSION, 2)
+                .try_into()
+                .unwrap(),
+        ),
+        // The dword the header leaves between end_entry and the entries.
+        reserved: half(GHCB_SHARED_BUFFER + PSC_END_ENTRY + 2),
+    }
 }
 
 /// The shim, with the pages it addresses mapped and nothing else running
@@ -222,7 +390,12 @@ impl Shim {
 
     /// The measured data block the shims carry in their own page.
     pub fn data(&self, entry: u64, spans: &[Region]) -> &Self {
-        let block = data_block(entry, spans).unwrap();
+        self.data_fetching(entry, spans, &[])
+    }
+
+    /// The same, for an SNP shim that fetches these two files.
+    pub fn data_fetching(&self, entry: u64, spans: &[Region], fetch: &[Fetch]) -> &Self {
+        let block = data_block(entry, spans, fetch, KERNEL_BASE).unwrap();
         let data = unsafe { &mut *std::ptr::addr_of_mut!(harness_shim_data) };
         data.fill(0);
         data[..block.len()].copy_from_slice(&block);
@@ -282,23 +455,7 @@ impl Shim {
 
     /// The block as a host would read it after the last exit the shim made.
     pub fn ghcb(&self) -> Ghcb {
-        let word = |at: u64| u64::from_le_bytes(read(GHCB_ALIAS, at, 8).try_into().unwrap());
-        let half = |at: u64| u32::from_le_bytes(read(GHCB_ALIAS, at, 4).try_into().unwrap());
-        Ghcb {
-            exit_code: word(GHCB_SW_EXIT_CODE),
-            exit_info_1: word(GHCB_SW_EXIT_INFO_1),
-            exit_info_2: word(GHCB_SW_EXIT_INFO_2),
-            scratch: word(GHCB_SW_SCRATCH),
-            valid: read(GHCB_ALIAS, GHCB_VALID_BITMAP, 16).try_into().unwrap(),
-            usage: half(GHCB_USAGE),
-            protocol: u16::from_le_bytes(
-                read(GHCB_ALIAS, GHCB_PROTOCOL_VERSION, 2)
-                    .try_into()
-                    .unwrap(),
-            ),
-            // The dword the header leaves between end_entry and the entries.
-            reserved: half(GHCB_SHARED_BUFFER + PSC_END_ENTRY + 2),
-        }
+        ghcb_now()
     }
 
     /// Whether the range the caller of `psc_range` holds survived it, which a
@@ -372,6 +529,85 @@ impl Shim {
             "the table the shim wrote left its page"
         );
         Some(read(ACPI_BASE, ACPI_MADT, len))
+    }
+
+    /// A whole data block as an image's shim page carries it.
+    pub fn data_raw(&self, block: &[u8]) -> &Self {
+        let data = unsafe { &mut *std::ptr::addr_of_mut!(harness_shim_data) };
+        data.fill(0);
+        data[..block.len()].copy_from_slice(block);
+        self
+    }
+
+    /// The walk for a guest whose RAM tops out at `memory`, through the SNP
+    /// shim's accept_lazy: the ranges it accepts in order, each 2-MiB unit it
+    /// leaves to Linux, and the size it gives the unaccepted table.
+    pub fn lazy_walk(&self, memory: u64) -> (Vec<(u64, u64)>, Vec<u64>, u64) {
+        zero(UNACCEPTED_BITMAP, 0, UNACCEPTED_BITMAP_SIZE);
+        zero(UNACCEPTED_TABLE, 16, 8);
+        let count = unsafe { harness_lazy_walk(memory) } as usize;
+        let ranges = unsafe { &*std::ptr::addr_of!(harness_ranges) };
+        assert!(2 * count <= ranges.len(), "the walk overran its buffer");
+        let bitmap = read(UNACCEPTED_BITMAP, 0, UNACCEPTED_BITMAP_SIZE);
+        let units = (0..bitmap.len() as u64 * 8)
+            .filter(|n| bitmap[*n as usize / 8] >> (n % 8) & 1 == 1)
+            .collect();
+        let size = u64::from_le_bytes(read(UNACCEPTED_TABLE, 16, 8).try_into().unwrap());
+        (
+            (0..count)
+                .map(|n| (ranges[2 * n], ranges[2 * n + 1]))
+                .collect(),
+            units,
+            size,
+        )
+    }
+
+    /// SHA-256 as the shim computes it, with the constants a fetching data
+    /// block carries already in place.
+    pub fn sha256(&self, bytes: &[u8]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        unsafe { harness_sha256(bytes.as_ptr(), bytes.len() as u64, out.as_mut_ptr()) };
+        out
+    }
+
+    /// fetch_all against `device`, with the destinations and the bounce
+    /// buffer cleared first so that nothing left by another test is read back.
+    pub fn fetch(&self, device: Device) -> FetchRun {
+        zero(KERNEL_BASE, 0, FETCH_TEST_MAX);
+        zero(INITRAMFS_BASE, 0, FETCH_TEST_MAX);
+        zero(FETCH_BOUNCE_ALIAS, 0, FETCH_BOUNCE_SIZE);
+        self.poison();
+        *FWCFG.lock().unwrap_or_else(|e| e.into_inner()) = Some(FwCfg {
+            device,
+            dma_high: 0,
+            selected: None,
+            offset: 0,
+            writes: Vec::new(),
+        });
+        let result = unsafe { harness_fetch_all() };
+        let writes = FWCFG
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .unwrap()
+            .writes;
+        let count = unsafe { harness_count } as usize;
+        let ranges = unsafe { &*std::ptr::addr_of!(harness_ranges) };
+        let entries = unsafe { &*std::ptr::addr_of!(harness_psc_entries) };
+        let psc_count = (unsafe { harness_psc_count } as usize).min(entries.len() / 2);
+        FetchRun {
+            result,
+            accepted: (0..count)
+                .map(|n| (ranges[2 * n], ranges[2 * n + 1]))
+                .collect(),
+            psc: (0..psc_count).map(|n| entries[2 * n]).collect(),
+            writes,
+        }
+    }
+
+    /// Bytes at `gpa` as the shim left them, private, where it copies to.
+    pub fn memory(&self, gpa: u64, len: u64) -> Vec<u8> {
+        read(gpa, 0, len)
     }
 
     /// The fixed header the shim copies, which every shim page carries.

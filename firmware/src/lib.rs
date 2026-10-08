@@ -12,6 +12,7 @@
 
 mod acpi;
 pub mod boot;
+mod efi;
 pub mod kernel;
 pub mod layout;
 /// The shims' own assembly, linked into the tests that hold it to this crate.
@@ -19,9 +20,12 @@ pub mod layout;
 pub mod shim;
 pub mod vmsa;
 
-use boot::{Placed, ACPI, RAM, RESERVED};
-use kernel::{identity_map, prepare, shim, shim_owned, RESET_SHIM};
+use boot::{Fill, Placed, ACPI, RAM, RESERVED};
+use kernel::{
+    identity_map, prepare, shim, shim_owned, Fetch, FWCFG_INITRD, FWCFG_KERNEL, RESET_SHIM,
+};
 use layout::*;
+use sha2::{Digest, Sha256};
 use std::{io, path::Path};
 use vmsa::{cc_blob, SNP_SHIM};
 
@@ -43,6 +47,17 @@ pub struct Launch {
     pub entry: u64,
     /// Measured bytes this crate authors, excluding kernel and initramfs.
     pub shim_owned: usize,
+    /// The fw_cfg files an SEV-SNP loader has to serve: each one's name, size
+    /// and SHA-256. Intel TDX measures what it places and fetches nothing.
+    pub fw_cfg: Vec<FwCfgFile>,
+}
+
+/// A file the loader serves through fw_cfg, as it is served: the whole file,
+/// of which the shim checks the part it copies against the measured digest.
+pub struct FwCfgFile {
+    pub name: &'static str,
+    pub size: u64,
+    pub sha256: [u8; 32],
 }
 
 /// The Intel TDX map. The shim runs from the reset page, so the map covers it
@@ -63,6 +78,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         Placed::measured(PAGE_TABLES, "", RESERVED, identity_map(0, false)),
         Placed::measured(BSP_STACK, "", RESERVED, boot::gdt_stack()),
         Placed::measured(KERNEL_SETUP_BASE, "kernel_setup", RESERVED, p.setup.clone()),
+        Placed::measured(EFI_PAGE, "efi", RESERVED, efi::page()),
         Placed::measured(KERNEL_BASE, "kernel", RAM, p.kernel),
         Placed::measured(INITRAMFS_BASE, "initramfs", RAM, p.initramfs),
         // The map covers the reset page, so the shim is never told to accept what it runs from.
@@ -71,9 +87,14 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
     boot::validate(&placed, params.memory)?;
     let spans = boot::shim_spans(&placed);
-    let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
+    let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
+    efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    boot::fill(&mut placed, RESET_ALIAS, shim(RESET_SHIM, p.entry, &spans)?)?;
+    boot::fill(
+        &mut placed,
+        RESET_ALIAS,
+        shim(RESET_SHIM, p.entry, &spans, &[], lazy_bound(p.info))?,
+    )?;
     let shim_owned = shim_owned(&placed)?;
 
     // Ascending GPA order: how a loader adds pages and the digest is built.
@@ -84,14 +105,35 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         spans,
         entry: p.entry,
         shim_owned,
+        fw_cfg: Vec::new(),
     })
 }
 
 /// The AMD SEV-SNP map: firmware-owned CPUID and secrets pages, a
 /// confidential-computing blob reached through setup_data, a shared alias in
 /// the page tables, and a shim below the kernel rather than at the reset vector.
+/// The kernel and initramfs are not placed pages: the AMD Secure Processor
+/// measures a page at a time, at a cost that dominated launch, so the shim
+/// fetches both through fw_cfg and holds them to digests it carries instead.
 pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result<Launch, String> {
     let p = prepare(kernel_path, initramfs_path, params)?;
+    let setup_bytes = p.info.setup_bytes as u64;
+    let fetch = [
+        Fetch::of(KERNEL_BASE, setup_bytes, &p.kernel),
+        Fetch::of(INITRAMFS_BASE, 0, &p.initramfs),
+    ];
+    let fw_cfg = vec![
+        FwCfgFile {
+            name: FWCFG_KERNEL,
+            size: setup_bytes + p.kernel.len() as u64,
+            sha256: p.file_digest,
+        },
+        FwCfgFile {
+            name: FWCFG_INITRD,
+            size: p.initramfs.len() as u64,
+            sha256: Sha256::digest(&p.initramfs).into(),
+        },
+    ];
 
     // The one authoritative map, as on TDX: E820, the imported pages and the accept list.
     let initramfs_len = p.initramfs.len();
@@ -113,10 +155,11 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         ),
         Placed::measured(BSP_STACK, "", RESERVED, boot::gdt_stack()),
         Placed::measured(SNP_GHCB, "", RESERVED, vec![0u8; PAGE as usize]),
+        Placed::measured(EFI_PAGE, "efi", RESERVED, efi::page()),
         Placed::measured(SHIM_BASE, "shim", RESERVED, vec![0u8; PAGE as usize]),
         Placed::measured(KERNEL_SETUP_BASE, "kernel_setup", RESERVED, p.setup.clone()),
-        Placed::measured(KERNEL_BASE, "kernel", RAM, p.kernel),
-        Placed::measured(INITRAMFS_BASE, "initramfs", RAM, p.initramfs),
+        Placed::fetched(KERNEL_BASE, "kernel", RAM, p.kernel),
+        Placed::fetched(INITRAMFS_BASE, "initramfs", RAM, p.initramfs),
     ];
     placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
     boot::validate(&placed, params.memory)?;
@@ -124,15 +167,20 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     // Only what this image loads. A loader converts these to private as it
     // imports them, so what this declares is that it has them backed at all;
     // the guest's own RAM is the shim's to convert, through the page state
-    // changes psc.inc makes, and one image serves a guest of any size.
-    let required_memory = spans
+    // changes psc.inc makes, and one image serves a guest of any size. The
+    // fetched spans are the shim's too, so they are not among them.
+    let mut required_memory: Vec<boot::Region> = placed
         .iter()
-        .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
+        .filter(|p| !matches!(p.fill, Fill::Mmio(_) | Fill::Fetched(_)))
+        .map(|p| (p.base, p.span(), p.e820))
         .collect();
+    required_memory.sort_unstable();
     // The setup_data chain is one measured SETUP_CC_BLOB record.
-    let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
+    let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
+    efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    boot::fill(&mut placed, SHIM_BASE, shim(SNP_SHIM, p.entry, &spans)?)?;
+    let shim_page = shim(SNP_SHIM, p.entry, &spans, &fetch, lazy_bound(p.info))?;
+    boot::fill(&mut placed, SHIM_BASE, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
 
     placed.sort_by_key(|p| p.base);
@@ -142,7 +190,15 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         spans,
         entry: p.entry,
         shim_owned,
+        fw_cfg,
     })
+}
+
+/// Everything below the end of the kernel's decompression is accepted by the
+/// shim, since the decompressor runs before Linux's own acceptance does; past
+/// it, whole 2-MiB units are Linux's to accept (see lazy.inc).
+fn lazy_bound(info: boot::KernelInfo) -> u64 {
+    align_up(KERNEL_BASE + info.init_size as u64, UNACCEPTED_UNIT)
 }
 
 /// Formats an io::Error with the action that failed.

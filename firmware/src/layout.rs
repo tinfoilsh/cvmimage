@@ -101,6 +101,101 @@ layout! {
     // of one entry and no more.
     PSC_ENTRY_CUR_PAGE = PAGE - 1;
 
+    // An entry that asks for the span shared rather than private: the next
+    // operation up from PSC_ENTRY_PRIVATE in the same field.
+    PSC_ENTRY_SHARED = 53;
+
+    // A port write through the block, which is how an SEV-SNP guest with no
+    // #VC handler reaches a device: the save area's RAX, its bit in the valid
+    // bitmap, and the IOIO exit the GHCB specification has it state, with the
+    // operand and address sizes encoded as SVM's IOIO intercept does.
+    GHCB_RAX = 0x1f8;
+    GHCB_RAX_VALID_BYTE = GHCB_RAX / 8 / 8;
+    GHCB_RAX_VALID_BIT = 1 << (GHCB_RAX / 8 % 8);
+    // Exit code and both exit infos, but no scratch area: a port write has none.
+    GHCB_IOIO_VALID_BITS = 0x7 << (GHCB_SW_EXIT_CODE / 8 % 8);
+    SVM_EXIT_IOIO = 0x7b;
+    IOIO_SZ32 = 1 << 6;
+    IOIO_A64 = 1 << 9;
+
+    // QEMU's fw_cfg device (docs/specs/fw_cfg.rst): the DMA address register,
+    // whose low half starts a transfer, the file directory's selector, the
+    // shape of one directory entry, and the control bits of an access.
+    FWCFG_PORT_DMA = 0x514;
+    FWCFG_FILE_DIR = 0x19;
+    FWCFG_FILE_LEN = 64;
+    FWCFG_FILE_SELECT = 4;
+    FWCFG_FILE_NAME = 8;
+    FWCFG_DMA_READ = 2;
+    FWCFG_DMA_SKIP = 4;
+    FWCFG_DMA_SELECT = 8;
+    // The access the shim describes sits in the block's shared buffer, which
+    // no page state change is using while the shim fetches, so it needs no
+    // shared page of its own. The device reads it at the GPA, big-endian.
+    FWCFG_DMA = GHCB_ALIAS + GHCB_SHARED_BUFFER;
+    FWCFG_DMA_GPA = SNP_GHCB + GHCB_SHARED_BUFFER;
+    FWCFG_DMA_GPA_BE = ((FWCFG_DMA_GPA & 0xff) << 24)
+        | ((FWCFG_DMA_GPA >> 8 & 0xff) << 16)
+        | ((FWCFG_DMA_GPA >> 16 & 0xff) << 8)
+        | (FWCFG_DMA_GPA >> 24 & 0xff);
+
+    // The RAM the device writes the kernel and initramfs into, a piece at a
+    // time, before the shim copies each piece into private memory. It lies in
+    // the first GiB, where the shared alias reaches, and in a gap of the
+    // measured map, so the accept walk takes it back as private RAM after.
+    FETCH_BOUNCE = 0x0020_0000;
+    FETCH_BOUNCE_SIZE = 0x0020_0000;
+    FETCH_BOUNCE_ALIAS = SHARED_ALIAS + FETCH_BOUNCE;
+    // The directory is read whole into the bounce buffer: this many files at
+    // most, which is far more than a q35 guest carries.
+    FETCH_DIR_ENTRIES = 1024;
+    FETCH_DIR_LEN = 4 + FETCH_DIR_ENTRIES * FWCFG_FILE_LEN;
+    // One file the shim fetches, as the data block states it: where it goes,
+    // how much of the fw_cfg file to skip first, how much to copy, the
+    // SHA-256 of what is copied, and the fw_cfg name with its NUL. The
+    // kernel's then the initramfs's, at the end of the block, where a TDX
+    // shim leaves zeros.
+    FETCH_DEST = 0;
+    FETCH_SKIP = 8;
+    FETCH_SIZE = 16;
+    FETCH_DIGEST = 24;
+    FETCH_NAME = 56;
+    FETCH_LEN = 80;
+    SHIM_DATA_FETCH = SHIM_DATA_SIZE - 2 * FETCH_LEN;
+    // SHA-256's initial hash value and round constants, ahead of those
+    // entries: data a shim reads, so in the data block, where the code page
+    // has no room for them.
+    SHIM_DATA_SHA_H = SHIM_DATA_SHA_K - 32;
+    SHIM_DATA_SHA_K = SHIM_DATA_FETCH - 64 * 4;
+    // "opt/tinfoil/kernel" and "opt/tinfoil/initrd" with their NUL.
+    FETCH_NAME_LEN = 19;
+
+    // The EFI tables an SNP guest is handed so that Linux accepts most of its
+    // RAM itself, lazily: Linux finds unaccepted memory only through an EFI
+    // configuration table (drivers/firmware/efi/unaccepted_memory.c), so the
+    // image carries a system table with no services and one such table, and
+    // claims an EFI boot whose runtime services are disabled. One measured
+    // page holds the system table, its configuration table, a one-entry
+    // memory map and, in its last bytes, the unaccepted table's header; the
+    // bitmap that header begins follows it in RAM the shim accepts and clears.
+    EFI_PAGE = 0x0040_0000;
+    EFI_CONFIG_TABLE = 0x80;
+    EFI_MEMMAP = 0xc0;
+    EFI_MEMDESC_SIZE = 48;
+    EFI_VENDOR = 0x100;
+    UNACCEPTED_TABLE = EFI_PAGE + PAGE - 24;
+    UNACCEPTED_SIZE = UNACCEPTED_TABLE + 16;
+    // One bit a 2-MiB unit of everything the identity map reaches.
+    UNACCEPTED_BITMAP = EFI_PAGE + PAGE;
+    UNACCEPTED_BITMAP_SIZE = MAP_LIMIT / UNACCEPTED_UNIT / 8;
+    UNACCEPTED_UNIT = 0x20_0000;
+    UNACCEPTED_UNIT_SHIFT = 21;
+    // Where in the data block the SNP shim finds the 2-MiB-aligned address
+    // below which it accepts everything itself.
+    SHIM_DATA_LAZY = SHIM_DATA_SHA_H - 8;
+    // boot_params' efi_info, as in arch/x86/include/uapi/asm/bootparam.h.
+    BP_EFI_INFO = 0x1c0;
+
     // The GHCB MSR protocol: one request a VMGEXIT, needing no block at all,
     // which is what the shim terminates through and sets the block up with.
     GHCB_MSR = 0xc001_0130;
@@ -240,6 +335,31 @@ const _: () = assert!(
         && GHCB_SW_SCRATCH == GHCB_SW_EXIT_CODE + 24
 );
 const _: () = assert!(GHCB_VALID_BITS < 0x100 && GHCB_VALID_BYTE < 16);
+// The bounce buffer is one 2-MiB page of RAM between the shim's own pages and
+// the kernel, inside the first GiB the shared alias reaches.
+const _: () = assert!(FETCH_BOUNCE.is_multiple_of(0x20_0000) && FETCH_BOUNCE_SIZE == 0x20_0000);
+const _: () = assert!(KERNEL_SETUP_END <= FETCH_BOUNCE);
+const _: () = assert!(FETCH_BOUNCE + FETCH_BOUNCE_SIZE <= KERNEL_BASE);
+const _: () = assert!(FETCH_BOUNCE + FETCH_BOUNCE_SIZE <= GIB);
+const _: () = assert!(FETCH_DIR_LEN <= FETCH_BOUNCE_SIZE);
+// The access fits the shared buffer, and its GPA the 32-bit half the device starts on.
+const _: () = assert!(FWCFG_DMA_GPA + 16 <= SNP_GHCB + GHCB_SHARED_BUFFER_END);
+const _: () = assert!(FWCFG_DMA_GPA < 1 << 32);
+const _: () = assert!(GHCB_RAX_VALID_BYTE < 16 && GHCB_IOIO_VALID_BITS < 0x100);
+// Both fetched files' entries fit the data block, aligned, after its two words.
+const _: () = assert!(SHIM_DATA_FETCH.is_multiple_of(8) && SHIM_DATA_SHA_H > SHIM_DATA_SPANS);
+const _: () = assert!(FETCH_DIGEST + 32 == FETCH_NAME && FETCH_NAME + FETCH_NAME_LEN <= FETCH_LEN);
+// The EFI page and the bitmap after it lie between the bounce buffer and the
+// kernel, in a gap of the measured map the accept walk clears before it marks
+// any of the bitmap: the header the shim sizes runs straight into it.
+const _: () = assert!(FETCH_BOUNCE + FETCH_BOUNCE_SIZE <= EFI_PAGE);
+const _: () = assert!(UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE <= KERNEL_BASE);
+const _: () = assert!(UNACCEPTED_UNIT == 1 << UNACCEPTED_UNIT_SHIFT);
+// The bitmap has a bit for every unit the identity map reaches.
+const _: () = assert!(UNACCEPTED_BITMAP_SIZE * 8 * UNACCEPTED_UNIT >= MAX_MEMORY);
+const _: () = assert!(EFI_MEMMAP + EFI_MEMDESC_SIZE <= EFI_VENDOR);
+const _: () = assert!(EFI_VENDOR + 16 <= UNACCEPTED_TABLE - EFI_PAGE);
+const _: () = assert!(SHIM_DATA_LAZY.is_multiple_of(8) && SHIM_DATA_LAZY > SHIM_DATA_SPANS);
 // A host's cursor into an entry sits below the page number, not in it.
 const _: () = assert!(PSC_ENTRY_CUR_PAGE < 1 << 12);
 // The descriptor has to lie wholly inside the shared buffer, and its entry

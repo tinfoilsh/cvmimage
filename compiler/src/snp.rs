@@ -90,6 +90,15 @@ struct Manifest {
     shim_owned_bytes: usize,
     launch: ReportFields,
     components: BTreeMap<&'static str, Component>,
+    /// What the loader must serve through fw_cfg, by name: the kernel and
+    /// initramfs are fetched by the shim rather than carried in this file.
+    fw_cfg: BTreeMap<&'static str, FwCfg>,
+}
+
+#[derive(Serialize)]
+struct FwCfg {
+    size: u64,
+    sha256: String,
 }
 
 pub fn build(
@@ -128,7 +137,7 @@ pub fn build(
             }
             Fill::Host => add_special(&mut pages, region.base, PAGE_SECRETS),
             Fill::Measured(data) => add_normal(&mut pages, region.base, data),
-            Fill::Parameters | Fill::Mmio(_) => {}
+            Fill::Parameters | Fill::Mmio(_) | Fill::Fetched(_) => {}
         }
     }
     validate_pages(&pages)?;
@@ -238,6 +247,17 @@ pub fn build(
         shim_owned_bytes: owned,
         launch: snp_launch(&measurement, host_data, guest_svn, signed),
         components,
+        fw_cfg: launch
+            .fw_cfg
+            .iter()
+            .map(|f| {
+                let file = FwCfg {
+                    size: f.size,
+                    sha256: hex::encode(f.sha256),
+                };
+                (f.name, file)
+            })
+            .collect(),
     };
     write_manifest(output, &manifest)
 }
@@ -916,7 +936,15 @@ mod tests {
         assert!(spans.iter().any(|(lo, _)| *lo == SNP_CPUID));
         assert!(spans
             .iter()
-            .any(|(lo, hi)| *lo <= KERNEL_BASE && KERNEL_BASE < *hi));
+            .any(|(lo, hi)| *lo <= KERNEL_SETUP_BASE && KERNEL_SETUP_BASE < *hi));
+        // ...and the kernel and initramfs are not loaded at all: the shim
+        // fetches them into memory it converts itself.
+        for fetched in [KERNEL_BASE, INITRAMFS_BASE] {
+            assert!(
+                !spans.iter().any(|(lo, hi)| *lo <= fetched && fetched < *hi),
+                "{fetched:#x} is declared but fetched"
+            );
+        }
     }
 
     /// The shim writes the zero page, the ACPI page and its two region buffers

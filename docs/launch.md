@@ -111,9 +111,10 @@ domain (MRTD). The shim enters long mode, parks
 application processors in the ACPI wakeup mailbox, accepts the remaining
 private RAM, and jumps to Linux.
 
-On SEV-SNP the digest covers the normal pages and the boot processor's VMSA.
-The shim enters long mode, validates and clears the remaining private RAM, and
-jumps to Linux.
+On SEV-SNP the digest covers the normal pages and the boot processor's VMSA,
+but not the kernel and initramfs: the shim fetches those and holds them to
+digests it carries (see below). The shim enters long mode, fetches them,
+validates and clears the remaining private RAM, and jumps to Linux.
 
 It starts no application processor. Only the boot processor is given a save
 area, and Linux brings the rest up itself through the Guest-Hypervisor
@@ -125,6 +126,42 @@ The SNP image reaches Linux through a confidential-computing blob on the
 and the record claims the whole page: Linux re-reads the chain long after boot
 in `pcibios_device_add()`, and `memremap()` returns ciphertext for a page
 outside the RAM map, leaving every PCI device without an MSI domain.
+
+### The kernel and initramfs on SEV-SNP
+
+KVM loads every page an SNP image places with one AMD Secure Processor command
+a page, measured or not, at about 1.4 ms each. Nine megabytes of kernel and
+initramfs cost three seconds of every launch that way, before the guest runs an
+instruction. So the SNP image does not place them. Its shim's measured data
+block carries, for each, where it goes, how long it is and its SHA-256, and the
+shim reads the bytes from QEMU's fw_cfg device:
+
+1. It asks the host to make a 2 MiB bounce buffer shared, and accepts the
+   kernel's and the initramfs's destinations as private memory.
+2. It looks each file up by name in the fw_cfg directory, and refuses one whose
+   size is not exactly what the image was built from.
+3. It has the device DMA the file into the bounce buffer a piece at a time,
+   copying each piece into the private destination.
+4. It hashes the private copy, never the shared one the host can still
+   rewrite, and terminates unless the digest matches.
+
+The port writes go through the GHCB as IOIO requests, since the shim installs
+no #VC handler. The accept walk afterwards takes the bounce buffer back as
+private RAM. A failure is reported as a GHCB termination request with reason
+set `0xf`: code 6 when the device does not serve the file, code 7 when its
+bytes do not match, which KVM logs as `SEV-ES guest requested termination`.
+
+| fw_cfg name | Contents | Bytes checked |
+| --- | --- | --- |
+| `opt/tinfoil/kernel` | the whole `bzImage` | everything after the setup sectors, which are measured in their own pages |
+| `opt/tinfoil/initrd` | the initramfs | all of it |
+
+The SNP manifest's `fw_cfg` object states each file's size and SHA-256 as
+served, which are the release's `kernel` and `initrd` digests. The launch
+measurement still pins both, through the digests in the shim's page; nothing
+the host supplies is trusted beyond being exactly those bytes. TDX keeps
+measuring the kernel and initramfs directly, because adding pages to a TD is
+cheap.
 
 There is no later measured boot. No RTMR is extended, no event log is produced,
 and no DICE identity is derived.
@@ -209,6 +246,13 @@ migration agents disabled. Pass it explicitly:
 -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=5,policy=0x30133
 ```
 
+The launch also has to serve the kernel and initramfs the image was built from:
+
+```sh
+-fw_cfg name=opt/tinfoil/kernel,file=/path/to/bzImage \
+-fw_cfg name=opt/tinfoil/initrd,file=/path/to/initramfs
+```
+
 The policy cannot express an SMT or single-socket requirement — KVM rejects
 `SNP_LAUNCH_START` for a policy that clears the SMT bit or sets `SINGLE_SOCKET`,
 so `PLATFORM_INFO` carries both instead.
@@ -230,16 +274,32 @@ The measured page tables map the first 2 TiB with 1-GiB pages, whatever the
 guest turns out to have, because they are measured and so cannot depend on it.
 That bounds guest RAM at 2046 GiB.
 
-Private-memory initialization is linear in guest RAM, and the shim does all of
-it up front because Linux discovers unaccepted memory only through EFI, which
-this image does not provide. That time is spent before the kernel starts, and
-on both platforms it is around 2.5 seconds per GiB of one processor's work:
-a 64 GiB guest reaches Linux about 170 seconds after launch, a 512 GiB one
-about twenty minutes after, and the 2046 GiB the map now allows would be over
-an hour. Cutting that means either spreading the work over the application
-processors, or giving Linux a way to find unaccepted memory itself -- EFI, or
-the unaccepted-memory E820 type. Neither is part of this change, so the ceiling
-is what the page tables allow rather than what is worth booting.
+Private-memory initialization is linear in guest RAM: about half a second a
+GiB on SEV-SNP, almost all of it the host allocating and converting each page,
+and about 2.5 seconds a GiB on TDX. Each shim does it only below a bound -- the
+end of the kernel's decompression, which runs before Linux can accept
+anything -- and past the bound accepts only the part 2-MiB units at the ends of
+each range, plus the first unit of a range that starts on a unit boundary,
+leaving every other whole unit to Linux, which accepts memory as it first
+allocates from it, as it does on an OVMF launch. A guest reaches Linux in about
+a second whatever its size; what it does not accept at boot it pays for, at
+the same rate, the first time it touches it. `accept_memory=eager` on the
+command line moves that back to boot, inside Linux.
+
+Linux discovers unaccepted memory only through an EFI configuration table
+(`LINUX_EFI_UNACCEPTED_MEM_TABLE_GUID`), so the image states an EFI boot
+that has already exited, with no boot or runtime services: one measured page
+holding a system table with that one configuration table, a memory map of one
+descriptor, and the table's header, and `boot_params.efi_info` pointing at it.
+The bitmap the header begins is the 128 KiB after it, which the shim accepts
+and clears before marking any of it, and the one field that depends on the
+guest's RAM, the bitmap's size, it writes at boot. This is the state an OVMF
+guest is in after `ExitBootServices` with runtime services disabled, except
+that the memory map names no conventional memory. Two consequences: physical
+KASLR is off, because the decompressor finds nowhere else to put the kernel, and `efi=runtime` must never be added
+to the command line, since there are no runtime services to call. A unit
+marked unaccepted that was also validated, or one neither, terminates or
+faults the guest; nothing about either is up to the host.
 
 ## Linux requirements
 
@@ -248,6 +308,7 @@ x86-64, boot protocol 2.12 or newer.
 ```text
 CONFIG_INTEL_TDX_GUEST    CONFIG_SMP    CONFIG_ACPI    CONFIG_BLK_DEV_INITRD
 CONFIG_AMD_MEM_ENCRYPT    CONFIG_SEV_GUEST                      (SEV-SNP also)
+CONFIG_EFI    CONFIG_EFI_STUB    CONFIG_EFI_DISABLE_RUNTIME
 ```
 
 Hotplug, suspend, kexec and processor offlining are unsupported.

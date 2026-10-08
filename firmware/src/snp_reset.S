@@ -2,14 +2,19 @@
 .include "madt.inc"
 .include "map.inc"
 .include "psc.inc"
+.include "sha256.inc"
+.include "fetch.inc"
+.include "lazy.inc"
 .section .reset,"ax"
 
 .code32
 .global snp_reset_start
-# Nothing here may depend on CPUID, I/O or an exception. What it does ask the
-# host for is page state changes, so that the guest makes its own memory
-# private rather than a loader doing it: see psc.inc. Every other use of the
-# GHCB MSR here is a termination request.
+# Nothing here may depend on CPUID or an exception. What it does ask the host
+# for is page state changes, so that the guest makes its own memory private
+# rather than a loader doing it (see psc.inc), and the port writes that fetch
+# the kernel and initramfs (see fetch.inc), both through the block rather than
+# through a #VC no handler is installed for. Every other use of the GHCB MSR
+# here is a termination request.
 snp_reset_start:
     cli
     cld
@@ -47,9 +52,12 @@ snp_long_mode:
     call merge_regions
     mov $ZERO_PAGE, %edi
     call e820_build
-    # Linux finds unvalidated memory only through EFI, so guest RAM is made
-    # private and validated here, in that order and by the guest itself.
+    # Guest RAM is made private and validated by the guest itself, in that
+    # order, up to the lazy bound; past it, Linux does it as it allocates,
+    # finding the units it has to in the EFI table efi.rs describes.
+    call unaccepted_size
     call ghcb_share
+    call fetch_all
     call accept_walk
     call ghcb_private
 
@@ -65,15 +73,18 @@ snp_boot_kernel:
     lea shim_data(%rip), %rax
     jmp *(%rax)
 
-map_code die_map, accept_private
+map_code die_map, accept_lazy
 psc_code die_psc, vmgexit
+lazy_code accept_private
+fetch_code die_fetch, die_digest, vmgexit, accept_private
+sha256_code
 
 # A map this image will not run in, which is step 2 of the sequence above.
 die_map:
     mov $2, %r15d
     jmp die_step
 
-# The three refusals the shim can report, numbered as steps 3 to 5: KVM prints
+# The refusals the shim can report, numbered as steps 3 to 7: KVM prints
 # a termination request's reason set and code, so which of them happened is
 # readable on the host even though the guest has no console. PVALIDATE
 # refusing a page is a fourth, reported by `die`.
@@ -95,6 +106,14 @@ die_psc:
     jmp die_step
 die_ghcb_private:
     mov $5, %r15d
+    jmp die_step
+# A device that would not serve the kernel or initramfs, and bytes that it did
+# serve but that do not hash to what this image measured.
+die_fetch:
+    mov $6, %r15d
+    jmp die_step
+die_digest:
+    mov $7, %r15d
     jmp die_step
 
 # The GHCB MSR termination request is the shim's only channel to the host:
@@ -133,6 +152,7 @@ die:
 accept_private:
     mov %r12, %r9
     mov %r13, %r10
+    mov $PSC_ENTRY_PRIVATE, %ebx
     call psc_range
     jmp validate_range
 

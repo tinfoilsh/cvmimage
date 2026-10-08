@@ -27,10 +27,11 @@
 
 .macro psc_code fail, exit
 
-# Make [%r9, %r10) private, in batches of at most PSC_MAX_ENTRIES entries,
-# preferring 2 MiB wherever the range is aligned for one and long enough to
-# hold it -- the size PVALIDATE prefers too, so the two agree on what the RMP
-# entry covers. Returns with %r9 at %r10.
+# Make [%r9, %r10) private, or shared, as %ebx says: PSC_ENTRY_PRIVATE or
+# PSC_ENTRY_SHARED, the bit of an entry that names the operation. Batches of
+# at most PSC_MAX_ENTRIES entries, preferring 2 MiB wherever the range is
+# aligned for one and long enough to hold it -- the size PVALIDATE prefers
+# too, so the two agree on what the RMP entry covers. Returns with %r9 at %r10.
 # Clobbers rax, rcx, rdx, rdi, r11, r14, and whatever \exit clobbers.
 psc_range:
     cmp %r10, %r9
@@ -39,7 +40,7 @@ psc_range:
     xor %r11d, %r11d                # entries described in this batch
     movq $0, PSC_CUR_ENTRY(%rdi)    # the header, which the host moves through
 2:  mov %r9, %rax                   # a page-aligned address is already a page number
-    bts $PSC_ENTRY_PRIVATE, %rax
+    bts %rbx, %rax
     mov $PAGE, %ecx                 # what this entry covers
     test $0x1fffff, %r9d
     jnz 3f                          # not on a 2 MiB boundary

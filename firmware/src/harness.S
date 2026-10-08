@@ -12,10 +12,24 @@
 .include "madt.inc"
 .include "map.inc"
 .include "psc.inc"
+.include "sha256.inc"
+.include "fetch.inc"
+.include "lazy.inc"
 
 .text
-map_code harness_fail, harness_accept
+map_code harness_fail, harness_walk_accept
 psc_code harness_fail, "call harness_psc_issue"
+fetch_code harness_fail, harness_mismatch, "call harness_io_issue", harness_accept
+sha256_code
+lazy_code harness_accept
+
+# What the walk hands its ranges to: the SNP shim's accept_lazy where a test
+# asks for it, and otherwise the recording primitive itself.
+harness_walk_accept:
+    cmpq $0, harness_lazy(%rip)
+    jne accept_lazy
+    jmp harness_accept
+
 
 # The System V registers a caller owns, saved once so that a refusal deep inside
 # a macro can return through the same epilogue an ordinary return does.
@@ -51,6 +65,75 @@ harness_fail:
     xor %eax, %eax
     jmp harness_ret
 
+# Bytes that do not hash to the digest the data block states.
+harness_mismatch:
+    mov harness_sp(%rip), %rsp
+    mov $2, %eax
+    jmp harness_ret
+
+# (data, len, out) -> 1, with the SHA-256 sha256.inc computes in out.
+.globl harness_sha256
+harness_sha256:
+    harness_enter
+    mov %rdi, %rax
+    mov %rsi, %rcx
+    mov %rdx, %rdi
+    mov %rax, %rsi
+    call sha256
+    mov $1, %eax
+    jmp harness_ret
+
+# A top of RAM no routine would compute, so that one which lost it shows.
+.set HARNESS_TOP, 0x0000567800000000
+
+# () -> 1 where both files were fetched and held to their digests, 2 where one
+# did not hash to it, 0 where the device or the host was refused, and 3 where
+# the fetch returned without the top of RAM it was handed. Every range it
+# accepted is in harness_ranges and every page state change in
+# harness_psc_entries.
+.globl harness_fetch_all
+harness_fetch_all:
+    harness_enter
+    movq $0, harness_count(%rip)
+    movq $0, harness_psc_count(%rip)
+    movq $0, harness_psc_calls(%rip)
+    movq $0, harness_psc_bytes(%rip)
+    movq $0, harness_psc_lost(%rip)
+    movq $0, harness_psc_host(%rip)    # HOST_WHOLE, defined below
+    mov $HARNESS_TOP, %r8
+    call fetch_all
+    mov $1, %eax
+    mov $HARNESS_TOP, %rcx
+    cmp %rcx, %r8
+    je harness_ret
+    mov $3, %eax
+    jmp harness_ret
+
+# The port write the fetch makes, handed to the device the test runs, which
+# reads the request out of the block and answers in it as a host would. The
+# exit may clobber rax, rdx and rdi, so everything else a C call does not
+# preserve is saved here.
+harness_io_issue:
+    push %rcx
+    push %rsi
+    push %r8
+    push %r9
+    push %r10
+    push %r11
+    push %rbp
+    mov %rsp, %rbp
+    and $-16, %rsp
+    call harness_fwcfg_io
+    mov %rbp, %rsp
+    pop %rbp
+    pop %r11
+    pop %r10
+    pop %r9
+    pop %r8
+    pop %rsi
+    pop %rcx
+    ret
+
 # (zero page, top of RAM) -> 1, or zero if the map was refused.
 .globl harness_e820
 harness_e820:
@@ -68,6 +151,21 @@ harness_accept_walk:
     mov %rdi, %r8
     movq $0, harness_count(%rip)
     call accept_walk
+    mov harness_count(%rip), %rax
+    jmp harness_ret
+
+# (top of RAM) -> how many ranges were accepted, as harness_accept_walk, with
+# the walk going through accept_lazy: what it accepts is in harness_ranges,
+# what it leaves to Linux in the bitmap, and the bitmap's size in the table.
+.globl harness_lazy_walk
+harness_lazy_walk:
+    harness_enter
+    mov %rdi, %r8
+    movq $0, harness_count(%rip)
+    movq $1, harness_lazy(%rip)
+    call unaccepted_size
+    call accept_walk
+    movq $0, harness_lazy(%rip)
     mov harness_count(%rip), %rax
     jmp harness_ret
 
@@ -109,6 +207,7 @@ harness_psc_range:
     # is handed a copy of in %r9 and %r10 and must not reach.
     mov $HARNESS_HELD_LO, %r12
     mov $HARNESS_HELD_HI, %r13
+    mov $PSC_ENTRY_PRIVATE, %ebx
     call psc_range
     call harness_psc_held
     mov $1, %eax
@@ -287,8 +386,11 @@ harness_psc_lost:
     .quad 0
 
 .balign 8
+harness_lazy:
+    .quad 0
 harness_sp:
     .quad 0
+.globl harness_count
 harness_count:
     .quad 0
 

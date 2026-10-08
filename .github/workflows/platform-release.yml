@@ -1,0 +1,49 @@
+name: Publish platform endorsements
+
+on:
+  push:
+    tags: ['platform-v*']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: platform-release-${{ github.ref_name }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Require a stable platform tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" != tag || ! "$REF_NAME" =~ ^platform-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Use a platform-vX.Y.Z tag"
+            exit 1
+          fi
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Build platform endorsements
+        run: bash platform/build.sh
+      - name: Hash platform endorsements
+        id: hash
+        run: echo "digest=sha256:$(sha256sum platform/platform-endorsements.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Attest platform endorsements
+        uses: actions/attest@7667f588f2f73a90cea6c7ac70e78266c4f76616 # v3.1.0
+        with:
+          subject-name: platform-endorsements.json
+          subject-digest: ${{ steps.hash.outputs.digest }}
+          predicate-type: https://tinfoil.sh/predicate/platform-endorsements/v2
+          predicate-path: platform/platform-endorsements.json
+      - name: Publish the platform release independently of runtime latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" platform/platform-endorsements.json --verify-tag --latest=false --title "$TAG" --notes "Platform security policies and machine inventory."

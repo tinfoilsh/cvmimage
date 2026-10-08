@@ -1298,7 +1298,7 @@ pub mod tests {
         const GUEST_ALLOWANCE: u64 = 2 << 20;
         // Everything this image reserves sits below KERNEL_SETUP_END, but for
         // the TDX reset page.
-        assert!(KERNEL_SETUP_END + PAGE <= GUEST_ALLOWANCE);
+        const { assert!(KERNEL_SETUP_END + PAGE <= GUEST_ALLOWANCE) };
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             for ram in SIZES {

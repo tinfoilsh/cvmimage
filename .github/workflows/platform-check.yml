@@ -20,4 +20,7 @@ jobs:
       - run: |
           python3 -m venv platform/.venv
           platform/.venv/bin/python -m unittest discover -s platform -p '*_test.py'
-          bash platform/build.sh
+          cd platform
+          .venv/bin/python validate.py
+          .venv/bin/python measure.py
+          bash build.sh

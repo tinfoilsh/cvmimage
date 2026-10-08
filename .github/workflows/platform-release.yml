@@ -31,10 +31,16 @@ jobs:
         with:
           persist-credentials: false
       - name: Build platform endorsements
-        run: bash platform/build.sh
+        run: |
+          cd platform
+          python3 validate.py
+          python3 measure.py
+          bash build.sh
       - name: Hash platform endorsements
         id: hash
-        run: echo "digest=sha256:$(sha256sum platform/platform-endorsements.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "digest=sha256:$(sha256sum platform/platform-endorsements.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "classic=sha256:$(sha256sum platform/platform-endorsements-classic.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Attest platform endorsements
         uses: actions/attest@7667f588f2f73a90cea6c7ac70e78266c4f76616 # v3.1.0
         with:
@@ -42,8 +48,15 @@ jobs:
           subject-digest: ${{ steps.hash.outputs.digest }}
           predicate-type: https://tinfoil.sh/predicate/platform-endorsements/v2
           predicate-path: platform/platform-endorsements.json
+      - name: Attest classic platform endorsements
+        uses: actions/attest@7667f588f2f73a90cea6c7ac70e78266c4f76616 # v3.1.0
+        with:
+          subject-name: platform-endorsements-classic.json
+          subject-digest: ${{ steps.hash.outputs.classic }}
+          predicate-type: https://tinfoil.sh/predicate/platform-endorsements/v1
+          predicate-path: platform/platform-endorsements-classic.json
       - name: Publish the platform release independently of runtime latest
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" platform/platform-endorsements.json --verify-tag --latest=false --title "$TAG" --notes "Platform security policies and machine inventory."
+        run: gh release create "$TAG" platform/platform-endorsements.json platform/platform-endorsements-classic.json --verify-tag --latest=false --title "$TAG" --notes "Platform security policies and machine inventory."

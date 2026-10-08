@@ -11,7 +11,6 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 )
 
 func TestClientFetch(t *testing.T) {
@@ -31,9 +30,7 @@ func TestClientFetch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			wantRequest := wire.Request{Profile: tc.profile, Repo: "tinfoilsh/example", Tag: "v1.2.3", Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
 			if tc.profile == wire.FormatV3 {
-				wantRequest.Repo, wantRequest.Tag = "", ""
-				wantRequest.Runtime = &collateral.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v1.2.3", Digest: strings.Repeat("a", 64)}
-				wantRequest.Config = &collateral.ConfigReference{Name: "/org/project/v1.2.3", Digest: strings.Repeat("b", 64)}
+				wantRequest.Digest = strings.Repeat("b", 64)
 			}
 			wantResponse := wire.Response{Format: tc.format, ExpiresAt: time.Now().Add(time.Hour).UTC()}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

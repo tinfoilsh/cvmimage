@@ -16,8 +16,8 @@ import (
 	sevabi "github.com/google/go-sev-guest/abi"
 	sevclient "github.com/google/go-sev-guest/client"
 	tdxclient "github.com/google/go-tdx-guest/client"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 
 	"tinfoil/internal/legacy"
 
@@ -176,10 +176,10 @@ func BuildAttestation(
 	material []envelope.CryptoMaterialItem,
 	nonce []byte,
 	deviceEvidence []envelope.DeviceEvidenceItem,
-	collateral []collateral.Entry,
+	collateral wire.Response,
 ) (json.RawMessage, error) {
 	return envelope.Build(envelope.BuildInput{
-		Nonce: nonce, CryptoMaterial: material, DeviceEvidence: deviceEvidence, Collateral: collateral,
+		Nonce: nonce, CryptoMaterial: material, DeviceEvidence: deviceEvidence, Collateral: collateral.Collateral, CollateralFormat: collateral.Format,
 	}, func(reportData [64]byte) (string, []byte, error) {
 		rawQuote, platform, err := reportWithRetry(reportData)
 		if err != nil {

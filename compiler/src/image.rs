@@ -907,9 +907,9 @@ pub mod tests {
     }
 
     /// The hosts the shim refuses rather than spins on or believes: one that
-    /// converts nothing, one that winds its entry cursor back, one that
-    /// answers with an end_entry past the batch the shim wrote, and one that
-    /// reports the request as not taken. The shim cannot say that it is
+    /// converts nothing, one that winds its entry cursor back, two that
+    /// answer with an end_entry other than the one the shim wrote, and one
+    /// that reports the request as not taken. The shim cannot say that it is
     /// stuck, so it must not get stuck; and the entry its progress is read
     /// out of is the one the header names, so a header naming an entry the
     /// shim never wrote is refused rather than indexed with.
@@ -921,6 +921,7 @@ pub mod tests {
             Host::Nothing,
             Host::Backwards,
             Host::PastTheBatch,
+            Host::RaisesTheEnd,
             Host::Refuses,
         ] {
             assert!(

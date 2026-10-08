@@ -29,7 +29,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-1axYNXm5vUpzmnbvutQ+P+cPUSeHPYCCA7g/tpj8QlY=";
+    vendorHash = "sha256-W9eW54ezrcE0uOehSAixgZiWIxg6265dqYqHfxAlLVE=";
     ldflags = [
       "-s"
       "-w"

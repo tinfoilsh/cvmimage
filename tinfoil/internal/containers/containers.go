@@ -164,6 +164,8 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 		}
 		if c.Healthcheck != nil {
 			phases = append(phases, boot.Stage{Name: "healthy", Status: boot.StatusPending})
+		} else if shimUpstreamPort(config, c) > 0 {
+			phases = append(phases, boot.Stage{Name: "ready", Status: boot.StatusPending})
 		}
 		substages = append(substages, boot.Stage{
 			Name:   c.Name,

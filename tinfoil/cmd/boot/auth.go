@@ -40,9 +40,21 @@ func dockerAuthKey(host string) string {
 	return host
 }
 
+// registryHost resolves the registry hostname for a REGISTRY_<KEY>_TOKEN
+// secret. A REGISTRY_<KEY>_HOST secret carries the hostname verbatim, since
+// a secret name cannot encode hyphens; otherwise the key itself is decoded
+// with underscores as dots (GHCR_IO -> ghcr.io).
+func registryHost(ext *shimconfig.ExternalConfig, hostPart string) string {
+	if host := ext.GetSecret("REGISTRY_" + hostPart + "_HOST"); host != "" {
+		return strings.ToLower(host)
+	}
+	return strings.ToLower(strings.ReplaceAll(hostPart, "_", "."))
+}
+
 // setupRegistryAuth configures Docker auth from external-config secrets.
 // Supports:
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
+//   - REGISTRY_<KEY>_HOST naming the registry when the key cannot encode it
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
 func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 	if err := ecrregistry.Configure(filepath.Join(boot.DockerConfigDir, ecrregistry.ConfigFileName), ext.GetSecret(ecrregistry.SecretName)); err != nil {
@@ -76,7 +88,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		}
 		// Extract host: REGISTRY_GHCR_IO_TOKEN -> GHCR_IO -> ghcr.io
 		hostPart := strings.TrimSuffix(strings.TrimPrefix(key, "REGISTRY_"), "_TOKEN")
-		host := strings.ToLower(strings.ReplaceAll(hostPart, "_", "."))
+		host := registryHost(ext, hostPart)
 		if host == "" || token == "" || !registryPattern.MatchString(host) {
 			continue
 		}

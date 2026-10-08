@@ -120,6 +120,10 @@ def check_uint(context: str, value) -> None:
 def validate_sev_policy(name: str, block: dict) -> None:
     ctx = f"policy {name}"
     check_members(f"{ctx}: sev_snp", block, SEV_FIELDS)
+    for field in ("minimum_tcb", "minimum_launch_tcb", "guest_policy", "platform_info"):
+        if not isinstance(block.get(field), dict):
+            err(f"{ctx}: {field} must be an object")
+            return
     for tcb_field in ("minimum_tcb", "minimum_launch_tcb"):
         tcb = block.get(tcb_field, {})
         check_members(f"{ctx}: {tcb_field}", tcb, TCB_FIELDS, TCB_OPTIONAL_FIELDS)

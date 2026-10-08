@@ -62,6 +62,10 @@ class PlatformBuildTest(unittest.TestCase):
             ("host_data", "0" * 63 + "\n"),
             ("image_id", "0" * 31 + "\n"),
             ("minimum_tcb", {"bl_spl": -1, "tee_spl": 0, "snp_spl": 0, "ucode_spl": 0}),
+            ("minimum_tcb", []),
+            ("minimum_launch_tcb", None),
+            ("guest_policy", "invalid"),
+            ("platform_info", 0),
         ):
             changed = copy.deepcopy(policies)
             changed["amd-genoa-prod"]["sev_snp"][field] = value

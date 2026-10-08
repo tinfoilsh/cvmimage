@@ -36,15 +36,13 @@ jobs:
       - name: Install Nix
         uses: ./.github/actions/install-nix
 
-      - name: Build image and config validator
+      - name: Build image
         env:
           PATH: /nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         run: |
           set -Eeuo pipefail
           /nix/var/nix/profiles/default/bin/nix-build \
             -I . -A shipping-image -o result
-          /nix/var/nix/profiles/default/bin/nix-build \
-            -I . -A config-validator -o result-config-validator
 
       - name: Generate manifest
         env:
@@ -59,8 +57,7 @@ jobs:
             "root": "$(tr -d '\n' < result/tinfoilcvm.roothash)",
             "initrd": "$(sha256sum result/tinfoilcvm.initrd | awk '{print $1}')",
             "kernel": "$(sha256sum result/tinfoilcvm.vmlinuz | awk '{print $1}')",
-            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')",
-            "config_validator": "$(sha256sum result-config-validator/bin/tinfoil-config | awk '{print $1}')"
+            "raw": "$(sha256sum result/tinfoilcvm.raw | awk '{print $1}')"
           }
           EOF
 
@@ -68,7 +65,6 @@ jobs:
           cp result/tinfoilcvm.initrd "/tmp/out/tinfoil-inference-${REF_NAME}.initrd"
           cp result/tinfoilcvm.vmlinuz "/tmp/out/tinfoil-inference-${REF_NAME}.vmlinuz"
           cp result/tinfoilcvm.raw "/tmp/out/tinfoil-inference-${REF_NAME}.raw"
-          cp result-config-validator/bin/tinfoil-config "/tmp/out/tinfoil-config-${REF_NAME}-linux-amd64"
 
           # Generate checksums
           cd /tmp/out
@@ -82,7 +78,6 @@ jobs:
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.initrd
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.vmlinuz
             /tmp/out/tinfoil-inference-${{ github.ref_name }}.raw
-            /tmp/out/tinfoil-config-${{ github.ref_name }}-linux-amd64
             /tmp/out/tinfoil-inference-${{ github.ref_name }}-checksums.sha256
 
       - name: Upload attested artifacts to R2
@@ -121,12 +116,10 @@ jobs:
           - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.vmlinuz
           - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.initrd
           - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.raw
-          - Config validator: https://images.tinfoil.sh/cvm/tinfoil-config-${REF_NAME}-linux-amd64
 
           ### Manifest
           \`\`\`json
           $(cat "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json")
           \`\`\`" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" \
-            "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256" \
-            "/tmp/out/tinfoil-config-${REF_NAME}-linux-amd64"
+            "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256"

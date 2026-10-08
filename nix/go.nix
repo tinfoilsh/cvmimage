@@ -29,7 +29,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-3LbTdtuhrTnfg37rwGfnBVYhTW1YAKNezGe5bmY1eng=";
+    vendorHash = "sha256-W9eW54ezrcE0uOehSAixgZiWIxg6265dqYqHfxAlLVE=";
     ldflags = [
       "-s"
       "-w"
@@ -121,23 +121,10 @@ let
     '';
     installPhase = "touch $out";
   };
-
-  configValidator = buildGoModule (common // {
-    pname = "tinfoil-config";
-    env = commonEnv // {
-      CGO_ENABLED = "0";
-    };
-    buildPhase = ''
-      runHook preBuild
-      go install -ldflags="''${ldflags[*]}" github.com/tinfoilsh/tinfoil-config/cmd/tinfoil-config
-      runHook postBuild
-    '';
-  });
 in
 {
   inherit checks;
   packages = {
-    "config-validator" = configValidator;
     "debug-pid1" = debugPID1;
     "runtime-go" = runtime;
     "tinfoil-initrd" = initrd;

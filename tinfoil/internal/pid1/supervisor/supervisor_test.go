@@ -599,6 +599,65 @@ func TestRestartBackoffCapsAndResetsOnlyAfterStableRun(t *testing.T) {
 	}
 }
 
+func TestCleanExitRestartsAtOnceButStillBacksOff(t *testing.T) {
+	sigchld := make(chan os.Signal, 16)
+	backend := newFakeBackend(sigchld)
+	manager := newManager(backend, sigchld, nil)
+	clock := newFakeClock()
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	supervisor := New(parent, manager, Config{
+		RestartBase: time.Second, RestartMax: 8 * time.Second,
+		StableAfter: 10 * time.Second, Clock: clock,
+	})
+	if err := supervisor.Start(context.Background(), Service{
+		Name: "shim", Required: true, Restart: true,
+		Command: Command{Name: "shim", Path: "/shim"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pid := receive(t, backend.started)
+	waitForServiceProcess(t, supervisor, "shim", pid)
+	noTimer := func() {
+		t.Helper()
+		select {
+		case timer := <-clock.timers:
+			t.Fatalf("restart waited %s", timer.delay)
+		default:
+		}
+	}
+
+	// Asked to reload: back without a timer.
+	backend.exit(pid, 0)
+	pid = receive(t, backend.started)
+	noTimer()
+	waitForServiceProcess(t, supervisor, "shim", pid)
+
+	// Exiting again inside the stable window is a loop, clean or not.
+	backend.exit(pid, 0)
+	clock.fire(t, 2*time.Second)
+	pid = receive(t, backend.started)
+	waitForServiceProcess(t, supervisor, "shim", pid)
+	backend.exit(pid, syscall.WaitStatus(1<<8))
+	clock.fire(t, 4*time.Second)
+	pid = receive(t, backend.started)
+	waitForServiceProcess(t, supervisor, "shim", pid)
+
+	// A failure never skips the wait, even from a stable run.
+	clock.elapse(10 * time.Second)
+	backend.exit(pid, syscall.WaitStatus(1<<8))
+	clock.fire(t, time.Second)
+	pid = receive(t, backend.started)
+	waitForServiceProcess(t, supervisor, "shim", pid)
+
+	// ...but a clean exit after a stable run is immediate again.
+	clock.elapse(10 * time.Second)
+	backend.exit(pid, 0)
+	pid = receive(t, backend.started)
+	noTimer()
+	waitForServiceProcess(t, supervisor, "shim", pid)
+}
+
 func TestDrainOrdersGroupsAndEscalatesTermToKill(t *testing.T) {
 	sigchld := make(chan os.Signal, 16)
 	backend := newFakeBackend(sigchld)

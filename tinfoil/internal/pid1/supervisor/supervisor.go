@@ -702,16 +702,26 @@ func (s *Supervisor) monitor(record *serviceRecord, process *Process) {
 			return
 		}
 
+		// A clean exit outside a crash loop is a restart something asked for
+		// (tinfoil-containers reloads the shim this way), so it does not wait.
+		// The delay still advances, so a service that keeps exiting backs off.
+		// A forking service's launcher exits cleanly by design; its cgroup
+		// emptying later is a daemon that died, which waits like any failure.
+		immediate := serviceErr == nil && cleanupErr == nil && !record.spec.Forking &&
+			record.delay == s.base
 		for {
 			delay := record.delay
 			if s.context.Err() != nil {
 				return
 			}
-			select {
-			case <-s.context.Done():
-				return
-			case <-s.clock.After(delay):
+			if !immediate {
+				select {
+				case <-s.context.Done():
+					return
+				case <-s.clock.After(delay):
+				}
 			}
+			immediate = false
 
 			s.mu.Lock()
 			if s.draining || s.context.Err() != nil {

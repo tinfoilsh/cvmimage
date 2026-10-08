@@ -56,7 +56,7 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/tinfoilsh/tinfoil-go v0.16.2-0.20261006003434-1d13590249d6
+	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.1.0.20261008050132-ad584a16b674
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect

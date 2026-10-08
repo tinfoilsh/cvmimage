@@ -20,25 +20,21 @@ import (
 )
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
-	ref := &collateral.ConfigReference{Name: "/org/project/v1", Digest: strings.Repeat("a", 64)}
-	runtime := &collateral.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.0", Digest: strings.Repeat("b", 64)}
+	digest := strings.Repeat("a", 64)
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
 metadata:
-  config:
-    name: %s
-    digest: %s
-  runtime:
-    repo: %s
-    tag: %s
-    digest: %s
+  profile: %s
+  repo: org/project
+  tag: v1
+  digest: %s
 network:
   address: 100.64.0.42/20
   gateway: 100.64.0.1
-`, ref.Name, ref.Digest, runtime.Repo, runtime.Tag, runtime.Digest)))
+`, wire.FormatV3, digest)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := wire.Request{Profile: wire.FormatV3, Config: ref, Runtime: runtime, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
+	expected := wire.Request{Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
 	collateral := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
 		Format: collateral.ConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

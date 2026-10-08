@@ -41,12 +41,12 @@ func loadCollateralRequest(path string) (wire.Request, error) {
 	if request.Platform != attestation.PlatformDummy {
 		switch request.Profile {
 		case "":
-			if request.Repo == "" || request.Config != nil || request.Runtime != nil {
+			if request.Repo == "" || request.Digest != "" {
 				return wire.Request{}, fmt.Errorf("legacy collateral request requires a repository")
 			}
 		case wire.FormatV3:
-			if request.Config == nil || request.Runtime == nil || request.Repo != "" || request.Tag != "" {
-				return wire.Request{}, fmt.Errorf("IGVM collateral request requires runtime and config references")
+			if request.Repo == "" || request.Tag == "" || request.Digest == "" {
+				return wire.Request{}, fmt.Errorf("registry collateral request requires a project, revision, and config digest")
 			}
 		default:
 			return wire.Request{}, fmt.Errorf("unsupported collateral request profile %q", request.Profile)

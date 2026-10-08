@@ -163,7 +163,7 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(collateral) != 0 {
+	if len(collateral.Collateral) != 0 || collateral.Format != wire.FormatV2 {
 		t.Fatalf("collateral = %#v", collateral)
 	}
 }

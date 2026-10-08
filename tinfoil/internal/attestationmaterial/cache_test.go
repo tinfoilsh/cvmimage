@@ -20,9 +20,11 @@ func (f fetchFunc) Fetch(ctx context.Context, request wire.Request) (wire.Respon
 func TestCacheFetchesLazily(t *testing.T) {
 	now := time.Now()
 	calls := 0
-	cache := NewCache(wire.Request{Repo: "repo", Platform: "sev-snp"}, fetchFunc(func(_ context.Context, _ wire.Request) (wire.Response, error) {
+	cache := NewCache(wire.Request{Profile: wire.FormatV3, Repo: "repo", Platform: "sev-snp"}, fetchFunc(func(_ context.Context, _ wire.Request) (wire.Response, error) {
 		calls++
-		return response(now.Add(48*time.Hour), "first"), nil
+		result := response(now.Add(48*time.Hour), "first")
+		result.Format = wire.FormatV3
+		return result, nil
 	}))
 	cache.now = func() time.Time { return now }
 
@@ -30,17 +32,17 @@ func TestCacheFetchesLazily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || len(got) != 1 || got[0].ID != "first" {
+	if calls != 1 || got.Format != wire.FormatV3 || len(got.Collateral) != 1 || got.Collateral[0].ID != "first" {
 		t.Fatalf("calls=%d collateral=%v", calls, got)
 	}
-	got[0].Data[0] = 'X'
-	got[0].Subjects[0] = "changed"
+	got.Collateral[0].Data[0] = 'X'
+	got.Collateral[0].Subjects[0] = "changed"
 	got, err = cache.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || string(got[0].Data) != `{"value":true}` || got[0].Subjects[0] != "subject" {
-		t.Fatalf("cache was not reused safely: calls=%d collateral=%s", calls, got[0].Data)
+	if calls != 1 || string(got.Collateral[0].Data) != `{"value":true}` || got.Collateral[0].Subjects[0] != "subject" {
+		t.Fatalf("cache was not reused safely: calls=%d collateral=%s", calls, got.Collateral[0].Data)
 	}
 }
 

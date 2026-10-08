@@ -16,7 +16,6 @@ import (
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
@@ -113,19 +112,19 @@ func prefetchKeyserverCollateral(
 	ctx context.Context,
 	config *Config,
 	request wire.Request,
-) ([]collateral.Entry, error) {
+) (wire.Response, error) {
 	if request.Repo == "" || request.Platform == "" || request.Platform == attestation.PlatformDummy || request.QuoteBase64 == "" {
-		return nil, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
+		return wire.Response{}, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
 	}
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating ATC client: %w", err)
+		return wire.Response{}, fmt.Errorf("creating ATC client: %w", err)
 	}
 	response, err := client.Fetch(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf("prefetching keyserver collateral: %w", err)
+		return wire.Response{}, fmt.Errorf("prefetching keyserver collateral: %w", err)
 	}
-	return response.Collateral, nil
+	return response, nil
 }
 
 func mergeKeyserverSecrets(names []string, secrets map[string]string, ext *shimconfig.ExternalConfig) error {

@@ -129,7 +129,7 @@ harness_psc_held:
 
 # What a host does with a batch, which the test chooses. The first three are
 # within a host's rights and the shim has to finish against all of them; the
-# last four are hosts it has to refuse rather than spin on or follow. Every
+# last five are hosts it has to refuse rather than spin on or follow. Every
 # entry a call does convert is recorded with its index in its batch, so a test
 # reads both what was asked for and how it was divided into exits.
 .set HOST_WHOLE, 0                  # the whole batch in one exit
@@ -139,6 +139,7 @@ harness_psc_held:
 .set HOST_BACKWARDS, 4              # the entry cursor wound back
 .set HOST_PAST_THE_BATCH, 5         # an end_entry the guest never wrote
 .set HOST_REFUSES, 6                # the request reported as not taken
+.set HOST_RAISES_THE_END, 7         # an end_entry a full batch writes
 harness_psc_issue:
     push %rcx                       # psc_vmgexit holds the block here
     push %rsi
@@ -156,6 +157,8 @@ harness_psc_issue:
     je 7f
     cmp $HOST_PAST_THE_BATCH, %rax
     je 8f
+    cmp $HOST_RAISES_THE_END, %rax
+    je 10f
     movzwl PSC_CUR_ENTRY(%rsi), %ecx
     movzwl PSC_END_ENTRY(%rsi), %edx
 1:  cmp %edx, %ecx
@@ -216,6 +219,13 @@ harness_psc_issue:
 # is told to read its own progress out of is one it never wrote. The cursor
 # moves with it, so nothing but the bound on end_entry catches this.
 8:  movw $PSC_MAX_ENTRIES, PSC_END_ENTRY(%rsi)
+    movzwl PSC_CUR_ENTRY(%rsi), %ecx
+    inc %ecx
+    jmp 3b
+
+# The same, but to an end_entry some full batch does write, so only the
+# guest's own record of the batch it described catches it.
+10: movw $PSC_MAX_ENTRIES-1, PSC_END_ENTRY(%rsi)
     movzwl PSC_CUR_ENTRY(%rsi), %ecx
     inc %ecx
     jmp 3b

@@ -240,7 +240,8 @@ def main() -> int:
         for slug, config in platforms.items():
             validate_platform(slug, config, shapes.get(slug))
 
-    if machines is None or policies is None or platforms is None:
+    if not isinstance(machines, dict) or not isinstance(policies, dict) or not machines or not policies or platforms is None:
+        err("machines and policies must be non-empty objects")
         print("\n".join(errors), file=sys.stderr)
         return 1
 

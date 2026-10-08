@@ -24,6 +24,9 @@ class PlatformBuildTest(unittest.TestCase):
             subprocess.run(["bash", str(root / "build.sh")], check=True, capture_output=True)
             classic = json.loads((root / "platform-endorsements-classic.json").read_text())
             runtime = json.loads((root / "platform-endorsements.json").read_text())
+            (root / "machines.json").write_text("{}")
+            invalid = subprocess.run(["bash", str(root / "build.sh")], capture_output=True)
+            self.assertNotEqual(invalid.returncode, 0)
 
         self.assertEqual(classic, {
             "format": "https://tinfoil.sh/predicate/platform-endorsements/v1",

@@ -13,7 +13,7 @@ MINIMUM_RUNTIME_ABI_VERSION="1.51"
 RUNTIME_PLATFORM_FORMAT="https://tinfoil.sh/predicate/platform-endorsements/v2"
 jq --arg format "$RUNTIME_PLATFORM_FORMAT" --arg minimum_abi_version "$MINIMUM_RUNTIME_ABI_VERSION" '
   .format = $format |
-  .measurements = {} |
+  del(.measurements) |
   .policies |= with_entries(
     if .value.platform == "sev-snp" then
       .value.sev_snp |= (

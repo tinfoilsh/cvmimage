@@ -36,7 +36,7 @@ class PlatformBuildTest(unittest.TestCase):
         })
         expected = copy.deepcopy(classic)
         expected["format"] = "https://tinfoil.sh/predicate/platform-endorsements/v2"
-        expected["measurements"] = {}
+        del expected["measurements"]
         for policy in expected["policies"].values():
             if policy["platform"] == "sev-snp":
                 block = policy["sev_snp"]

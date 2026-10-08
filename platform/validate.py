@@ -17,13 +17,14 @@ required, unknown members are errors (fail-closed, mirroring the SDK
 parsers).
 """
 
+from collections import Counter
 import json
 import re
 import sys
 from pathlib import Path
 
 HEX_RE = re.compile(r"^[0-9a-f]+$")
-VERSION_RE = re.compile(r"^\d+\.\d+$")
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+$")
 MEMORY_RE = re.compile(r"^(\d+)M$")
 
 SEV_ID_LEN = 128
@@ -74,8 +75,8 @@ def err(msg: str) -> None:
 
 
 def no_duplicates_hook(pairs):
-    keys = [k for k, _ in pairs]
-    dupes = {k for k in keys if keys.count(k) > 1}
+    counts = Counter(k for k, _ in pairs)
+    dupes = {k for k, count in counts.items() if count > 1}
     if dupes:
         err(f"duplicate JSON keys: {sorted(dupes)}")
     return dict(pairs)
@@ -101,7 +102,7 @@ def check_members(context: str, block: dict, required: set, optional: set = froz
 
 
 def check_hex(context: str, value, length: int) -> None:
-    if not isinstance(value, str) or len(value) != length or not HEX_RE.match(value):
+    if not isinstance(value, str) or len(value) != length or not HEX_RE.fullmatch(value):
         err(f"{context}: expected {length} lowercase hex chars, got {value!r}")
 
 
@@ -132,7 +133,8 @@ def validate_sev_policy(name: str, block: dict) -> None:
     check_members(f"{ctx}: platform_info", pi, PLATFORM_INFO_FIELDS, PLATFORM_INFO_OPTIONAL_FIELDS)
     check_bools(f"{ctx}: platform_info", pi)
     for field in ("minimum_api_version", "minimum_abi_version"):
-        if not VERSION_RE.match(str(block.get(field, ""))):
+        value = block.get(field)
+        if not isinstance(value, str) or not VERSION_RE.fullmatch(value):
             err(f"{ctx}: {field} must be a 'maj.min' string")
     check_uint(f"{ctx}: minimum_build", block.get("minimum_build"))
     check_uint(f"{ctx}: minimum_guest_svn", block.get("minimum_guest_svn"))
@@ -172,7 +174,7 @@ def validate_tdx_policy(
     for ref in refs:
         if isinstance(ref, str):
             referenced_slugs.add(ref)
-        if ref not in shaped_slugs:
+        if not isinstance(ref, str) or ref not in shaped_slugs:
             err(f"{ctx}: platform_measurements ref {ref!r} has no platforms/<slug>/shape.json")
 
 
@@ -200,7 +202,7 @@ def validate_platform(slug: str, config, shape) -> None:
     for field in ("memory", "acpi_memory"):
         if field in config and not MEMORY_RE.match(str(config[field])):
             err(f"{ctx} {field}: must be expressed as integer MiB, got {config[field]!r}")
-    if config.get("profile") not in PLATFORM_PROFILES:
+    if not isinstance(config.get("profile"), str) or config["profile"] not in PLATFORM_PROFILES:
         err(f"{ctx} profile: unsupported value {config.get('profile')!r}")
     if config.get("qemu_source") != QEMU_SOURCE:
         err(f"{ctx} qemu_source: must be {QEMU_SOURCE!r}")
@@ -247,6 +249,9 @@ def main() -> int:
 
     referenced_slugs: set[str] = set()
     for name, policy in policies.items():
+        if not isinstance(policy, dict):
+            err(f"policy {name}: must be an object")
+            continue
         platform = policy.get("platform")
         if platform not in ("sev-snp", "tdx"):
             err(f"policy {name}: invalid platform {platform!r}")
@@ -254,6 +259,9 @@ def main() -> int:
         block_key = "sev_snp" if platform == "sev-snp" else "tdx"
         if set(policy) != {"platform", block_key}:
             err(f"policy {name}: must contain exactly 'platform' and '{block_key}'")
+            continue
+        if not isinstance(policy[block_key], dict):
+            err(f"policy {name}: {block_key} must be an object")
             continue
         if platform == "sev-snp":
             validate_sev_policy(name, policy[block_key])
@@ -273,8 +281,8 @@ def main() -> int:
         if policy_name not in policies:
             err(f"machines[{identifier[:16]}...]: unknown policy {policy_name!r}")
             continue
-        platform = policies[policy_name].get("platform")
-        if not HEX_RE.match(identifier or ""):
+        platform = policies[policy_name].get("platform") if isinstance(policies[policy_name], dict) else None
+        if not HEX_RE.fullmatch(identifier or ""):
             err(f"machines key {identifier!r}: not lowercase hex")
         elif platform == "sev-snp":
             if len(identifier) != SEV_ID_LEN:

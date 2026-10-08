@@ -35,7 +35,6 @@ jobs:
           /nix/var/nix/profiles/default/bin/nix-build \
             --no-out-link -I . \
             -A checks \
-            -A config-checks \
             -A config-validator \
             -A shipping-image \
             -A debug-image

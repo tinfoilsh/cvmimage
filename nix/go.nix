@@ -28,15 +28,8 @@ let
 
   common = {
     version = "0";
-    src = pkgs.lib.fileset.toSource {
-      root = ../.;
-      fileset = pkgs.lib.fileset.unions [
-        ../config
-        ../tinfoil
-      ];
-    };
-    sourceRoot = "source/tinfoil";
-    vendorHash = "sha256-hRNjXVN6Sx6e75zxVIqRLSLX1VGix2BLv2VnLYXhs3M=";
+    src = pkgs.lib.cleanSource ../tinfoil;
+    vendorHash = "sha256-zbXVc4/jFujxTQ+vB6hTMK8KKk6uI1qYydyexMah68k=";
     ldflags = [
       "-s"
       "-w"
@@ -103,7 +96,6 @@ let
   checkSource = pkgs.lib.fileset.toSource {
     root = ../.;
     fileset = pkgs.lib.fileset.unions [
-      ../config
       ../image
       ../repart.d
       ../tinfoil
@@ -130,38 +122,21 @@ let
     installPhase = "touch $out";
   };
 
-  configCommon = {
-    inherit (common) version ldflags allowedReferences;
-    src = pkgs.lib.cleanSource ../config;
-    vendorHash = "sha256-qT4/QJcg/q/+9INK8e9Q94QezYlrBouwviAXi5yS0vM=";
+  configValidator = buildGoModule (common // {
+    pname = "tinfoil-config";
     env = commonEnv // {
       CGO_ENABLED = "0";
     };
-  };
-
-  configValidator = buildGoModule (configCommon // {
-    pname = "tinfoil-config";
-    subPackages = [ "cmd/tinfoil-config" ];
-    doCheck = false;
-  });
-
-  configChecks = buildGoModule (configCommon // {
-    pname = "tinfoil-config-checks";
-    doCheck = true;
-    buildPhase = "true";
-    checkPhase = ''
-      runHook preCheck
-      go test ./...
-      go vet ./...
-      runHook postCheck
+    buildPhase = ''
+      runHook preBuild
+      go install -ldflags="''${ldflags[*]}" github.com/tinfoilsh/tinfoil-config/cmd/tinfoil-config
+      runHook postBuild
     '';
-    installPhase = "touch $out";
   });
 in
 {
   inherit checks;
   packages = {
-    "config-checks" = configChecks;
     "config-validator" = configValidator;
     "debug-pid1" = debugPID1;
     "runtime-go" = runtime;

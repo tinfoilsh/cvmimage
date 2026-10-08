@@ -1,9 +1,7 @@
 package volume
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -16,28 +14,14 @@ import (
 )
 
 const (
-	maxRequestBytes = 512
+	maxRequestBytes = 64 << 10
 	requestTimeout  = 5 * time.Second
-	opStatus        = "status"
-	opUnlock        = "unlock"
-	opInitialize    = "initialize"
+	opUnlock        = 'u'
+	opInitialize    = 'i'
 	statusOK        = "ok"
 	statusRejected  = "rejected"
 	statusFailed    = "failed"
-	statusLocked    = "locked"
 )
-
-// request is one JSON object per SOCK_SEQPACKET datagram. The overlay layout is
-// measured and reaches the worker through its invocation, so the caller supplies
-// only the operation and the unlock key.
-type request struct {
-	Op  string `json:"op"`
-	Key []byte `json:"key,omitempty"`
-}
-
-type response struct {
-	Status string `json:"status"`
-}
 
 func Serve(ctx context.Context, parsed Spec) error {
 	instance, err := openVolume(parsed)
@@ -54,7 +38,8 @@ func Serve(ctx context.Context, parsed Spec) error {
 		return nil
 	}
 
-	listener, err := listen(instance.socketPath(), instance.Owner)
+	uid, gid, _ := instance.OwnerIDs()
+	listener, err := listen(instance.socketPath(), uid, gid)
 	if err != nil {
 		return err
 	}
@@ -99,41 +84,29 @@ func (w *volume) serve(ctx context.Context, connection *net.UnixConn) error {
 		return err
 	}
 	status, requestErr := w.handle(ctx, packet[:n])
-	reply, err := json.Marshal(response{Status: status})
-	if err != nil {
-		return errors.Join(requestErr, err)
-	}
 	// Set after handle, which formats a fresh volume and takes minutes on a large one.
 	if err := connection.SetWriteDeadline(time.Now().Add(requestTimeout)); err != nil {
 		return errors.Join(requestErr, err)
 	}
-	if _, err := connection.Write(reply); err != nil {
+	if _, err := connection.Write([]byte(status)); err != nil {
 		return errors.Join(requestErr, err)
 	}
 	return requestErr
 }
 
+// A request is one datagram: a format version byte, an op byte, then the raw key.
 func (w *volume) handle(ctx context.Context, packet []byte) (string, error) {
-	if len(packet) > maxRequestBytes {
-		return statusRejected, errors.New("request is too large")
+	if len(packet) < 2 || len(packet) > maxRequestBytes {
+		return statusRejected, fmt.Errorf("request is %d bytes", len(packet))
 	}
-	var spec request
-	defer func() { clear(spec.Key) }()
-	decoder := json.NewDecoder(bytes.NewReader(packet))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&spec); err != nil {
+	version, op, key := packet[0], packet[1], packet[2:]
+	if op != opUnlock && op != opInitialize {
+		return statusRejected, fmt.Errorf("invalid request operation %q", op)
+	}
+	if err := validateKey(key, op == opInitialize, version); err != nil {
 		return statusRejected, err
 	}
-	if spec.Op == opStatus {
-		return statusLocked, nil
-	}
-	if spec.Op != opUnlock && spec.Op != opInitialize {
-		return statusRejected, fmt.Errorf("invalid request operation %q", spec.Op)
-	}
-	if len(spec.Key) != KeyBytes {
-		return statusRejected, fmt.Errorf("key is %d bytes, want %d", len(spec.Key), KeyBytes)
-	}
-	if spec.Op == opInitialize {
+	if op == opInitialize {
 		blank, err := blockDeviceBlank(w.source)
 		if err != nil {
 			return statusFailed, err
@@ -142,14 +115,14 @@ func (w *volume) handle(ctx context.Context, packet []byte) (string, error) {
 			return statusRejected, errors.New("storage volume is not blank")
 		}
 	}
-	if err := w.activate(ctx, spec.Key, spec.Op == opInitialize, true); err != nil {
+	if err := w.activate(ctx, key, op == opInitialize, version); err != nil {
 		return statusFailed, err
 	}
 	w.unlocked = true
 	return statusOK, nil
 }
 
-func listen(path string, owner int) (*net.UnixListener, error) {
+func listen(path string, uid, gid int) (*net.UnixListener, error) {
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
 			return nil, fmt.Errorf("refusing to replace non-socket %s", path)
@@ -169,7 +142,7 @@ func listen(path string, owner int) (*net.UnixListener, error) {
 		listener.Close()
 		return nil, err
 	}
-	if err := os.Chown(path, owner, owner); err != nil {
+	if err := os.Chown(path, uid, gid); err != nil {
 		listener.Close()
 		return nil, err
 	}

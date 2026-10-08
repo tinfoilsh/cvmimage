@@ -46,7 +46,7 @@ func parseInvocation(args []string) (volume.Spec, error) {
 	flags.IntVar(&parsed.Index, "index", 0, "")
 	flags.StringVar(&parsed.Name, "name", "", "")
 	flags.BoolVar(&parsed.Exec, "exec", false, "")
-	flags.IntVar(&parsed.Owner, "owner", 0, "")
+	flags.StringVar(&parsed.Owner, "owner", "", "")
 	flags.Func("overlay", "", func(value string) error {
 		parts := strings.Split(value, ":")
 		if len(parts) != 3 {

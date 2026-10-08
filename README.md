@@ -12,7 +12,7 @@ Pin the CVM release in `tinfoil-config.yml`:
 cvm-version: "<version>@sha256:<manifest-sha256>"
 ```
 
-The digest is the SHA-256 of the release's `tinfoil-inference-<version>-manifest.json`.
+The digest is the SHA-256 of the release's `tinfoil-inference-v<version>-manifest.json`.
 [Release notes](https://github.com/tinfoilsh/cvmimage/releases) include the complete
 config line; stable releases also update this example automatically.
 

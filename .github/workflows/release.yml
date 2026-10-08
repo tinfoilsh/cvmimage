@@ -12,7 +12,7 @@ jobs:
     name: Release
     runs-on: large
     outputs:
-      manifest-sha256: ${{ steps.manifest-digest.outputs.sha256 }}
+      config-pin: ${{ steps.manifest-digest.outputs.config-pin }}
       prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
     permissions:
       contents: write
@@ -194,7 +194,9 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
-          echo "sha256=$(sha256sum "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          manifest_sha256="$(sha256sum "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')"
+          echo "sha256=${manifest_sha256}" >> "$GITHUB_OUTPUT"
+          echo "config-pin=${REF_NAME#v}@sha256:${manifest_sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
@@ -254,7 +256,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
           IS_PRERELEASE: ${{ steps.check-prerelease.outputs.is_prerelease }}
-          MANIFEST_SHA256: ${{ steps.manifest-digest.outputs.sha256 }}
+          CONFIG_PIN: ${{ steps.manifest-digest.outputs.config-pin }}
         run: |
           set -Eeuo pipefail
           manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
@@ -272,7 +274,7 @@ jobs:
             --notes "### Config
           Add this to your tinfoil-config.yml:
           \`\`\`yaml
-          cvm-version: \"${REF_NAME#v}@sha256:${MANIFEST_SHA256}\"
+          cvm-version: \"${CONFIG_PIN}\"
           \`\`\`
 
           ### Downloads
@@ -328,12 +330,11 @@ jobs:
       - name: Update config pin
         if: steps.latest.outputs.update == 'true'
         env:
-          REF_NAME: ${{ github.ref_name }}
-          MANIFEST_SHA256: ${{ needs.release.outputs.manifest-sha256 }}
+          CONFIG_PIN: ${{ needs.release.outputs.config-pin }}
         run: |
           set -Eeuo pipefail
           test "$(grep -c '^cvm-version:' README.md)" -eq 1
-          sed -i "s|^cvm-version:.*|cvm-version: \"${REF_NAME#v}@sha256:${MANIFEST_SHA256}\"|" README.md
+          sed -i "s|^cvm-version:.*|cvm-version: \"${CONFIG_PIN}\"|" README.md
 
       - uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c  # v6.1.0
         id: readme-pr

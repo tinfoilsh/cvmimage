@@ -40,24 +40,21 @@ func dockerAuthKey(host string) string {
 	return host
 }
 
-// registryHost resolves the registry hostname for a REGISTRY_<KEY>_TOKEN
-// secret. A REGISTRY_<KEY>_HOST secret carries the hostname verbatim, since
-// a secret name cannot encode hyphens; otherwise the key itself is decoded
-// with underscores as dots (GHCR_IO -> ghcr.io).
-func registryHost(ext *shimconfig.ExternalConfig, hostPart string) string {
-	if host := ext.GetSecret("REGISTRY_" + hostPart + "_HOST"); host != "" {
-		return strings.ToLower(host)
-	}
-	return strings.ToLower(strings.ReplaceAll(hostPart, "_", "."))
-}
-
 // setupRegistryAuth configures Docker auth from external-config secrets.
 // Supports:
 //   - REGISTRY_<HOST>_USER/TOKEN (e.g., REGISTRY_GHCR_IO_TOKEN)
-//   - REGISTRY_<KEY>_HOST naming the registry when the key cannot encode it
+//   - CUSTOM_REGISTRY_AUTH containing a host, username, and token as JSON
 //   - GCLOUD_KEY/GCLOUD_REGISTRY (GCP service account for Artifact Registry)
 func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
-	if err := ecrregistry.Configure(filepath.Join(boot.DockerConfigDir, ecrregistry.ConfigFileName), ext.GetSecret(ecrregistry.SecretName)); err != nil {
+	return setupRegistryAuthAt(ext, boot.DockerConfigDir, boot.GCloudKeyPath)
+}
+
+func setupRegistryAuthAt(ext *shimconfig.ExternalConfig, dockerConfigDir, gcloudKeyPath string) error {
+	custom, err := customRegistryAuth(ext)
+	if err != nil {
+		return err
+	}
+	if err := ecrregistry.Configure(filepath.Join(dockerConfigDir, ecrregistry.ConfigFileName), ext.GetSecret(ecrregistry.SecretName)); err != nil {
 		return err
 	}
 	if ext == nil || ext.Secrets == nil {
@@ -67,7 +64,8 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 
 	cfg := DockerConfig{Auths: make(map[string]DockerAuth)}
 
-	if data, err := os.ReadFile(boot.DockerConfigPath); err == nil && len(data) > 0 {
+	dockerConfigPath := filepath.Join(dockerConfigDir, "config.json")
+	if data, err := os.ReadFile(dockerConfigPath); err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			log.Printf("Warning: failed to parse existing docker config: %v", err)
 		}
@@ -88,7 +86,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		}
 		// Extract host: REGISTRY_GHCR_IO_TOKEN -> GHCR_IO -> ghcr.io
 		hostPart := strings.TrimSuffix(strings.TrimPrefix(key, "REGISTRY_"), "_TOKEN")
-		host := registryHost(ext, hostPart)
+		host := strings.ToLower(strings.ReplaceAll(hostPart, "_", "."))
 		if host == "" || token == "" || !registryPattern.MatchString(host) {
 			continue
 		}
@@ -117,7 +115,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 	}
 	if gcloudKey != "" {
 		// Write key file for containers that mount it directly (e.g., Pollux)
-		if err := os.WriteFile(boot.GCloudKeyPath, []byte(gcloudKey), 0600); err != nil {
+		if err := os.WriteFile(gcloudKeyPath, []byte(gcloudKey), 0600); err != nil {
 			log.Printf("Warning: failed to write GCloud key file: %v", err)
 		}
 	}
@@ -126,6 +124,7 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		for _, reg := range registries {
 			reg = strings.TrimSpace(reg)
 			if reg != "" && registryPattern.MatchString(reg) {
+				configured[reg] = reg
 				cfg.Auths[reg] = DockerAuth{
 					Auth: base64.StdEncoding.EncodeToString([]byte("_json_key_base64:" + base64.StdEncoding.EncodeToString([]byte(gcloudKey)))),
 				}
@@ -134,13 +133,21 @@ func setupRegistryAuth(ext *shimconfig.ExternalConfig) error {
 		}
 	}
 
+	if custom != nil {
+		authKey := dockerAuthKey(custom.Host)
+		if _, exists := configured[authKey]; exists {
+			return fmt.Errorf("custom registry conflicts with another supplied registry credential")
+		}
+		cfg.Auths[authKey] = DockerAuth{Auth: base64.StdEncoding.EncodeToString([]byte(custom.Username + ":" + custom.Token))}
+	}
+
 	// Write config
 	if len(cfg.Auths) > 0 {
-		if err := os.MkdirAll(boot.DockerConfigDir, 0700); err != nil {
+		if err := os.MkdirAll(dockerConfigDir, 0700); err != nil {
 			return fmt.Errorf("creating docker config dir: %w", err)
 		}
 		data, _ := json.MarshalIndent(cfg, "", "  ")
-		if err := os.WriteFile(boot.DockerConfigPath, data, 0600); err != nil {
+		if err := os.WriteFile(dockerConfigPath, data, 0600); err != nil {
 			return fmt.Errorf("writing docker config: %w", err)
 		}
 	}

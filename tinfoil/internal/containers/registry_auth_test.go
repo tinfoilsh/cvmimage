@@ -141,6 +141,8 @@ func TestRegistryAuthResolvesHostFromReference(t *testing.T) {
 	useDockerConfig(t, map[string]string{
 		"ghcr.io":                     "octocat:ghp_secret",
 		"localhost:5000":              "local:lpass",
+		"harbor.my-company.com":       "robot$project+puller:harbor-password",
+		"harbor.my.company.com":       "other-robot:other-password",
 		"https://index.docker.io/v1/": "hubuser:hubpass",
 	})
 
@@ -150,6 +152,8 @@ func TestRegistryAuthResolvesHostFromReference(t *testing.T) {
 		{"ghcr.io/org/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "octocat", "ghp_secret", "ghcr.io"},
 		{"ghcr.io/org/app:v1", "octocat", "ghp_secret", "ghcr.io"},
 		{"localhost:5000/app:v1", "local", "lpass", "localhost:5000"},
+		{"harbor.my-company.com/project/app:v1", "robot$project+puller", "harbor-password", "harbor.my-company.com"},
+		{"harbor.my.company.com/project/app:v1", "other-robot", "other-password", "harbor.my.company.com"},
 		{"nginx", "hubuser", "hubpass", "https://index.docker.io/v1/"},
 		{"docker.io/library/nginx:latest", "hubuser", "hubpass", "https://index.docker.io/v1/"},
 		{"index.docker.io/library/nginx:latest", "hubuser", "hubpass", "https://index.docker.io/v1/"},

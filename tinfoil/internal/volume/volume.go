@@ -39,7 +39,7 @@ const (
 
 	headerMagic = "tinfoil-volume-2"
 	headerBytes = 4096
-	// Both markers permanently define this Argon2id profile and a 96-byte table key.
+	// Format 2 uses these fixed Argon2id parameters and a 96-byte table key.
 	argonTime      = 3
 	argonMemoryKiB = 256 << 10
 	argonThreads   = 4

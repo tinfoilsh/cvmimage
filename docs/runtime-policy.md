@@ -193,7 +193,7 @@ that mount the volume through `persistent_volumes`. Send one `SOCK_SEQPACKET`
 datagram containing `0x01`, the ASCII byte `u`, and the 64 raw key bytes. The
 response is plain `ok`, `rejected`, or `failed`. Normal format 2 requests start
 with `0x02` and use `u` to unlock or `i` to initialize. There is no default format
-byte, automatic format detection, or retry with a different derivation.
+byte or automatic fallback between Argon2id and HKDF.
 
 To use this path for a formerly boot-unlocked volume, remove its `key-secret`
 entry and grant that secret to its owning container through `secrets`. The

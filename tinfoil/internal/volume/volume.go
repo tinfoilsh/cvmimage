@@ -37,8 +37,9 @@ const (
 	MinKeyBytes    = 16
 	blankProbeSize = 1 << 20
 
-	headerMagic    = "tinfoil-volume-1"
-	headerBytes    = 4096
+	headerMagic = "tinfoil-volume-2"
+	headerBytes = 4096
+	// Both markers permanently define this Argon2id profile and a 96-byte table key.
 	argonTime      = 3
 	argonMemoryKiB = 256 << 10
 	argonThreads   = 4
@@ -75,12 +76,9 @@ type volume struct {
 }
 
 type diskHeader struct {
-	Magic   [len(headerMagic)]byte
-	Time    uint32
-	Memory  uint32
-	Threads uint8
-	_       [3]byte
-	Salt    [32]byte
+	Magic [len(headerMagic)]byte
+	_     [12]byte // Reserved; preserves the salt offset in tinfoil-volume-1.
+	Salt  [32]byte
 }
 
 func (parsed Spec) Validate() error {
@@ -480,7 +478,7 @@ func (w *volume) tableKey(key []byte, initialize bool, version byte) ([]byte, in
 		if err != nil {
 			return nil, 0, err
 		}
-		return argon2.IDKey(key, h.Salt[:], h.Time, h.Memory, h.Threads, devicemapper.AuthenticatedKeyBytes), headerBytes, nil
+		return argon2.IDKey(key, h.Salt[:], argonTime, argonMemoryKiB, argonThreads, devicemapper.AuthenticatedKeyBytes), headerBytes, nil
 	}
 	return nil, 0, fmt.Errorf("unsupported volume format %d", version)
 }
@@ -489,7 +487,6 @@ func (w *volume) header(initialize bool) (diskHeader, error) {
 	var h diskHeader
 	if initialize {
 		copy(h.Magic[:], headerMagic)
-		h.Time, h.Memory, h.Threads = argonTime, argonMemoryKiB, argonThreads
 		rand.Read(h.Salt[:])
 		raw, err := binary.Append(nil, binary.LittleEndian, h)
 		if err != nil {
@@ -507,11 +504,8 @@ func (w *volume) header(initialize bool) (diskHeader, error) {
 	if _, err := binary.Decode(raw, binary.LittleEndian, &h); err != nil {
 		return h, err
 	}
-	if string(h.Magic[:]) != headerMagic {
+	if string(h.Magic[:]) != headerMagic && string(h.Magic[:]) != "tinfoil-volume-1" {
 		return h, errors.New("storage volume carries no header")
-	}
-	if h.Time != argonTime || h.Memory != argonMemoryKiB || h.Threads != argonThreads {
-		return h, fmt.Errorf("unsupported key derivation parameters %d/%d/%d", h.Time, h.Memory, h.Threads)
 	}
 	return h, nil
 }

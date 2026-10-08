@@ -4,10 +4,8 @@ package volume
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/hkdf"
-	"crypto/sha256"
-	"crypto/sha512"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
@@ -32,18 +31,18 @@ const (
 	workSuffix      = ".work"
 	integritySuffix = "-integrity"
 
-	// A request carries one key, but the table needs a cipher key and a MAC key.
-	tableKeyInfo = "tinfoil volume table key v1"
-	// tinfoil-cli's sealFor derives the same identity from the same key.
-	sealKeyInfo = "tinfoil seal identity v1"
-
-	// The extend is one write of a whole digest to this file. It is TDX's
-	// alone; SEV-SNP guests have no such register and the path is absent.
-	rtmr3Path = "/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384"
+	VersionArgon2 byte = 2
 
 	maxOverlays    = 8
-	KeyBytes       = 64
+	MinKeyBytes    = 16
 	blankProbeSize = 1 << 20
+
+	headerMagic = "tinfoil-volume-2"
+	headerBytes = 4096
+	// Format 2 uses these fixed Argon2id parameters and a 96-byte table key.
+	argonTime      = 3
+	argonMemoryKiB = 256 << 10
+	argonThreads   = 4
 
 	// Linux include/linux/statfs.h defines ST_NOSYMFOLLOW; x/sys/unix omits it.
 	statfsNoSymfollow = 0x2000
@@ -74,6 +73,12 @@ type volume struct {
 	control  *os.File
 	source   *os.File
 	unlocked bool
+}
+
+type diskHeader struct {
+	Magic [len(headerMagic)]byte
+	_     [12]byte // Reserved; preserves the salt offset in tinfoil-volume-1.
+	Salt  [32]byte
 }
 
 func (parsed Spec) Validate() error {
@@ -111,10 +116,10 @@ func (parsed Spec) Validate() error {
 }
 
 // Mount opens a volume during boot. A blank disk is initialized; any other
-// disk must open with this key. Boot-resolved keys do not extend the runtime seal.
+// disk must open with this key.
 func Mount(ctx context.Context, spec Spec, key []byte) error {
-	if len(key) != KeyBytes {
-		return fmt.Errorf("key is %d bytes, want %d", len(key), KeyBytes)
+	if len(key) < MinKeyBytes {
+		return fmt.Errorf("key is %d bytes, want at least %d", len(key), MinKeyBytes)
 	}
 	instance, err := openVolume(spec)
 	if err != nil {
@@ -129,7 +134,7 @@ func Mount(ctx context.Context, spec Spec, key []byte) error {
 	if err != nil {
 		return err
 	}
-	return instance.activate(ctx, key, blank, false)
+	return instance.activate(ctx, key, blank, VersionArgon2)
 }
 
 func openVolume(parsed Spec) (*volume, error) {
@@ -279,23 +284,25 @@ func (w *volume) removeUnopened(name string) error {
 	return devicemapper.Remove(w.control, name)
 }
 
-func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool) (result error) {
-	tableKey, err := hkdf.Key(sha256.New, key, nil, tableKeyInfo, devicemapper.AuthenticatedKeyBytes)
+func (w *volume) activate(ctx context.Context, key []byte, initialize bool, version byte) (result error) {
+	if err := validateKey(key, initialize, version); err != nil {
+		return err
+	}
+	// Zeroing is safe only over a header and superblock this call wrote and before mkfs has finished behind it.
+	rollback := initialize
+	defer func() {
+		if result != nil && rollback {
+			result = errors.Join(result, w.writeStart(make([]byte, blankProbeSize)))
+		}
+	}()
+	tableKey, reserved, err := w.tableKey(key, initialize, version)
 	if err != nil {
 		return err
 	}
 	defer clear(tableKey)
-	// Zeroing is safe only over a superblock this call wrote and before mkfs has finished behind it.
-	rollback := false
-	defer func() {
-		if result != nil && rollback {
-			result = errors.Join(result, w.restoreBlank())
-		}
-	}()
-	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), initialize); err != nil {
+	if err := devicemapper.ActivateIntegrity(w.control, w.source, w.integrityName(), reserved, initialize); err != nil {
 		return err
 	}
-	rollback = initialize
 	defer func() {
 		if result != nil {
 			result = errors.Join(result, devicemapper.Remove(w.control, w.integrityName()))
@@ -359,47 +366,7 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool
 			result = errors.Join(result, unix.Unmount(merged[index], 0))
 		}
 	}()
-	if err != nil {
-		return err
-	}
-	if !seal {
-		return nil
-	}
-	// Here rather than before the mapping, because dm-crypt accepts any key: the
-	// mount is the only proof this one opened the volume, so a wrong key leaves
-	// the register untouched and the permit still worth retrying. Last of all
-	// because the extend cannot be undone: anything failing after it would leave
-	// the next attempt marking this boot a second time.
-	seed, err := hkdf.Key(sha256.New, key, nil, sealKeyInfo, ed25519.SeedSize)
-	if err != nil {
-		return err
-	}
-	defer clear(seed)
-	private := ed25519.NewKeyFromSeed(seed)
-	defer clear(private)
-	identity := sha512.Sum384(private.Public().(ed25519.PublicKey))
-	return extendSeal(identity[:])
-}
-
-// extendSeal marks this boot with the identity of the opening key. The write is
-// the extend -- hardware replaces the register with the hash of its old value
-// and these bytes -- so a marked boot cannot be returned to an unmarked one
-// without a reboot. Where the guest has no such register there is nothing to
-// extend and nothing in the attestation to read it from, which is why the mark
-// is a client-side check against the report rather than this worker's word.
-func extendSeal(digest []byte) error {
-	file, err := os.OpenFile(rtmr3Path, os.O_WRONLY, 0)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("opening the seal register: %w", err)
-	}
-	if _, err := file.Write(digest); err != nil {
-		file.Close()
-		return fmt.Errorf("extending the seal register: %w", err)
-	}
-	return file.Close()
+	return err
 }
 
 // mountOverlays reports every layer it merged, on failure as well, because the
@@ -488,6 +455,61 @@ func readMountState(path string) (mountState, error) {
 	}, nil
 }
 
+func validateKey(key []byte, initialize bool, version byte) error {
+	switch version {
+	case VersionHKDF:
+		return validateLegacyKey(key, initialize)
+	case VersionArgon2:
+		if len(key) < MinKeyBytes {
+			return fmt.Errorf("key is %d bytes, want at least %d", len(key), MinKeyBytes)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported volume format %d", version)
+	}
+}
+
+func (w *volume) tableKey(key []byte, initialize bool, version byte) ([]byte, int64, error) {
+	switch version {
+	case VersionHKDF:
+		return legacyTableKey(key, initialize)
+	case VersionArgon2:
+		h, err := w.header(initialize)
+		if err != nil {
+			return nil, 0, err
+		}
+		return argon2.IDKey(key, h.Salt[:], argonTime, argonMemoryKiB, argonThreads, devicemapper.AuthenticatedKeyBytes), headerBytes, nil
+	}
+	return nil, 0, fmt.Errorf("unsupported volume format %d", version)
+}
+
+func (w *volume) header(initialize bool) (diskHeader, error) {
+	var h diskHeader
+	if initialize {
+		copy(h.Magic[:], headerMagic)
+		rand.Read(h.Salt[:])
+		raw, err := binary.Append(nil, binary.LittleEndian, h)
+		if err != nil {
+			return h, err
+		}
+		return h, w.writeStart(raw)
+	}
+	if err := unix.IoctlSetInt(int(w.source.Fd()), unix.BLKFLSBUF, 0); err != nil {
+		return h, fmt.Errorf("invalidating the stale block cache: %w", err)
+	}
+	raw := make([]byte, binary.Size(h))
+	if _, err := w.source.ReadAt(raw, 0); err != nil {
+		return h, fmt.Errorf("reading volume header: %w", err)
+	}
+	if _, err := binary.Decode(raw, binary.LittleEndian, &h); err != nil {
+		return h, err
+	}
+	if string(h.Magic[:]) != headerMagic && string(h.Magic[:]) != "tinfoil-volume-1" {
+		return h, errors.New("storage volume carries no header")
+	}
+	return h, nil
+}
+
 func blockDeviceBlank(source *os.File) (bool, error) {
 	if source == nil {
 		return false, errors.New("storage volume is unavailable")
@@ -519,13 +541,13 @@ func blockDeviceBlank(source *os.File) (bool, error) {
 	return true, nil
 }
 
-func (w *volume) restoreBlank() error {
+func (w *volume) writeStart(data []byte) error {
 	raw, err := os.OpenFile(w.source.Name(), os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}
 	defer raw.Close()
-	if _, err := raw.WriteAt(make([]byte, blankProbeSize), 0); err != nil {
+	if _, err := raw.WriteAt(data, 0); err != nil {
 		return err
 	}
 	return raw.Sync()

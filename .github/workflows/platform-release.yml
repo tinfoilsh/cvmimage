@@ -4,6 +4,11 @@ on:
   push:
     tags: ['platform-v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'New platform version (e.g. 0.1.1 or v0.1.1); leave empty to retry a tag'
+        type: string
+        required: false
 
 permissions: {}
 
@@ -11,7 +16,33 @@ concurrency:
   group: platform-release-${{ github.ref_name }}
 
 jobs:
+  create-tag:
+    if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Create the platform tag and start publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION#platform-}"
+          version="${version#v}"
+          tag="platform-v${version}"
+          if [[ ! "$tag" =~ ^platform-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Enter a stable platform version such as 0.1.1"
+            exit 1
+          fi
+          gh api "repos/$GH_REPO/git/refs" --method POST \
+            -f "ref=refs/tags/$tag" -f "sha=$SOURCE_SHA"
+          gh workflow run platform-release.yml --repo "$GH_REPO" --ref "$tag"
+
   publish:
+    if: github.event_name != 'workflow_dispatch' || inputs.version == ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -24,7 +55,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           if [[ "$REF_TYPE" != tag || ! "$REF_NAME" =~ ^platform-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::Use a platform-vX.Y.Z tag"
+            echo "::error::Enter a version when running from a branch, or use a platform-vX.Y.Z tag"
             exit 1
           fi
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

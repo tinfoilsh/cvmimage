@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"
@@ -22,16 +22,16 @@ import (
 	"tinfoil/internal/key"
 )
 
-type staticCollateralSource []collateral.Entry
+type staticCollateralSource wire.Response
 
-func (s staticCollateralSource) Current(context.Context) ([]collateral.Entry, error) {
-	return s, nil
+func (s staticCollateralSource) Current(context.Context) (wire.Response, error) {
+	return wire.Response(s), nil
 }
 
 type errorCollateralSource struct{}
 
-func (errorCollateralSource) Current(context.Context) ([]collateral.Entry, error) {
-	return nil, errors.New("expired")
+func (errorCollateralSource) Current(context.Context) (wire.Response, error) {
+	return wire.Response{}, errors.New("expired")
 }
 
 type fakeValidator struct {

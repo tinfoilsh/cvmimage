@@ -47,24 +47,25 @@ func NewCache(request wire.Request, fetcher Fetcher) *Cache {
 	}
 }
 
-func (c *Cache) Current(ctx context.Context) ([]collateral.Entry, error) {
+func (c *Cache) Current(ctx context.Context) (wire.Response, error) {
 	for {
 		c.mu.Lock()
 		now := c.now()
 		if c.response != nil && now.Before(c.response.ExpiresAt) {
-			collateral := cloneCollateral(c.response.Collateral)
+			response := *c.response
+			response.Collateral = cloneCollateral(response.Collateral)
 			if c.refreshing == nil && !now.Before(c.nextAttempt) {
 				c.startRefresh()
 			}
 			c.mu.Unlock()
-			return collateral, nil
+			return response, nil
 		}
 		if c.refreshing != nil {
 			done := c.refreshing
 			c.mu.Unlock()
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return wire.Response{}, ctx.Err()
 			case <-done:
 				continue
 			}
@@ -72,13 +73,13 @@ func (c *Cache) Current(ctx context.Context) ([]collateral.Entry, error) {
 		if now.Before(c.nextAttempt) {
 			nextAttempt := c.nextAttempt
 			c.mu.Unlock()
-			return nil, fmt.Errorf("%w: refresh retry available at %s", ErrUnavailable, nextAttempt.Format(time.RFC3339))
+			return wire.Response{}, fmt.Errorf("%w: refresh retry available at %s", ErrUnavailable, nextAttempt.Format(time.RFC3339))
 		}
 		done := c.startRefresh()
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return wire.Response{}, ctx.Err()
 		case <-done:
 		}
 	}

@@ -1,6 +1,6 @@
 module tinfoil
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/containerd/errdefs v1.0.0
@@ -21,8 +21,8 @@ require (
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.3.2
 	github.com/tinfoilsh/modelwrap v0.2.1
 	github.com/tinfoilsh/tinfoil-config v0.1.16
-	golang.org/x/net v0.57.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.15.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -56,17 +56,17 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.1.0.20261008050132-ad584a16b674
+	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.1.0.20261009012920-31c57af7d7b4
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.54.0
-	golang.org/x/mod v0.38.0
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
-	golang.org/x/tools v0.48.0 // indirect
+	golang.org/x/crypto v0.57.0
+	golang.org/x/mod v0.41.0
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )

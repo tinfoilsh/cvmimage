@@ -11,6 +11,9 @@ jobs:
   release:
     name: Release
     runs-on: large
+    outputs:
+      config-pin: ${{ steps.manifest-digest.outputs.config-pin }}
+      prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
     permissions:
       contents: write
       id-token: write
@@ -191,7 +194,9 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
-          echo "sha256=$(sha256sum "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          manifest_sha256="$(sha256sum "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')"
+          echo "sha256=${manifest_sha256}" >> "$GITHUB_OUTPUT"
+          echo "config-pin=${REF_NAME#v}@sha256:${manifest_sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
@@ -251,6 +256,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
           IS_PRERELEASE: ${{ steps.check-prerelease.outputs.is_prerelease }}
+          CONFIG_PIN: ${{ steps.manifest-digest.outputs.config-pin }}
         run: |
           set -Eeuo pipefail
           manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
@@ -265,7 +271,13 @@ jobs:
             -R "$REPOSITORY" \
             $PRERELEASE_FLAG \
             --title "$REF_NAME" \
-            --notes "### Downloads
+            --notes "### Config
+          Add this to your tinfoil-config.yml:
+          \`\`\`yaml
+          cvm-version: \"${CONFIG_PIN}\"
+          \`\`\`
+
+          ### Downloads
           - Kernel: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.vmlinuz
           - Initrd: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.initrd
           - Disk: https://images.tinfoil.sh/cvm/tinfoil-inference-${REF_NAME}.raw
@@ -283,3 +295,93 @@ jobs:
           \`\`\`" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" \
             "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256"
+
+  update-readme:
+    name: Update README config example
+    needs: release
+    if: needs.release.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-readme
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check latest release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          latest=$(gh api "repos/${REPOSITORY}/releases/latest" --jq .tag_name)
+          if [ "$latest" = "$REF_NAME" ]; then
+            echo "update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        if: steps.latest.outputs.update == 'true'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Update config pin
+        if: steps.latest.outputs.update == 'true'
+        env:
+          CONFIG_PIN: ${{ needs.release.outputs.config-pin }}
+        run: |
+          set -Eeuo pipefail
+          test "$(grep -c '^cvm-version:' README.md)" -eq 1
+          sed -i "s|^cvm-version:.*|cvm-version: \"${CONFIG_PIN}\"|" README.md
+
+      - name: Create or update README pull request
+        id: readme-pr
+        if: steps.latest.outputs.update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_BRANCH: readme-update/cvm-version
+        run: |
+          set -Eeuo pipefail
+          git add README.md
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          gh auth setup-git
+          previous_head=$(git ls-remote origin "refs/heads/$PR_BRANCH" | cut -f1)
+          git switch -c "$PR_BRANCH"
+          title="docs: update CVM config example to $REF_NAME"
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "$title"
+          git push --force-with-lease="refs/heads/$PR_BRANCH:$previous_head" \
+            origin "HEAD:refs/heads/$PR_BRANCH"
+
+          body_file="$RUNNER_TEMP/readme-pr-body.md"
+          printf 'Pin the README config example to the runtime manifest published with %s.\n' \
+            "$REF_NAME" > "$body_file"
+          pr_url=$(gh pr list --head "$PR_BRANCH" --base "$BASE_BRANCH" \
+            --state open --json url --jq '.[0].url // empty')
+          if [ -z "$pr_url" ]; then
+            pr_url=$(gh pr create --head "$PR_BRANCH" --base "$BASE_BRANCH" \
+              --title "$title" --body-file "$body_file")
+          else
+            gh pr edit "$pr_url" --title "$title" --body-file "$body_file"
+          fi
+          echo "pull-request-url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "pull-request-head-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Merge README update
+        if: steps.readme-pr.outputs.pull-request-url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.readme-pr.outputs.pull-request-url }}
+          PR_HEAD: ${{ steps.readme-pr.outputs.pull-request-head-sha }}
+        run: |
+          gh pr merge "$PR_URL" --rebase --delete-branch --match-head-commit "$PR_HEAD" ||
+            echo "::warning::Could not merge README update automatically. Merge it manually: $PR_URL"

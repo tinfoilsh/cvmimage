@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 
 	"golang.org/x/sys/unix"
 
@@ -42,7 +41,6 @@ const (
 	// alone; SEV-SNP guests have no such register and the path is absent.
 	rtmr3Path = "/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384"
 
-	maxOwner       = 65534
 	maxOverlays    = 8
 	KeyBytes       = 64
 	blankProbeSize = 1 << 20
@@ -85,8 +83,8 @@ func (parsed Spec) Validate() error {
 	if !namePattern.MatchString(parsed.Name) {
 		return fmt.Errorf("invalid storage volume name %q", parsed.Name)
 	}
-	if parsed.Owner < 0 || parsed.Owner > maxOwner {
-		return fmt.Errorf("invalid storage volume owner %d", parsed.Owner)
+	if _, _, err := parsed.OwnerIDs(); err != nil {
+		return fmt.Errorf("invalid storage volume %w", err)
 	}
 	if err := device.StorageSlots(parsed.Models, parsed.Index+1); err != nil {
 		return err
@@ -292,10 +290,11 @@ func (w *volume) activate(ctx context.Context, key []byte, initialize, seal bool
 		result = errors.Join(result, devicemapper.Remove(w.control, w.mapperName()))
 	}()
 	if initialize {
-		if err := prepareFormat(w.mapperNode(), w.Owner); err != nil {
+		uid, gid, _ := w.OwnerIDs()
+		if err := prepareFormat(w.mapperNode(), uid, gid); err != nil {
 			return fmt.Errorf("preparing volume for format: %w", err)
 		}
-		command := exec.CommandContext(ctx, boot.VolumeWorkerBinary, FormatMode, w.mapperNode(), strconv.Itoa(w.Owner))
+		command := exec.CommandContext(ctx, boot.VolumeWorkerBinary, FormatMode, w.mapperNode(), w.Owner)
 		command.Env = []string{}
 		command.Stdout = io.Discard
 		var diagnostics bytes.Buffer
@@ -424,7 +423,8 @@ func (w *volume) overlay(spec runtimeconfig.VolumeOverlay) (string, error) {
 		return "", fmt.Errorf("merging %s into %s: %w", lower, mountPoint, err)
 	}
 	// overlayfs performs every upper-layer operation as the mounter, so upper and work stay ours.
-	if err := os.Chown(mountPoint, w.Owner, w.Owner); err != nil {
+	uid, gid, _ := w.OwnerIDs()
+	if err := os.Chown(mountPoint, uid, gid); err != nil {
 		return mountPoint, err
 	}
 	return mountPoint, nil

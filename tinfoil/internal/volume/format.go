@@ -13,6 +13,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"tinfoil/internal/runtimeconfig"
 )
 
 const (
@@ -25,14 +27,14 @@ const (
 	formatBlockBytes  = 4096
 )
 
-func mkfsArgs(owner int) []string {
+func mkfsArgs(uid, gid int) []string {
 	// root_owner hands the volume to the login account. root_perms adds group
 	// write and setgid, because the container writing this tree runs as uid 0
 	// with the volume gid and no CAP_DAC_OVERRIDE, and new directories have to
 	// stay in the group as it grows. mkfs has to set both: it writes the root
 	// inode directly, whereas a chmod afterwards would need CAP_FOWNER, which
 	// this formatter has just dropped.
-	root := fmt.Sprintf("root_owner=%d:%d,root_perms=2775", owner, owner)
+	root := fmt.Sprintf("root_owner=%d:%d,root_perms=2775", uid, gid)
 	// Nothing is left to first use: dm-integrity holds no tag for a block that was
 	// never written, so a lazy table or journal reads back as an I/O error.
 	return []string{
@@ -44,8 +46,8 @@ func mkfsArgs(owner int) []string {
 
 // prepareFormat writes a tag over every block mkfs reads, leaving the rest of
 // the volume unwritten so its image stays sparse.
-func prepareFormat(node string, owner int) error {
-	backups, err := backupSuperblocks(node, owner)
+func prepareFormat(node string, uid, gid int) error {
+	backups, err := backupSuperblocks(node, uid, gid)
 	if err != nil {
 		return err
 	}
@@ -93,8 +95,8 @@ func prepareFormat(node string, owner int) error {
 
 // backupSuperblocks asks mkfs where the backups will land. The dry run writes
 // nothing and reports read errors it works around, so only stdout matters.
-func backupSuperblocks(node string, owner int) ([]uint64, error) {
-	output, _ := exec.Command(mkfsPath, append(mkfsArgs(owner)[1:], "-n", node)...).Output()
+func backupSuperblocks(node string, uid, gid int) ([]uint64, error) {
+	output, _ := exec.Command(mkfsPath, append(mkfsArgs(uid, gid)[1:], "-n", node)...).Output()
 	fields := strings.Fields(strings.ReplaceAll(backupList(string(output)), ",", " "))
 	blocks := make([]uint64, 0, len(fields))
 	for _, field := range fields {
@@ -133,8 +135,8 @@ func RunFormatter(args []string) error {
 	if len(args) != 4 {
 		return errors.New("invalid formatter invocation")
 	}
-	owner, err := strconv.Atoi(args[3])
-	if err != nil || owner < 0 || owner > maxOwner {
+	uid, gid, err := (&runtimeconfig.VolumeSpec{Owner: args[3]}).OwnerIDs()
+	if err != nil {
 		return errors.New("invalid formatter owner")
 	}
 	base := filepath.Base(args[2])
@@ -157,5 +159,5 @@ func RunFormatter(args []string) error {
 			return errors.New("formatter retained capabilities")
 		}
 	}
-	return syscall.Exec(mkfsPath, append(mkfsArgs(owner), "-q", args[2]), []string{})
+	return syscall.Exec(mkfsPath, append(mkfsArgs(uid, gid), "-q", args[2]), []string{})
 }

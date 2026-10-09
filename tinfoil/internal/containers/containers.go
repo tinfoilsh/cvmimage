@@ -537,9 +537,10 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		})
 	}
 
+	hostConfig.Binds = append(hostConfig.Binds, c.Volumes...)
 	// Volume mounts. A volume named twice brings its control socket only once.
-	for _, vol := range c.Volumes {
-		for _, bind := range volumeBinds(vol, cfg) {
+	for _, vol := range c.PersistentVolumes {
+		for _, bind := range volumeBinds(vol) {
 			if !slices.Contains(hostConfig.Binds, bind) {
 				hostConfig.Binds = append(hostConfig.Binds, bind)
 			}
@@ -592,13 +593,8 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	return containerConfig, hostConfig, networkingConfig, rest, nil
 }
 
-func volumeBinds(vol string, cfg *Config) []string {
-	source, target, found := strings.Cut(vol, ":")
-	if !found || cfg == nil || !slices.ContainsFunc(cfg.Volumes, func(v runtimeconfig.VolumeSpec) bool {
-		return v.Name == source
-	}) {
-		return []string{vol}
-	}
+func volumeBinds(vol string) []string {
+	source, target, _ := strings.Cut(vol, ":")
 	control := boot.VolumeControlDir + "/" + source
 	return []string{
 		boot.VolumeDataDir + "/" + source + ":" + target + ":rslave",

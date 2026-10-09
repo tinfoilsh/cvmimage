@@ -593,7 +593,7 @@ func startVolumeWorkers(ctx context.Context, deps lifecycleDeps) error {
 			"--index=" + strconv.Itoa(index),
 			"--name=" + volume.Name,
 			fmt.Sprintf("--exec=%t", volume.Exec),
-			"--owner=" + strconv.Itoa(volume.Owner),
+			"--owner=" + volume.Owner,
 		}
 		for _, overlay := range volume.Overlays {
 			args = append(args, "--overlay="+overlay.Model+":"+overlay.Source+":"+overlay.Target)

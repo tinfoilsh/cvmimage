@@ -41,11 +41,15 @@ func loadCollateralRequest(path string) (wire.Request, error) {
 	if request.Platform != attestation.PlatformDummy {
 		switch request.Profile {
 		case "":
-			if request.Repo == "" || request.Digest != "" {
+			if request.Repo == "" || request.Digest != "" || request.Runtime != "" {
 				return wire.Request{}, fmt.Errorf("legacy collateral request requires a repository")
 			}
 		case wire.FormatV3:
-			if request.Repo == "" || request.Tag == "" || request.Digest == "" {
+			if request.Runtime != "" {
+				if request.Repo != "" || request.Tag != "" || request.Digest != "" {
+					return wire.Request{}, fmt.Errorf("runtime and registry config references are mutually exclusive")
+				}
+			} else if request.Repo == "" || request.Tag == "" || request.Digest == "" {
 				return wire.Request{}, fmt.Errorf("registry collateral request requires a project, revision, and config digest")
 			}
 		default:

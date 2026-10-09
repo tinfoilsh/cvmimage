@@ -46,6 +46,17 @@ func TestLoadConfigCollateralRequest(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("request = %#v, error = %v", got, err)
 	}
+	want.Repo, want.Tag, want.Digest = "", "", ""
+	want.Runtime = "0.15.1-rc.1@sha256:" + strings.Repeat("a", 64)
+	got, err = loadCollateralRequest(writeCollateralRequestArtifact(t, want))
+	if err != nil || got != want {
+		t.Fatalf("local request = %#v, error = %v", got, err)
+	}
+	want.Repo = "org/project"
+	if _, err := loadCollateralRequest(writeCollateralRequestArtifact(t, want)); err == nil {
+		t.Fatal("mixed registry and local collateral request accepted")
+	}
+
 }
 
 func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {

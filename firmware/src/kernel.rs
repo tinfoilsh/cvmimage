@@ -414,6 +414,14 @@ mod tests {
             share < walk && walk < private,
             "the block is shared out of order"
         );
+        let power_writes: Vec<_> = calls
+            .iter()
+            .filter(|(_, name)| *name == "snp_port_write")
+            .collect();
+        assert_eq!(power_writes.len(), 5);
+        assert!(power_writes
+            .iter()
+            .all(|(at, _)| walk < *at && *at < private));
 
         // ...and inside the walk, private comes before validated.
         let psc = once("psc_range");
@@ -427,7 +435,7 @@ mod tests {
             "the range is validated before it is private"
         );
 
-        // The TDX shim asks a host for nothing: it is handed accepted memory.
+        // The TDX shim does not use the GHCB to convert memory.
         for name in [
             "psc_range",
             "psc_complete",

@@ -75,7 +75,7 @@ jobs:
           # here and removed, if at all, as a change of their own.
           cmdline="readonly=on modprobe.blacklist=nouveau nouveau.modeset=0"
           cmdline="$cmdline root=/dev/mapper/root roothash=${roothash}"
-          cmdline="$cmdline pci=noacpi pcie_ports=compat"
+          cmdline="$cmdline pci=nocrs pcie_ports=compat"
           echo "IGVM command line: $cmdline"
           echo "roothash=$roothash" >> "$GITHUB_ENV"
           for platform in snp tdx; do

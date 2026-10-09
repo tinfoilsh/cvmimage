@@ -1,6 +1,7 @@
 .include "layout.inc"
 .include "madt.inc"
 .include "map.inc"
+.include "power.inc"
 .section .reset,"ax"
 
 .code32
@@ -49,6 +50,7 @@ long_mode:
     call accept_walk
 
 boot_kernel:
+    q35_power_init tdx_port_write
     madt_build die, 1
     mov $ZERO_PAGE, %rsi
     lea shim_data(%rip), %rax
@@ -87,6 +89,7 @@ accept_done:
     ret
 
 map_code die_map, accept_range
+tdx_port_write_code die, tdcall
 
 # A map this image will not run in, reported as the top of RAM it refused.
 die_map:
@@ -110,7 +113,7 @@ ap_poll:
     movl $0, (%rbx)
     jmp *%rax
 
-# TDG.VP.VMCALL<ReportFatalError> is the only thing this shim ever says to the host.
+# TDG.VP.VMCALL<ReportFatalError> reports a boot failure to the host.
 die:
     mov $0x1c00, %ecx               # expose R10, R11 and R12 to the host
     xor %r10d, %r10d                # standard GHCI

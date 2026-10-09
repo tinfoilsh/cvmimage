@@ -18,11 +18,25 @@ const RSDP_EXT_CHECKSUM: usize = 32;
 const RSDP_V1_LEN: usize = 20;
 
 const FADT_DSDT: usize = 40;
+const FADT_SCI: usize = 46;
+const FADT_PM1A_EVENT: usize = 56;
+const FADT_PM1A_CONTROL: usize = 64;
+const FADT_PM_TIMER: usize = 76;
+const FADT_PM1_EVENT_LEN: usize = 88;
+const FADT_PM1_CONTROL_LEN: usize = 89;
+const FADT_PM_TIMER_LEN: usize = 91;
+const FADT_C2_LATENCY: usize = 96;
+const FADT_C3_LATENCY: usize = 98;
 const FADT_FLAGS: usize = 112;
 const FADT_MINOR_VERSION: usize = 131;
 const FADT_X_DSDT: usize = 140;
 const FADT_WBINVD: u32 = 1;
-const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
+const FADT_SLEEP_BUTTON: u32 = 1 << 5;
+// Name (_S5, Package (4) { 0, 0, 0, 0 }): Q35's soft-off sleep type is zero.
+const S5_AML: &[u8] = b"\x08_S5_\x12\x06\x04\0\0\0\0";
+// Scope (_SB) { Device (PCI0) { Name (_HID, EisaId ("PNP0A03")) } }
+// PCI resources come from the E820 map, not a second copy in _CRS.
+const PCI_ROOT_AML: &[u8] = b"\x10\x16_SB_\x5b\x82\x0fPCI0\x08_HID\x0c\x41\xd0\x0a\x03";
 
 /// One measured page: the RSDP at ACPI_BASE, the rest at the offsets layout.rs
 /// checks. The page stops at ACPI_MADT, which a shim fills from the processor
@@ -52,17 +66,24 @@ pub fn build() -> Vec<u8> {
     let fo = (fadt - ACPI_BASE) as usize;
     header(&mut bytes[fo..], b"FACP", FADT_LEN as u32, 6);
     put32(&mut bytes, fo + FADT_DSDT, dsdt as u32);
-    put32(
-        &mut bytes,
-        fo + FADT_FLAGS,
-        FADT_HW_REDUCED_ACPI | FADT_WBINVD,
-    );
+    bytes[fo + FADT_SCI..fo + FADT_SCI + 2].copy_from_slice(&(ACPI_SCI_IRQ as u16).to_le_bytes());
+    put32(&mut bytes, fo + FADT_PM1A_EVENT, Q35_PM_BASE as u32);
+    put32(&mut bytes, fo + FADT_PM1A_CONTROL, Q35_PM_CONTROL as u32);
+    put32(&mut bytes, fo + FADT_PM_TIMER, Q35_PM_TIMER as u32);
+    bytes[fo + FADT_PM1_EVENT_LEN] = 4;
+    bytes[fo + FADT_PM1_CONTROL_LEN] = 2;
+    bytes[fo + FADT_PM_TIMER_LEN] = 4;
+    bytes[fo + FADT_C2_LATENCY..fo + FADT_C2_LATENCY + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+    bytes[fo + FADT_C3_LATENCY..fo + FADT_C3_LATENCY + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+    put32(&mut bytes, fo + FADT_FLAGS, FADT_SLEEP_BUTTON | FADT_WBINVD);
     bytes[fo + FADT_MINOR_VERSION] = 5;
     put64(&mut bytes, fo + FADT_X_DSDT, dsdt);
     finish(&mut bytes[fo..fo + FADT_LEN as usize]);
 
     let do_ = (dsdt - ACPI_BASE) as usize;
     header(&mut bytes[do_..], b"DSDT", DSDT_LEN as u32, 2);
+    let aml = [S5_AML, PCI_ROOT_AML].concat();
+    bytes[do_ + TABLE_HEADER_LEN..do_ + DSDT_LEN as usize].copy_from_slice(&aml);
     finish(&mut bytes[do_..do_ + DSDT_LEN as usize]);
 
     bytes
@@ -102,6 +123,20 @@ mod tests {
         header(&mut v, b"APIC", 0, 6);
         put32(&mut v, MADT_LAPIC_ADDR, LOCAL_APIC_ADDR);
         put32(&mut v, MADT_FLAGS, MADT_PCAT_COMPAT);
+        v.extend_from_slice(&[MADT_IOAPIC as u8, MADT_IOAPIC_LEN as u8, 0, 0]);
+        v.extend_from_slice(&(IOAPIC_ADDRESS as u32).to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(&[MADT_OVERRIDE as u8, MADT_OVERRIDE_LEN as u8, 0, 0]);
+        v.extend_from_slice(&(Q35_PIT_GSI as u32).to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&[
+            MADT_OVERRIDE as u8,
+            MADT_OVERRIDE_LEN as u8,
+            0,
+            ACPI_SCI_IRQ as u8,
+        ]);
+        v.extend_from_slice(&(ACPI_SCI_IRQ as u32).to_le_bytes());
+        v.extend_from_slice(&(MADT_SCI_FLAGS as u16).to_le_bytes());
         v
     }
 
@@ -149,6 +184,69 @@ mod tests {
         }
     }
 
+    #[test]
+    fn both_shims_initialize_the_power_registers_the_fadt_describes() {
+        let a = build();
+        let f = ACPI_FADT as usize;
+        let word = |at| u16::from_le_bytes(a[f + at..f + at + 2].try_into().unwrap());
+        let dword = |at| u32::from_le_bytes(a[f + at..f + at + 4].try_into().unwrap());
+        assert_eq!(word(FADT_SCI) as u64, ACPI_SCI_IRQ);
+        assert_eq!(dword(FADT_FLAGS) & (1 << 20 | 1 << 4), 0);
+        let base = dword(FADT_PM1A_EVENT) as u64;
+        assert_eq!(dword(FADT_PM1A_CONTROL) as u64, base + 4);
+        assert_eq!(dword(FADT_PM_TIMER) as u64, base + 8);
+        assert_eq!(a[f + FADT_PM1_EVENT_LEN], 4);
+        assert_eq!(a[f + FADT_PM1_CONTROL_LEN], 2);
+        assert_eq!(a[f + FADT_PM_TIMER_LEN], 4);
+
+        let writes = [
+            (4, PCI_CONFIG_ADDRESS, Q35_LPC_PMBASE),
+            (4, PCI_CONFIG_DATA, base | Q35_PM_IO_ENABLE),
+            (4, PCI_CONFIG_ADDRESS, Q35_LPC_ACPI_CTRL),
+            (4, PCI_CONFIG_DATA, Q35_ACPI_ENABLE),
+            (2, base + 4, ACPI_SCI_ENABLE),
+        ];
+        let shim = crate::shim::shim();
+        for tdx in [false, true] {
+            let (success, requests) = shim.power(tdx, 0, false);
+            assert!(success);
+            assert_eq!(requests.len(), writes.len());
+            for (request, (size, port, value)) in requests.iter().zip(writes) {
+                let expected = if tdx {
+                    [0, 0xfc00, 0, 30, size, 1, port, value]
+                } else {
+                    [
+                        SVM_EXIT_IOIO,
+                        port << 16 | size << 4 | IOIO_ADDR_64,
+                        0,
+                        value,
+                        1 << 63,
+                        7 << 50,
+                        GHCB_PROTOCOL,
+                        0,
+                    ]
+                };
+                assert_eq!(*request, expected, "TDX={tdx}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_refused_power_write_stops_boot_without_retrying() {
+        let shim = crate::shim::shim();
+        for (tdx, module_failure) in [(false, false), (true, false), (true, true)] {
+            let (_, all) = shim.power(tdx, 0, false);
+            for fail_at in 1..=all.len() {
+                let (success, requests) = shim.power(tdx, fail_at as u64, module_failure);
+                assert!(
+                    !success,
+                    "TDX={tdx}, module={module_failure}, write={fail_at}"
+                );
+                assert_eq!(requests, all[..fail_at]);
+            }
+        }
+    }
+
     /// The measured page ends where the shim's table begins: nothing below it
     /// depends on the processor count, and the XSDT checksum covers none of it.
     #[test]
@@ -169,7 +267,7 @@ mod tests {
             for wakeup in [false, true] {
                 let m = madt(cpus, wakeup);
                 let wake = if wakeup { MADT_WAKEUP_LEN } else { 0 };
-                let len = MADT_HEADER_LEN + cpus as u64 * MADT_LAPIC_LEN + wake;
+                let len = MADT_TEMPLATE_LEN + cpus as u64 * MADT_LAPIC_LEN + wake;
                 assert_eq!(m.len() as u64, len);
                 assert_eq!(u32::from_le_bytes(m[4..8].try_into().unwrap()) as u64, len);
                 assert!(sums_to_zero(&m));
@@ -198,7 +296,7 @@ mod tests {
         let at = SHIM_MADT as usize;
         for page in [RESET_SHIM, SNP_SHIM] {
             assert_eq!(
-                &page[at..at + MADT_HEADER_LEN as usize],
+                &page[at..at + MADT_TEMPLATE_LEN as usize],
                 &madt_template()[..]
             );
         }

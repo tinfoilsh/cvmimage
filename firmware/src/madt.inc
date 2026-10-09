@@ -14,7 +14,7 @@
     mov $(ACPI_BASE + ACPI_MADT), %edi
     mov %rdi, %rbx
     lea madt_template(%rip), %rsi
-    mov $MADT_HEADER_LEN, %ecx
+    mov $MADT_TEMPLATE_LEN, %ecx
     rep movsb
     xor %eax, %eax
 1:  movzbl %al, %edx                # an 8-bit ACPI id, then the same APIC id
@@ -59,4 +59,13 @@
     .long 1
     .long 0xfee00000
     .long 1
+    .byte MADT_IOAPIC, MADT_IOAPIC_LEN, 0, 0
+    .long IOAPIC_ADDRESS
+    .long 0
+    .byte MADT_OVERRIDE, MADT_OVERRIDE_LEN, 0, 0
+    .long Q35_PIT_GSI
+    .word 0
+    .byte MADT_OVERRIDE, MADT_OVERRIDE_LEN, 0, ACPI_SCI_IRQ
+    .long ACPI_SCI_IRQ
+    .word MADT_SCI_FLAGS
 .endm

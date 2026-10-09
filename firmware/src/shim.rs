@@ -18,6 +18,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 // As harness.S sizes them: two words a range, and two an entry.
 const HARNESS_RANGES: usize = 256;
 const HARNESS_PSC_ENTRIES: usize = 4096;
+const HARNESS_POWER_WRITES: usize = 5;
 
 extern "C" {
     fn harness_regions() -> u64;
@@ -26,6 +27,9 @@ extern "C" {
     fn harness_psc_range(lo: u64, hi: u64, host: u64) -> u64;
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
+    fn harness_power(tdx: u64, fail_at: u64, module_failure: u64) -> u64;
+    static harness_power_count: u64;
+    static harness_power_requests: [[u64; 8]; HARNESS_POWER_WRITES];
     static mut harness_shim_data: [u8; SHIM_DATA_SIZE as usize];
     static mut harness_ranges: [u64; 2 * HARNESS_RANGES];
     static mut harness_psc_entries: [u64; 2 * HARNESS_PSC_ENTRIES];
@@ -33,7 +37,7 @@ extern "C" {
     static harness_psc_calls: u64;
     static harness_psc_bytes: u64;
     static harness_psc_lost: u64;
-    static harness_madt_template: [u8; MADT_HEADER_LEN as usize];
+    static harness_madt_template: [u8; MADT_TEMPLATE_LEN as usize];
 }
 
 /// What the host the shim is run against does with a batch, as harness.S
@@ -182,6 +186,15 @@ fn read(base: u64, at: u64, len: u64) -> Vec<u8> {
 }
 
 impl Shim {
+    pub fn power(&self, tdx: bool, fail_at: u64, module_failure: bool) -> (bool, Vec<[u64; 8]>) {
+        unsafe {
+            let success = harness_power(tdx.into(), fail_at, module_failure.into()) != 0;
+            let count = harness_power_count as usize;
+            assert!(count <= HARNESS_POWER_WRITES);
+            (success, harness_power_requests[..count].to_vec())
+        }
+    }
+
     /// The processor count an untrusted loader leaves in its parameter page.
     pub fn loader_vcpus(&self, count: u32) -> &Self {
         zero(PARAM_PAGE, 0, PAGE);

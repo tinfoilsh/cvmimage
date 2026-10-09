@@ -12,10 +12,13 @@
 .include "madt.inc"
 .include "map.inc"
 .include "psc.inc"
+.include "power.inc"
 
 .text
 map_code harness_fail, harness_accept
 psc_code harness_fail, "call harness_psc_issue"
+snp_port_write_code harness_fail, "call harness_snp_io"
+tdx_port_write_code harness_fail, "call harness_tdx_io"
 
 # The System V registers a caller owns, saved once so that a refusal deep inside
 # a macro can return through the same epilogue an ordinary return does.
@@ -50,6 +53,84 @@ harness_fail:
     mov harness_sp(%rip), %rsp
     xor %eax, %eax
     jmp harness_ret
+
+# (TDX, failing call, module failure) -> success. Record the wire requests
+# from the real helpers, replacing only the privileged hypervisor exit.
+.globl harness_power
+harness_power:
+    harness_enter
+    mov %rsi, harness_power_failure(%rip)
+    mov %rdx, harness_power_module_failure(%rip)
+    movq $0, harness_power_count(%rip)
+    test %rdi, %rdi
+    jnz 1f
+    q35_power_init snp_port_write
+    jmp 2f
+1:  q35_power_init tdx_port_write
+2:  mov $1, %eax
+    jmp harness_ret
+
+harness_power_record:
+    mov harness_power_count(%rip), %rdi
+    cmp $HARNESS_POWER_WRITES, %rdi
+    jae harness_fail
+    incq harness_power_count(%rip)
+    shl $6, %rdi
+    lea harness_power_requests(%rip), %rsi
+    add %rdi, %rsi
+    ret
+
+harness_snp_io:
+    call harness_power_record
+    mov GHCB_SW_EXIT_CODE(%rcx), %rax
+    mov %rax, 0(%rsi)
+    mov GHCB_SW_EXIT_INFO_1(%rcx), %rax
+    mov %rax, 8(%rsi)
+    mov GHCB_SW_EXIT_INFO_2(%rcx), %rax
+    mov %rax, 16(%rsi)
+    mov GHCB_RAX(%rcx), %rax
+    mov %rax, 24(%rsi)
+    mov GHCB_VALID_BITMAP(%rcx), %rax
+    mov %rax, 32(%rsi)
+    mov GHCB_VALID_BITMAP+8(%rcx), %rax
+    mov %rax, 40(%rsi)
+    movzwl GHCB_PROTOCOL_VERSION(%rcx), %eax
+    mov %rax, 48(%rsi)
+    mov GHCB_USAGE(%rcx), %eax
+    mov %rax, 56(%rsi)
+    mov harness_power_count(%rip), %rax
+    cmp harness_power_failure(%rip), %rax
+    sete %al
+    movzbl %al, %eax
+    mov %rax, GHCB_SW_EXIT_INFO_1(%rcx)
+    ret
+
+harness_tdx_io:
+    call harness_power_record
+    mov %rax, 0(%rsi)
+    mov %rcx, 8(%rsi)
+    mov %r10, 16(%rsi)
+    mov %r11, 24(%rsi)
+    mov %r12, 32(%rsi)
+    mov %r13, 40(%rsi)
+    mov %r14, 48(%rsi)
+    mov %r15, 56(%rsi)
+    # A VMM may overwrite the exposed arguments; the next request must not
+    # inherit any of them as a port, value, or access size.
+    xor %r12d, %r12d
+    xor %r14d, %r14d
+    xor %r15d, %r15d
+    xor %eax, %eax
+    xor %r10d, %r10d
+    mov harness_power_count(%rip), %rdi
+    cmp harness_power_failure(%rip), %rdi
+    jne 1f
+    cmpq $0, harness_power_module_failure(%rip)
+    jne 2f
+    inc %r10
+1:  ret
+2:  inc %rax
+    ret
 
 # (zero page, top of RAM) -> 1, or zero if the map was refused.
 .globl harness_e820
@@ -248,6 +329,18 @@ harness_madt_bare:
 
 .data
 .balign 8
+.set HARNESS_POWER_WRITES, 5
+.globl harness_power_requests
+harness_power_requests:
+    .fill HARNESS_POWER_WRITES * 64,1,0
+.globl harness_power_count
+harness_power_count:
+    .quad 0
+harness_power_failure:
+    .quad 0
+harness_power_module_failure:
+    .quad 0
+
 # The data block the shims carry in their measured page, which a test fills.
 .globl harness_shim_data
 harness_shim_data:

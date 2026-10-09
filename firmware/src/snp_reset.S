@@ -2,14 +2,13 @@
 .include "madt.inc"
 .include "map.inc"
 .include "psc.inc"
+.include "power.inc"
 .section .reset,"ax"
 
 .code32
 .global snp_reset_start
-# Nothing here may depend on CPUID, I/O or an exception. What it does ask the
-# host for is page state changes, so that the guest makes its own memory
-# private rather than a loader doing it: see psc.inc. Every other use of the
-# GHCB MSR here is a termination request.
+# Nothing here may depend on CPUID, trapped I/O or an exception. Page state
+# changes and the fixed PM-register writes use the GHCB explicitly.
 snp_reset_start:
     cli
     cld
@@ -51,6 +50,7 @@ snp_long_mode:
     # private and validated here, in that order and by the guest itself.
     call ghcb_share
     call accept_walk
+    q35_power_init snp_port_write
     call ghcb_private
 
     # The one table the measurement leaves to the shim. SNP carries no wakeup
@@ -67,6 +67,7 @@ snp_boot_kernel:
 
 map_code die_map, accept_private
 psc_code die_psc, vmgexit
+snp_port_write_code die_power, vmgexit
 
 # A map this image will not run in, which is step 2 of the sequence above.
 die_map:
@@ -96,8 +97,11 @@ die_psc:
 die_ghcb_private:
     mov $5, %r15d
     jmp die_step
+die_power:
+    mov $SNP_POWER_FAILURE, %r15d
+    jmp die_step
 
-# The GHCB MSR termination request is the shim's only channel to the host:
+# Boot failures use the GHCB MSR termination request:
 # reason set 0xf, which is this shim's own, and the code in %r15d. The set is
 # where the protocol puts the subsystem -- sets 0 and 1 are the ones the GHCB
 # specification and Linux define -- so the failure goes in the code, where a

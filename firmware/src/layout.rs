@@ -61,6 +61,7 @@ layout! {
     // be addressed the way the host reads it.
     SHARED_ALIAS = 0x200_0000_0000;
     GHCB_ALIAS = SHARED_ALIAS + SNP_GHCB;
+    GHCB_RAX = 0x1f8;
 
     // The fields of a GHCB a page state change states, as in the GHCB
     // specification's save area, and the byte of the valid bitmap that marks
@@ -81,6 +82,29 @@ layout! {
     GHCB_USAGE = 0xffc;
     GHCB_PROTOCOL = 2;
     SVM_VMGEXIT_PSC = 0x8000_0010;
+    SVM_EXIT_IOIO = 0x7b;
+    IOIO_ADDR_64 = 1 << 9;
+    IO_WORD_BYTES = 2;
+    IO_DWORD_BYTES = 4;
+    TDX_IO_EXIT = 30;
+    TDX_IO_WRITE = 1;
+    TDX_IO_REGISTERS = 0xfc00; // R10 through R15.
+    SNP_POWER_FAILURE = 6;
+
+    PCI_CONFIG_ADDRESS = 0xcf8;
+    PCI_CONFIG_DATA = 0xcfc;
+    Q35_LPC_PMBASE = 0x8000_f840;
+    Q35_LPC_ACPI_CTRL = 0x8000_f844;
+    Q35_PM_BASE = 0x600;
+    Q35_PM_CONTROL = Q35_PM_BASE + 4;
+    Q35_PM_TIMER = Q35_PM_BASE + 8;
+    Q35_PM_IO_ENABLE = 1;
+    Q35_ACPI_ENABLE = 0x80;
+    ACPI_SCI_ENABLE = 1;
+    ACPI_SCI_IRQ = 9;
+    Q35_PIT_GSI = 2;
+    IOAPIC_ADDRESS = 0xfec0_0000;
+    MADT_SCI_FLAGS = 0xf; // Active-low, level-triggered.
 
     // The page state change descriptor, which the shim builds in that buffer:
     // a header the host moves through, then one entry a span of pages. The
@@ -148,13 +172,18 @@ layout! {
     RSDP_LEN = 36;
     XSDT_LEN = 52;
     FADT_LEN = 276;
-    // A DSDT of nothing but its header: this machine has no AML to run.
-    DSDT_LEN = 36;
+    // The header followed by the soft-off package and PCI root bridge.
+    DSDT_LEN = 71;
     MADT_HEADER_LEN = 44;
+    MADT_IOAPIC_LEN = 12;
+    MADT_OVERRIDE_LEN = 10;
+    MADT_TEMPLATE_LEN = MADT_HEADER_LEN + MADT_IOAPIC_LEN + 2 * MADT_OVERRIDE_LEN;
     MADT_LAPIC_LEN = 8;
     MADT_WAKEUP_LEN = 16;
     // The MADT entry types the shims write, and the flag that says a processor is usable.
     MADT_LOCAL_APIC = 0;
+    MADT_IOAPIC = 1;
+    MADT_OVERRIDE = 2;
     MADT_WAKEUP = 16;
     LAPIC_ENABLED = 1;
 
@@ -261,7 +290,7 @@ const _: () = assert!(SHIM_DATA + SHIM_DATA_SIZE <= SHIM_SIZE);
 // An IGVM VP context indexes processors in 16 bits.
 const _: () = assert!(MAX_VCPUS <= u16::MAX as u32);
 // The park stub is a handful of instructions; it must not run into the template.
-const _: () = assert!(SHIM_MADT + MADT_HEADER_LEN <= SHIM_DATA);
+const _: () = assert!(SHIM_MADT + MADT_TEMPLATE_LEN <= SHIM_DATA);
 // A TD fetches its first instruction from the top of the 32-bit address space.
 const _: () = assert!(RESET_ALIAS + PAGE == 0x1_0000_0000);
 
@@ -276,7 +305,7 @@ pub const MAX_VCPUS: u32 = 255;
 const _: () = assert!(MAX_VCPUS > 0 && MAX_VCPUS - 1 < 0xff);
 // One Local APIC entry per processor plus the wakeup structure, all inside the page.
 const _: () = assert!(
-    ACPI_MADT + MADT_HEADER_LEN + MAX_VCPUS as u64 * MADT_LAPIC_LEN + MADT_WAKEUP_LEN <= PAGE
+    ACPI_MADT + MADT_TEMPLATE_LEN + MAX_VCPUS as u64 * MADT_LAPIC_LEN + MADT_WAKEUP_LEN <= PAGE
 );
 
 // SEV_FEATURES, which QEMU forwards to KVM_SEV_INIT2: SNPActive only, no DebugSwap.

@@ -336,20 +336,48 @@ jobs:
           test "$(grep -c '^cvm-version:' README.md)" -eq 1
           sed -i "s|^cvm-version:.*|cvm-version: \"${CONFIG_PIN}\"|" README.md
 
-      - uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c  # v6.1.0
+      - name: Create or update README pull request
         id: readme-pr
         if: steps.latest.outputs.update == 'true'
-        with:
-          token: ${{ github.token }}
-          add-paths: README.md
-          branch: readme-update/cvm-version
-          base: ${{ github.event.repository.default_branch }}
-          commit-message: "docs: update CVM config example to ${{ github.ref_name }}"
-          title: "docs: update CVM config example to ${{ github.ref_name }}"
-          body: "Pin the README config example to the runtime manifest published with ${{ github.ref_name }}."
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_BRANCH: readme-update/cvm-version
+        run: |
+          set -Eeuo pipefail
+          git add README.md
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          gh auth setup-git
+          previous_head=$(git ls-remote origin "refs/heads/$PR_BRANCH" | cut -f1)
+          git switch -c "$PR_BRANCH"
+          title="docs: update CVM config example to $REF_NAME"
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "$title"
+          git push --force-with-lease="refs/heads/$PR_BRANCH:$previous_head" \
+            origin "HEAD:refs/heads/$PR_BRANCH"
+
+          body_file="$RUNNER_TEMP/readme-pr-body.md"
+          printf 'Pin the README config example to the runtime manifest published with %s.\n' \
+            "$REF_NAME" > "$body_file"
+          pr_url=$(gh pr list --head "$PR_BRANCH" --base "$BASE_BRANCH" \
+            --state open --json url --jq '.[0].url // empty')
+          if [ -z "$pr_url" ]; then
+            pr_url=$(gh pr create --head "$PR_BRANCH" --base "$BASE_BRANCH" \
+              --title "$title" --body-file "$body_file")
+          else
+            gh pr edit "$pr_url" --title "$title" --body-file "$body_file"
+          fi
+          echo "pull-request-url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "pull-request-head-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Merge README update
-        if: steps.readme-pr.outputs.pull-request-number != ''
+        if: steps.readme-pr.outputs.pull-request-url != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ steps.readme-pr.outputs.pull-request-url }}

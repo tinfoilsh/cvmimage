@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -133,23 +132,12 @@ func serveUntilShutdown(ctx context.Context, srv *http.Server) error {
 	return nil
 }
 
-// bootStagesHandler returns a minimal handler that only serves the
-// boot-stages endpoint, returning 503 for everything else.
+// bootStagesHandler withholds config-derived boot details until the config
+// source and status authorization are available.
 func bootStagesHandler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
-		state, err := boot.Load()
-		if err != nil {
-			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(state)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeWorkloadUnavailable(w, false)
 	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeWorkloadUnavailable(w)
-	})
-	return mux
 }
 
 const artifactPollInterval = 1 * time.Second

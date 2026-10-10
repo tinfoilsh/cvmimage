@@ -76,12 +76,7 @@ func run(ctx context.Context, invocation invocation) error {
 	// 1. Config
 	start := time.Now()
 	log.Println("Loading configuration")
-	configHash, err := measuredConfigHash()
-	if err != nil {
-		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
-		return err
-	}
-	config, err := loadAndVerifyConfig(configHash, invocation.debug)
+	config, configHash, err := loadConfig(invocation.debug)
 	if err != nil {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
 		return err

@@ -19,6 +19,7 @@ import (
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
 
+	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/legacy"
 
 	"tinfoil/internal/compress"
@@ -72,6 +73,13 @@ func DevicePlatform() (string, error) {
 
 // Report fetches the raw hardware attestation report and platform identifier.
 func Report(userData [64]byte) (report []byte, platform string, err error) {
+	cmdline, err := kernelcmdline.Read()
+	if err != nil {
+		return nil, "", err
+	}
+	if cmdline.NonCC {
+		return nil, "", fmt.Errorf("hardware attestation is disabled in non-CC mode")
+	}
 	platform, err = DevicePlatform()
 	if err != nil {
 		return nil, "", err

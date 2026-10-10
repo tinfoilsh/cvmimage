@@ -11,6 +11,7 @@ import (
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/device"
+	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -79,51 +80,65 @@ func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 	return netip.AddrFrom4(broadcast)
 }
 
-// loadAndVerifyConfig reads the config from disk and verifies its hash
-func loadAndVerifyConfig(expectedHash string, debug bool) (*Config, error) {
+// loadConfig verifies the launch hash unless the kernel explicitly opts out of CC.
+func loadConfig(debug bool) (*Config, string, error) {
+	cmdline, err := kernelcmdline.Read()
+	if err != nil {
+		return nil, "", err
+	}
 	configDiskPath, err := device.ConfigDisk()
 	if err != nil {
-		return nil, fmt.Errorf("finding config disk: %w", err)
+		return nil, "", fmt.Errorf("finding config disk: %w", err)
 	}
 
 	configData, err := readDiskPayload(configDiskPath, maxDiskPayloadBytes)
 	if err != nil {
-		return nil, fmt.Errorf("reading config disk: %w", err)
-	}
-
-	// Verify hash against the value the host committed to at launch
-	if !hexHashPattern.MatchString(expectedHash) {
-		return nil, fmt.Errorf("invalid launch config hash: %s", expectedHash)
+		return nil, "", fmt.Errorf("reading config disk: %w", err)
 	}
 
 	actualHash := sha256Hash(configData)
-	if expectedHash != actualHash { // Public values: no constant time comparison
-		return nil, fmt.Errorf("config hash mismatch: expected %s, got %s", expectedHash, actualHash)
+	if !cmdline.NonCC {
+		// Verify hash against the value the host committed to at launch
+		expectedHash, err := measuredConfigHash()
+		if err != nil {
+			return nil, "", err
+		}
+		if !hexHashPattern.MatchString(expectedHash) {
+			return nil, "", fmt.Errorf("invalid launch config hash: %s", expectedHash)
+		}
+		if expectedHash != actualHash { // Public values: no constant time comparison
+			return nil, "", fmt.Errorf("config hash mismatch: expected %s, got %s", expectedHash, actualHash)
+		}
+		log.Printf("Config hash verified: %s", actualHash)
+	} else {
+		log.Println("Non-CC boot: config hash verification and hardware attestation are disabled")
 	}
-	log.Printf("Config hash verified: %s", actualHash)
 
-	// Write verified config to ramdisk
+	// Write config to ramdisk
 	if err := os.WriteFile(boot.ConfigPath, configData, 0644); err != nil {
-		return nil, fmt.Errorf("writing config to ramdisk: %w", err)
+		return nil, "", fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
 	config, err := runtimeconfig.Decode(configData, debug)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	if cmdline.NonCC {
+		config.ShimCfg.DummyAttestation = true
 	}
 
 	if err := validateGPUCount(config.GPUs); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := validateModelCount(len(config.Models)); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if err := loadExternalConfig(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	return config, nil
+	return config, actualHash, nil
 }
 
 func loadExternalConfig() error {

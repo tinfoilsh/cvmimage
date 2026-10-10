@@ -84,3 +84,44 @@ func TestAttestationMetricsThroughShim(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalConfigStatusRequiresMetricsKey(t *testing.T) {
+	const metricsKey = "private-metrics-key"
+	id, err := identity.NewIdentity()
+	require.NoError(t, err)
+	for _, ready := range []bool{false, true} {
+		for _, key := range []string{"", metricsKey} {
+			ext := &config.ExternalConfig{MetricsAPIKey: key}
+			ext.Metadata.ConfigSource = config.SourceLocal
+			var handler http.Handler
+			if ready {
+				handler = NewShimServer(nil, nil, tinfoilattestation.BodyV2{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext, "127.0.0.1:9999", nil)
+			} else {
+				handler = NewObservabilityServer(tinfoilattestation.BodyV2{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext)
+			}
+			for _, path := range []string{"/.well-known/tinfoil-containers", "/.well-known/tinfoil-boot-stages", "/.well-known/tinfoil-metrics", "/.well-known/metrics"} {
+				for _, token := range []string{"", "wrong-key"} {
+					request := httptest.NewRequest(http.MethodGet, path, nil)
+					if token != "" {
+						request.Header.Set("Authorization", "Bearer "+token)
+					}
+					response := httptest.NewRecorder()
+					handler.ServeHTTP(response, request)
+					require.Equal(t, http.StatusUnauthorized, response.Code, path)
+				}
+			}
+			request := httptest.NewRequest(http.MethodGet, "/.well-known/metrics", nil)
+			request.Header.Set("Authorization", "Bearer "+metricsKey)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if key == "" {
+				require.Equal(t, http.StatusUnauthorized, response.Code)
+			} else {
+				require.Equal(t, http.StatusOK, response.Code)
+			}
+			response = httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, attestationV3Path, nil))
+			require.Equal(t, http.StatusBadRequest, response.Code)
+		}
+	}
+}

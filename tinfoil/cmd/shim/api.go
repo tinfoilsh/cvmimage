@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/auth"
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
@@ -312,16 +313,16 @@ func NewObservabilityServer(
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
-	config *config.Config,
+	cfg *config.Config,
 	externalConfig *config.ExternalConfig,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
 	registerObservabilityHandlers(mux, ehbpMiddleware, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeWorkloadUnavailable(w)
+		writeWorkloadUnavailable(w, externalConfig.Metadata.ConfigSource != config.SourceLocal)
 	})
-	return wrapShimMux(config, mux)
+	return wrapShimMux(cfg, mux)
 }
 
 func wrapShimMux(config *config.Config, mux http.Handler) http.Handler {
@@ -418,7 +419,21 @@ func registerObservabilityHandlers(
 		})
 	})
 
-	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
+	statusHandler := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if externalConfig.Metadata.ConfigSource == config.SourceLocal {
+				if externalConfig.MetricsAPIKey == "" {
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+				if !auth.RequireBearer(externalConfig.MetricsAPIKey, w, r) {
+					return
+				}
+			}
+			next(w, r)
+		}
+	}
+	mux.HandleFunc("/.well-known/tinfoil-boot-stages", statusHandler(func(w http.ResponseWriter, r *http.Request) {
 		state, err := boot.Load()
 		if err != nil {
 			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
@@ -426,19 +441,19 @@ func registerObservabilityHandlers(
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(state)
-	})
+	}))
 
-	mux.HandleFunc("/.well-known/tinfoil-metrics", metrics.HandleMetrics(externalConfig))
-	mux.HandleFunc("/.well-known/metrics", metrics.HandlePrometheusMetrics(&externalConfig.Metadata, externalConfig.MetricsAPIKey))
-	mux.HandleFunc("/.well-known/tinfoil-containers", containersHandler())
+	mux.HandleFunc("/.well-known/tinfoil-metrics", statusHandler(metrics.HandleMetrics(externalConfig)))
+	mux.HandleFunc("/.well-known/metrics", statusHandler(metrics.HandlePrometheusMetrics(&externalConfig.Metadata, externalConfig.MetricsAPIKey)))
+	mux.HandleFunc("/.well-known/tinfoil-containers", statusHandler(containersHandler()))
 	mux.HandleFunc(ehbpProtocol.KeysPath, ehbpIdentity.ConfigHandler)
 }
 
 // writeWorkloadUnavailable answers requests that arrive before the workload
 // proxy is serving. A failed boot is permanent for this VM and must not read
-// as a transient; a pending boot invites a retry. The boot state is attached
-// so operators can see which stage is at fault.
-func writeWorkloadUnavailable(w http.ResponseWriter) {
+// as a transient; a pending boot invites a retry. Public configs may attach
+// boot state so operators can see which stage is at fault.
+func writeWorkloadUnavailable(w http.ResponseWriter, includeBootState bool) {
 	apiErr := errServiceStarting
 	var state any
 	if s, err := boot.Load(); err == nil {
@@ -448,7 +463,7 @@ func writeWorkloadUnavailable(w http.ResponseWriter) {
 		}
 	}
 	body := map[string]any{"error": apiErr.envelope().Error}
-	if state != nil {
+	if includeBootState && state != nil {
 		body["boot"] = state
 	}
 

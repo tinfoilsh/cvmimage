@@ -52,7 +52,7 @@ network:
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "collateral-request.json")
 	request, err := writeCollateralRequest(path, &CPUAttestation{RawReport: []byte("quote"), Platform: "sev-snp"},
-		external)
+		external, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,5 +71,41 @@ network:
 	got, err := client.Fetch(context.Background(), persisted)
 	if err != nil || !reflect.DeepEqual(got.Collateral, collateral) {
 		t.Fatalf("collateral = %#v, error = %v", got.Collateral, err)
+	}
+}
+
+func TestLocalCollateralRequestOmitsConfigIdentity(t *testing.T) {
+	const runtimeVersion = "0.15.1-rc.1@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
+metadata:
+  profile: %s
+  config_source: local
+  repo: private/project
+  tag: private-revision
+  digest: private-digest
+network:
+  address: 100.64.0.42/20
+  gateway: 100.64.0.1
+`, wire.FormatV3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "collateral-request.json")
+	cpu := &CPUAttestation{RawReport: []byte("quote"), Platform: "sev-snp"}
+	request, err := writeCollateralRequest(path, cpu, external, runtimeVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := wire.Request{Profile: wire.FormatV3, Runtime: runtimeVersion, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
+	if request != expected {
+		t.Fatalf("request = %#v, want %#v", request, expected)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(data), "private") {
+		t.Fatalf("private config reference in collateral request: %s; error: %v", data, err)
+	}
+	external.Metadata.Profile = ""
+	if _, err := writeCollateralRequest(path, cpu, external, runtimeVersion); err == nil {
+		t.Fatal("local config accepted without collateral v3")
 	}
 }

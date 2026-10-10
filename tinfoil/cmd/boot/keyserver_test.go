@@ -144,7 +144,7 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{Repo: "tinfoilsh/workload", Tag: "v1.2.3"}}
 	cpu := &CPUAttestation{RawReport: []byte("raw quote"), Platform: "sev-snp"}
 	path := t.TempDir() + "/collateral-request.json"
-	collateralRequest, err := writeCollateralRequest(path, cpu, external)
+	collateralRequest, err := writeCollateralRequest(path, cpu, external, "")
 	if err != nil {
 		t.Fatal(err)
 	}

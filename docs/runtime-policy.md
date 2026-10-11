@@ -90,9 +90,11 @@ remains locked, and the verified CVM root disk is not made writable.
 Admin containers use declared bridge `networks` and `ports` like ordinary
 workloads. An `egress: open` network provides Internet access; published ports
 remain loopback-only and reachable through the shim's authenticated, attested
-CONNECT tunnel. The one exception is direct SSH: `cvm_admin: true`,
-`ports: ["22:22"]`, and `cvm-network.inbound-ports: [22]` together bind that
-mapping on the guest interface and admit its DNAT traffic through the firewall.
+CONNECT tunnel. The one exception is direct SSH: publishing guest port 22 and
+setting `cvm-network.inbound-ports: [22]` binds that mapping on the guest
+interface and admits its DNAT traffic through the firewall. This works for
+ordinary containers too, without changing their user or privileges. For example,
+`ports: ["22:2223"]` exposes a non-root SSH server on container port 2223.
 The debug toolbox keeps port 2222 and suppresses this exception. Images may run
 an inner Docker daemon: nested containers use its own bridges/NAT and Unix
 socket, so `docker ps` does not show the SSH wrapper. Guest network rules are

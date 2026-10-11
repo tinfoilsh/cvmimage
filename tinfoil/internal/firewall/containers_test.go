@@ -36,6 +36,16 @@ func TestAdminSSHForwardPrecedesDNATDrop(t *testing.T) {
 	if !strings.Contains(mustContainerScript(t, cfg, false), `oifname "shim-net" ct status dnat ct original proto-dst 22 tcp dport 22 accept`) {
 		t.Fatal("SSH must also be admitted on shim-net when the admin container is the shim upstream")
 	}
+	cfg.Containers[0].CVMAdmin = false
+	cfg.Containers[0].Ports = []string{"22:2223", "3000:3000"}
+	script = mustContainerScript(t, cfg, false)
+	accept = strings.Index(script, `oifname "dev" ct status dnat ct original proto-dst 22 tcp dport 2223 accept`)
+	if accept < 0 || accept > strings.Index(script, dnatDrop) || strings.Contains(script, "dport 3000") {
+		t.Fatalf("non-admin SSH must admit the mapped container port only:\n%s", script)
+	}
+	if strings.Contains(mustContainerScript(t, cfg, true), "proto-dst 22") {
+		t.Fatal("debug mode exposed the production SSH mapping")
+	}
 	cfg.CVMNetwork.InboundPorts = nil
 	if strings.Contains(mustContainerScript(t, cfg, false), "proto-dst 22") {
 		t.Fatal("SSH exposed without the inbound-ports opt-in")
@@ -121,5 +131,12 @@ func TestContainerNetworkPolicyDropsPublishedPorts(t *testing.T) {
 	script := mustContainerScript(t, config, false)
 	if drop, bridge := strings.Index(script, dnatDrop), strings.Index(script, `container_forward iifname "app"`); drop < 0 || drop > bridge {
 		t.Fatalf("dnat drop must precede the per-bridge rules:\n%s", script)
+	}
+}
+
+func TestUpstreamCannotReachShimHTTPS(t *testing.T) {
+	cfg := &runtimeconfig.Config{ShimCfg: &shimconfig.Config{UpstreamContainer: "workspace"}}
+	if strings.Contains(mustContainerScript(t, cfg, false), "tcp dport 443 accept") {
+		t.Fatal("upstream can reach shim HTTPS")
 	}
 }

@@ -83,14 +83,14 @@ containers:
 	}
 }
 
-func TestOnlyOptedInAdminSSHBecomesDirect(t *testing.T) {
+func TestOnlyOptedInSSHBecomesDirect(t *testing.T) {
 	for _, test := range []struct {
 		name                          string
 		admin, inbound, debug, direct bool
 	}{
 		{"opt in", true, true, false, true},
 		{"no inbound", true, false, false, false},
-		{"ordinary container", false, true, false, false},
+		{"ordinary container", false, true, false, true},
 		{"debug suppresses production mapping", true, true, true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -519,5 +519,22 @@ func TestBuildContainerCreateSpec_DeclaredVolumeBecomesPropagatedBind(t *testing
 	}
 	if slices.Contains(hostConfig.Binds, "workspace:/workspace") {
 		t.Fatalf("Binds = %v, want the declared volume resolved to its measured mount", hostConfig.Binds)
+	}
+}
+
+func TestNonAdminSSHServiceGetsOnlyDeclaredExposure(t *testing.T) {
+	c := Container{Name: "monitor", Image: "app", User: "65532:65532", Networks: []string{"upstream"}, Ports: []string{"22:2223", "8080:8080"}}
+	cfg := &Config{Containers: []Container{c}, CVMNetwork: runtimeconfig.CVMNetworkConfig{InboundPorts: []int{443, 22}}, Networks: map[string]*runtimeconfig.NetworkSpec{"upstream": {Egress: "open"}}}
+	_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.Privileged || len(host.CapAdd) != 0 || host.PidMode.IsHost() {
+		t.Fatalf("SSH grants administrator privileges: %+v", host)
+	}
+	direct := host.PortBindings[dockernetwork.MustParsePort("2223/tcp")][0]
+	private := host.PortBindings[dockernetwork.MustParsePort("8080/tcp")][0]
+	if direct.HostIP.IsValid() || direct.HostPort != "22" || private.HostIP.String() != containernet.PublishedHostIP {
+		t.Fatalf("wrong exposure: direct=%+v private=%+v", direct, private)
 	}
 }

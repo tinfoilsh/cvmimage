@@ -1,13 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/config"
@@ -30,12 +37,57 @@ func TestLoadCollateralRequest(t *testing.T) {
 }
 
 func TestNewCollateralSourceSkipsDummy(t *testing.T) {
-	source, err := newCollateralSource(wire.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{})
+	source, err := newCollateralSource(wire.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if source != nil {
 		t.Fatal("dummy collateral source was created")
+	}
+}
+
+func TestLocalCollateralIncludesExactConfig(t *testing.T) {
+	request := wire.Request{Profile: wire.FormatV3, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
+		Runtime: "0.15.1-rc.1@sha256:" + strings.Repeat("a", 64)}
+	platform := collateral.Entry{ID: collateral.PlatformID, Role: collateral.RoleReferenceValues,
+		Format: collateral.SigstorePlatformV1Format, Data: []byte(`{"sigstore_bundle":{}}`)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got wire.Request
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil || got != request {
+			t.Errorf("ATC request = %#v, error = %v", got, err)
+		}
+		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour),
+			Collateral: []collateral.Entry{platform}})
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte("# Preserve exact bytes.\r\ncvm-version: " + request.Runtime + "\r\n")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := newCollateralSource(request, &config.Config{ATC: server.URL}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		response, err := source.Current(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.Format != wire.FormatV3 || len(response.Collateral) != 2 || !reflect.DeepEqual(response.Collateral[0], platform) {
+			t.Fatalf("unexpected collateral response: %#v", response)
+		}
+		entry := response.Collateral[1]
+		if entry.ID != collateral.ConfigID || entry.Role != collateral.RoleReferenceValues || entry.Format != collateral.ConfigV1Format {
+			t.Fatalf("unexpected config collateral: %#v", entry)
+		}
+		var decoded struct {
+			Config []byte `json:"config_base64"`
+		}
+		if err := json.Unmarshal(entry.Data, &decoded); err != nil || !bytes.Equal(decoded.Config, data) {
+			t.Fatalf("config = %q, error = %v", decoded.Config, err)
+		}
+		entry.Data[0] = 'x'
 	}
 }
 

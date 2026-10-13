@@ -427,10 +427,12 @@ func CryptTable(deviceNumber string, key []byte, lengthSectors uint64) ([]byte, 
 	return cryptTable(encryptedModelCipher, deviceNumber, key, encryptedModelKeyBytes, lengthSectors, sectorSizeOption)
 }
 
-// AuthenticatedCryptTable builds the fixed dm-crypt parameters used for the
-// writable workspace volume, whose tags live on the dm-integrity device below.
+// AuthenticatedCryptTable builds the fixed dm-crypt parameters used for
+// writable volumes, whose tags live on the dm-integrity device below.
 func AuthenticatedCryptTable(deviceNumber string, key []byte, lengthSectors uint64) ([]byte, error) {
-	return cryptTable(authenticatedCipher, deviceNumber, key, AuthenticatedKeyBytes, lengthSectors, integrityOption, sectorSizeOption)
+	// Bypass the crypto workqueues and separate write-submission thread.
+	return cryptTable(authenticatedCipher, deviceNumber, key, AuthenticatedKeyBytes, lengthSectors,
+		integrityOption, sectorSizeOption, "no_read_workqueue", "no_write_workqueue")
 }
 
 func cryptTable(cipher, deviceNumber string, key []byte, keyBytes int, lengthSectors uint64, options ...string) ([]byte, error) {
@@ -445,14 +447,22 @@ func cryptTable(cipher, deviceNumber string, key []byte, keyBytes int, lengthSec
 		return nil, fmt.Errorf("dm-crypt length %d sectors is not aligned to sector size %d", lengthSectors, cryptSectorSizeBytes)
 	}
 
-	params := make([]byte, 0, len(cipher)+hex.EncodedLen(len(key))+len(deviceNumber)+64)
+	optionCount := strconv.Itoa(len(options))
+	paramsSize := len(cipher) + hex.EncodedLen(len(key)) + len(deviceNumber) + len(optionCount)
+	paramsSize += len(" ") + 2*len(" 0 ")
+	for _, option := range options {
+		paramsSize += 1 + len(option)
+	}
+	// Reserve the whole table before encoding the key. A growing append would
+	// leave a copy of key material outside the buffer erased after table loading.
+	params := make([]byte, 0, paramsSize)
 	params = append(params, cipher...)
 	params = append(params, ' ')
 	params = hex.AppendEncode(params, key)
 	params = append(params, " 0 "...)
 	params = append(params, deviceNumber...)
 	params = append(params, " 0 "...)
-	params = strconv.AppendInt(params, int64(len(options)), 10)
+	params = append(params, optionCount...)
 	for _, option := range options {
 		params = append(params, ' ')
 		params = append(params, option...)

@@ -67,6 +67,22 @@ func TestCryptTable(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedCryptTable(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa5}, 96)
+	params, err := AuthenticatedCryptTable("8:17", key, 8192)
+	if err != nil {
+		t.Fatalf("AuthenticatedCryptTable: %v", err)
+	}
+	want := "capi:authenc(hmac(sha256),xts(aes))-random " + strings.Repeat("a5", 96) +
+		" 0 8:17 0 4 integrity:48:aead sector_size:4096 no_read_workqueue no_write_workqueue"
+	if string(params) != want {
+		t.Fatalf("params = %q, want %q", params, want)
+	}
+	if !bytes.Equal(key, bytes.Repeat([]byte{0xa5}, 96)) {
+		t.Fatal("AuthenticatedCryptTable modified caller key")
+	}
+}
+
 func TestBlockDeviceInfoRejectsIndirectAndNonBlockPaths(t *testing.T) {
 	dir := t.TempDir()
 	regularPath := filepath.Join(dir, "regular")

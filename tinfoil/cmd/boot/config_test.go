@@ -61,6 +61,21 @@ func TestValidateExternalNetwork(t *testing.T) {
 		"host prefix": func(c *shimconfig.ExternalNetworkConfig) {
 			c.Address, c.Gateway = "192.0.2.1/32", "192.0.2.1"
 		},
+		"alias gateway": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "10.254.0.2/24", "10.254.0.1"
+		},
+		"alias guest": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "10.254.0.254/30", "10.254.0.253"
+		},
+		"alias in subnet": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "10.254.1.2/23", "10.254.1.1"
+		},
+		"subnet within upper alias range": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "10.254.0.130/25", "10.254.0.129"
+		},
+		"alias in broad subnet": func(c *shimconfig.ExternalNetworkConfig) {
+			c.Address, c.Gateway = "100.64.0.2/0", "100.64.0.1"
+		},
 		"subnet":    func(c *shimconfig.ExternalNetworkConfig) { c.Gateway = "192.0.2.1" },
 		"network":   func(c *shimconfig.ExternalNetworkConfig) { c.Address = "100.64.0.0/20" },
 		"broadcast": func(c *shimconfig.ExternalNetworkConfig) { c.Address = "100.64.15.255/20" },
@@ -82,6 +97,12 @@ func TestValidateExternalNetwork(t *testing.T) {
 	}
 	if err := validateExternalNetwork(nil); err == nil {
 		t.Fatal("missing external network accepted")
+	}
+	for _, address := range []string{"10.253.255.2/24", "10.254.1.2/24"} {
+		config := shimconfig.ExternalNetworkConfig{Address: address, Gateway: strings.Replace(address, ".2/24", ".1", 1)}
+		if err := validateExternalNetwork(&config); err != nil {
+			t.Fatalf("non-overlapping neighboring subnet rejected: %v", err)
+		}
 	}
 }
 

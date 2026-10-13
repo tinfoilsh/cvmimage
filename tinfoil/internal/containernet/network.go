@@ -4,6 +4,11 @@
 package containernet
 
 const (
+	// PolicyAliasCIDR is reserved for virtual TCP peers. Addresses in this
+	// range must never be assigned to an interface or gateway. The host must
+	// enforce per-source bindings and reject delivery to its own services.
+	PolicyAliasCIDR = "10.254.0.0/24"
+
 	// ShimNetName is the implicit Docker network connecting the shim (host
 	// netns) to its upstream container. Always closed; never declarable by
 	// the operator.

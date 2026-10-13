@@ -3,7 +3,9 @@ package egress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -110,5 +112,22 @@ func TestPublicIPv4RejectsNonPublicAnswers(t *testing.T) {
 		if !publicIPv4(netip.MustParseAddr(value)) {
 			t.Errorf("publicIPv4(%s) = false", value)
 		}
+	}
+}
+
+func TestResolveOnlyAdmitsTheReservedAliasRangeAmongNonPublicAddresses(t *testing.T) {
+	// Literal IPs exercise the real resolver without depending on external DNS.
+	var aliases []string
+	for i := range 256 {
+		aliases = append(aliases, fmt.Sprintf("10.254.0.%d", i))
+	}
+	addresses := append(append([]string(nil), aliases...), []string{
+		"10.254.0.1", "10.253.255.255", "10.254.1.0", "198.19.255.254", "198.18.0.1",
+		"10.0.0.1", "172.16.0.1", "192.168.1.1", "100.64.0.1", "169.254.169.254", "127.0.0.1",
+		"0.0.0.0", "224.0.0.1", "::ffff:10.254.0.1", "8.8.8.8",
+	}...)
+	got, err := resolve(context.Background(), addresses)
+	if err != nil || !reflect.DeepEqual(got, append(aliases, "8.8.8.8")) {
+		t.Fatalf("resolve = %v, %v", got, err)
 	}
 }

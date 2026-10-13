@@ -137,7 +137,7 @@ func resolve(ctx context.Context, domains []string) ([]string, error) {
 		}
 		for _, value := range addrs {
 			addr, err := netip.ParseAddr(value)
-			if err != nil || !publicIPv4(addr) {
+			if err != nil || (!publicIPv4(addr) && !netip.MustParsePrefix(containernet.PolicyAliasCIDR).Contains(addr)) {
 				continue
 			}
 			canonical := addr.String()

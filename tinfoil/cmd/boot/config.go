@@ -10,6 +10,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/containernet"
 	"tinfoil/internal/device"
 	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/runtimeconfig"
@@ -49,6 +50,9 @@ func validateExternalNetwork(config *shimconfig.ExternalNetworkConfig) error {
 	}
 	if prefix.Bits() > 30 {
 		return fmt.Errorf("IPv4 prefix /%d has no distinct guest and gateway addresses", prefix.Bits())
+	}
+	if prefix.Overlaps(netip.MustParsePrefix(containernet.PolicyAliasCIDR)) {
+		return fmt.Errorf("external network overlaps reserved policy alias range %s", containernet.PolicyAliasCIDR)
 	}
 	gateway, err := netip.ParseAddr(config.Gateway)
 	if err != nil || !gateway.Is4() {

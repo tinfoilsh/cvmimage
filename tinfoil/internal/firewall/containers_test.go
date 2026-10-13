@@ -81,8 +81,8 @@ func TestContainerNetworkPolicyModes(t *testing.T) {
 	}
 	accept := strings.Index(script, `iifname "control" ip daddr @allow-control accept`)
 	drop := strings.Index(script, `iifname "control" ip daddr {`)
-	if accept < 0 || drop < 0 || accept > drop {
-		t.Fatalf("allowlist accept must precede private-range drop:\n%s", script)
+	if accept < 0 || drop < 0 || drop > accept {
+		t.Fatalf("private-range drop must precede the general allowlist accept:\n%s", script)
 	}
 }
 

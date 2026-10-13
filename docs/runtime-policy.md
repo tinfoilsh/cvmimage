@@ -145,6 +145,14 @@ keys to it, and bind SSH authorization to an owner-controlled source.
 
 ## Ordinary workloads
 
+Container egress permits TCP to the reserved virtual-peer range `10.254.0.0/24`
+on open networks; allowlisted networks require each destination to be listed.
+Closed networks and other private destinations stay blocked. Guest subnets may
+not overlap the range, and alias traffic cannot terminate at CVM services or use
+in-guest DNAT. The outer host must enforce bindings and block unbound aliases
+and host-local delivery. The CVM cannot verify external NAT destinations, so
+peer authentication remains required.
+
 A container may publish TCP ports with `ports: ["<host>:<container>"]`, which
 requires an attached network for Docker to translate onto, a host port no other
 container claims, and one the CVM does not listen on itself (443, 80, and the

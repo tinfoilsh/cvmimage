@@ -18,7 +18,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 // As harness.S sizes them: two words a range, and two an entry.
 const HARNESS_RANGES: usize = 256;
 const HARNESS_PSC_ENTRIES: usize = 4096;
-const HARNESS_POWER_WRITES: usize = 5;
+const HARNESS_POWER_WRITES: usize = 4;
 
 extern "C" {
     fn harness_regions() -> u64;

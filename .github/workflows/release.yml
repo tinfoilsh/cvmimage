@@ -68,8 +68,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           roothash="$(tr -d '\n' < result/tinfoilcvm.roothash)"
-          # Matches what the firmware path has booted for every release to
-          # date. Three of these options look inert against this kernel
+          # Matches what the firmware path has booted to date, except that
+          # pci=nocrs replaces pci=noacpi, which would stop the ACPI SCI being
+          # routed. Three of these options look inert against this kernel
           # (CONFIG_DRM is unset, and readonly= is not a kernel parameter) but
           # they are inside a measured command line, so they are left alone
           # here and removed, if at all, as a change of their own.

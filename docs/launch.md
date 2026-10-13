@@ -129,13 +129,14 @@ outside the RAM map, leaving every PCI device without an MSI domain.
 There is no later measured boot. No RTMR is extended, no event log is produced,
 and no DICE identity is derived.
 
-The measured ACPI tables describe Q35's power-management registers, I/O APIC,
-SCI interrupt and S5 power-off state. Each boot processor initializes the fixed
-LPC PM window through its platform's I/O hypercall before entering Linux. A
-refused write terminates boot. Linux's tiny power-button driver delivers a
-host power-down request to PID 1 as SIGTERM; after draining services, PID 1
-requests S5. The kernel command line permits ACPI interrupt routing and uses
-`pci=nocrs` so PCI resources continue to come from the E820 map.
+The measured ACPI tables describe Q35's power-management (PM) event and control
+registers, the I/O APIC, the ACPI system control interrupt (SCI) and the S5
+soft-off state. Before entering Linux, the boot processor maps the PM registers
+through the LPC bridge's PCI configuration space, with four fixed writes made
+through its platform's I/O hypercall. Linux's tiny power-button driver delivers
+a host power-down request to PID 1 as SIGTERM; after draining services, PID 1
+enters S5. `pci=noacpi` would stop the SCI being routed, so the command line
+uses `pci=nocrs`, which gives the PCI root all of I/O and memory space as before.
 
 ## Build
 

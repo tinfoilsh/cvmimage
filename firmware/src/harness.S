@@ -329,7 +329,7 @@ harness_madt_bare:
 
 .data
 .balign 8
-.set HARNESS_POWER_WRITES, 5
+.set HARNESS_POWER_WRITES, 4
 .globl harness_power_requests
 harness_power_requests:
     .fill HARNESS_POWER_WRITES * 64,1,0

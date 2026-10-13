@@ -89,7 +89,7 @@ accept_done:
     ret
 
 map_code die_map, accept_range
-tdx_port_write_code die, tdcall
+tdx_port_write_code tdcall
 
 # A map this image will not run in, reported as the top of RAM it refused.
 die_map:

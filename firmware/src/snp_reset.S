@@ -67,14 +67,14 @@ snp_boot_kernel:
 
 map_code die_map, accept_private
 psc_code die_psc, vmgexit
-snp_port_write_code die_power, vmgexit
+snp_port_write_code vmgexit
 
 # A map this image will not run in, which is step 2 of the sequence above.
 die_map:
     mov $2, %r15d
     jmp die_step
 
-# The four refusals the shim can report, numbered as steps 3 to 6: KVM prints
+# The three refusals the shim can report, numbered as steps 3 to 5: KVM prints
 # a termination request's reason set and code, so which of them happened is
 # readable on the host even though the guest has no console. PVALIDATE
 # refusing a page is a fourth, reported by `die`.
@@ -96,9 +96,6 @@ die_psc:
     jmp die_step
 die_ghcb_private:
     mov $5, %r15d
-    jmp die_step
-die_power:
-    mov $6, %r15d
     jmp die_step
 
 # Boot failures use the GHCB MSR termination request:

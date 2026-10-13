@@ -17,8 +17,8 @@
 .text
 map_code harness_fail, harness_accept
 psc_code harness_fail, "call harness_psc_issue"
-snp_port_write_code harness_fail, "call harness_snp_io"
-tdx_port_write_code harness_fail, "call harness_tdx_io"
+snp_port_write_code "call harness_snp_io"
+tdx_port_write_code "call harness_tdx_io"
 
 # The System V registers a caller owns, saved once so that a refusal deep inside
 # a macro can return through the same epilogue an ordinary return does.
@@ -54,13 +54,11 @@ harness_fail:
     xor %eax, %eax
     jmp harness_ret
 
-# (TDX, failing call, module failure) -> success. Record the wire requests
-# from the real helpers, replacing only the privileged hypervisor exit.
+# (TDX) -> 1. Record the wire requests from the real helpers, replacing only
+# the privileged hypervisor exit.
 .globl harness_power
 harness_power:
     harness_enter
-    mov %rsi, harness_power_failure(%rip)
-    mov %rdx, harness_power_module_failure(%rip)
     movq $0, harness_power_count(%rip)
     test %rdi, %rdi
     jnz 1f
@@ -98,11 +96,6 @@ harness_snp_io:
     mov %rax, 48(%rsi)
     mov GHCB_USAGE(%rcx), %eax
     mov %rax, 56(%rsi)
-    mov harness_power_count(%rip), %rax
-    cmp harness_power_failure(%rip), %rax
-    sete %al
-    movzbl %al, %eax
-    mov %rax, GHCB_SW_EXIT_INFO_1(%rcx)
     ret
 
 harness_tdx_io:
@@ -120,16 +113,6 @@ harness_tdx_io:
     xor %r12d, %r12d
     xor %r14d, %r14d
     xor %r15d, %r15d
-    xor %eax, %eax
-    xor %r10d, %r10d
-    mov harness_power_count(%rip), %rdi
-    cmp harness_power_failure(%rip), %rdi
-    jne 1f
-    cmpq $0, harness_power_module_failure(%rip)
-    jne 2f
-    inc %r10
-1:  ret
-2:  inc %rax
     ret
 
 # (zero page, top of RAM) -> 1, or zero if the map was refused.
@@ -335,10 +318,6 @@ harness_power_requests:
     .fill HARNESS_POWER_WRITES * 64,1,0
 .globl harness_power_count
 harness_power_count:
-    .quad 0
-harness_power_failure:
-    .quad 0
-harness_power_module_failure:
     .quad 0
 
 # The data block the shims carry in their measured page, which a test fills.

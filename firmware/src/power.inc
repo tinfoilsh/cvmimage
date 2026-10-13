@@ -1,6 +1,8 @@
 # Q35's LPC bridge is at 00:1f.0. These fixed writes establish the PM I/O
 # window described by the measured FADT; no host-provided address is used.
-# Every argument the hypervisor can see is reloaded before each call.
+# Every argument the hypervisor can see is reloaded before each call. Replies
+# are not checked: a host can drop a write either way, and then only loses the
+# ability to power the guest down.
 .macro q35_out port, value, write
     mov $\port, %r14d
     mov $\value, %r15d
@@ -16,7 +18,7 @@
 
 # A 4-byte write of R15 to port R14. The SNP caller owns an already shared GHCB.
 # Only the output value and the IOIO request are exposed, never guest pointers.
-.macro snp_port_write_code fail, exit
+.macro snp_port_write_code exit
 snp_port_write:
     mov $GHCB_ALIAS, %rcx
     movq $0, GHCB_VALID_BITMAP(%rcx)
@@ -33,13 +35,11 @@ snp_port_write:
     movq $0, GHCB_SW_EXIT_INFO_2(%rcx)
     mov %r15, GHCB_RAX(%rcx)
     \exit
-    cmpl $0, GHCB_SW_EXIT_INFO_1(%rcx)
-    jne \fail
     ret
 .endm
 
 # TDG.VP.VMCALL<Instruction.IO>, with only R10 through R15 shared with the VMM.
-.macro tdx_port_write_code fail, exit
+.macro tdx_port_write_code exit
 tdx_port_write:
     xor %eax, %eax
     mov $TDX_IO_REGISTERS, %ecx
@@ -48,9 +48,5 @@ tdx_port_write:
     mov $IO_DWORD_BYTES, %r12d
     mov $TDX_IO_WRITE, %r13d
     \exit
-    test %rax, %rax
-    jnz \fail
-    test %r10, %r10
-    jnz \fail
     ret
 .endm

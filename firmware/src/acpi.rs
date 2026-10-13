@@ -190,8 +190,7 @@ mod tests {
         ];
         let shim = crate::shim::shim();
         for tdx in [false, true] {
-            let (success, requests) = shim.power(tdx, 0, false);
-            assert!(success);
+            let requests = shim.power(tdx);
             assert_eq!(requests.len(), writes.len());
             for (request, (port, value)) in requests.iter().zip(writes) {
                 let expected = if tdx {
@@ -209,22 +208,6 @@ mod tests {
                     ]
                 };
                 assert_eq!(*request, expected, "TDX={tdx}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_refused_power_write_stops_boot_without_retrying() {
-        let shim = crate::shim::shim();
-        for (tdx, module_failure) in [(false, false), (true, false), (true, true)] {
-            let (_, all) = shim.power(tdx, 0, false);
-            for fail_at in 1..=all.len() {
-                let (success, requests) = shim.power(tdx, fail_at as u64, module_failure);
-                assert!(
-                    !success,
-                    "TDX={tdx}, module={module_failure}, write={fail_at}"
-                );
-                assert_eq!(requests, all[..fail_at]);
             }
         }
     }

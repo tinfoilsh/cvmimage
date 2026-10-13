@@ -27,7 +27,7 @@ extern "C" {
     fn harness_psc_range(lo: u64, hi: u64, host: u64) -> u64;
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
-    fn harness_power(tdx: u64, fail_at: u64, module_failure: u64) -> u64;
+    fn harness_power(tdx: u64) -> u64;
     static harness_power_count: u64;
     static harness_power_requests: [[u64; 8]; HARNESS_POWER_WRITES];
     static mut harness_shim_data: [u8; SHIM_DATA_SIZE as usize];
@@ -186,12 +186,13 @@ fn read(base: u64, at: u64, len: u64) -> Vec<u8> {
 }
 
 impl Shim {
-    pub fn power(&self, tdx: bool, fail_at: u64, module_failure: bool) -> (bool, Vec<[u64; 8]>) {
+    /// The I/O requests the boot processor's power setup makes.
+    pub fn power(&self, tdx: bool) -> Vec<[u64; 8]> {
         unsafe {
-            let success = harness_power(tdx.into(), fail_at, module_failure.into()) != 0;
+            assert_eq!(harness_power(tdx.into()), 1);
             let count = harness_power_count as usize;
             assert!(count <= HARNESS_POWER_WRITES);
-            (success, harness_power_requests[..count].to_vec())
+            harness_power_requests[..count].to_vec()
         }
     }
 

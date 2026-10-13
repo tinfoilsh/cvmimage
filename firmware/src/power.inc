@@ -1,30 +1,20 @@
 # Q35's LPC bridge is at 00:1f.0. These fixed writes establish the PM I/O
 # window described by the measured FADT; no host-provided address is used.
-# Reload all hypervisor-visible arguments before every call.
-.macro q35_power_init write
-    mov $IO_DWORD_BYTES, %r12d
-    mov $PCI_CONFIG_ADDRESS, %r14d
-    mov $Q35_LPC_PMBASE, %r15d
-    call \write
-    mov $IO_DWORD_BYTES, %r12d
-    mov $PCI_CONFIG_DATA, %r14d
-    mov $(Q35_PM_BASE | Q35_PM_IO_ENABLE), %r15d
-    call \write
-    mov $IO_DWORD_BYTES, %r12d
-    mov $PCI_CONFIG_ADDRESS, %r14d
-    mov $Q35_LPC_ACPI_CTRL, %r15d
-    call \write
-    mov $IO_DWORD_BYTES, %r12d
-    mov $PCI_CONFIG_DATA, %r14d
-    mov $Q35_ACPI_ENABLE, %r15d
-    call \write
-    mov $IO_WORD_BYTES, %r12d
-    mov $Q35_PM_CONTROL, %r14d
-    mov $ACPI_SCI_ENABLE, %r15d
+# Every argument the hypervisor can see is reloaded before each call.
+.macro q35_out port, value, write
+    mov $\port, %r14d
+    mov $\value, %r15d
     call \write
 .endm
 
-# R12 bytes, R14 port, R15 value. The SNP caller owns an already shared GHCB.
+.macro q35_power_init write
+    q35_out PCI_CONFIG_ADDRESS, Q35_LPC_PMBASE, \write
+    q35_out PCI_CONFIG_DATA, Q35_PM_BASE, \write
+    q35_out PCI_CONFIG_ADDRESS, Q35_LPC_ACPI_CTRL, \write
+    q35_out PCI_CONFIG_DATA, Q35_ACPI_ENABLE, \write
+.endm
+
+# A 4-byte write of R15 to port R14. The SNP caller owns an already shared GHCB.
 # Only the output value and the IOIO request are exposed, never guest pointers.
 .macro snp_port_write_code fail, exit
 snp_port_write:
@@ -38,10 +28,7 @@ snp_port_write:
     movq $SVM_EXIT_IOIO, GHCB_SW_EXIT_CODE(%rcx)
     mov %r14, %rax
     shl $16, %rax
-    mov %r12, %rdx
-    shl $4, %rdx
-    or %rdx, %rax
-    or $IOIO_ADDR_64, %rax
+    or $(IO_DWORD_BYTES << 4 | IOIO_ADDR_64), %rax
     mov %rax, GHCB_SW_EXIT_INFO_1(%rcx)
     movq $0, GHCB_SW_EXIT_INFO_2(%rcx)
     mov %r15, GHCB_RAX(%rcx)
@@ -58,6 +45,7 @@ tdx_port_write:
     mov $TDX_IO_REGISTERS, %ecx
     xor %r10d, %r10d
     mov $TDX_IO_EXIT, %r11d
+    mov $IO_DWORD_BYTES, %r12d
     mov $TDX_IO_WRITE, %r13d
     \exit
     test %rax, %rax

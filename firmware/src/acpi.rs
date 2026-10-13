@@ -21,21 +21,18 @@ const FADT_DSDT: usize = 40;
 const FADT_SCI: usize = 46;
 const FADT_PM1A_EVENT: usize = 56;
 const FADT_PM1A_CONTROL: usize = 64;
-const FADT_PM_TIMER: usize = 76;
 const FADT_PM1_EVENT_LEN: usize = 88;
 const FADT_PM1_CONTROL_LEN: usize = 89;
-const FADT_PM_TIMER_LEN: usize = 91;
-const FADT_C2_LATENCY: usize = 96;
-const FADT_C3_LATENCY: usize = 98;
 const FADT_FLAGS: usize = 112;
 const FADT_MINOR_VERSION: usize = 131;
 const FADT_X_DSDT: usize = 140;
 const FADT_WBINVD: u32 = 1;
-const FADT_SLEEP_BUTTON: u32 = 1 << 5;
+// SLP_BUTTON: no fixed-feature sleep button; the power button stays fixed.
+const FADT_SLP_BUTTON: u32 = 1 << 5;
 // Name (_S5, Package (4) { 0, 0, 0, 0 }): Q35's soft-off sleep type is zero.
 const S5_AML: &[u8] = b"\x08_S5_\x12\x06\x04\0\0\0\0";
 // Scope (_SB) { Device (PCI0) { Name (_HID, EisaId ("PNP0A03")) } }
-// PCI resources come from the E820 map, not a second copy in _CRS.
+// No _CRS: pci=nocrs gives the root bus all of I/O and memory space, as before.
 const PCI_ROOT_AML: &[u8] = b"\x10\x16_SB_\x5b\x82\x0fPCI0\x08_HID\x0c\x41\xd0\x0a\x03";
 
 /// One measured page: the RSDP at ACPI_BASE, the rest at the offsets layout.rs
@@ -69,13 +66,9 @@ pub fn build() -> Vec<u8> {
     bytes[fo + FADT_SCI..fo + FADT_SCI + 2].copy_from_slice(&(ACPI_SCI_IRQ as u16).to_le_bytes());
     put32(&mut bytes, fo + FADT_PM1A_EVENT, Q35_PM_BASE as u32);
     put32(&mut bytes, fo + FADT_PM1A_CONTROL, Q35_PM_CONTROL as u32);
-    put32(&mut bytes, fo + FADT_PM_TIMER, Q35_PM_TIMER as u32);
     bytes[fo + FADT_PM1_EVENT_LEN] = 4;
     bytes[fo + FADT_PM1_CONTROL_LEN] = 2;
-    bytes[fo + FADT_PM_TIMER_LEN] = 4;
-    bytes[fo + FADT_C2_LATENCY..fo + FADT_C2_LATENCY + 2].copy_from_slice(&u16::MAX.to_le_bytes());
-    bytes[fo + FADT_C3_LATENCY..fo + FADT_C3_LATENCY + 2].copy_from_slice(&u16::MAX.to_le_bytes());
-    put32(&mut bytes, fo + FADT_FLAGS, FADT_SLEEP_BUTTON | FADT_WBINVD);
+    put32(&mut bytes, fo + FADT_FLAGS, FADT_SLP_BUTTON | FADT_WBINVD);
     bytes[fo + FADT_MINOR_VERSION] = 5;
     put64(&mut bytes, fo + FADT_X_DSDT, dsdt);
     finish(&mut bytes[fo..fo + FADT_LEN as usize]);
@@ -129,14 +122,6 @@ mod tests {
         v.extend_from_slice(&[MADT_OVERRIDE as u8, MADT_OVERRIDE_LEN as u8, 0, 0]);
         v.extend_from_slice(&(Q35_PIT_GSI as u32).to_le_bytes());
         v.extend_from_slice(&0u16.to_le_bytes());
-        v.extend_from_slice(&[
-            MADT_OVERRIDE as u8,
-            MADT_OVERRIDE_LEN as u8,
-            0,
-            ACPI_SCI_IRQ as u8,
-        ]);
-        v.extend_from_slice(&(ACPI_SCI_IRQ as u32).to_le_bytes());
-        v.extend_from_slice(&(MADT_SCI_FLAGS as u16).to_le_bytes());
         v
     }
 
@@ -194,30 +179,27 @@ mod tests {
         assert_eq!(dword(FADT_FLAGS) & (1 << 20 | 1 << 4), 0);
         let base = dword(FADT_PM1A_EVENT) as u64;
         assert_eq!(dword(FADT_PM1A_CONTROL) as u64, base + 4);
-        assert_eq!(dword(FADT_PM_TIMER) as u64, base + 8);
         assert_eq!(a[f + FADT_PM1_EVENT_LEN], 4);
         assert_eq!(a[f + FADT_PM1_CONTROL_LEN], 2);
-        assert_eq!(a[f + FADT_PM_TIMER_LEN], 4);
 
         let writes = [
-            (4, PCI_CONFIG_ADDRESS, Q35_LPC_PMBASE),
-            (4, PCI_CONFIG_DATA, base | Q35_PM_IO_ENABLE),
-            (4, PCI_CONFIG_ADDRESS, Q35_LPC_ACPI_CTRL),
-            (4, PCI_CONFIG_DATA, Q35_ACPI_ENABLE),
-            (2, base + 4, ACPI_SCI_ENABLE),
+            (PCI_CONFIG_ADDRESS, Q35_LPC_PMBASE),
+            (PCI_CONFIG_DATA, base),
+            (PCI_CONFIG_ADDRESS, Q35_LPC_ACPI_CTRL),
+            (PCI_CONFIG_DATA, Q35_ACPI_ENABLE),
         ];
         let shim = crate::shim::shim();
         for tdx in [false, true] {
             let (success, requests) = shim.power(tdx, 0, false);
             assert!(success);
             assert_eq!(requests.len(), writes.len());
-            for (request, (size, port, value)) in requests.iter().zip(writes) {
+            for (request, (port, value)) in requests.iter().zip(writes) {
                 let expected = if tdx {
-                    [0, 0xfc00, 0, 30, size, 1, port, value]
+                    [0, 0xfc00, 0, 30, 4, 1, port, value]
                 } else {
                     [
                         SVM_EXIT_IOIO,
-                        port << 16 | size << 4 | IOIO_ADDR_64,
+                        port << 16 | 4 << 4 | IOIO_ADDR_64,
                         0,
                         value,
                         1 << 63,

@@ -65,7 +65,4 @@
     .byte MADT_OVERRIDE, MADT_OVERRIDE_LEN, 0, 0
     .long Q35_PIT_GSI
     .word 0
-    .byte MADT_OVERRIDE, MADT_OVERRIDE_LEN, 0, ACPI_SCI_IRQ
-    .long ACPI_SCI_IRQ
-    .word MADT_SCI_FLAGS
 .endm

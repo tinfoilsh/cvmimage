@@ -418,7 +418,7 @@ mod tests {
             .iter()
             .filter(|(_, name)| *name == "snp_port_write")
             .collect();
-        assert_eq!(power_writes.len(), 5);
+        assert_eq!(power_writes.len(), 4);
         assert!(power_writes
             .iter()
             .all(|(at, _)| walk < *at && *at < private));

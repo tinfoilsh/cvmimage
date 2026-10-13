@@ -84,12 +84,10 @@ layout! {
     SVM_VMGEXIT_PSC = 0x8000_0010;
     SVM_EXIT_IOIO = 0x7b;
     IOIO_ADDR_64 = 1 << 9;
-    IO_WORD_BYTES = 2;
     IO_DWORD_BYTES = 4;
     TDX_IO_EXIT = 30;
     TDX_IO_WRITE = 1;
     TDX_IO_REGISTERS = 0xfc00; // R10 through R15.
-    SNP_POWER_FAILURE = 6;
 
     PCI_CONFIG_ADDRESS = 0xcf8;
     PCI_CONFIG_DATA = 0xcfc;
@@ -97,14 +95,10 @@ layout! {
     Q35_LPC_ACPI_CTRL = 0x8000_f844;
     Q35_PM_BASE = 0x600;
     Q35_PM_CONTROL = Q35_PM_BASE + 4;
-    Q35_PM_TIMER = Q35_PM_BASE + 8;
-    Q35_PM_IO_ENABLE = 1;
     Q35_ACPI_ENABLE = 0x80;
-    ACPI_SCI_ENABLE = 1;
     ACPI_SCI_IRQ = 9;
     Q35_PIT_GSI = 2;
     IOAPIC_ADDRESS = 0xfec0_0000;
-    MADT_SCI_FLAGS = 0xf; // Active-low, level-triggered.
 
     // The page state change descriptor, which the shim builds in that buffer:
     // a header the host moves through, then one entry a span of pages. The
@@ -177,7 +171,7 @@ layout! {
     MADT_HEADER_LEN = 44;
     MADT_IOAPIC_LEN = 12;
     MADT_OVERRIDE_LEN = 10;
-    MADT_TEMPLATE_LEN = MADT_HEADER_LEN + MADT_IOAPIC_LEN + 2 * MADT_OVERRIDE_LEN;
+    MADT_TEMPLATE_LEN = MADT_HEADER_LEN + MADT_IOAPIC_LEN + MADT_OVERRIDE_LEN;
     MADT_LAPIC_LEN = 8;
     MADT_WAKEUP_LEN = 16;
     // The MADT entry types the shims write, and the flag that says a processor is usable.

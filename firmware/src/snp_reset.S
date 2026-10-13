@@ -74,7 +74,7 @@ die_map:
     mov $2, %r15d
     jmp die_step
 
-# The three refusals the shim can report, numbered as steps 3 to 5: KVM prints
+# The four refusals the shim can report, numbered as steps 3 to 6: KVM prints
 # a termination request's reason set and code, so which of them happened is
 # readable on the host even though the guest has no console. PVALIDATE
 # refusing a page is a fourth, reported by `die`.
@@ -98,7 +98,7 @@ die_ghcb_private:
     mov $5, %r15d
     jmp die_step
 die_power:
-    mov $SNP_POWER_FAILURE, %r15d
+    mov $6, %r15d
     jmp die_step
 
 # Boot failures use the GHCB MSR termination request:

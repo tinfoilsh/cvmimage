@@ -197,7 +197,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 
-		collateralCache, err := newCollateralSource(collateralRequest, config)
+		collateralCache, err := newCollateralSource(collateralRequest, config, boot.ConfigPath)
 		if err != nil {
 			return err
 		}

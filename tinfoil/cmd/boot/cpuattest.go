@@ -66,7 +66,7 @@ func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
 	}
 }
 
-func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig) (wire.Request, error) {
+func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig, runtimeVersion string) (wire.Request, error) {
 	if cpuAtt == nil || len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
 		return wire.Request{}, fmt.Errorf("raw CPU attestation is required")
 	}
@@ -79,6 +79,13 @@ func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimc
 		request.Tag = external.Metadata.Tag
 		request.Profile = external.Metadata.Profile
 		request.Digest = external.Metadata.Digest
+		if external.Metadata.ConfigSource != "" {
+			if external.Metadata.ConfigSource != shimconfig.SourceLocal || request.Profile != wire.FormatV3 || runtimeVersion == "" {
+				return wire.Request{}, fmt.Errorf("local config collateral requires a runtime and the v3 profile")
+			}
+			request.Repo, request.Tag, request.Digest = "", "", ""
+			request.Runtime = runtimeVersion
+		}
 	}
 	data, err := json.Marshal(request)
 	if err != nil {

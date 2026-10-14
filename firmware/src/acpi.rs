@@ -23,12 +23,15 @@ const FADT_PM1A_EVENT: usize = 56;
 const FADT_PM1A_CONTROL: usize = 64;
 const FADT_PM1_EVENT_LEN: usize = 88;
 const FADT_PM1_CONTROL_LEN: usize = 89;
+const FADT_BOOT_ARCH: usize = 109;
 const FADT_FLAGS: usize = 112;
 const FADT_MINOR_VERSION: usize = 131;
 const FADT_X_DSDT: usize = 140;
 const FADT_WBINVD: u32 = 1;
 // SLP_BUTTON: no fixed-feature sleep button; the power button stays fixed.
 const FADT_SLP_BUTTON: u32 = 1 << 5;
+// No CMOS RTC: Linux then registers no RTC device for the host to interrupt or time.
+const FADT_NO_CMOS_RTC: u16 = 1 << 5;
 // Name (_S5, Package (4) { 0, 0, 0, 0 }): Q35's soft-off sleep type is zero.
 const S5_AML: &[u8] = b"\x08_S5_\x12\x06\x04\0\0\0\0";
 // Scope (_SB) { Device (PCI0) { Name (_HID, EisaId ("PNP0A03")) } }
@@ -68,6 +71,8 @@ pub fn build() -> Vec<u8> {
     put32(&mut bytes, fo + FADT_PM1A_CONTROL, Q35_PM_CONTROL as u32);
     bytes[fo + FADT_PM1_EVENT_LEN] = 4;
     bytes[fo + FADT_PM1_CONTROL_LEN] = 2;
+    bytes[fo + FADT_BOOT_ARCH..fo + FADT_BOOT_ARCH + 2]
+        .copy_from_slice(&FADT_NO_CMOS_RTC.to_le_bytes());
     put32(&mut bytes, fo + FADT_FLAGS, FADT_SLP_BUTTON | FADT_WBINVD);
     bytes[fo + FADT_MINOR_VERSION] = 5;
     put64(&mut bytes, fo + FADT_X_DSDT, dsdt);
@@ -177,6 +182,7 @@ mod tests {
         let dword = |at| u32::from_le_bytes(a[f + at..f + at + 4].try_into().unwrap());
         assert_eq!(word(FADT_SCI) as u64, ACPI_SCI_IRQ);
         assert_eq!(dword(FADT_FLAGS) & (1 << 20 | 1 << 4), 0);
+        assert_eq!(word(FADT_BOOT_ARCH), FADT_NO_CMOS_RTC);
         let base = dword(FADT_PM1A_EVENT) as u64;
         assert_eq!(dword(FADT_PM1A_CONTROL) as u64, base + 4);
         assert_eq!(a[f + FADT_PM1_EVENT_LEN], 4);

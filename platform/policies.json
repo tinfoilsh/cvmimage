@@ -221,6 +221,7 @@
       "xfam": "e702060000000000",
       "minimum_tcb_evaluation_data_number": 19,
       "platform_measurements": [
+        "b200_56cpu_768gb_4gpu_4disk",
         "tiny_0d_new",
         "small_0d_new",
         "small_0d_32gb_new",

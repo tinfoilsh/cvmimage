@@ -3,6 +3,9 @@ name: Build images
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'platform/**'
+      - '.github/workflows/platform-*.yml'
   workflow_dispatch:
 
 permissions: {}

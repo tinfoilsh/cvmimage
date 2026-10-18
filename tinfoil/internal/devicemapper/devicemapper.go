@@ -52,6 +52,8 @@ const (
 	integrityDataSectorsAt   = 16
 	integrityProbeSectors    = 8
 
+	integrityMaxJournalSectors = (1 << 30) / dmSectorSizeBytes
+
 	// AuthenticatedKeyBytes covers the XTS key followed by the MAC key.
 	AuthenticatedKeyBytes = encryptedModelKeyBytes + authenticatedMACKeyBytes
 
@@ -430,9 +432,9 @@ func CryptTable(deviceNumber string, key []byte, lengthSectors uint64) ([]byte, 
 // AuthenticatedCryptTable builds the fixed dm-crypt parameters used for
 // writable volumes, whose tags live on the dm-integrity device below.
 func AuthenticatedCryptTable(deviceNumber string, key []byte, lengthSectors uint64) ([]byte, error) {
-	// Bypass the crypto workqueues and separate write-submission thread.
+	// Keep reads synchronous and let the write workqueue parallelize encryption.
 	return cryptTable(authenticatedCipher, deviceNumber, key, AuthenticatedKeyBytes, lengthSectors,
-		integrityOption, sectorSizeOption, "no_read_workqueue", "no_write_workqueue")
+		integrityOption, sectorSizeOption, "no_read_workqueue")
 }
 
 func cryptTable(cipher, deviceNumber string, key []byte, keyBytes int, lengthSectors uint64, options ...string) ([]byte, error) {
@@ -700,8 +702,7 @@ func ActivateIntegrity(control, source *os.File, name string, reservedBytes int6
 	if err != nil {
 		return err
 	}
-	params := fmt.Sprintf("%s %d %d %s 2 block_size:%d fix_padding",
-		deviceNumber, reservedBytes/dmSectorSizeBytes, integrityTagBytes, integrityMode, cryptSectorSizeBytes)
+	params := integrityTable(deviceNumber, reservedBytes, deviceSectors, false)
 	dataSectors, formatted, err := IntegrityDataSectors(source, reservedBytes)
 	if err != nil {
 		return err
@@ -715,7 +716,10 @@ func ActivateIntegrity(control, source *os.File, name string, reservedBytes int6
 		}
 		// The capacity is published only once a table exists, and building one
 		// is what writes the superblock the zeroed device lacks.
-		if err := loadIntegrityTable(control, name, integrityProbeSectors, params); err != nil {
+		// The volume owner only permits initialization of Argon2id/version 2
+		// volumes. Existing volumes always use their stored journal geometry.
+		formatParams := integrityTable(deviceNumber, reservedBytes, deviceSectors, true)
+		if err := loadIntegrityTable(control, name, integrityProbeSectors, formatParams); err != nil {
 			return err
 		}
 		if err := Remove(control, name); err != nil {
@@ -752,6 +756,20 @@ func ActivateIntegrity(control, source *os.File, name string, reservedBytes int6
 		)
 	}
 	return EnsureBlockNode(MapperNode(name), info.Dev)
+}
+
+func integrityTable(deviceNumber string, reservedBytes int64, deviceSectors uint64, initialize bool) string {
+	options := fmt.Sprintf("block_size:%d fix_padding", cryptSectorSizeBytes)
+	optionCount := 2
+	if initialize {
+		// Retain the kernel's 1/128 capacity limit for small volumes while
+		// raising its 64 MiB journal cap to 1 GiB.
+		journalSectors := min(uint64(integrityMaxJournalSectors), deviceSectors/128)
+		options += fmt.Sprintf(" journal_sectors:%d", journalSectors)
+		optionCount++
+	}
+	return fmt.Sprintf("%s %d %d %s %d %s",
+		deviceNumber, reservedBytes/dmSectorSizeBytes, integrityTagBytes, integrityMode, optionCount, options)
 }
 
 func loadIntegrityTable(control *os.File, name string, lengthSectors uint64, params string) (result error) {

@@ -183,6 +183,13 @@ Unlocking propagates the writable encrypted filesystem into existing application
 mounts without recreating the container. A failed unlock leaves the placeholder
 read-only; preparing an already-unlocked volume leaves it writable.
 
+New Argon2id/version 2 volumes use a dm-integrity journal of up to
+1 GiB, capped at 1/128 of the backing disk's capacity for smaller volumes.
+The kernel rounds the requested size down to whole journal sections. Existing
+volumes retain the journal size stored in their superblock, including previously
+created version 2 volumes. Writable volumes use the dm-crypt write workqueue;
+read requests continue to bypass the read workqueue.
+
 The mount regression test uses an isolated namespace and tmpfs, not block devices.
 Run it on Linux with `CAP_SYS_ADMIN`, from `tinfoil/`:
 

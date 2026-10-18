@@ -74,12 +74,58 @@ func TestAuthenticatedCryptTable(t *testing.T) {
 		t.Fatalf("AuthenticatedCryptTable: %v", err)
 	}
 	want := "capi:authenc(hmac(sha256),xts(aes))-random " + strings.Repeat("a5", 96) +
-		" 0 8:17 0 4 integrity:48:aead sector_size:4096 no_read_workqueue no_write_workqueue"
+		" 0 8:17 0 3 integrity:48:aead sector_size:4096 no_read_workqueue"
 	if string(params) != want {
 		t.Fatalf("params = %q, want %q", params, want)
 	}
 	if !bytes.Equal(key, bytes.Repeat([]byte{0xa5}, 96)) {
 		t.Fatal("AuthenticatedCryptTable modified caller key")
+	}
+}
+
+func TestIntegrityTable(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		reservedBytes int64
+		deviceBytes   uint64
+		initialize    bool
+		want          string
+	}{
+		{
+			name: "existing legacy volume", deviceBytes: 1 << 40,
+			want: "8:17 0 48 J 2 block_size:4096 fix_padding",
+		},
+		{
+			name: "existing version 2 volume", reservedBytes: 4096, deviceBytes: 1 << 40,
+			want: "8:17 8 48 J 2 block_size:4096 fix_padding",
+		},
+		{
+			name: "minimum supported volume", reservedBytes: 4096, deviceBytes: 64 << 20, initialize: true,
+			want: "8:17 8 48 J 3 block_size:4096 fix_padding journal_sectors:1024",
+		},
+		{
+			name: "old journal cap", reservedBytes: 4096, deviceBytes: 8 << 30, initialize: true,
+			want: "8:17 8 48 J 3 block_size:4096 fix_padding journal_sectors:131072",
+		},
+		{
+			name: "capacity limited journal", reservedBytes: 4096, deviceBytes: 64 << 30, initialize: true,
+			want: "8:17 8 48 J 3 block_size:4096 fix_padding journal_sectors:1048576",
+		},
+		{
+			name: "new journal cap", reservedBytes: 4096, deviceBytes: 128 << 30, initialize: true,
+			want: "8:17 8 48 J 3 block_size:4096 fix_padding journal_sectors:2097152",
+		},
+		{
+			name: "large volume", reservedBytes: 4096, deviceBytes: 1 << 40, initialize: true,
+			want: "8:17 8 48 J 3 block_size:4096 fix_padding journal_sectors:2097152",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := integrityTable("8:17", test.reservedBytes, test.deviceBytes/dmSectorSizeBytes, test.initialize)
+			if got != test.want {
+				t.Fatalf("integrity params = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

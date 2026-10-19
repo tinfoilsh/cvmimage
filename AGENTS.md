@@ -14,7 +14,8 @@
 - Any change to an image input (Go code, `image/rootfs/`, `nix/`, `kernel/`,
   `repart.d/`) changes the measurement that clients verify. Pushing a `v*` tag
   publishes a release, and a stable tag also opens `cvm-version` update PRs in
-  every config repository. Do not tag without approval.
+  the repositories with the `tinfoil-functions` topic. Do not tag without
+  approval.
 
 ## Runtime invariants
 

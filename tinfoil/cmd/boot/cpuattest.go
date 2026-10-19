@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,21 +10,24 @@ import (
 	"os"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/attestation"
+	"tinfoil/internal/attestationmaterial"
 	shimconfig "tinfoil/internal/config"
 	tlsutil "tinfoil/internal/tls"
 )
 
 type CPUAttestation struct {
+	Document  json.RawMessage
 	RawReport []byte
 	Platform  string
 	V2Doc     *verifier.Document
 }
 
-func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAttestation, error) {
+func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config, profile string) (*CPUAttestation, error) {
 	aBody := id.attestationBody()
 	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
 	userData := aBody.Marshal()
@@ -48,8 +52,17 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 	if err != nil {
 		return nil, fmt.Errorf("building V2 document: %w", err)
 	}
+	nonce := make([]byte, envelope.NonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating collateral nonce: %w", err)
+	}
+	document, err := attestation.BuildAttestation(nil, nonce, nil, wire.Response{Format: profile})
+	if err != nil {
+		return nil, fmt.Errorf("building collateral document: %w", err)
+	}
 
 	return &CPUAttestation{
+		Document:  document,
 		RawReport: rawReport,
 		Platform:  platform,
 		V2Doc:     v2Doc,
@@ -66,13 +79,16 @@ func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
 	}
 }
 
-func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig, runtimeVersion string) (wire.Request, error) {
+func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig, runtimeVersion string) (attestationmaterial.Request, error) {
 	if cpuAtt == nil || len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
-		return wire.Request{}, fmt.Errorf("raw CPU attestation is required")
+		return attestationmaterial.Request{}, fmt.Errorf("raw CPU attestation is required")
 	}
-	request := wire.Request{
-		Platform:    cpuAtt.Platform,
-		QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
+	request := attestationmaterial.Request{
+		Version:  attestationmaterial.RequestVersionDocument,
+		Document: cpuAtt.Document,
+	}
+	if cpuAtt.Platform == attestation.PlatformDummy {
+		request = attestationmaterial.Request{Platform: cpuAtt.Platform, QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport)}
 	}
 	if external != nil {
 		request.Repo = external.Metadata.Repo
@@ -81,18 +97,25 @@ func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimc
 		request.Digest = external.Metadata.Digest
 		if external.Metadata.ConfigSource != "" {
 			if external.Metadata.ConfigSource != shimconfig.SourceLocal || request.Profile != wire.FormatV3 || runtimeVersion == "" {
-				return wire.Request{}, fmt.Errorf("local config collateral requires a runtime and the v3 profile")
+				return attestationmaterial.Request{}, fmt.Errorf("local config collateral requires a runtime and the v3 profile")
 			}
 			request.Repo, request.Tag, request.Digest = "", "", ""
 			request.Runtime = runtimeVersion
+			request.Version = attestationmaterial.RequestVersionLegacy
+			request.Document = nil
+			request.Platform = cpuAtt.Platform
+			request.QuoteBase64 = base64.StdEncoding.EncodeToString(cpuAtt.RawReport)
 		}
+	}
+	if err := request.Validate(); err != nil {
+		return attestationmaterial.Request{}, err
 	}
 	data, err := json.Marshal(request)
 	if err != nil {
-		return wire.Request{}, fmt.Errorf("marshaling collateral request: %w", err)
+		return attestationmaterial.Request{}, fmt.Errorf("marshaling collateral request: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return wire.Request{}, fmt.Errorf("writing collateral request: %w", err)
+		return attestationmaterial.Request{}, fmt.Errorf("writing collateral request: %w", err)
 	}
 	return request, nil
 }

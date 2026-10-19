@@ -17,11 +17,12 @@ import (
 	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/attestation"
+	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/config"
 )
 
 func TestLoadCollateralRequest(t *testing.T) {
-	want := wire.Request{
+	want := attestationmaterial.Request{
 		Repo:        "tinfoilsh/workload",
 		Tag:         "v1",
 		Platform:    "tdx",
@@ -31,13 +32,13 @@ func TestLoadCollateralRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("request = %#v, want %#v", got, want)
 	}
 }
 
 func TestNewCollateralSourceSkipsDummy(t *testing.T) {
-	source, err := newCollateralSource(wire.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{}, "")
+	source, err := newCollateralSource(attestationmaterial.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +48,13 @@ func TestNewCollateralSourceSkipsDummy(t *testing.T) {
 }
 
 func TestLocalCollateralIncludesExactConfig(t *testing.T) {
-	request := wire.Request{Profile: wire.FormatV3, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
+	request := attestationmaterial.Request{Profile: wire.FormatV3, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
 		Runtime: "0.15.1-rc.1@sha256:" + strings.Repeat("a", 64)}
 	platform := collateral.Entry{ID: collateral.PlatformID, Role: collateral.RoleReferenceValues,
 		Format: collateral.SigstorePlatformV1Format, Data: []byte(`{"sigstore_bundle":{}}`)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var got wire.Request
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil || got != request {
+		var got attestationmaterial.Request
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil || !reflect.DeepEqual(got, request) {
 			t.Errorf("ATC request = %#v, error = %v", got, err)
 		}
 		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour),
@@ -92,7 +93,7 @@ func TestLocalCollateralIncludesExactConfig(t *testing.T) {
 }
 
 func TestLoadConfigCollateralRequest(t *testing.T) {
-	want := wire.Request{Profile: wire.FormatV3, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
+	want := attestationmaterial.Request{Profile: wire.FormatV3, Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU=",
 		Repo: "org/project", Tag: "v1", Digest: strings.Repeat("a", 64)}
 	got, err := loadCollateralRequest(writeCollateralRequestArtifact(t, want))
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -101,7 +102,7 @@ func TestLoadConfigCollateralRequest(t *testing.T) {
 	want.Repo, want.Tag, want.Digest = "", "", ""
 	want.Runtime = "0.15.1-rc.1@sha256:" + strings.Repeat("a", 64)
 	got, err = loadCollateralRequest(writeCollateralRequestArtifact(t, want))
-	if err != nil || got != want {
+	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("local request = %#v, error = %v", got, err)
 	}
 	want.Repo = "org/project"
@@ -113,7 +114,7 @@ func TestLoadConfigCollateralRequest(t *testing.T) {
 
 func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
 	digest := strings.Repeat("a", 64)
-	for name, request := range map[string]wire.Request{
+	for name, request := range map[string]attestationmaterial.Request{
 		"empty":            {},
 		"missing quote":    {Repo: "repo", Platform: attestation.PlatformTDX},
 		"missing repo":     {Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
@@ -131,7 +132,7 @@ func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
 	}
 }
 
-func writeCollateralRequestArtifact(t *testing.T, request wire.Request) string {
+func writeCollateralRequestArtifact(t *testing.T, request attestationmaterial.Request) string {
 	t.Helper()
 	data, err := json.Marshal(request)
 	if err != nil {

@@ -125,7 +125,7 @@ func run(ctx context.Context, invocation invocation) error {
 	// 4. CPU attestation
 	start = time.Now()
 	log.Println("Fetching CPU attestation")
-	cpuAtt, err := fetchCPUAttestation(nodeID, config.ShimCfg)
+	cpuAtt, err := fetchCPUAttestation(nodeID, config.ShimCfg, externalConfig.Metadata.Profile)
 	if err != nil {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 		return err

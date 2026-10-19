@@ -48,7 +48,7 @@ func fetchKeyserverSecrets(
 	config *Config,
 	ext *shimconfig.ExternalConfig,
 	nodeID *NodeIdentity,
-	collateralRequest wire.Request,
+	collateralRequest attestationmaterial.Request,
 	names []string,
 ) (map[string]string, error) {
 	if ext == nil || ext.Metadata.Repo == "" {
@@ -111,9 +111,9 @@ func fetchKeyserverSecrets(
 func prefetchKeyserverCollateral(
 	ctx context.Context,
 	config *Config,
-	request wire.Request,
+	request attestationmaterial.Request,
 ) (wire.Response, error) {
-	if request.Repo == "" || request.Platform == "" || request.Platform == attestation.PlatformDummy || request.QuoteBase64 == "" {
+	if request.Repo == "" || request.Platform == attestation.PlatformDummy || request.Validate() != nil {
 		return wire.Response{}, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
 	}
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)

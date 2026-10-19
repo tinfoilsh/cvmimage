@@ -23,11 +23,11 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
@@ -183,7 +183,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		}
 		cert.Store(&realCert)
 
-		collateralRequest, err := waitForArtifact("Collateral request", func() (wire.Request, error) {
+		collateralRequest, err := waitForArtifact("Collateral request", func() (attestationmaterial.Request, error) {
 			return loadCollateralRequest(boot.CollateralRequestPath)
 		})
 		if err != nil {

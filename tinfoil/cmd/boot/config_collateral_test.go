@@ -14,6 +14,7 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/attestationmaterial"
@@ -34,11 +35,17 @@ network:
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := wire.Request{Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
+	empty, err := document.Build(document.BuildInput{Nonce: make([]byte, document.NonceSize), CollateralFormat: wire.FormatV3}, func([64]byte) (string, []byte, error) {
+		return document.SEVSNPReportV1Format, []byte("quote"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Document: empty, Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest}
 	collateral := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
 		Format: collateral.ConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request wire.Request
+		var request attestationmaterial.Request
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 			w.WriteHeader(http.StatusBadRequest)
@@ -51,7 +58,7 @@ network:
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "collateral-request.json")
-	request, err := writeCollateralRequest(path, &CPUAttestation{RawReport: []byte("quote"), Platform: "sev-snp"},
+	request, err := writeCollateralRequest(path, &CPUAttestation{Document: empty, RawReport: []byte("quote"), Platform: "sev-snp"},
 		external, "")
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +67,7 @@ network:
 	if err != nil {
 		t.Fatal(err)
 	}
-	var persisted wire.Request
+	var persisted attestationmaterial.Request
 	if err := json.Unmarshal(data, &persisted); err != nil || !reflect.DeepEqual(persisted, request) {
 		t.Fatalf("persisted request = %#v, error = %v", persisted, err)
 	}
@@ -96,8 +103,8 @@ network:
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := wire.Request{Profile: wire.FormatV3, Runtime: runtimeVersion, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
-	if request != expected {
+	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionLegacy, Profile: wire.FormatV3, Runtime: runtimeVersion, Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
+	if !reflect.DeepEqual(request, expected) {
 		t.Fatalf("request = %#v, want %#v", request, expected)
 	}
 	data, err := os.ReadFile(path)

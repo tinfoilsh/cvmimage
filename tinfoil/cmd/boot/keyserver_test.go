@@ -3,18 +3,20 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
+	"tinfoil/internal/attestationmaterial"
 	shimconfig "tinfoil/internal/config"
 )
 
@@ -122,16 +124,19 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 		if request.URL.Path != "/attestation-collaterals" {
 			t.Fatalf("path = %s", request.URL.Path)
 		}
-		var collateralRequest wire.Request
+		var collateralRequest attestationmaterial.Request
 		if err := json.NewDecoder(request.Body).Decode(&collateralRequest); err != nil {
 			t.Fatal(err)
 		}
-		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Platform != "sev-snp" {
+		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Version != attestationmaterial.RequestVersionDocument || collateralRequest.Platform != "" || collateralRequest.QuoteBase64 != "" {
 			t.Fatalf("request = %#v", collateralRequest)
 		}
-		quote, err := base64.StdEncoding.DecodeString(collateralRequest.QuoteBase64)
-		if err != nil || string(quote) != "raw quote" {
-			t.Fatalf("quote = %q, err = %v", quote, err)
+		parsed, err := envelope.Parse(collateralRequest.Document, make([]byte, envelope.NonceSize))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(parsed.CPUEvidence().Report) != "raw quote" || len(parsed.CryptoMaterialItems()) != 0 || len(parsed.DeviceEvidenceItems()) != 0 {
+			t.Fatal("incorrect preflight evidence")
 		}
 		_ = json.NewEncoder(w).Encode(wire.Response{
 			Format:    wire.FormatV2,
@@ -142,7 +147,13 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 
 	config := &Config{ShimCfg: &shimconfig.Config{ATC: server.URL}}
 	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{Repo: "tinfoilsh/workload", Tag: "v1.2.3"}}
-	cpu := &CPUAttestation{RawReport: []byte("raw quote"), Platform: "sev-snp"}
+	empty, err := envelope.Build(envelope.BuildInput{Nonce: make([]byte, envelope.NonceSize)}, func([64]byte) (string, []byte, error) {
+		return envelope.SEVSNPReportV1Format, []byte("raw quote"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpu := &CPUAttestation{Document: empty, RawReport: []byte("raw quote"), Platform: "sev-snp"}
 	path := t.TempDir() + "/collateral-request.json"
 	collateralRequest, err := writeCollateralRequest(path, cpu, external, "")
 	if err != nil {
@@ -152,11 +163,11 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var persisted wire.Request
+	var persisted attestationmaterial.Request
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted != collateralRequest {
+	if !reflect.DeepEqual(persisted, collateralRequest) {
 		t.Fatalf("persisted request = %#v, want %#v", persisted, collateralRequest)
 	}
 	collateral, err := prefetchKeyserverCollateral(context.Background(), config, collateralRequest)

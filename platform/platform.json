@@ -4,9 +4,9 @@
     "cpus": 32,
     "disks": 4,
     "memory": "524288M",
-    "pci_hole64_end": "0x50000000000",
+    "pci_hole64_end": "0x4c000000000",
     "pci_hole64_size": "4096G",
-    "pci_hole64_start": "0x10000000000",
+    "pci_hole64_start": "0xc000000000",
     "profile": "quad",
     "qemu_source": "qemu:10.1.0"
   },

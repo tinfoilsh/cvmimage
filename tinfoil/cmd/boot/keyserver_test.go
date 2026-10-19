@@ -138,6 +138,12 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 		if string(parsed.CPUEvidence().Report) != "raw quote" || len(parsed.CryptoMaterialItems()) != 0 || len(parsed.DeviceEvidenceItems()) != 0 {
 			t.Fatal("incorrect preflight evidence")
 		}
+		var draft struct {
+			Collateral []json.RawMessage `json:"collateral"`
+		}
+		if err := json.Unmarshal(collateralRequest.Document, &draft); err != nil || draft.Collateral == nil || len(draft.Collateral) != 0 {
+			t.Fatalf("preflight collateral must be an empty array: %v", err)
+		}
 		_ = json.NewEncoder(w).Encode(wire.Response{
 			Format:    wire.FormatV2,
 			ExpiresAt: time.Now().Add(time.Hour),

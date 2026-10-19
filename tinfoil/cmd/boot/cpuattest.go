@@ -27,7 +27,7 @@ type CPUAttestation struct {
 	V2Doc     *verifier.Document
 }
 
-func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config, profile string) (*CPUAttestation, error) {
+func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config, metadata shimconfig.Metadata) (*CPUAttestation, error) {
 	aBody := id.attestationBody()
 	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
 	userData := aBody.Marshal()
@@ -52,13 +52,16 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config, profile s
 	if err != nil {
 		return nil, fmt.Errorf("building V2 document: %w", err)
 	}
-	nonce := make([]byte, envelope.NonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generating collateral nonce: %w", err)
-	}
-	document, err := attestation.BuildAttestation(nil, nonce, nil, wire.Response{Format: profile})
-	if err != nil {
-		return nil, fmt.Errorf("building collateral document: %w", err)
+	var document json.RawMessage
+	if metadata.ConfigSource != shimconfig.SourceLocal {
+		nonce := make([]byte, envelope.NonceSize)
+		if _, err := rand.Read(nonce); err != nil {
+			return nil, fmt.Errorf("generating collateral nonce: %w", err)
+		}
+		document, err = attestation.BuildAttestation(nil, nonce, nil, wire.Response{Format: metadata.Profile})
+		if err != nil {
+			return nil, fmt.Errorf("building collateral document: %w", err)
+		}
 	}
 
 	return &CPUAttestation{

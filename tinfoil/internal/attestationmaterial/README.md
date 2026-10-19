@@ -19,6 +19,7 @@ versioning is independent of attestation v3 and the collateral response format.
 
 On IGVM, registry-backed configs also include `profile`, `repo`, `tag`, and
 `digest`, and the document uses the corresponding collateral format. Private
-local configs keep explicit request version 1 with only the runtime pin and
-raw quote. Their exact config bytes and identity never go to ATC; the shim adds
-that config locally when serving the client's final attestation.
+local configs keep explicit request version 1 with the v3 `profile`, `runtime`
+pin, `platform`, and `quote_base64`; they do not generate a preflight document.
+Their exact config bytes and identity never go to ATC; the shim adds that config
+locally when serving the client's final attestation.

@@ -3,8 +3,9 @@
 New boots send request `version: 2`, with `repo`, optional `tag`, and `document`.
 The document is a standard v3 attestation generated with a random preflight
 nonce and empty crypto-material, device-evidence, and collateral arrays. Its
-CPU quote binds those empty sections. The raw boot quote remains available for
-legacy boot consumers; it is not wrapped into the v3 document.
+CPU quote binds the crypto-material and device-evidence sections. Collateral
+remains outside that binding so ATC can fill it in. The raw boot quote remains
+available for legacy boot consumers; it is not wrapped into the v3 document.
 
 ATC derives hardware collection inputs from the document, fills only its
 collateral array, and runs the existing SDK verifier before returning the

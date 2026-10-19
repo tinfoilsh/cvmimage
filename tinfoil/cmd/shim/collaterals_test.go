@@ -3,16 +3,16 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
-
-	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	"tinfoil/internal/attestationmaterial"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/config"
 )
 
 func TestLoadCollateralRequest(t *testing.T) {
-	want := wire.Request{
+	want := attestationmaterial.Request{
 		Repo:        "tinfoilsh/workload",
 		Tag:         "v1",
 		Platform:    "tdx",
@@ -22,13 +22,13 @@ func TestLoadCollateralRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("request = %#v, want %#v", got, want)
 	}
 }
 
 func TestNewCollateralSourceSkipsDummy(t *testing.T) {
-	source, err := newCollateralSource(wire.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{})
+	source, err := newCollateralSource(attestationmaterial.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestNewCollateralSourceSkipsDummy(t *testing.T) {
 }
 
 func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
-	for name, request := range map[string]wire.Request{
+	for name, request := range map[string]attestationmaterial.Request{
 		"empty":         {},
 		"missing quote": {Repo: "repo", Platform: attestation.PlatformTDX},
 		"missing repo":  {Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
@@ -51,7 +51,7 @@ func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
 	}
 }
 
-func writeCollateralRequestArtifact(t *testing.T, request wire.Request) string {
+func writeCollateralRequestArtifact(t *testing.T, request attestationmaterial.Request) string {
 	t.Helper()
 	data, err := json.Marshal(request)
 	if err != nil {

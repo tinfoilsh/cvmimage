@@ -2,23 +2,26 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 
-	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
 
 	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/attestation"
+	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	tlsutil "tinfoil/internal/tls"
 )
 
 type CPUAttestation struct {
+	Document  json.RawMessage
 	RawReport []byte
 	Platform  string
 	V2Doc     *verifier.Document
@@ -56,8 +59,17 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 	if err := writeAttestationDoc(v2Doc); err != nil {
 		return nil, err
 	}
+	nonce := make([]byte, envelope.NonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating collateral nonce: %w", err)
+	}
+	document, err := attestation.BuildAttestation(nil, nonce, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building collateral document: %w", err)
+	}
 
 	return &CPUAttestation{
+		Document:  document,
 		RawReport: rawReport,
 		Platform:  platform,
 		V2Doc:     v2Doc,
@@ -86,13 +98,19 @@ func writeAttestationDoc(att *verifier.Document) error {
 	return nil
 }
 
-func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig) (wire.Request, error) {
+func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig) (attestationmaterial.Request, error) {
 	if cpuAtt == nil || len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
-		return wire.Request{}, fmt.Errorf("raw CPU attestation is required")
+		return attestationmaterial.Request{}, fmt.Errorf("raw CPU attestation is required")
 	}
-	request := wire.Request{
-		Platform:    cpuAtt.Platform,
-		QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
+	request := attestationmaterial.Request{
+		Version:  attestationmaterial.RequestVersionDocument,
+		Document: cpuAtt.Document,
+	}
+	if cpuAtt.Platform == attestation.PlatformDummy {
+		request = attestationmaterial.Request{Platform: cpuAtt.Platform, QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport)}
+	}
+	if err := request.Validate(); err != nil {
+		return attestationmaterial.Request{}, err
 	}
 	if external != nil {
 		request.Repo = external.Metadata.Repo
@@ -100,10 +118,10 @@ func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimc
 	}
 	data, err := json.Marshal(request)
 	if err != nil {
-		return wire.Request{}, fmt.Errorf("marshaling collateral request: %w", err)
+		return attestationmaterial.Request{}, fmt.Errorf("marshaling collateral request: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return wire.Request{}, fmt.Errorf("writing collateral request: %w", err)
+		return attestationmaterial.Request{}, fmt.Errorf("writing collateral request: %w", err)
 	}
 	return request, nil
 }

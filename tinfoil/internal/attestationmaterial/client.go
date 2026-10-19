@@ -40,7 +40,10 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response, error) {
+func (c *Client) Fetch(ctx context.Context, request Request) (wire.Response, error) {
+	if err := request.Validate(); err != nil {
+		return wire.Response{}, err
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return wire.Response{}, fmt.Errorf("marshaling collaterals request: %w", err)

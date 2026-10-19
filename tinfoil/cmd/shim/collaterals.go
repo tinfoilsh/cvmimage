@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"os"
 
-	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
 	shimconfig "tinfoil/internal/config"
 )
 
-func newCollateralSource(request wire.Request, config *shimconfig.Config) (collateralSource, error) {
+func newCollateralSource(request attestationmaterial.Request, config *shimconfig.Config) (collateralSource, error) {
 	if request.Platform == attestation.PlatformDummy {
 		return nil, nil
 	}
@@ -23,23 +21,20 @@ func newCollateralSource(request wire.Request, config *shimconfig.Config) (colla
 	return attestationmaterial.NewCache(request, client), nil
 }
 
-func loadCollateralRequest(path string) (wire.Request, error) {
+func loadCollateralRequest(path string) (attestationmaterial.Request, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return wire.Request{}, fmt.Errorf("reading %s: %w", path, err)
+		return attestationmaterial.Request{}, fmt.Errorf("reading %s: %w", path, err)
 	}
-	var request wire.Request
+	var request attestationmaterial.Request
 	if err := json.Unmarshal(data, &request); err != nil {
-		return wire.Request{}, fmt.Errorf("parsing collateral request: %w", err)
+		return attestationmaterial.Request{}, fmt.Errorf("parsing collateral request: %w", err)
 	}
-	if request.Platform == "" {
-		return wire.Request{}, fmt.Errorf("collateral request is missing platform")
-	}
-	if request.QuoteBase64 == "" {
-		return wire.Request{}, fmt.Errorf("collateral request is missing quote_base64")
+	if err := request.Validate(); err != nil {
+		return attestationmaterial.Request{}, err
 	}
 	if request.Platform != attestation.PlatformDummy && request.Repo == "" {
-		return wire.Request{}, fmt.Errorf("collateral request is missing repo")
+		return attestationmaterial.Request{}, fmt.Errorf("collateral request is missing repo")
 	}
 	return request, nil
 }

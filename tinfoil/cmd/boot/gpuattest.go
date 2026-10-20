@@ -14,54 +14,38 @@ import (
 	"tinfoil/internal/nvml"
 )
 
-const nvattestTimeout = 5 * time.Minute
+const (
+	nvattestTimeout = 5 * time.Minute
+	gpuDeviceIDH100 = 0x2331
+	gpuDeviceIDH200 = 0x2335
+	gpuDeviceIDB200 = 0x2901
+	gpuDeviceIDB300 = 0x3182
+)
 
-func detectGPUArchitectures(expectedGPUs int) ([]nvml.DeviceArchitecture, error) {
-	if ret := nvml.Init(); ret != nvml.SUCCESS {
-		return nil, fmt.Errorf("nvml.Init: %s", nvml.ErrorString(ret))
+func validateGPUSecurity(deviceIDs []uint64, expectedGPUs int, allowUnencryptedNVLink bool) (string, error) {
+	if len(deviceIDs) == 0 {
+		return "", fmt.Errorf("no GPUs detected")
 	}
-	defer nvml.Shutdown()
-
-	count, ret := nvml.DeviceGetCount()
-	if ret != nvml.SUCCESS {
-		return nil, fmt.Errorf("DeviceGetCount: %s", nvml.ErrorString(ret))
-	}
-	if count != expectedGPUs {
-		return nil, fmt.Errorf("expected %d GPUs, detected %d", expectedGPUs, count)
-	}
-	architectures := make([]nvml.DeviceArchitecture, count)
-	for i := range architectures {
-		device, ret := nvml.DeviceGetHandleByIndex(i)
-		if ret != nvml.SUCCESS {
-			return nil, fmt.Errorf("DeviceGetHandleByIndex(%d): %s", i, nvml.ErrorString(ret))
-		}
-		architectures[i], ret = device.GetArchitecture()
-		if ret != nvml.SUCCESS {
-			return nil, fmt.Errorf("GetArchitecture(%d): %s", i, nvml.ErrorString(ret))
-		}
-	}
-	return architectures, nil
-}
-
-func validateGPUSecurity(architectures []nvml.DeviceArchitecture, allowUnencryptedNVLink bool) (string, error) {
-	if len(architectures) == 0 {
-		return "", fmt.Errorf("no GPU architectures detected")
+	if len(deviceIDs) != expectedGPUs {
+		return "", fmt.Errorf("expected %d GPUs, detected %d", expectedGPUs, len(deviceIDs))
 	}
 	var arch string
-	for i, architecture := range architectures {
-		switch architecture {
-		case nvml.DEVICE_ARCH_HOPPER:
-			arch = attestation.GPUArchHopper
-		case nvml.DEVICE_ARCH_BLACKWELL:
-			arch = attestation.GPUArchBlackwell
+	for i, deviceID := range deviceIDs {
+		var deviceArch string
+		switch deviceID {
+		case gpuDeviceIDH100, gpuDeviceIDH200:
+			deviceArch = attestation.GPUArchHopper
+		case gpuDeviceIDB200, gpuDeviceIDB300:
+			deviceArch = attestation.GPUArchBlackwell
 		default:
-			return "", fmt.Errorf("GPU %d has unsupported architecture %d", i, architecture)
+			return "", fmt.Errorf("GPU %d has unsupported PCI device ID %#x", i, deviceID)
 		}
-		if architecture != architectures[0] {
+		if arch != "" && deviceArch != arch {
 			return "", fmt.Errorf("mixed GPU architectures are unsupported")
 		}
+		arch = deviceArch
 	}
-	if arch == attestation.GPUArchHopper && len(architectures) > 1 && !allowUnencryptedNVLink {
+	if arch == attestation.GPUArchHopper && len(deviceIDs) > 1 && !allowUnencryptedNVLink {
 		return "", fmt.Errorf("multi-GPU Hopper (H100/H200) uses unencrypted NVLink; set security.allow-unencrypted-nvlink: true to allow it")
 	}
 	return arch, nil

@@ -38,12 +38,7 @@ GHCR, Docker Hub, GCR, and legacy `REGISTRY_<HOST>_USER/TOKEN` inputs keep their
 existing format. This contract supports one custom registry, matching the
 controlplane's one-connection-per-organization policy.
 
-## Rollout
+## Compatibility
 
-The producer is [controlplane #890](https://github.com/tinfoilsh/controlplane/pull/890).
-Release this guest support before enabling structured delivery in the controlplane,
-then pin that supporting CVM release in the workload configuration and rebuild its
-measured release. Previously published images ignore this secret; a successful
-controlplane credential check does not establish guest compatibility. The first
-supporting version must be recorded from the actual published release, not inferred
-from the next expected version number.
+CVM v0.14.14 is the first release that reads `CUSTOM_REGISTRY_AUTH`; older images
+ignore it. A workload that relies on it needs `cvm-version` 0.14.14 or later.

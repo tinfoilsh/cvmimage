@@ -6,9 +6,9 @@
   [docs/build.md](docs/build.md), on x86_64 Linux with the Nix release that
   `nix/install.sh` installs. Always pass `-I .`, because that Nix runs with
   `restrict-eval`: `nix-build -I . -A shipping-image -o result`.
-- `nix-build -I . -A checks` runs the Go tests and `go vet` that CI runs. Pass
-  it before you push. `go test ./...` in `tinfoil/` is the fast loop; the Go
-  packages build only on Linux.
+- `nix-build -I . -A checks` runs the Go tests and `go vet` that CI runs.
+  `go test ./...` in `tinfoil/` is the fast loop; the Go packages build only on
+  Linux.
 - When `tinfoil/go.mod` or `go.sum` changes, set `vendorHash` in `nix/go.nix`
   to the hash the failed build reports.
 - Any change to an image input (Go code, `image/rootfs/`, `nix/`, `kernel/`,
@@ -29,8 +29,7 @@
   `/mnt/ramdisk/private`, which containers see only through explicit read-only
   grants.
 - This code is the customer's audit surface. Put convenience validation,
-  warnings, and typo checks in pre-deploy tooling (tinctl, tinfoild, CI), not in
-  the image.
+  warnings, and typo checks in pre-deploy tooling or CI, not in the image.
 
 ## Inside a running enclave
 
@@ -39,34 +38,11 @@
 - Debug SSH lands in the `tinfoil-debug-toolbox` container, which controls the
   workload containers through `tindbg` and the Docker CLI. Its own `AGENTS.md`
   in `/run/root` explains how.
-- The debug image (`-A debug-image`, launched with
-  `tinctl dev-launch --debug-image`) adds a BusyBox shell on the serial console.
-- `tinctl watch <id>` prints each boot stage's result.
+- The debug image (`-A debug-image`) adds a BusyBox shell on the serial
+  console.
 
-[tinfoild's AGENTS.md](https://github.com/tinfoilsh/tinfoild/blob/main/AGENTS.md)
-covers launching and reaching an enclave.
+## Testing
 
-## End-to-end testing
-
-Run the lightest level that exercises your change, and check the behavior your
-diff touches rather than a generic checklist.
-
-1. `nix-build -I . -A checks`: always.
-2. Build the image: for any change outside Go.
-3. Boot it on a dev host with `tinctl dev-launch` and confirm it reaches
-   `ready`: for any non-trivial runtime change.
-4. Boot it on a host with the TEE and GPU shape your change depends on. Ask
-   which host first.
-5. One boot per relevant platform: only when the user asks.
-
-The axes are TEE (AMD SEV-SNP or Intel TDX), GPU type, and GPU count (none,
-one, or several). A boot-path change needs one host per TEE; a GPU attestation,
-model pack, or passthrough change needs each GPU shape it can reach. Find hosts
-by `cpu_vendor` and `gpu_type` in infra's `inventory.yml`, and follow
-[infra's AGENTS.md](https://github.com/tinfoilsh/infra/blob/main/AGENTS.md)
-for which hosts you may use. If the fleet lacks a combination, say so instead of
-claiming coverage.
-
-Use the configs and verification scripts in
-[infra-harness](https://github.com/tinfoilsh/infra-harness) rather than writing
-new ones.
+Pass `checks` before you push, and build the image for any change outside Go.
+Booting the image on AMD SEV-SNP or Intel TDX hardware needs Tinfoil host
+access, so ask the user how to test a runtime change end to end.

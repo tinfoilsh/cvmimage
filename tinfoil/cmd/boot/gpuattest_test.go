@@ -6,37 +6,45 @@ import (
 	"testing"
 
 	"tinfoil/internal/attestation"
-	"tinfoil/internal/nvml"
 	"tinfoil/internal/runtimeconfig"
 )
 
 func TestValidateGPUSecurity(t *testing.T) {
-	const unknownArchitecture nvml.DeviceArchitecture = 0
-	hopper := []nvml.DeviceArchitecture{nvml.DEVICE_ARCH_HOPPER}
-	blackwell := []nvml.DeviceArchitecture{nvml.DEVICE_ARCH_BLACKWELL}
+	const unknownDeviceID = 0xffff
+	h100 := []uint64{gpuDeviceIDH100}
+	h200 := []uint64{gpuDeviceIDH200}
+	b200 := []uint64{gpuDeviceIDB200}
+	b300 := []uint64{gpuDeviceIDB300}
 	for _, test := range []struct {
-		name          string
-		architectures []nvml.DeviceArchitecture
-		allow         bool
-		wantArch      string
-		wantSwitch    bool
-		wantErr       string
+		name       string
+		deviceIDs  []uint64
+		allow      bool
+		wantArch   string
+		wantSwitch bool
+		wantErr    string
 	}{
-		{name: "single Hopper", architectures: hopper, wantArch: attestation.GPUArchHopper},
-		{name: "multiple Hopper default", architectures: slices.Repeat(hopper, hopperGPUCount), wantErr: "security.allow-unencrypted-nvlink: true"},
-		{name: "multiple Hopper opt-in", architectures: slices.Repeat(hopper, hopperGPUCount), allow: true, wantArch: attestation.GPUArchHopper, wantSwitch: true},
-		{name: "two Hopper default", architectures: slices.Repeat(hopper, 2), wantErr: "security.allow-unencrypted-nvlink: true"},
-		{name: "single Blackwell", architectures: blackwell, wantArch: attestation.GPUArchBlackwell},
-		{name: "multiple Blackwell default", architectures: slices.Repeat(blackwell, maxGPUCount), wantArch: attestation.GPUArchBlackwell},
-		{name: "multiple Blackwell opt-in", architectures: slices.Repeat(blackwell, maxGPUCount), allow: true, wantArch: attestation.GPUArchBlackwell},
-		{name: "missing devices", wantErr: "no GPU architectures"},
-		{name: "unknown architecture", architectures: []nvml.DeviceArchitecture{unknownArchitecture}, allow: true, wantErr: "unsupported architecture"},
-		{name: "unknown last device", architectures: []nvml.DeviceArchitecture{nvml.DEVICE_ARCH_BLACKWELL, unknownArchitecture}, allow: true, wantErr: "GPU 1 has unsupported architecture"},
-		{name: "mixed architectures", architectures: []nvml.DeviceArchitecture{nvml.DEVICE_ARCH_BLACKWELL, nvml.DEVICE_ARCH_HOPPER}, wantErr: "mixed GPU architectures"},
-		{name: "mixed architectures opt-in", architectures: []nvml.DeviceArchitecture{nvml.DEVICE_ARCH_HOPPER, nvml.DEVICE_ARCH_BLACKWELL}, allow: true, wantErr: "mixed GPU architectures"},
+		{name: "single H100", deviceIDs: h100, wantArch: attestation.GPUArchHopper},
+		{name: "single H200", deviceIDs: h200, wantArch: attestation.GPUArchHopper},
+		{name: "multiple H100 default", deviceIDs: slices.Repeat(h100, hopperGPUCount), wantErr: "security.allow-unencrypted-nvlink: true"},
+		{name: "multiple H100 opt-in", deviceIDs: slices.Repeat(h100, hopperGPUCount), allow: true, wantArch: attestation.GPUArchHopper, wantSwitch: true},
+		{name: "multiple H200 default", deviceIDs: slices.Repeat(h200, hopperGPUCount), wantErr: "security.allow-unencrypted-nvlink: true"},
+		{name: "multiple H200 opt-in", deviceIDs: slices.Repeat(h200, hopperGPUCount), allow: true, wantArch: attestation.GPUArchHopper, wantSwitch: true},
+		{name: "two Hopper default", deviceIDs: slices.Repeat(h200, 2), wantErr: "security.allow-unencrypted-nvlink: true"},
+		{name: "single B200", deviceIDs: b200, wantArch: attestation.GPUArchBlackwell},
+		{name: "single B300", deviceIDs: b300, wantArch: attestation.GPUArchBlackwell},
+		{name: "multiple B200 default", deviceIDs: slices.Repeat(b200, maxGPUCount), wantArch: attestation.GPUArchBlackwell},
+		{name: "multiple B300 default", deviceIDs: slices.Repeat(b300, maxGPUCount), wantArch: attestation.GPUArchBlackwell},
+		{name: "multiple Blackwell opt-in", deviceIDs: slices.Repeat(b200, maxGPUCount), allow: true, wantArch: attestation.GPUArchBlackwell},
+		{name: "missing devices", wantErr: "no GPUs detected"},
+		{name: "unknown device opt-in", deviceIDs: []uint64{unknownDeviceID}, allow: true, wantErr: "unsupported PCI device ID"},
+		{name: "multiple unknown devices", deviceIDs: slices.Repeat([]uint64{unknownDeviceID}, maxGPUCount), wantErr: "unsupported PCI device ID"},
+		{name: "unknown last device", deviceIDs: []uint64{gpuDeviceIDB200, unknownDeviceID}, allow: true, wantErr: "GPU 1 has unsupported PCI device ID"},
+		{name: "unknown first device", deviceIDs: []uint64{unknownDeviceID, gpuDeviceIDB300}, wantErr: "GPU 0 has unsupported PCI device ID"},
+		{name: "mixed architectures", deviceIDs: []uint64{gpuDeviceIDB200, gpuDeviceIDH200}, wantErr: "mixed GPU architectures"},
+		{name: "mixed architectures opt-in", deviceIDs: []uint64{gpuDeviceIDH200, gpuDeviceIDB300}, allow: true, wantErr: "mixed GPU architectures"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			arch, err := validateGPUSecurity(test.architectures, test.allow)
+			arch, err := validateGPUSecurity(test.deviceIDs, len(test.deviceIDs), test.allow)
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) || arch != "" {
 					t.Fatalf("validateGPUSecurity = %q, %v; want rejection containing %q", arch, err, test.wantErr)
@@ -46,7 +54,7 @@ func TestValidateGPUSecurity(t *testing.T) {
 			if err != nil || arch != test.wantArch {
 				t.Fatalf("validateGPUSecurity = %q, %v; want %q", arch, err, test.wantArch)
 			}
-			needSwitch, err := attestation.RequiresNVSwitchEvidence(arch, len(test.architectures))
+			needSwitch, err := attestation.RequiresNVSwitchEvidence(arch, len(test.deviceIDs))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,6 +62,18 @@ func TestValidateGPUSecurity(t *testing.T) {
 				t.Fatalf("NVSwitch evidence required = %v, want %v", needSwitch, test.wantSwitch)
 			}
 		})
+	}
+}
+
+func TestGPUSecurityRejectsCountMismatch(t *testing.T) {
+	for _, deviceIDs := range [][]uint64{
+		{gpuDeviceIDB200},
+		slices.Repeat([]uint64{gpuDeviceIDB200}, maxGPUCount+1),
+	} {
+		arch, err := validateGPUSecurity(deviceIDs, maxGPUCount, true)
+		if err == nil || !strings.Contains(err.Error(), "GPUs, detected") || arch != "" {
+			t.Fatalf("validateGPUSecurity = %q, %v; want GPU count mismatch", arch, err)
+		}
 	}
 }
 
@@ -84,8 +104,8 @@ containers:
 			if err != nil {
 				t.Fatal(err)
 			}
-			architectures := slices.Repeat([]nvml.DeviceArchitecture{nvml.DEVICE_ARCH_HOPPER}, config.GPUs)
-			_, err = validateGPUSecurity(architectures, config.Security.AllowUnencryptedNVLink)
+			deviceIDs := slices.Repeat([]uint64{gpuDeviceIDH200}, config.GPUs)
+			_, err = validateGPUSecurity(deviceIDs, config.GPUs, config.Security.AllowUnencryptedNVLink)
 			if (err == nil) != test.allowed {
 				t.Fatalf("policy error = %v, want allowed = %v", err, test.allowed)
 			}

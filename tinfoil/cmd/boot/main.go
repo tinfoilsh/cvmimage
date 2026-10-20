@@ -138,9 +138,9 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	var gpuArch string
 	if gpuCount > 0 {
-		architectures, err := detectGPUArchitectures(gpuCount)
+		deviceIDs, err := nvidia.GPUDeviceIDs()
 		if err == nil {
-			gpuArch, err = validateGPUSecurity(architectures, config.Security.AllowUnencryptedNVLink)
+			gpuArch, err = validateGPUSecurity(deviceIDs, gpuCount, config.Security.AllowUnencryptedNVLink)
 		}
 		if err != nil {
 			if readyErr := setGPUReadyState(false); readyErr != nil {

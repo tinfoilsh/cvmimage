@@ -142,6 +142,46 @@ func TestGPUCountUsesExactNVIDIAClassesAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestGPUDeviceIDsUsesExactNVIDIAClassesAndFailsClosed(t *testing.T) {
+	const (
+		firstDeviceID  = 0x2901
+		secondDeviceID = 0x3182
+		firstGPU       = "0000:01:00.0"
+		secondGPU      = "0000:02:00.0"
+	)
+	paths := testDevicePaths(t)
+	ids, err := gpuDeviceIDs(paths)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("empty gpuDeviceIDs = %v, %v", ids, err)
+	}
+	for name, fixture := range map[string][2]string{
+		firstGPU:       {"0x10de", "0x030000"},
+		secondGPU:      {"0x10de", "0x030200"},
+		"0000:03:00.0": {"0x10de", "0x030201"},
+		"0000:04:00.0": {"0x10de", "0x068000"},
+		"0000:05:00.0": {"0x1af4", "0x030200"},
+	} {
+		addPCIFixture(t, paths, name, fixture[0], fixture[1], false)
+	}
+	writeTestFile(t, filepath.Join(paths.pciDevices, firstGPU, "device"), "0x2901\n")
+	secondIDPath := filepath.Join(paths.pciDevices, secondGPU, "device")
+	writeTestFile(t, secondIDPath, "0x3182\n")
+	ids, err = gpuDeviceIDs(paths)
+	if err != nil || !reflect.DeepEqual(ids, []uint64{firstDeviceID, secondDeviceID}) {
+		t.Fatalf("gpuDeviceIDs = %v, %v; want both GPU IDs", ids, err)
+	}
+	writeTestFile(t, secondIDPath, "invalid\n")
+	if ids, err := gpuDeviceIDs(paths); err == nil || ids != nil {
+		t.Fatalf("gpuDeviceIDs accepted malformed ID: %v, %v", ids, err)
+	}
+	if err := os.Remove(secondIDPath); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := gpuDeviceIDs(paths); err == nil || ids != nil {
+		t.Fatalf("gpuDeviceIDs accepted missing ID: %v, %v", ids, err)
+	}
+}
+
 func TestSWManagementVPDDetectionIsBoundedAndVendorIndependent(t *testing.T) {
 	paths := testDevicePaths(t)
 	addPCIFixture(t, paths, "0000:01:00.0", "0x15b3", "0x020000", false)

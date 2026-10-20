@@ -136,7 +136,10 @@ harness_accept_walk:
     jmp harness_ret
 
 # What the shims give PVALIDATE and TDG.MEM.PAGE.ACCEPT: the empty range is
-# dropped here exactly as both of them drop it.
+# dropped here exactly as both of them drop it. It leaves every register the
+# real ones may (psc.inc, validate_range, accept_range) holding garbage and
+# %r12 at the end of the range, so a caller that kept something there across
+# the call fails here rather than only in a guest.
 harness_accept:
     cmp %r13, %r12
     jae 1f
@@ -150,7 +153,21 @@ harness_accept:
     shr $4, %rax
     inc %rax
     mov %rax, harness_count(%rip)
-1:  ret
+1:  mov %r13, %r12
+    movabs $HARNESS_POISON, %rax
+    mov %rax, %rbx
+    mov %rax, %rcx
+    mov %rax, %rdx
+    mov %rax, %rdi
+    mov %rax, %rsi
+    mov %rax, %r9
+    mov %rax, %r10
+    mov %rax, %r11
+    mov %rax, %r14
+    mov %rax, %r15
+    ret
+
+.set HARNESS_POISON, 0x0bad0bad0bad0bad
 
 # A range of nothing in particular, so that a routine that recomputed it
 # rather than leaving it alone would not land on it by chance.

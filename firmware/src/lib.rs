@@ -12,6 +12,7 @@
 
 mod acpi;
 pub mod boot;
+mod efi;
 pub mod kernel;
 pub mod layout;
 /// The shims' own assembly, linked into the tests that hold it to this crate.
@@ -63,6 +64,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         Placed::measured(PAGE_TABLES, "", RESERVED, identity_map(0, false)),
         Placed::measured(BSP_STACK, "", RESERVED, boot::gdt_stack()),
         Placed::measured(KERNEL_SETUP_BASE, "kernel_setup", RESERVED, p.setup.clone()),
+        Placed::measured(EFI_PAGE, "efi", RESERVED, efi::page()),
         Placed::measured(KERNEL_BASE, "kernel", RAM, p.kernel),
         Placed::measured(INITRAMFS_BASE, "initramfs", RAM, p.initramfs),
         // The map covers the reset page, so the shim is never told to accept what it runs from.
@@ -71,9 +73,11 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
     boot::validate(&placed, params.memory)?;
     let spans = boot::shim_spans(&placed);
-    let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
+    let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
+    efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    boot::fill(&mut placed, RESET_ALIAS, shim(RESET_SHIM, p.entry, &spans)?)?;
+    let shim_page = shim(RESET_SHIM, p.entry, &spans, lazy_bound(p.info))?;
+    boot::fill(&mut placed, RESET_ALIAS, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
 
     // Ascending GPA order: how a loader adds pages and the digest is built.
@@ -113,6 +117,7 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         ),
         Placed::measured(BSP_STACK, "", RESERVED, boot::gdt_stack()),
         Placed::measured(SNP_GHCB, "", RESERVED, vec![0u8; PAGE as usize]),
+        Placed::measured(EFI_PAGE, "efi", RESERVED, efi::page()),
         Placed::measured(SHIM_BASE, "shim", RESERVED, vec![0u8; PAGE as usize]),
         Placed::measured(KERNEL_SETUP_BASE, "kernel_setup", RESERVED, p.setup.clone()),
         Placed::measured(KERNEL_BASE, "kernel", RAM, p.kernel),
@@ -130,9 +135,11 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
         .collect();
     // The setup_data chain is one measured SETUP_CC_BLOB record.
-    let zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
+    let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
+    efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    boot::fill(&mut placed, SHIM_BASE, shim(SNP_SHIM, p.entry, &spans)?)?;
+    let shim_page = shim(SNP_SHIM, p.entry, &spans, lazy_bound(p.info))?;
+    boot::fill(&mut placed, SHIM_BASE, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
 
     placed.sort_by_key(|p| p.base);
@@ -143,6 +150,13 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         entry: p.entry,
         shim_owned,
     })
+}
+
+/// Everything below the end of the kernel's decompression is accepted by the
+/// shim, since the decompressor runs before Linux's own acceptance does; past
+/// it, whole 2-MiB units are Linux's to accept (see lazy.inc).
+fn lazy_bound(info: boot::KernelInfo) -> u64 {
+    align_up(KERNEL_BASE + info.init_size as u64, UNACCEPTED_UNIT)
 }
 
 /// Formats an io::Error with the action that failed.

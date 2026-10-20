@@ -77,6 +77,12 @@ pub fn parse_bzimage(image: &[u8]) -> Result<KernelInfo, String> {
     if image[HDR_RELOCATABLE] == 0 && get64(image, HDR_PREF_ADDRESS) != KERNEL_BASE {
         return Err("kernel is not relocatable and prefers a different load address".into());
     }
+    // A relocatable kernel still moves its decompressor up to the address it
+    // prefers (compressed/head_64.S), and does so before Linux can accept
+    // memory: past KERNEL_BASE + init_size is RAM the shim leaves to Linux.
+    if get64(image, HDR_PREF_ADDRESS) > KERNEL_BASE {
+        return Err("kernel prefers a load address above the fixed one".into());
+    }
     let setup_sects = if image[HDR_SETUP_SECTS] == 0 {
         4
     } else {
@@ -253,6 +259,20 @@ pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
         if pair[0].1 > pair[1].0 {
             return Err(format!("placed regions overlap at {:#x}", pair[1].0));
         }
+    }
+    // The unaccepted bitmap has to be RAM the accept walk clears, not a span.
+    let bitmap = (
+        UNACCEPTED_BITMAP,
+        UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
+    );
+    if let Some(p) = spans(placed)
+        .iter()
+        .find(|(lo, hi, _)| *lo < bitmap.1 && bitmap.0 < *hi)
+    {
+        return Err(format!(
+            "placed region {:#x} overlaps the unaccepted bitmap",
+            p.0
+        ));
     }
     for p in placed {
         if !p.base.is_multiple_of(PAGE) {

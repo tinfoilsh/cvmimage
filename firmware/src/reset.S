@@ -2,6 +2,7 @@
 .include "madt.inc"
 .include "map.inc"
 .include "power.inc"
+.include "lazy.inc"
 .section .reset,"ax"
 
 .code32
@@ -46,7 +47,12 @@ long_mode:
     call merge_regions
     mov $ZERO_PAGE, %edi
     call e820_build
-    # Linux finds unaccepted memory only through EFI, so guest RAM is accepted here.
+    # Guest RAM is accepted here up to the lazy bound; past it, Linux accepts
+    # it as it allocates, finding the units it has to in the EFI table efi.rs
+    # describes, and the RAM it may randomize the kernel into in its map.
+    mov $ZERO_PAGE, %edi
+    call efi_memmap_build
+    call unaccepted_size
     call accept_walk
 
 boot_kernel:
@@ -88,7 +94,8 @@ accept_2m:
 accept_done:
     ret
 
-map_code die_map, accept_range
+map_code die_map, accept_lazy
+lazy_code accept_range
 tdx_port_write_code tdcall
 
 # A map this image will not run in, reported as the top of RAM it refused.

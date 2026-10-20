@@ -3,6 +3,7 @@
 .include "map.inc"
 .include "psc.inc"
 .include "power.inc"
+.include "lazy.inc"
 .section .reset,"ax"
 
 .code32
@@ -46,8 +47,13 @@ snp_long_mode:
     call merge_regions
     mov $ZERO_PAGE, %edi
     call e820_build
-    # Linux finds unvalidated memory only through EFI, so guest RAM is made
-    # private and validated here, in that order and by the guest itself.
+    # Guest RAM is made private and validated by the guest itself, in that
+    # order, up to the lazy bound; past it, Linux does it as it allocates,
+    # finding the units it has to in the EFI table efi.rs describes, and the
+    # RAM it may randomize the kernel into in its map.
+    mov $ZERO_PAGE, %edi
+    call efi_memmap_build
+    call unaccepted_size
     call ghcb_share
     call accept_walk
     q35_power_init snp_port_write
@@ -65,7 +71,8 @@ snp_boot_kernel:
     lea shim_data(%rip), %rax
     jmp *(%rax)
 
-map_code die_map, accept_private
+map_code die_map, accept_lazy
+lazy_code accept_private
 psc_code die_psc, vmgexit
 snp_port_write_code vmgexit
 

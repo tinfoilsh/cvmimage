@@ -17,8 +17,11 @@ const imageReservedBytes = 2 << 20
 
 // enforceRAMSize holds the launch to at least the memory the config asked for,
 // which HOST_DATA commits to while the host picks the machine's size. Only
-// System RAM counts: the loader or the shim validated every page of it, but
-// nothing the host marks reserved.
+// System RAM counts, never anything the host marks reserved. The loader or the
+// shim validated the part Linux boots in, and Linux validates the rest as it
+// first allocates from it, so a host that describes System RAM it has not
+// backed is found out then and the guest terminates; a host that describes too
+// little is refused here.
 func enforceRAMSize(root string, requestedMiB int) (string, error) {
 	if requestedMiB < 1 {
 		return "", fmt.Errorf("config requests %d MiB of RAM, at least 1 is required", requestedMiB)

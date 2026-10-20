@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	nvattestTimeout = 5 * time.Minute
-	gpuDeviceIDH100 = 0x2331
-	gpuDeviceIDH200 = 0x2335
-	gpuDeviceIDB200 = 0x2901
-	gpuDeviceIDB300 = 0x3182
+	nvattestTimeout    = 5 * time.Minute
+	gpuDeviceIDH100SXM = 0x2330
+	gpuDeviceIDH100    = 0x2331
+	gpuDeviceIDH200    = 0x2335
+	gpuDeviceIDB200    = 0x2901
+	gpuDeviceIDB300    = 0x3182
 )
 
 func validateGPUSecurity(deviceIDs []uint64, expectedGPUs int, allowUnencryptedNVLink bool) (string, error) {
@@ -33,7 +34,7 @@ func validateGPUSecurity(deviceIDs []uint64, expectedGPUs int, allowUnencryptedN
 	for i, deviceID := range deviceIDs {
 		var deviceArch string
 		switch deviceID {
-		case gpuDeviceIDH100, gpuDeviceIDH200:
+		case gpuDeviceIDH100SXM, gpuDeviceIDH100, gpuDeviceIDH200:
 			deviceArch = attestation.GPUArchHopper
 		case gpuDeviceIDB200, gpuDeviceIDB300:
 			deviceArch = attestation.GPUArchBlackwell

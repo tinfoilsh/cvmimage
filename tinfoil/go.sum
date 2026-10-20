@@ -97,8 +97,8 @@ github.com/tinfoilsh/modelwrap v0.2.1 h1:2Up98rhP+BtEtQowjHm+DpZtZiWORa3p0XWVzgX
 github.com/tinfoilsh/modelwrap v0.2.1/go.mod h1:y3ov37f4WkQVA0jwJ/Rg7yQtKZuZloaQC+U7GgSoa8w=
 github.com/tinfoilsh/tinfoil-config v0.1.17 h1:MU2ENuroO2gxIF+n/Rw9KGNgQje+9H5bT04k1HxZh+E=
 github.com/tinfoilsh/tinfoil-config v0.1.17/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
-github.com/tinfoilsh/tinfoil-config v0.1.18-0.20261020025029-56be6c7ba42c h1:7ibDrU9eT7YXLivi0JgrA66cif89MxW3HnxqDkuRPd4=
-github.com/tinfoilsh/tinfoil-config v0.1.18-0.20261020025029-56be6c7ba42c/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
+github.com/tinfoilsh/tinfoil-config v0.1.18 h1:I0R2hxEj7AbGSufup0wVZie8c9QXpwfqph0szL3f0+o=
+github.com/tinfoilsh/tinfoil-config v0.1.18/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
 github.com/tinfoilsh/tinfoil-go v0.16.2-0.20261005163020-6947646acf0c h1:1upPyFfT2Ic4xAjw/68CnQLRWZ1wZr10G0x0FwB65bU=
 github.com/tinfoilsh/tinfoil-go v0.16.2-0.20261005163020-6947646acf0c/go.mod h1:rxhbkBevlTIfwatj6wkhGLY45HL8K6H1ynmxbmOq6N8=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=

@@ -8,97 +8,63 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/nvml"
 )
 
-const (
-	nvattestTimeout = 5 * time.Minute
-	nvidiaVendorID  = "0x10de"
-	nvidiaGPUClass  = "0x030200" // 3D controller
-	gpuDeviceIDH100 = "0x2331"
-	gpuDeviceIDH200 = "0x2335"
-	gpuDeviceIDB200 = "0x2901"
-	gpuDeviceIDB300 = "0x3182"
-)
+const nvattestTimeout = 5 * time.Minute
 
-// forEachNVIDIAGPU iterates over PCI devices that are NVIDIA GPUs
-// (vendor 0x10de + 3D-controller class), invoking fn with each device's
-// sysfs entry name. Walking stops if fn returns false.
-func forEachNVIDIAGPU(fn func(entryName string) bool) error {
-	const pciPath = "/sys/bus/pci/devices"
-	entries, err := os.ReadDir(pciPath)
-	if err != nil {
-		return fmt.Errorf("reading PCI devices: %w", err)
+func detectGPUArchitectures(expectedGPUs int) ([]nvml.DeviceArchitecture, error) {
+	if ret := nvml.Init(); ret != nvml.SUCCESS {
+		return nil, fmt.Errorf("nvml.Init: %s", nvml.ErrorString(ret))
 	}
-	for _, entry := range entries {
-		vendor, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "vendor"))
-		if err != nil || strings.TrimSpace(string(vendor)) != nvidiaVendorID {
-			continue
+	defer nvml.Shutdown()
+
+	count, ret := nvml.DeviceGetCount()
+	if ret != nvml.SUCCESS {
+		return nil, fmt.Errorf("DeviceGetCount: %s", nvml.ErrorString(ret))
+	}
+	if count != expectedGPUs {
+		return nil, fmt.Errorf("expected %d GPUs, detected %d", expectedGPUs, count)
+	}
+	architectures := make([]nvml.DeviceArchitecture, count)
+	for i := range architectures {
+		device, ret := nvml.DeviceGetHandleByIndex(i)
+		if ret != nvml.SUCCESS {
+			return nil, fmt.Errorf("DeviceGetHandleByIndex(%d): %s", i, nvml.ErrorString(ret))
 		}
-		class, err := os.ReadFile(filepath.Join(pciPath, entry.Name(), "class"))
-		if err != nil || strings.TrimSpace(string(class)) != nvidiaGPUClass {
-			continue
-		}
-		if !fn(entry.Name()) {
-			return nil
+		architectures[i], ret = device.GetArchitecture()
+		if ret != nvml.SUCCESS {
+			return nil, fmt.Errorf("GetArchitecture(%d): %s", i, nvml.ErrorString(ret))
 		}
 	}
-	return nil
+	return architectures, nil
 }
 
-// detectGPUCount returns the number of NVIDIA 3D-controller PCI devices
-// in the guest. The caller validates against the config-declared count.
-func detectGPUCount() (int, error) {
-	count := 0
-	if err := forEachNVIDIAGPU(func(string) bool { count++; return true }); err != nil {
-		return 0, err
+func validateGPUSecurity(architectures []nvml.DeviceArchitecture, allowUnencryptedNVLink bool) (string, error) {
+	if len(architectures) == 0 {
+		return "", fmt.Errorf("no GPU architectures detected")
 	}
-	return count, nil
-}
-
-// archFamily maps a detected GPU product to its architecture family label.
-// Unknown products (including "") map to "", which the shape rule rejects
-// for multi-GPU configurations.
-func archFamily(arch string) string {
-	switch arch {
-	case "h100", "h200":
-		return attestation.GPUArchHopper
-	case "b200", "b300":
-		return attestation.GPUArchBlackwell
-	default:
-		return ""
-	}
-}
-
-// detectGPUArch returns "h100", "h200", "b200", "b300", or "" from the first GPU.
-func detectGPUArch() (string, error) {
-	const pciPath = "/sys/bus/pci/devices"
 	var arch string
-	err := forEachNVIDIAGPU(func(entryName string) bool {
-		device, err := os.ReadFile(filepath.Join(pciPath, entryName, "device"))
-		if err != nil {
-			return true
-		}
-		switch strings.TrimSpace(string(device)) {
-		case gpuDeviceIDH100:
-			arch = "h100"
-		case gpuDeviceIDH200:
-			arch = "h200"
-		case gpuDeviceIDB200:
-			arch = "b200"
-		case gpuDeviceIDB300:
-			arch = "b300"
+	for i, architecture := range architectures {
+		switch architecture {
+		case nvml.DEVICE_ARCH_HOPPER:
+			arch = attestation.GPUArchHopper
+		case nvml.DEVICE_ARCH_BLACKWELL:
+			arch = attestation.GPUArchBlackwell
 		default:
-			return true
+			return "", fmt.Errorf("GPU %d has unsupported architecture %d", i, architecture)
 		}
-		return false
-	})
-	return arch, err
+		if architecture != architectures[0] {
+			return "", fmt.Errorf("mixed GPU architectures are unsupported")
+		}
+	}
+	if arch == attestation.GPUArchHopper && len(architectures) > 1 && !allowUnencryptedNVLink {
+		return "", fmt.Errorf("multi-GPU Hopper (H100/H200) uses unencrypted NVLink; set security.allow-unencrypted-nvlink: true to allow it")
+	}
+	return arch, nil
 }
 
 func runNvattest(device string) error {
@@ -188,7 +154,7 @@ type GPURawEvidence struct {
 
 // verifyGPUAttestation runs attestation for the expected number of GPUs (1 or 8).
 // Returns the raw evidence for inclusion in the attestation envelope.
-func verifyGPUAttestation(expectedGPUs int) (*GPURawEvidence, error) {
+func verifyGPUAttestation(expectedGPUs int, arch string) (*GPURawEvidence, error) {
 	ok := false
 	defer func() {
 		if !ok {
@@ -214,11 +180,7 @@ func verifyGPUAttestation(expectedGPUs int) (*GPURawEvidence, error) {
 	}
 	evidence.GPU = gpuRaw
 
-	arch, err := detectGPUArch()
-	if err != nil {
-		return nil, fmt.Errorf("detecting GPU arch: %w", err)
-	}
-	needSwitch, err := attestation.RequiresNVSwitchEvidence(archFamily(arch), expectedGPUs)
+	needSwitch, err := attestation.RequiresNVSwitchEvidence(arch, expectedGPUs)
 	if err != nil {
 		return nil, fmt.Errorf("GPU shape validation: %w", err)
 	}

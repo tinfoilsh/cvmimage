@@ -146,6 +146,20 @@ func run(ctx context.Context, invocation invocation) error {
 		tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), wrapped.Error())
 		return wrapped
 	}
+	var gpuArch string
+	if gpuCount > 0 {
+		architectures, err := detectGPUArchitectures(gpuCount)
+		if err == nil {
+			gpuArch, err = validateGPUSecurity(architectures, config.Security.AllowUnencryptedNVLink)
+		}
+		if err != nil {
+			if readyErr := setGPUReadyState(false); readyErr != nil {
+				log.Printf("WARNING: failed to disable GPU ready state: %v", readyErr)
+			}
+			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
+			return err
+		}
+	}
 	if gpuCount > 0 && config.ShimCfg.DummyAttestation {
 		log.Printf("Skipping GPU attestation for %d GPUs (dummy-attestation mode)", gpuCount)
 		if err := setGPUReadyState(true); err != nil {
@@ -155,7 +169,7 @@ func run(ctx context.Context, invocation invocation) error {
 	} else if gpuCount > 0 {
 		log.Printf("Verifying GPU attestation (%d GPUs)", gpuCount)
 		var err error
-		_, err = verifyGPUAttestation(gpuCount)
+		_, err = verifyGPUAttestation(gpuCount, gpuArch)
 		if err != nil {
 			tracker.Record("gpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 			return err

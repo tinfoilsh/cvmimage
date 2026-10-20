@@ -116,6 +116,11 @@ func GPUCount() (int, error) {
 	return gpuCount(systemDevicePaths)
 }
 
+// GPUDeviceIDs reads every NVIDIA GPU identity, failing on unreadable or malformed IDs.
+func GPUDeviceIDs() ([]uint64, error) {
+	return gpuDeviceIDs(systemDevicePaths)
+}
+
 // DetectFabricMode selects the userspace fabric contract from direct NVIDIA
 // NVSwitch PCI functions and vendor-independent SW_MNG VPD markers.
 func DetectFabricMode() (FabricMode, error) {
@@ -147,6 +152,25 @@ func gpuCount(paths devicePaths) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+func gpuDeviceIDs(paths devicePaths) ([]uint64, error) {
+	devices, err := nvidiaPCIDevices(paths)
+	if err != nil {
+		return nil, err
+	}
+	var ids []uint64
+	for _, device := range devices {
+		if !isGPUClass(device.class) {
+			continue
+		}
+		id, err := readHexAttribute(filepath.Join(paths.pciDevices, device.name, "device"))
+		if err != nil {
+			return nil, fmt.Errorf("read NVIDIA GPU device ID for %s: %w", device.name, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func detectFabricMode(paths devicePaths) (FabricMode, error) {

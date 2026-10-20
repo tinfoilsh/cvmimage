@@ -49,24 +49,6 @@ aliases, or capability additions outside `IPC_LOCK`, `NET_BIND_SERVICE`, and
 the attested top-level GPU count; boolean, zero, negative, duplicate, and
 out-of-range selections are rejected.
 
-## GPU security
-
-The measured `security.allow-unencrypted-nvlink` flag defaults to false. Boot
-rejects multi-GPU Hopper workloads (H100 and H200) unless the configuration
-explicitly permits their unencrypted NVLink traffic:
-
-```yaml
-gpus: 8
-security:
-  allow-unencrypted-nvlink: true
-```
-
-Boot checks every GPU's architecture and the declared GPU count before enabling
-GPU readiness, fetching workload secrets, or starting containers. Unknown or
-mixed architectures are rejected. The policy also applies in dummy-attestation
-mode. Opting in preserves the existing GPU, NVSwitch, and topology attestation
-checks in normal mode. Single-GPU Hopper and Blackwell workloads need no opt-in.
-
 ## Attested workload keys
 
 The measured `attested-keys` list declares `{id, key, uid?, gid?}` and each

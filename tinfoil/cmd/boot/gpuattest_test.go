@@ -12,6 +12,7 @@ import (
 func TestValidateGPUSecurity(t *testing.T) {
 	const unknownDeviceID = 0xffff
 	h100 := []uint64{gpuDeviceIDH100}
+	h100SXM := []uint64{gpuDeviceIDH100SXM}
 	h200 := []uint64{gpuDeviceIDH200}
 	b200 := []uint64{gpuDeviceIDB200}
 	b300 := []uint64{gpuDeviceIDB300}
@@ -24,9 +25,12 @@ func TestValidateGPUSecurity(t *testing.T) {
 		wantErr    string
 	}{
 		{name: "single H100", deviceIDs: h100, wantArch: attestation.GPUArchHopper},
+		{name: "single H100 SXM", deviceIDs: h100SXM, wantArch: attestation.GPUArchHopper},
 		{name: "single H200", deviceIDs: h200, wantArch: attestation.GPUArchHopper},
 		{name: "multiple H100 default", deviceIDs: slices.Repeat(h100, hopperGPUCount), wantErr: "security.allow-unencrypted-nvlink: true"},
 		{name: "multiple H100 opt-in", deviceIDs: slices.Repeat(h100, hopperGPUCount), allow: true, wantArch: attestation.GPUArchHopper, wantSwitch: true},
+		{name: "multiple H100 SXM default", deviceIDs: slices.Repeat(h100SXM, hopperGPUCount), wantErr: "security.allow-unencrypted-nvlink: true"},
+		{name: "multiple H100 SXM opt-in", deviceIDs: slices.Repeat(h100SXM, hopperGPUCount), allow: true, wantArch: attestation.GPUArchHopper, wantSwitch: true},
 		{name: "multiple H200 default", deviceIDs: slices.Repeat(h200, hopperGPUCount), wantErr: "security.allow-unencrypted-nvlink: true"},
 		{name: "multiple H200 opt-in", deviceIDs: slices.Repeat(h200, hopperGPUCount), allow: true, wantArch: attestation.GPUArchHopper, wantSwitch: true},
 		{name: "two Hopper default", deviceIDs: slices.Repeat(h200, 2), wantErr: "security.allow-unencrypted-nvlink: true"},

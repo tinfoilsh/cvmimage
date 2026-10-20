@@ -119,6 +119,38 @@ layout! {
     // of one entry and no more.
     PSC_ENTRY_CUR_PAGE = PAGE - 1;
 
+    // The EFI tables both shims hand Linux so that it accepts most of guest RAM
+    // itself, as it allocates: Linux finds unaccepted memory only through an
+    // EFI configuration table (drivers/firmware/efi/unaccepted_memory.c), so
+    // the image states an EFI boot that has already exited, with no boot or
+    // runtime services and that one table. One measured page holds the system
+    // table, its configuration table, the vendor string, the memory map and,
+    // in its last bytes, the unaccepted table's header; the bitmap that header
+    // begins follows it in RAM the accept walk clears before marking any of it.
+    EFI_PAGE = 0x0040_0000;
+    EFI_CONFIG_TABLE = 0x80;
+    EFI_VENDOR = 0xa0;
+    // The memory map: a descriptor the image measures for this page, then one
+    // a shim appends for each RAM entry of the E820 map it builds. Once
+    // efi_info names a map, Linux's decompressor picks the physical address it
+    // randomizes the kernel to from that map alone, so it names the RAM.
+    EFI_MEMMAP = 0xc0;
+    EFI_MEMDESC_SIZE = 48;
+    EFI_MEMMAP_MAX = (UNACCEPTED_TABLE - EFI_PAGE - EFI_MEMMAP) / EFI_MEMDESC_SIZE;
+    EFI_CONVENTIONAL_MEMORY = 7;
+    EFI_MEMORY_WB = 8;
+    UNACCEPTED_TABLE = EFI_PAGE + PAGE - 24;
+    UNACCEPTED_SIZE = UNACCEPTED_TABLE + 16;
+    // One bit a 2-MiB unit of everything the identity map reaches.
+    UNACCEPTED_BITMAP = EFI_PAGE + PAGE;
+    UNACCEPTED_BITMAP_SIZE = MAP_LIMIT / UNACCEPTED_UNIT / 8;
+    UNACCEPTED_UNIT = 0x20_0000;
+    UNACCEPTED_UNIT_SHIFT = 21;
+    // boot_params' efi_info, as in arch/x86/include/uapi/asm/bootparam.h, and
+    // the field in it a shim writes once it knows how long the map is.
+    BP_EFI_INFO = 0x1c0;
+    BP_EFI_MEMMAP_SIZE = BP_EFI_INFO + 20;
+
     // The GHCB MSR protocol: one request a VMGEXIT, needing no block at all,
     // which is what the shim terminates through and sets the block up with.
     GHCB_MSR = 0xc001_0130;
@@ -145,6 +177,9 @@ layout! {
     SHIM_DATA_ENTRY = 0;
     SHIM_DATA_MIN_MEMORY = 8;
     SHIM_DATA_SPANS = 16;
+    // ...and, in its last word, the 2-MiB-aligned address below which a shim
+    // accepts all of guest RAM itself rather than leaving it to Linux.
+    SHIM_DATA_LAZY = SHIM_DATA_SIZE - 8;
     // One region of the guest's map: where it starts, where it ends, and what
     // E820 calls it. The measured spans and the loader's regions share a shape,
     // because a shim merges them into one list.
@@ -263,6 +298,20 @@ const _: () = assert!(
         && GHCB_SW_SCRATCH == GHCB_SW_EXIT_CODE + 24
 );
 const _: () = assert!(GHCB_VALID_BITS < 0x100 && GHCB_VALID_BYTE < 16);
+// The EFI page and the bitmap after it lie between the shim's pages and the
+// kernel, in a gap of the measured map the accept walk clears before it marks
+// any of the bitmap: the header the shim sizes runs straight into it.
+const _: () = assert!(KERNEL_SETUP_END <= EFI_PAGE && EFI_PAGE.is_multiple_of(PAGE));
+const _: () = assert!(UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE <= KERNEL_BASE);
+const _: () = assert!(UNACCEPTED_UNIT == 1 << UNACCEPTED_UNIT_SHIFT);
+// The bitmap has a bit for every unit the identity map reaches.
+const _: () = assert!(UNACCEPTED_BITMAP_SIZE * 8 * UNACCEPTED_UNIT >= MAX_MEMORY);
+const _: () = assert!(EFI_CONFIG_TABLE + 24 <= EFI_VENDOR && EFI_VENDOR + 16 <= EFI_MEMMAP);
+// The measured descriptor and at least as many as a guest's E820 map has RAM
+// entries in practice; a longer map is cut short, which leaves KASLR fewer
+// places to choose from rather than a wrong one.
+const _: () = assert!(EFI_MEMMAP_MAX >= 64);
+const _: () = assert!(SHIM_DATA_LAZY.is_multiple_of(8) && SHIM_DATA_LAZY > SHIM_DATA_SPANS);
 // A host's cursor into an entry sits below the page number, not in it.
 const _: () = assert!(PSC_ENTRY_CUR_PAGE < 1 << 12);
 // The descriptor has to lie wholly inside the shared buffer, and its entry
@@ -381,6 +430,14 @@ impl Params {
         };
         if cmdline.bytes().any(|b| !b.is_ascii_graphic() && b != b' ') {
             return Err("--cmdline must be printable ASCII".into());
+        }
+        // The EFI tables the image hands Linux have no runtime services: a
+        // kernel told to use them anyway calls through a null table.
+        if cmdline
+            .split_whitespace()
+            .any(|w| w.starts_with("efi=") && w.contains("runtime"))
+        {
+            return Err("--cmdline must not enable EFI runtime services".into());
         }
         // A split guest restacks above 4 GiB, so the map reaches past the RAM it has.
         let split = ram >= Q35_SPLIT;

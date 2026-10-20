@@ -13,12 +13,21 @@
 .include "map.inc"
 .include "psc.inc"
 .include "power.inc"
+.include "lazy.inc"
 
 .text
-map_code harness_fail, harness_accept
+map_code harness_fail, harness_walk_accept
 psc_code harness_fail, "call harness_psc_issue"
 snp_port_write_code "call harness_snp_io"
 tdx_port_write_code "call harness_tdx_io"
+lazy_code harness_accept
+
+# What the walk hands its ranges to: the shims' accept_lazy where a test asks
+# for it, and otherwise the recording primitive itself.
+harness_walk_accept:
+    cmpq $0, harness_lazy(%rip)
+    jne accept_lazy
+    jmp harness_accept
 
 # The System V registers a caller owns, saved once so that a refusal deep inside
 # a macro can return through the same epilogue an ordinary return does.
@@ -51,6 +60,7 @@ harness_ret:
 
 harness_fail:
     mov harness_sp(%rip), %rsp
+    movq $0, harness_lazy(%rip)
     xor %eax, %eax
     jmp harness_ret
 
@@ -133,6 +143,29 @@ harness_accept_walk:
     movq $0, harness_count(%rip)
     call accept_walk
     mov harness_count(%rip), %rax
+    jmp harness_ret
+
+# (top of RAM) -> how many ranges were accepted, as harness_accept_walk, with
+# the walk going through accept_lazy: what it accepts is in harness_ranges,
+# what it leaves to Linux in the bitmap, and the bitmap's size in the table.
+.globl harness_lazy_walk
+harness_lazy_walk:
+    harness_enter
+    mov %rdi, %r8
+    movq $0, harness_count(%rip)
+    movq $1, harness_lazy(%rip)
+    call unaccepted_size
+    call accept_walk
+    movq $0, harness_lazy(%rip)
+    mov harness_count(%rip), %rax
+    jmp harness_ret
+
+# (zero page) -> 1, with the EFI memory map completed from its E820 map.
+.globl harness_efi_memmap
+harness_efi_memmap:
+    harness_enter
+    call efi_memmap_build
+    mov $1, %eax
     jmp harness_ret
 
 # What the shims give PVALIDATE and TDG.MEM.PAGE.ACCEPT: the empty range is
@@ -376,6 +409,8 @@ harness_psc_lost:
     .quad 0
 
 .balign 8
+harness_lazy:
+    .quad 0
 harness_sp:
     .quad 0
 harness_count:

@@ -108,12 +108,12 @@ before validating each range. So the file does not move with the guest size.
 
 On TDX every image page contributes to the measurement register for the trust
 domain (MRTD). The shim enters long mode, parks
-application processors in the ACPI wakeup mailbox, accepts the remaining
-private RAM, and jumps to Linux.
+application processors in the ACPI wakeup mailbox, accepts the private RAM
+Linux needs before it can accept memory itself, and jumps to Linux.
 
 On SEV-SNP the digest covers the normal pages and the boot processor's VMSA.
-The shim enters long mode, validates and clears the remaining private RAM, and
-jumps to Linux.
+The shim enters long mode, makes private, validates and clears the RAM Linux
+needs before it can accept memory itself, and jumps to Linux.
 
 It starts no application processor. Only the boot processor is given a save
 area, and Linux brings the rest up itself through the Guest-Hypervisor
@@ -239,16 +239,45 @@ The measured page tables map the first 2 TiB with 1-GiB pages, whatever the
 guest turns out to have, because they are measured and so cannot depend on it.
 That bounds guest RAM at 2046 GiB.
 
-Private-memory initialization is linear in guest RAM, and the shim does all of
-it up front because Linux discovers unaccepted memory only through EFI, which
-this image does not provide. That time is spent before the kernel starts, and
-on both platforms it is around 2.5 seconds per GiB of one processor's work:
-a 64 GiB guest reaches Linux about 170 seconds after launch, a 512 GiB one
-about twenty minutes after, and the 2046 GiB the map now allows would be over
-an hour. Cutting that means either spreading the work over the application
-processors, or giving Linux a way to find unaccepted memory itself -- EFI, or
-the unaccepted-memory E820 type. Neither is part of this change, so the ceiling
-is what the page tables allow rather than what is worth booting.
+## Lazy acceptance
+
+Accepting private memory is linear in guest RAM, and done up front it is one
+processor's work before the kernel starts, followed by Linux clearing all of
+it again as it frees it into the page allocator. So the shims accept only what
+Linux needs before its own acceptance runs, and leave the rest to Linux, which
+accepts a 2-MiB unit when it first allocates from it and clears it then.
+
+Linux finds unaccepted memory only through the EFI configuration table
+`LINUX_EFI_UNACCEPTED_MEM_TABLE_GUID`, so each image places one measured EFI
+page (`firmware/src/efi.rs`) and points `boot_params.efi_info` at it. It states
+an EFI boot that has already exited: a system table with no boot or runtime
+services and that one table, as an OVMF guest is after `ExitBootServices` with
+`CONFIG_EFI_DISABLE_RUNTIME`. The table's bitmap, one bit a 2-MiB unit, follows
+the page in RAM the shim accepts and clears first.
+
+At boot the shim (`firmware/src/lazy.inc`):
+
+- accepts everything below a measured bound -- the end of the kernel's
+  decompression, rounded up to a unit -- because the decompressor runs before
+  Linux's acceptance does;
+- past it, accepts the part units at each end of a range and the first whole
+  unit after a range's start, and marks every other whole unit in the bitmap.
+  A unit is marked only if nothing in it was accepted or placed, since
+  validating a page twice terminates the guest, and never right after a span
+  Linux frees later, which `load_unaligned_zeropad()` could read into;
+- completes the EFI memory map with one conventional-memory descriptor for each
+  RAM entry of the E820 map it built. Once `efi_info` names a map, Linux's
+  decompressor picks the physical address it randomizes the kernel to from
+  that map alone, and accepts the range it picks; Linux proper takes RAM from
+  E820. A map cut short at the page's capacity only narrows KASLR.
+
+The bitmap and the map are written by measured code into private memory the
+host cannot reach, so the host influences neither. Every page is still cleared
+before first use, by Linux as it accepts it, and `init_on_alloc` and
+`init_on_free` stay on. The cost moves to first touch: a workload that writes
+most of its RAM at start pays roughly what an eager boot did, spread over the
+processors that allocate it. `accept_memory=eager` on the command line restores
+eager acceptance inside Linux.
 
 ## Linux requirements
 
@@ -257,6 +286,8 @@ x86-64, boot protocol 2.12 or newer.
 ```text
 CONFIG_INTEL_TDX_GUEST    CONFIG_SMP    CONFIG_ACPI    CONFIG_BLK_DEV_INITRD
 CONFIG_AMD_MEM_ENCRYPT    CONFIG_SEV_GUEST                      (SEV-SNP also)
+CONFIG_EFI    CONFIG_UNACCEPTED_MEMORY    CONFIG_EFI_DISABLE_RUNTIME
+                                       (lazy acceptance: the EFI tables have no services)
 ```
 
 Hotplug, suspend, kexec and processor offlining are unsupported.

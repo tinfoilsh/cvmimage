@@ -15,6 +15,10 @@ use crate::kernel::data_block;
 use crate::layout::*;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+/// A lazy bound for tests that are not about it: 2-MiB-aligned, past the
+/// bitmap, and past anything a test places.
+pub const TEST_LAZY_BOUND: u64 = KERNEL_BASE + 0x400_0000;
+
 // As harness.S sizes them: two words a range, and two an entry.
 const HARNESS_RANGES: usize = 256;
 const HARNESS_PSC_ENTRIES: usize = 4096;
@@ -24,6 +28,8 @@ extern "C" {
     fn harness_regions() -> u64;
     fn harness_e820(zero: *mut u8, memory: u64) -> u64;
     fn harness_accept_walk(memory: u64) -> u64;
+    fn harness_lazy_walk(memory: u64) -> u64;
+    fn harness_efi_memmap(zero: *mut u8) -> u64;
     fn harness_psc_range(lo: u64, hi: u64, host: u64) -> u64;
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
@@ -143,6 +149,9 @@ fn map_pages(base: u64, len: u64) {
 fn map_low_pages() {
     map_pages(ACPI_BASE, 3 * PAGE);
     map_pages(SHIM_HOST_REGIONS, SHIM_REGIONS_END - SHIM_HOST_REGIONS);
+    // The EFI page whose map and unaccepted table the shim completes, and the
+    // bitmap after it.
+    map_pages(EFI_PAGE, PAGE + UNACCEPTED_BITMAP_SIZE);
     // The block, at the address the shim writes it through rather than the one
     // it names to the host.
     map_pages(GHCB_ALIAS, PAGE);
@@ -234,12 +243,17 @@ impl Shim {
         self.loader_memory_map(&entries)
     }
 
-    /// The measured data block the shims carry in their own page.
+    /// The measured data block the shims carry in their own page, with a lazy
+    /// bound past where any test places a kernel.
     pub fn data(&self, entry: u64, spans: &[Region]) -> &Self {
-        let block = data_block(entry, spans).unwrap();
+        self.data_raw(&data_block(entry, spans, TEST_LAZY_BOUND).unwrap())
+    }
+
+    /// A data block as an image carries it, byte for byte.
+    pub fn data_raw(&self, block: &[u8]) -> &Self {
         let data = unsafe { &mut *std::ptr::addr_of_mut!(harness_shim_data) };
         data.fill(0);
-        data[..block.len()].copy_from_slice(&block);
+        data[..block.len()].copy_from_slice(block);
         self
     }
 
@@ -286,6 +300,52 @@ impl Shim {
         (0..count)
             .map(|n| (ranges[2 * n], ranges[2 * n + 1]))
             .collect()
+    }
+
+    /// The walk for a guest whose RAM tops out at `memory`, through the
+    /// shims' accept_lazy: the ranges it accepts in order, each 2-MiB unit it
+    /// leaves to Linux, and the size it gives the unaccepted table.
+    pub fn lazy_walk(&self, memory: u64) -> (Vec<(u64, u64)>, Vec<u64>, u64) {
+        zero(UNACCEPTED_BITMAP, 0, UNACCEPTED_BITMAP_SIZE);
+        zero(UNACCEPTED_TABLE, 16, 8);
+        let count = unsafe { harness_lazy_walk(memory) } as usize;
+        let ranges = unsafe { &*std::ptr::addr_of!(harness_ranges) };
+        assert!(2 * count <= ranges.len(), "the walk overran its buffer");
+        let bitmap = read(UNACCEPTED_BITMAP, 0, UNACCEPTED_BITMAP_SIZE);
+        let units = (0..bitmap.len() as u64 * 8)
+            .filter(|n| bitmap[*n as usize / 8] >> (n % 8) & 1 == 1)
+            .collect();
+        let size = u64::from_le_bytes(read(UNACCEPTED_TABLE, 16, 8).try_into().unwrap());
+        let accepted = (0..count)
+            .map(|n| (ranges[2 * n], ranges[2 * n + 1]))
+            .collect();
+        (accepted, units, size)
+    }
+
+    /// The EFI memory map the shim completes for a guest of `memory`, from an
+    /// image's measured EFI page and zero page: E820 is built into that zero
+    /// page first, as the shims do. Each descriptor as (type, start, pages,
+    /// attribute), the measured one first, and the size efi_info states.
+    pub fn efi_memmap(
+        &self,
+        measured: &[u8],
+        zero_page: &[u8],
+        memory: u64,
+    ) -> (Vec<(u32, u64, u64, u64)>, u32) {
+        fill(EFI_PAGE, 0, measured);
+        let mut zero = zero_page.to_vec();
+        assert_eq!(unsafe { harness_e820(zero.as_mut_ptr(), memory) }, 1);
+        unsafe { harness_efi_memmap(zero.as_mut_ptr()) };
+        let size = u32::from_le_bytes(zero[BP_EFI_MEMMAP_SIZE as usize..][..4].try_into().unwrap());
+        let map = read(EFI_PAGE, EFI_MEMMAP, size as u64);
+        let word = |at: usize| u64::from_le_bytes(map[at..at + 8].try_into().unwrap());
+        let descriptors = (0..size as usize / EFI_MEMDESC_SIZE as usize)
+            .map(|n| {
+                let at = n * EFI_MEMDESC_SIZE as usize;
+                (word(at) as u32, word(at + 8), word(at + 24), word(at + 32))
+            })
+            .collect();
+        (descriptors, size)
     }
 
     /// The block filled with a byte no field of a request holds, so that a

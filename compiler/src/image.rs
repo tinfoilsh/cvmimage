@@ -821,6 +821,206 @@ pub mod tests {
         }
     }
 
+    /// An image's measured page at `base`.
+    fn placed_page(launch: &tinfoil_firmware::Launch, base: u64) -> Vec<u8> {
+        launch
+            .placed
+            .iter()
+            .find(|p| p.base == base)
+            .unwrap()
+            .data()
+            .to_vec()
+    }
+
+    /// The shim's data block, out of the page an image carries it in.
+    fn data_block_of(launch: &tinfoil_firmware::Launch, snp: bool) -> Vec<u8> {
+        let page = placed_page(launch, if snp { SHIM_BASE } else { RESET_ALIAS });
+        page[SHIM_DATA as usize..(SHIM_DATA + SHIM_DATA_SIZE) as usize].to_vec()
+    }
+
+    /// What each shim accepts and what it leaves Linux, run with an image's
+    /// own data block against every guest size. Between them they cover
+    /// exactly the RAM the accept walk owes, once: a unit marked and accepted
+    /// both would be validated twice, which terminates the guest, and a gap
+    /// in both would fault the first time Linux touched it. Nothing below the
+    /// bound is left to Linux, because the decompressor runs before Linux's
+    /// own acceptance does.
+    #[test]
+    fn the_shim_leaves_linux_whole_units_past_the_bound_and_accepts_the_rest() {
+        const UNIT: u64 = 0x20_0000;
+        const GIB_PAGES: u64 = GIB / PAGE;
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        let check = |what: &str, block: &[u8]| {
+            let bound =
+                u64::from_le_bytes(block[SHIM_DATA_LAZY as usize..][..8].try_into().unwrap());
+            assert!(
+                bound > KERNEL_BASE && bound.is_multiple_of(UNIT),
+                "{what}: bound"
+            );
+            let (top, regions) = shim.regions().unwrap();
+            let owed = boot::accept_ranges(&regions, top);
+            let (accepted, units, size) = shim.lazy_walk(top);
+            assert_eq!(size, top.div_ceil(UNIT).div_ceil(8), "{what}: bitmap size");
+            // The bitmap is RAM the shim accepts (and so clears) itself, below
+            // the bound, and the walk ascends: so it is accepted before any
+            // unit, all of which lie past the bound, is marked in it.
+            assert!(
+                accepted.windows(2).all(|w| w[0].1 <= w[1].0),
+                "{what}: accepted out of order"
+            );
+            assert!(
+                accepted.iter().any(|(lo, hi)| *lo <= UNACCEPTED_BITMAP
+                    && UNACCEPTED_BITMAP + size <= *hi
+                    && *hi <= bound),
+                "{what}: the bitmap is not accepted before the bound"
+            );
+            for u in &units {
+                assert!(u * UNIT >= bound, "{what}: unit {u} is below the bound");
+                assert!((u + 1) * UNIT <= top, "{what}: unit {u} is past the RAM");
+                // The page before a marked unit is always one the shim accepted.
+                assert!(
+                    !owed.iter().any(|(lo, _)| *lo == u * UNIT),
+                    "{what}: unit {u} starts a range"
+                );
+            }
+            let mut pieces: Vec<(u64, u64)> = accepted
+                .iter()
+                .copied()
+                .chain(units.iter().map(|u| (u * UNIT, (u + 1) * UNIT)))
+                .collect();
+            pieces.sort_unstable();
+            let mut tiled: Vec<(u64, u64)> = Vec::new();
+            for (lo, hi) in pieces {
+                assert!(lo < hi, "{what}: an empty piece at {lo:#x}");
+                match tiled.last_mut() {
+                    Some(last) if last.1 > lo => panic!("{what}: {lo:#x} is covered twice"),
+                    Some(last) if last.1 == lo => last.1 = hi,
+                    _ => tiled.push((lo, hi)),
+                }
+            }
+            assert_eq!(
+                tiled, owed,
+                "{what}: accepted and marked do not tile what is owed"
+            );
+            // ...and past the bound almost all of it is Linux's: at most a unit
+            // and a part unit at the start of each range, and a part unit at
+            // its end, are accepted there.
+            let eager: u64 = accepted
+                .iter()
+                .map(|(l, h)| h.min(&top) - l.max(&bound).min(h))
+                .sum();
+            assert!(
+                eager <= 3 * UNIT * owed.len() as u64,
+                "{what}: {eager:#x} accepted past the bound"
+            );
+            if top >= 2 * GIB {
+                assert!(!units.is_empty(), "{what}: nothing left to Linux");
+            }
+        };
+        // RAM ending half a unit, and a unit and a page, past the first whole
+        // unit above the initramfs: a range with no whole unit in it past the
+        // bound has to be accepted, not marked.
+        let ends = [
+            INITRAMFS_BASE + UNIT + UNIT / 2,
+            INITRAMFS_BASE + 2 * UNIT + PAGE,
+        ];
+        // Maps no q35 guest is given but a loader may describe: a reserved
+        // hole mid-RAM ending off a unit boundary, and RAM restacked above
+        // 1 TiB past a hole, as QEMU lays out a large guest on AMD.
+        let maps: [&[(u64, u64, u16)]; 2] = [
+            &[
+                (0, GIB_PAGES, 0),
+                (GIB_PAGES, 3, 1),
+                (GIB_PAGES + 3, 5 * GIB_PAGES + 2, 0),
+            ],
+            &[
+                (0, 2 * GIB_PAGES, 0),
+                (4 * GIB_PAGES, 996 * GIB_PAGES, 0),
+                (1024 * GIB_PAGES, 64 * GIB_PAGES + 7, 0),
+            ],
+        ];
+        for snp in [true, false] {
+            for ram in SIZES.into_iter().chain(ends) {
+                let (_, launch) = launched(dir.path(), ram, snp);
+                let block = data_block_of(&launch, snp);
+                shim.data_raw(&block).loader_ram(ram);
+                check(&format!("{ram:#x}, snp={snp}"), &block);
+            }
+            let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+            let block = data_block_of(&launch, snp);
+            for (n, map) in maps.iter().enumerate() {
+                shim.data_raw(&block).loader_memory_map(map);
+                check(&format!("map {n}, snp={snp}"), &block);
+            }
+        }
+    }
+
+    /// The EFI memory map the shim completes, run with an image's own EFI and
+    /// zero pages against every guest size. Once efi_info names a map, Linux's
+    /// decompressor randomizes the kernel into the free memory that map lists
+    /// and nowhere else, so it has to list the RAM E820 does, entry for entry:
+    /// one entry missing narrows KASLR, and one too many hands the kernel
+    /// memory the image placed something in.
+    #[test]
+    fn the_efi_memory_map_lists_the_ram_e820_does() {
+        let dir = tempdir().unwrap();
+        let shim = tinfoil_firmware::shim::shim();
+        for snp in [false, true] {
+            for ram in SIZES {
+                let (params, launch) = launched(dir.path(), ram, snp);
+                shim.data(launch.entry, &launch.spans).loader_ram(ram);
+                let (top, host) = boot::host_regions(&params.extents());
+                let want = boot::merge(&launch.spans, &host);
+                assert_eq!(shim.regions().map(|r| r.0), Some(top));
+                let (map, size) = shim.efi_memmap(
+                    &placed_page(&launch, EFI_PAGE),
+                    &placed_page(&launch, ZERO_PAGE),
+                    top,
+                );
+                let what = format!("{ram:#x}, snp={snp}");
+                assert_eq!(
+                    size as usize,
+                    map.len() * EFI_MEMDESC_SIZE as usize,
+                    "{what}"
+                );
+                assert_eq!(map[0], (2, EFI_PAGE, 1, EFI_MEMORY_WB), "{what}: measured");
+                let ram_entries: Vec<(u32, u64, u64, u64)> = boot::e820(&want, top)
+                    .into_iter()
+                    .filter(|e| e.2 == RAM)
+                    .map(|(base, len, _)| {
+                        assert!(base.is_multiple_of(PAGE) && len.is_multiple_of(PAGE));
+                        (
+                            EFI_CONVENTIONAL_MEMORY as u32,
+                            base,
+                            len / PAGE,
+                            EFI_MEMORY_WB,
+                        )
+                    })
+                    .collect();
+                assert!(
+                    ram_entries.len() < EFI_MEMMAP_MAX as usize,
+                    "{what}: map cut short"
+                );
+                assert_eq!(map[1..], ram_entries[..], "{what}: the RAM listed");
+                // Nothing the image placed is free memory, bar the RAM it
+                // loaded the kernel and initramfs into, which the decompressor
+                // keeps clear of itself.
+                for (_, base, pages, _) in &map[1..] {
+                    let end = base + pages * PAGE;
+                    for p in &launch.placed {
+                        let overlaps = p.base < end && *base < p.base + p.span();
+                        assert!(
+                            !overlaps || p.e820 == RAM,
+                            "{what}: free memory over the placed {:#x}",
+                            p.base
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// The shim converts its own memory now, so every page the accept walk is
     /// about to PVALIDATE has to have been asked for first: a page left out is
     /// a PVALIDATE on a page the RMP still calls shared, which fails, and the
@@ -1175,7 +1375,7 @@ pub mod tests {
             .filter_map(|p| p.data.map(|d| (p.gpa, d)))
             .collect();
         let components = manifest["components"].as_object().unwrap();
-        assert_eq!(components.len(), 6);
+        assert_eq!(components.len(), 7);
         for (name, c) in components {
             let gpa =
                 u64::from_str_radix(c["address"].as_str().unwrap().trim_start_matches("0x"), 16)

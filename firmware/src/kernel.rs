@@ -73,7 +73,7 @@ pub(crate) fn prepare(
 /// the zero-terminated spans it placed packed in. The E820 map and the ranges
 /// to accept both follow from those spans and the memory the loader reports,
 /// so neither the guest's RAM nor anything derived from it is measured here.
-pub fn data_block(entry: u64, spans: &[boot::Region]) -> Result<Vec<u8>, String> {
+pub fn data_block(entry: u64, spans: &[boot::Region], lazy: u64) -> Result<Vec<u8>, String> {
     // Each span can cost the E820 map a gap entry and an entry of its own, and
     // the RAM above the last of them one more. What the loader's map adds to
     // that is not known until boot, so the shim counts the entries it writes
@@ -94,17 +94,31 @@ pub fn data_block(entry: u64, spans: &[boot::Region]) -> Result<Vec<u8>, String>
         data.extend_from_slice(&0u32.to_le_bytes());
     }
     data.extend_from_slice(&[0u8; SPAN_LEN as usize]);
-    if data.len() > SHIM_DATA_SIZE as usize {
+    if data.len() > SHIM_DATA_LAZY as usize {
         return Err(format!(
-            "shim data block needs {} of {SHIM_DATA_SIZE} bytes",
+            "shim data block needs {} of the {SHIM_DATA_LAZY} bytes its spans have",
             data.len()
         ));
     }
+    // accept_lazy marks every whole unit past the bound, so one that left the
+    // bitmap or the decompressor to Linux would mark memory nothing accepts.
+    if !lazy.is_multiple_of(UNACCEPTED_UNIT) || lazy < UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE {
+        return Err(format!(
+            "{lazy:#x} is not a lazy bound past the unaccepted bitmap"
+        ));
+    }
+    data.resize(SHIM_DATA_SIZE as usize, 0);
+    put64(&mut data, SHIM_DATA_LAZY as usize, lazy);
     Ok(data)
 }
 
-pub(crate) fn shim(blob: &[u8], entry: u64, spans: &[boot::Region]) -> Result<Vec<u8>, String> {
-    let data = data_block(entry, spans)?;
+pub(crate) fn shim(
+    blob: &[u8],
+    entry: u64,
+    spans: &[boot::Region],
+    lazy: u64,
+) -> Result<Vec<u8>, String> {
+    let data = data_block(entry, spans, lazy)?;
     let (mut shim, at) = (blob.to_vec(), SHIM_DATA as usize);
     if shim[at..at + data.len()].iter().any(|b| *b != 0) {
         return Err("shim code overruns its data block".into());
@@ -332,9 +346,18 @@ mod tests {
                     .collect()
             };
 
-            // The boot path runs these once each, in this order.
+            // The boot path runs these once each, in this order: the EFI map
+            // is completed from the E820 table, and the bitmap sized, before
+            // the walk marks any of it.
             let mut last = 0;
-            for name in ["host_regions", "merge_regions", "e820_build", "accept_walk"] {
+            for name in [
+                "host_regions",
+                "merge_regions",
+                "e820_build",
+                "efi_memmap_build",
+                "unaccepted_size",
+                "accept_walk",
+            ] {
                 let at = sites(name);
                 assert_eq!(at.len(), 1, "{name} is reached from {} places", at.len());
                 assert_eq!(
@@ -346,28 +369,58 @@ mod tests {
                 last = at[0];
             }
 
-            // ...and e820_build is given the zero page it writes the table into.
-            let at = code
-                .iter()
-                .position(|(_, text)| target(text) == Some("e820_build"))
-                .unwrap();
-            assert_eq!(
-                code[at - 1].1,
-                ["mov", &format!("${ZERO_PAGE:#x},%edi")],
-                "e820_build is handed something other than the zero page"
-            );
+            // ...and e820_build and efi_memmap_build are each given the zero
+            // page, the one to write the table into and the other to read it.
+            for name in ["e820_build", "efi_memmap_build"] {
+                let at = code
+                    .iter()
+                    .position(|(_, text)| target(text) == Some(name))
+                    .unwrap();
+                assert_eq!(
+                    code[at - 1].1,
+                    ["mov", &format!("${ZERO_PAGE:#x},%edi")],
+                    "{name} is handed something other than the zero page"
+                );
+            }
 
-            // accept_walk hands its ranges to this platform's own primitive and
-            // to nothing else: once from the loop, once as it tails out.
-            let from_walk: Vec<&str> = calls
+            // accept_walk hands its ranges to accept_lazy and to nothing else:
+            // once from the loop, once as it tails out. accept_lazy hands them
+            // on to this platform's own primitive, once for the part before
+            // the units it marks and once, as it tails out, for the part after.
+            let from = |caller: &str| -> Vec<&str> {
+                calls
+                    .iter()
+                    .filter(|(at, name)| routine(&symbols, *at) == caller && !name.contains('+'))
+                    .map(|(_, name)| *name)
+                    .collect()
+            };
+            assert_eq!(
+                from("accept_walk"),
+                ["accept_lazy", "accept_lazy"],
+                "accept_walk hands ranges elsewhere"
+            );
+            // Every transfer out of accept_lazy, the conditional one included
+            // (a range with no whole unit past the bound goes straight on).
+            let out_of_lazy: Vec<&str> = code
                 .iter()
-                .filter(|(at, name)| routine(&symbols, *at) == "accept_walk" && !name.contains('+'))
-                .map(|(_, name)| *name)
+                .filter(|(at, text)| {
+                    routine(&symbols, *at) == "accept_lazy"
+                        && text
+                            .first()
+                            .is_some_and(|m| m.starts_with('j') || *m == "call")
+                })
+                .filter_map(|(_, text)| text.last()?.strip_prefix('<')?.strip_suffix('>'))
+                // Its own loop, which objdump may name after whichever layout
+                // constant the address happens to equal, as target() knows.
+                .filter(|name| {
+                    let base = name.split('+').next().unwrap();
+                    base != "accept_lazy" && !SYMBOLS.iter().any(|(s, _)| *s == base)
+                })
                 .collect();
             assert_eq!(
-                from_walk,
-                [accept, accept],
-                "accept_walk hands ranges elsewhere"
+                out_of_lazy,
+                [accept, accept, accept],
+                "accept_lazy hands ranges elsewhere"
             );
 
             // The shim page really is what the listing describes.

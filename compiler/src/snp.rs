@@ -140,10 +140,11 @@ pub fn build(
     validate_vmsa(&bsp_vmsa, SHIM_BASE, BSP_STACK_TOP, ZERO_PAGE)?;
     let vmsa = vmsa_page(&bsp_vmsa);
     let measurement = launch_measurement(&pages, std::slice::from_ref(&vmsa));
-    // The loader must find memory backed where this image puts pages. It is not
-    // asked for the guest's RAM: on SEV-SNP this directive is how a loader
-    // converts memory to private, not a check it makes, and a guest that has
-    // its RAM converted for it is a guest whose image states a machine size.
+    // The loader must find memory backed where this image puts pages, and
+    // where the shim validates. It is asked for no more of the guest's RAM:
+    // on SEV-SNP this directive is how a loader converts memory to private,
+    // not a check it makes, and a guest that has all its RAM converted for it
+    // is a guest whose image states a machine size.
     let mut spans: Vec<(u64, u64)> = Vec::new();
     for (base, size, _) in &required_memory {
         match spans.last_mut() {
@@ -559,7 +560,6 @@ mod tests {
     use super::*;
     use crate::image::tests::{params, test_kernel};
     use tempfile::tempdir;
-    use tinfoil_firmware::boot::RESERVED;
 
     #[test]
     fn measurement_matches_the_reference_implementation() {
@@ -746,52 +746,6 @@ mod tests {
         }
     }
 
-    /// The GHCB page is loaded and E820-reserved, and the shim never validates it itself.
-    #[test]
-    fn the_ghcb_page_is_placed_reserved_and_not_accepted() {
-        let dir = tempdir().unwrap();
-        let (k, i, out) = (
-            dir.path().join("bzImage"),
-            dir.path().join("initrd"),
-            dir.path().join("out.igvm"),
-        );
-        fs::write(&k, test_kernel()).unwrap();
-        fs::write(&i, vec![7u8; 100_000]).unwrap();
-        build(&k, &i, &out, &params(), None, None, 0).unwrap();
-        let bytes = fs::read(&out).unwrap();
-        let file = IgvmFile::new_from_binary(&bytes, None).unwrap();
-        let pages: BTreeMap<u64, Vec<u8>> = file
-            .directives()
-            .iter()
-            .filter_map(|d| match d {
-                IgvmDirectiveHeader::PageData {
-                    gpa,
-                    data,
-                    data_type,
-                    ..
-                } if *data_type == IgvmPageDataType::NORMAL => Some((*gpa, data.clone())),
-                _ => None,
-            })
-            .collect();
-        assert!(pages.contains_key(&SNP_GHCB));
-        let (_, ranges) = crate::image::tests::shim_ranges(&pages[&SHIM_BASE], &params());
-        assert!(!ranges.is_empty());
-        assert!(!ranges
-            .iter()
-            .any(|(lo, hi)| *lo <= SNP_GHCB && SNP_GHCB < *hi));
-        // The zero page's E820 map: entry count at 0x1e8, 20-byte entries from 0x2d0.
-        // The shim writes the table at boot, so this is the map it will write.
-        let (_, _, spans) = crate::image::tests::shim_data(&pages[&SHIM_BASE]);
-        assert!(boot::read_e820(&pages[&ZERO_PAGE]).is_empty());
-        let (top, host) = boot::host_regions(&params().extents());
-        let e820 = boot::e820(&boot::merge(&spans, &host), top);
-        let kind = e820
-            .iter()
-            .find(|(base, size, _)| *base <= SNP_GHCB && SNP_GHCB < base + size)
-            .map(|(_, _, kind)| *kind);
-        assert_eq!(kind, Some(RESERVED));
-    }
-
     #[test]
     fn changing_any_measured_input_moves_the_measurement() {
         let dir = tempdir().unwrap();
@@ -852,13 +806,13 @@ mod tests {
 
     /// On SEV-SNP a required-memory directive is not a check: QEMU converts the
     /// range to private in the RMP (target/i386/sev.c). Declaring a machine's
-    /// worth of it is therefore how a guest used to get private RAM, and is
-    /// what bound one published image to one guest size. The shim converts its
-    /// own memory now, so this states only the pages the image loads -- all of
-    /// them, because a loader that has none backed there cannot import them,
-    /// and none beyond, because beyond them is the guest's own business.
+    /// worth of it would bind one published image to one guest size, so this
+    /// states the pages the image loads -- all of them, because a loader that
+    /// has none backed there cannot import them -- and the RAM below the lazy
+    /// bound the shim validates, which the loader converts so that the shim
+    /// asks the host for nothing. Nothing past the bound: that is Linux's.
     #[test]
-    fn required_memory_is_the_pages_the_image_loads_and_no_more() {
+    fn required_memory_is_what_the_image_loads_and_the_ram_below_the_bound() {
         let dir = tempdir().unwrap();
         let (k, i, out) = (
             dir.path().join("bzImage"),
@@ -897,11 +851,19 @@ mod tests {
             }
             (spans, loaded)
         };
-        let (spans, loaded) = declared(8 * GIB);
+        let (spans, mut loaded) = declared(8 * GIB);
+        let params = Params::snp(8 * GIB, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
+        let launch = tinfoil_firmware::snp(&k, &i, &params).unwrap();
+        for (lo, hi) in &launch.accept {
+            for gpa in (*lo..*hi).step_by(PAGE as usize) {
+                push_page(&mut loaded, gpa);
+            }
+        }
         assert_eq!(
             spans, loaded,
-            "the image requires something it does not load"
+            "the image requires something it neither loads nor validates"
         );
+        assert!(spans.iter().any(|(lo, hi)| *lo == 0 && launch.lazy <= *hi));
         // The RAM the guest is given does not enter it, which is the point:
         // one image, any -m, and the shim converting what the guest was given.
         for ram in [DEFAULT_RAM, 2 * GIB, 64 * GIB, MAX_RAM] {
@@ -913,19 +875,21 @@ mod tests {
         }
         // Nothing the image loads is left out, so nothing is imported into
         // memory a loader was never told to have.
-        assert!(spans.iter().any(|(lo, _)| *lo == SNP_CPUID));
+        assert!(spans
+            .iter()
+            .any(|(lo, hi)| *lo <= SNP_CPUID && SNP_CPUID < *hi));
         assert!(spans
             .iter()
             .any(|(lo, hi)| *lo <= KERNEL_BASE && KERNEL_BASE < *hi));
     }
 
-    /// The shim writes the zero page, the ACPI page and its two region buffers
-    /// before it converts or validates anything, and reads the page tables,
-    /// the loader's two parameter pages and its own stack throughout. All of
-    /// those have to arrive private and validated, which is what the loader
+    /// The shim writes the zero page, the EFI page and the ACPI page and reads
+    /// its shapes before it validates anything, and reads the page tables, the
+    /// loader's two parameter pages and its own stack throughout. All of those
+    /// have to arrive private and validated, which is what the loader
     /// importing them does -- so every one has to be inside a span this image
     /// declares. One left out is a fault in the first instructions of a guest
-    /// with no console, and no accept walk would ever reach it.
+    /// with no console.
     #[test]
     fn every_page_the_shim_touches_before_it_converts_is_declared() {
         let dir = tempdir().unwrap();
@@ -950,19 +914,17 @@ mod tests {
                 PAGE_TABLES,
                 PAGE_TABLES + PAGE_TABLE_SIZE,
             ),
-            ("the stack and both buffers", BSP_STACK, BSP_STACK_TOP),
-            ("the block", SNP_GHCB, SNP_GHCB + PAGE),
+            ("the stack", BSP_STACK, BSP_STACK_TOP),
+            ("the shapes", SHAPES_PAGE, SHAPES_PAGE + SHAPES_SIZE),
             ("the shim itself", SHIM_BASE, SHIM_BASE + SHIM_SIZE),
         ] {
             assert!(covered(lo, hi), "{name} ({lo:#x}..{hi:#x}) is not declared");
         }
-        // ...and the block in particular is never handed to the accept walk:
-        // converting it part-way through would break every batch after it.
-        let (top, host) = boot::host_regions(&params.extents());
-        for (lo, hi) in boot::accept_ranges(&boot::merge(&launch.spans, &host), top) {
+        // ...and so is every range it validates.
+        for (lo, hi) in &launch.accept {
             assert!(
-                !(lo <= SNP_GHCB && SNP_GHCB < hi),
-                "the walk converts the block it is converting through"
+                covered(*lo, *hi),
+                "{lo:#x}..{hi:#x} is validated undeclared"
             );
         }
     }
@@ -986,10 +948,10 @@ mod tests {
         }
     }
 
-    /// The RAM a guest is given no longer reaches the digest: the E820 map and
-    /// the accept list it decided are written by the shim, from a memory map
-    /// the loader deposits after the measurement is closed, and the required
-    /// memory it declares is the image's own pages rather than a machine's.
+    /// The RAM a guest is given no longer reaches the digest: the shim takes
+    /// the end of RAM from the memory map the loader deposits after the
+    /// measurement is closed, and the required memory the image declares is
+    /// its own pages and fixed accept ranges rather than a machine's.
     #[test]
     fn the_guest_size_leaves_the_measurement_alone() {
         let dir = tempdir().unwrap();

@@ -1,8 +1,6 @@
 .include "layout.inc"
 .include "madt.inc"
-.include "map.inc"
-.include "psc.inc"
-.include "lazy.inc"
+.include "shape.inc"
 .section .reset,"ax"
 
 .code64
@@ -10,69 +8,41 @@
 # The VMSA hands over 64-bit long mode on the measured page tables, with the
 # stack, the data segments and RFLAGS (interrupts and direction clear) already
 # as the shim needs them (vmsa.rs), so there is no mode switch to make.
-# Nothing here may depend on CPUID, trapped I/O or an exception. Page state
-# changes use the GHCB explicitly.
+# Nothing here may depend on CPUID, trapped I/O or an exception, and nothing
+# exits to the host but a request to terminate.
 snp_reset_start:
-    # The guest's own E820 map, which the measurement leaves to the shim because
-    # measuring it would bind this image to a machine size.
-    call host_regions
-    call merge_regions
+    # The guest's map is one of the shapes the image measured: its E820 and
+    # EFI tables are copied, and only the top of RAM is the loader's to say.
+    # RAM below the lazy bound, and what the image leaves free of the units
+    # it places in past it, is validated here, from a measured list the image
+    # also declares as required memory, so the loader has made it private
+    # before the guest runs; the remaining units Linux converts and validates
+    # as it allocates, finding them in the EFI table efi.rs describes.
+    call shape_match
     mov $ZERO_PAGE, %edi
-    call e820_build
-    # Guest RAM is made private and validated by the guest itself, in that
-    # order, up to the lazy bound; past it, Linux does it as it allocates,
-    # finding the units it has to in the EFI table efi.rs describes, and the
-    # RAM it may randomize the kernel into in its map.
-    mov $ZERO_PAGE, %edi
-    call efi_memmap_build
-    call unaccepted_size
-    call ghcb_share
-    call accept_walk
-    call ghcb_private
+    call shape_apply
+    call accept_fixed
+    call mark_lazy
 
     # The one table the measurement leaves to the shim. SNP carries no wakeup
     # structure: Linux starts an application processor with a save area it
     # builds itself and hands over through the GHCB, needing nothing from here.
     # Each step numbers itself in %r15d so a failure names it in its code.
-    mov $1, %r15d
+    mov $2, %r15d
     madt_build die_step, 0
 
-snp_boot_kernel:
     mov $ZERO_PAGE, %rsi
     lea shim_data(%rip), %rax
     jmp *(%rax)
 
-map_code die_map, accept_lazy
-lazy_code accept_private
-psc_code die_psc, vmgexit
+shape_code die_map, validate_range
 
-# A map this image will not run in, which is step 2 of the sequence above.
+# A map that is no shape this image knows, which is step 1 of the sequence
+# above. KVM prints a termination request's reason set and code, so which
+# refusal happened is readable on the host though the guest has no console.
+# PVALIDATE refusing a page is another, reported by `die`.
 die_map:
-    mov $2, %r15d
-    jmp die_step
-
-# The three refusals the shim can report, numbered as steps 3 to 5: KVM prints
-# a termination request's reason set and code, so which of them happened is
-# readable on the host even though the guest has no console. PVALIDATE
-# refusing a page is a fourth, reported by `die`.
-#
-# A host that answers the share request with success and leaves the block
-# assigned to the guest is reported by nothing at all. The first write to the
-# descriptor is then an unencrypted write to a page the RMP still says the
-# guest owns, which is an RMP violation: the host takes a nested page fault
-# and the guest stops where it stood, with no exception a shim without an IDT
-# could have turned into a request. Nothing here probes for it, because
-# touching the page to find out is that same violation -- a probe would stop
-# an honest host rather than catch a lying one -- so the evidence is where KVM
-# says the guest stopped.
-die_ghcb_share:
-    mov $3, %r15d
-    jmp die_step
-die_psc:
-    mov $4, %r15d
-    jmp die_step
-die_ghcb_private:
-    mov $5, %r15d
+    mov $1, %r15d
     jmp die_step
 
 # Boot failures use the GHCB MSR termination request:
@@ -103,105 +73,10 @@ die:
     or $0x80, %r15d
     jmp die_step
 
-# Accept [%r12, %r13): the host makes it private, then PVALIDATE takes it. The
-# order is the whole point -- a PVALIDATE of a page the RMP still says the
-# host owns is a violation of it, not a status the guest reads back -- and an
-# image that declared a machine's worth of required memory never had to get it
-# right, because its loader had converted everything before the shim ran.
-accept_private:
-    mov %r12, %r9
-    mov %r13, %r10
-    call psc_range
-    jmp validate_range
-
-# The one request the MSR protocol has to carry: a descriptor the host reads
-# needs a shared page to sit in, and the only way to share the page the
-# descriptor sits in is a protocol that needs no page. The firmware validated
-# the block as the image measured it, so its validation is rescinded first --
-# private to shared is in that order, and shared to private in the other.
-ghcb_share:
-    mov $SNP_GHCB, %rax
-    xor %ecx, %ecx                  # 4 KiB, as the firmware validated it
-    xor %edx, %edx                  # rescind
-    pvalidate
-    jc die_ghcb_share               # it was not validated: not the measured state
-    test %eax, %eax
-    jnz die_ghcb_share
-    mov $(GHCB_SHARE_REQ >> 32), %edx
-    mov $(GHCB_SHARE_REQ & 0xffffffff), %eax
-    call ghcb_msr
-    test %edx, %edx                 # the response carries an error code up here
-    jnz die_ghcb_share
-    and $0xfff, %eax
-    cmp $GHCB_MSR_PSC_RESP, %eax
-    jne die_ghcb_share
-    # A host reads no block it was not given the address of first.
-    xor %edx, %edx
-    mov $(SNP_GHCB | GHCB_MSR_REG_GPA_REQ), %eax
-    call ghcb_msr
-    cmp $(SNP_GHCB | GHCB_MSR_REG_GPA_RESP), %eax
-    jne die_ghcb_share              # a response naming some other page
-    test %edx, %edx
-    jnz die_ghcb_share
-    # GHCB info 0: the block itself, which is what the page protocol exits with.
-    xor %edx, %edx
-    mov $SNP_GHCB, %eax
-    mov $GHCB_MSR, %ecx
-    wrmsr
-    ret
-
-# ...and back, so the guest hands Linux the block in the state the image
-# measured rather than a page its host can still write.
-ghcb_private:
-    mov $(GHCB_PRIVATE_REQ >> 32), %edx
-    mov $(GHCB_PRIVATE_REQ & 0xffffffff), %eax
-    call ghcb_msr
-    test %edx, %edx
-    jnz die_ghcb_private
-    and $0xfff, %eax
-    cmp $GHCB_MSR_PSC_RESP, %eax
-    jne die_ghcb_private
-    mov $SNP_GHCB, %rax
-    xor %ecx, %ecx
-    mov $1, %edx                    # validate
-    pvalidate
-    jc die_ghcb_private
-    test %eax, %eax
-    jnz die_ghcb_private
-    # The block was written through the shared alias and is zeroed here through
-    # the encrypted map, with nothing flushing a cache line between the two
-    # views of it. Every part that implements SNP reports SME_COHERENT (CPUID
-    # 0x8000001f EAX[10]) and keeps those views coherent in hardware, which is
-    # why Linux skips the same flush (amd_enc_cache_flush_required). Nothing
-    # here may read CPUID, so that is an assumption about the parts this image
-    # is published for rather than something it checks.
-    mov $SNP_GHCB, %edi             # the descriptor is not what was measured here
-    xor %eax, %eax
-    mov $512, %ecx
-    rep stosq
-    # ...and the MSR to the value a reset leaves in it, so the register does
-    # not still name a page the host can no longer read. It withdraws nothing:
-    # the GHCB address a host has registered lives in the control area it owns,
-    # no request in the protocol takes it back, and KVM keeps it for the life
-    # of the processor. This only leaves the register in a defined state.
-    xor %edx, %edx
-    xor %eax, %eax
-    mov $GHCB_MSR, %ecx
-    wrmsr
-    ret
-
-# EDX:EAX as a GHCB MSR request -> EDX:EAX the response. The caller reads what
-# the response puts where, because the two requests this shim makes put
-# different things there.
-ghcb_msr:
-    mov $GHCB_MSR, %ecx
-    wrmsr
-    vmgexit
-    mov $GHCB_MSR, %ecx
-    rdmsr
-    ret
-
-# Validate [%r12, %r13) as private memory, preferring 2 MiB; PVALIDATE reports status in EAX.
+# Validate [%r12, %r13) as private memory, preferring 2 MiB pages, and zero
+# it. The loader made it private before launch because the image declares it
+# required memory; a page it did not is an RMP violation, not a status the
+# guest reads back, and the guest stops there. PVALIDATE reports status in EAX.
 validate_range:
     cmp %r13, %r12
     jae validated
@@ -215,7 +90,7 @@ validate_range:
     mov $1, %edx
     pvalidate
     setc %bl
-    movzbl %bl, %ebx                # %ebx arrives holding a cursor, not zero
+    movzbl %bl, %ebx                # %ebx arrives holding the shape, not zero
     mov %eax, %r15d
     test %eax, %eax
     jnz size_2m
@@ -231,7 +106,7 @@ validate_4k:
     mov $1, %edx
     pvalidate
     setc %bl
-    movzbl %bl, %ebx                # %ebx arrives holding a cursor, not zero
+    movzbl %bl, %ebx                # %ebx arrives holding the shape, not zero
     mov %eax, %r15d
     test %eax, %eax
     jnz die
@@ -257,8 +132,8 @@ validated:
 madt_template:
     madt_header
 
-    # The entry point, the least memory this image runs in, and the spans it
-    # placed, all written here by the builder.
+    # The entry point, the shape count, the lazy bound and the ranges to
+    # accept, all written here by the builder.
     .org SHIM_DATA
 shim_data:
     .fill SHIM_DATA_SIZE,1,0

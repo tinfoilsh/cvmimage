@@ -7,8 +7,9 @@
 //! runtime services and this one table, as an OVMF guest is after
 //! ExitBootServices with CONFIG_EFI_DISABLE_RUNTIME, which this kernel sets.
 //! Everything here is fixed and measured. At boot a shim writes only what
-//! depends on the RAM the guest has: the bitmap's size and bits, and a memory
-//! map descriptor for each RAM entry of the E820 map it builds (lazy.inc).
+//! depends on the RAM the guest has: the bitmap's size and bits, and the
+//! memory map descriptors of the shape the guest's map is, copied from the
+//! shapes page with the last one's end set (shape.inc).
 
 use crate::boot::{put32, put64};
 use crate::layout::*;

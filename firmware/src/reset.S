@@ -1,7 +1,6 @@
 .include "layout.inc"
 .include "madt.inc"
 .include "map.inc"
-.include "power.inc"
 .include "lazy.inc"
 .section .reset,"ax"
 
@@ -56,7 +55,6 @@ long_mode:
     call accept_walk
 
 boot_kernel:
-    q35_power_init tdx_port_write
     madt_build die, 1
     mov $ZERO_PAGE, %rsi
     lea shim_data(%rip), %rax
@@ -96,7 +94,6 @@ accept_done:
 
 map_code die_map, accept_lazy
 lazy_code accept_range
-tdx_port_write_code tdcall
 
 # A map this image will not run in, reported as the top of RAM it refused.
 die_map:

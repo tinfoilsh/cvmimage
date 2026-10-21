@@ -158,8 +158,6 @@ pub enum Fill {
     /// One page the loader fills from an IGVM parameter area: private on
     /// arrival, so no shim accepts it, and measured by address alone.
     Parameters,
-    /// A declared MMIO aperture: nothing is loaded there and no shim accepts it.
-    Mmio(u64),
 }
 
 /// A span of the guest map, from which the E820 map, the file and the accept list follow.
@@ -196,19 +194,10 @@ impl Placed {
             fill: Fill::Parameters,
         }
     }
-    pub fn mmio(base: u64, size: u64) -> Placed {
-        Placed {
-            base,
-            name: "",
-            e820: ABSENT,
-            fill: Fill::Mmio(size),
-        }
-    }
     pub fn span(&self) -> u64 {
         match &self.fill {
             Fill::Measured(d) => align_up(d.len() as u64, PAGE).max(PAGE),
             Fill::Host | Fill::Parameters => PAGE,
-            Fill::Mmio(n) => *n,
         }
     }
     pub fn data(&self) -> &[u8] {
@@ -244,18 +233,9 @@ pub fn fill(placed: &mut [Placed], base: u64, data: Vec<u8>) -> Result<(), Strin
     Ok(())
 }
 
-pub fn spans(placed: &[Placed]) -> Vec<Region> {
-    let mut v: Vec<_> = placed
-        .iter()
-        .map(|p| (p.base, p.base + p.span(), p.e820))
-        .collect();
-    v.sort_unstable();
-    v
-}
-
 /// Overlapping spans reach Linux as an E820 map and an accept list that disagree.
-pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
-    for pair in spans(placed).windows(2) {
+pub fn validate(placed: &[Placed]) -> Result<(), String> {
+    for pair in shim_spans(placed).windows(2) {
         if pair[0].1 > pair[1].0 {
             return Err(format!("placed regions overlap at {:#x}", pair[1].0));
         }
@@ -265,7 +245,7 @@ pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
         UNACCEPTED_BITMAP,
         UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
     );
-    if let Some(p) = spans(placed)
+    if let Some(p) = shim_spans(placed)
         .iter()
         .find(|(lo, hi, _)| *lo < bitmap.1 && bitmap.0 < *hi)
     {
@@ -277,12 +257,6 @@ pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
     for p in placed {
         if !p.base.is_multiple_of(PAGE) {
             return Err(format!("placed region {:#x} is not page-aligned", p.base));
-        }
-        if p.base >= memory && p.base != RESET_ALIAS {
-            return Err(format!(
-                "placed region {:#x} lies outside the memory the image describes",
-                p.base
-            ));
         }
     }
     Ok(())
@@ -296,11 +270,10 @@ pub type Region = (u64, u64, u32);
 /// The map the shapes' tables and the accept list are built from: every span
 /// this image places at a fixed address. It is measured, so it is one list for
 /// every guest the image can run in, and it says nothing about how much RAM
-/// that guest has or where its apertures are -- the loader's map says that.
+/// that guest has -- the loader's map says that.
 pub fn shim_spans(placed: &[Placed]) -> Vec<Region> {
     let mut v: Vec<Region> = placed
         .iter()
-        .filter(|p| !matches!(p.fill, Fill::Mmio(_)))
         .map(|p| (p.base, p.base + p.span(), p.e820))
         .collect();
     v.sort_unstable();
@@ -728,6 +701,8 @@ pub fn put64(v: &mut [u8], at: usize, n: u64) {
 mod tests {
     use super::*;
 
+    const RAM_TOP: u64 = 0x4000_0000;
+
     fn map() -> Vec<Placed> {
         vec![
             Placed::measured(ZERO_PAGE, "", RESERVED, vec![0; PAGE as usize]),
@@ -740,9 +715,9 @@ mod tests {
     #[test]
     fn e820_tiles_the_whole_span_without_gaps() {
         let map = map();
-        let e = e820(&spans(&map), DEFAULT_RAM);
+        let e = e820(&shim_spans(&map), RAM_TOP);
         assert_eq!(e.first().unwrap().0, 0);
-        assert_eq!(e.last().unwrap().0 + e.last().unwrap().1, DEFAULT_RAM);
+        assert_eq!(e.last().unwrap().0 + e.last().unwrap().1, RAM_TOP);
         for pair in e.windows(2) {
             assert_eq!(pair[0].0 + pair[0].1, pair[1].0);
         }
@@ -753,7 +728,7 @@ mod tests {
     #[test]
     fn accept_ranges_are_exactly_the_complement_of_the_placed_map() {
         let map = map();
-        let ranges = accept_ranges(&spans(&map), DEFAULT_RAM);
+        let ranges = accept_ranges(&shim_spans(&map), RAM_TOP);
         let placed: Vec<_> = map.iter().map(|p| (p.base, p.base + p.span())).collect();
         // Nothing placed is ever accepted: that is the page-aliasing attack.
         for (lo, hi) in &ranges {
@@ -762,28 +737,15 @@ mod tests {
         // ...and nothing else is left out.
         let covered: u64 = ranges.iter().map(|(l, h)| h - l).sum();
         let taken: u64 = placed.iter().map(|(l, h)| h - l).sum();
-        assert_eq!(covered + taken, DEFAULT_RAM);
-    }
-
-    #[test]
-    fn an_mmio_hole_is_absent_from_e820_and_never_accepted() {
-        let mut map = map();
-        map.push(Placed::mmio(0x30_0000, 0x2_0000));
-        // Linux assigns BARs out of gaps, so no entry of any type may cover the aperture.
-        assert!(e820(&spans(&map), DEFAULT_RAM)
-            .iter()
-            .all(|x| x.0 + x.1 <= 0x30_0000 || x.0 >= 0x32_0000));
-        assert!(accept_ranges(&spans(&map), DEFAULT_RAM)
-            .iter()
-            .all(|(l, h)| *h <= 0x30_0000 || *l >= 0x32_0000));
+        assert_eq!(covered + taken, RAM_TOP);
     }
 
     #[test]
     fn overlapping_placement_is_rejected() {
         let mut map = map();
-        map.push(Placed::mmio(ACPI_BASE, PAGE));
-        assert!(validate(&map, DEFAULT_RAM).is_err());
-        assert!(validate(&map[..1], DEFAULT_RAM).is_ok());
+        map.push(Placed::host(ACPI_BASE));
+        assert!(validate(&map).is_err());
+        assert!(validate(&map[..1]).is_ok());
     }
 
     #[test]

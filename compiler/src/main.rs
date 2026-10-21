@@ -5,7 +5,7 @@ mod snp;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-use tinfoil_firmware::layout::{Params, DEFAULT_CBIT, DEFAULT_RAM, DEFAULT_VCPUS};
+use tinfoil_firmware::layout::{Params, DEFAULT_CBIT};
 
 #[derive(Parser)]
 #[command(
@@ -34,17 +34,9 @@ struct Common {
     initramfs: PathBuf,
     #[arg(long)]
     output: PathBuf,
-    /// Guest RAM the host must match, in 0x hex or with a K/M/G suffix.
-    #[arg(long, default_value_t = DEFAULT_RAM, value_parser = parse_size)]
-    ram: u64,
     /// Linux command line, measured whole, with `no5lvl` always appended.
     #[arg(long, default_value = "", hide_default_value = true)]
     cmdline: String,
-    /// Processor count the host must match. The shim builds the MADT from what
-    /// the loader passes it and only the boot processor is measured, so this
-    /// records what the build was asked for and leaves the digest alone.
-    #[arg(long, default_value_t = DEFAULT_VCPUS)]
-    vcpus: u32,
     /// MRCONFIGID (TDX, 48 bytes) or HOST_DATA (SNP, 32 bytes) the host must
     /// pass, hex-encoded. A TDX value pads the config hash with 16 zero bytes.
     #[arg(long)]
@@ -79,24 +71,6 @@ enum Command {
     },
 }
 
-fn parse_size(text: &str) -> Result<u64, String> {
-    let text = text.trim();
-    let (digits, scale) = match text.as_bytes().last() {
-        Some(b'K' | b'k') => (&text[..text.len() - 1], 1 << 10),
-        Some(b'M' | b'm') => (&text[..text.len() - 1], 1 << 20),
-        Some(b'G' | b'g') => (&text[..text.len() - 1], 1 << 30),
-        _ => (text, 1),
-    };
-    let value = match digits.strip_prefix("0x") {
-        Some(hex) => u64::from_str_radix(hex, 16),
-        None => digits.parse(),
-    };
-    value
-        .map_err(|e| e.to_string())?
-        .checked_mul(scale)
-        .ok_or_else(|| "size overflows".to_string())
-}
-
 fn run() -> Result<(), String> {
     match Cli::parse().command {
         Command::Build {
@@ -114,7 +88,7 @@ fn run() -> Result<(), String> {
                         .into(),
                 );
             }
-            let params = Params::tdx(common.ram, common.vcpus, &common.cmdline)?;
+            let params = Params::tdx(&common.cmdline)?;
             image::build(
                 &common.kernel,
                 &common.initramfs,
@@ -130,7 +104,7 @@ fn run() -> Result<(), String> {
             id_key,
             guest_svn,
         } => {
-            let params = Params::snp(common.ram, common.vcpus, cbit, &common.cmdline)?;
+            let params = Params::snp(cbit, &common.cmdline)?;
             snp::build(
                 &common.kernel,
                 &common.initramfs,

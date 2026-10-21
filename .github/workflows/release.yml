@@ -154,8 +154,8 @@ jobs:
           set -Eeuo pipefail
           rm -rf /tmp/out
           mkdir -p /tmp/out
-          snp_launch="$(jq -ce 'select(.format_version == 3) | .launch | {measurement}' tinfoil-snp.igvm.manifest.json)"
-          tdx_launch="$(jq -ce 'select(.format_version == 3) | .launch | {mrtd, rtmr0, rtmr1, rtmr2, rtmr3}' tinfoil-tdx.igvm.manifest.json)"
+          snp_launch="$(jq -ce 'select(.format_version == 4) | .launch | {measurement}' tinfoil-snp.igvm.manifest.json)"
+          tdx_launch="$(jq -ce 'select(.format_version == 4) | .launch | {mrtd, rtmr0, rtmr1, rtmr2, rtmr3}' tinfoil-tdx.igvm.manifest.json)"
           # Generate manifest JSON
           cat > "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" << EOF
           {

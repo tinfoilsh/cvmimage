@@ -8,7 +8,14 @@ let
     "mailcap-1.17.patch"
     "tzdata-1.19.patch"
   ];
+  # Pin the Go toolchain explicitly; bump this together with the src hash
+  # whenever the toolchain needs an update.
   upstreamGo = pkgs.go_1_27.overrideAttrs (old: {
+    version = "1.27.3";
+    src = pkgs.fetchurl {
+      url = "https://go.dev/dl/go1.27.3.src.tar.gz";
+      hash = "sha256-bndJA1zzYPBrJXXRYup535/ajvZxiJ5cN1+OUHd/Jrs=";
+    };
     patches = builtins.filter (
       patch:
       !pkgs.lib.any (

@@ -2,7 +2,6 @@
 .include "madt.inc"
 .include "map.inc"
 .include "psc.inc"
-.include "power.inc"
 .include "lazy.inc"
 .section .reset,"ax"
 
@@ -12,7 +11,7 @@
 # stack, the data segments and RFLAGS (interrupts and direction clear) already
 # as the shim needs them (vmsa.rs), so there is no mode switch to make.
 # Nothing here may depend on CPUID, trapped I/O or an exception. Page state
-# changes and the fixed PM-register writes use the GHCB explicitly.
+# changes use the GHCB explicitly.
 snp_reset_start:
     # The guest's own E820 map, which the measurement leaves to the shim because
     # measuring it would bind this image to a machine size.
@@ -29,7 +28,6 @@ snp_reset_start:
     call unaccepted_size
     call ghcb_share
     call accept_walk
-    q35_power_init snp_port_write
     call ghcb_private
 
     # The one table the measurement leaves to the shim. SNP carries no wakeup
@@ -47,7 +45,6 @@ snp_boot_kernel:
 map_code die_map, accept_lazy
 lazy_code accept_private
 psc_code die_psc, vmgexit
-snp_port_write_code vmgexit
 
 # A map this image will not run in, which is step 2 of the sequence above.
 die_map:

@@ -82,20 +82,7 @@ layout! {
     GHCB_USAGE = 0xffc;
     GHCB_PROTOCOL = 2;
     SVM_VMGEXIT_PSC = 0x8000_0010;
-    SVM_EXIT_IOIO = 0x7b;
-    IOIO_ADDR_64 = 1 << 9;
-    IO_DWORD_BYTES = 4;
-    TDX_IO_EXIT = 30;
-    TDX_IO_WRITE = 1;
-    TDX_IO_REGISTERS = 0xfc00; // R10 through R15.
 
-    PCI_CONFIG_ADDRESS = 0xcf8;
-    PCI_CONFIG_DATA = 0xcfc;
-    Q35_LPC_PMBASE = 0x8000_f840;
-    Q35_LPC_ACPI_CTRL = 0x8000_f844;
-    Q35_PM_BASE = 0x600;
-    Q35_PM_CONTROL = Q35_PM_BASE + 4;
-    Q35_ACPI_ENABLE = 0x80;
     ACPI_SCI_IRQ = 9;
     Q35_PIT_GSI = 2;
     IOAPIC_ADDRESS = 0xfec0_0000;
@@ -201,8 +188,8 @@ layout! {
     RSDP_LEN = 36;
     XSDT_LEN = 52;
     FADT_LEN = 276;
-    // The header followed by the soft-off package and PCI root bridge.
-    DSDT_LEN = 71;
+    // The header followed by the PCI root bridge.
+    DSDT_LEN = 59;
     MADT_HEADER_LEN = 44;
     MADT_IOAPIC_LEN = 12;
     MADT_OVERRIDE_LEN = 10;

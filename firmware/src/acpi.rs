@@ -19,21 +19,17 @@ const RSDP_V1_LEN: usize = 20;
 
 const FADT_DSDT: usize = 40;
 const FADT_SCI: usize = 46;
-const FADT_PM1A_EVENT: usize = 56;
-const FADT_PM1A_CONTROL: usize = 64;
-const FADT_PM1_EVENT_LEN: usize = 88;
-const FADT_PM1_CONTROL_LEN: usize = 89;
 const FADT_BOOT_ARCH: usize = 109;
 const FADT_FLAGS: usize = 112;
 const FADT_MINOR_VERSION: usize = 131;
 const FADT_X_DSDT: usize = 140;
 const FADT_WBINVD: u32 = 1;
-// SLP_BUTTON: no fixed-feature sleep button; the power button stays fixed.
-const FADT_SLP_BUTTON: u32 = 1 << 5;
+// Hardware-reduced ACPI: no PM1 register blocks, no fixed events and no fixed
+// power or sleep buttons, so Linux touches no chipset power-management ports
+// and has no ACPI path to power the guest off. A guest is stopped from the host.
+const FADT_HW_REDUCED_ACPI: u32 = 1 << 20;
 // No CMOS RTC: Linux then registers no RTC device for the host to interrupt or time.
 const FADT_NO_CMOS_RTC: u16 = 1 << 5;
-// Name (_S5, Package (4) { 0, 0, 0, 0 }): Q35's soft-off sleep type is zero.
-const S5_AML: &[u8] = b"\x08_S5_\x12\x06\x04\0\0\0\0";
 // Scope (_SB) { Device (PCI0) { Name (_HID, EisaId ("PNP0A03")) } }
 // No _CRS: pci=nocrs gives the root bus all of I/O and memory space, as before.
 const PCI_ROOT_AML: &[u8] = b"\x10\x16_SB_\x5b\x82\x0fPCI0\x08_HID\x0c\x41\xd0\x0a\x03";
@@ -67,21 +63,20 @@ pub fn build() -> Vec<u8> {
     header(&mut bytes[fo..], b"FACP", FADT_LEN as u32, 6);
     put32(&mut bytes, fo + FADT_DSDT, dsdt as u32);
     bytes[fo + FADT_SCI..fo + FADT_SCI + 2].copy_from_slice(&(ACPI_SCI_IRQ as u16).to_le_bytes());
-    put32(&mut bytes, fo + FADT_PM1A_EVENT, Q35_PM_BASE as u32);
-    put32(&mut bytes, fo + FADT_PM1A_CONTROL, Q35_PM_CONTROL as u32);
-    bytes[fo + FADT_PM1_EVENT_LEN] = 4;
-    bytes[fo + FADT_PM1_CONTROL_LEN] = 2;
     bytes[fo + FADT_BOOT_ARCH..fo + FADT_BOOT_ARCH + 2]
         .copy_from_slice(&FADT_NO_CMOS_RTC.to_le_bytes());
-    put32(&mut bytes, fo + FADT_FLAGS, FADT_SLP_BUTTON | FADT_WBINVD);
+    put32(
+        &mut bytes,
+        fo + FADT_FLAGS,
+        FADT_HW_REDUCED_ACPI | FADT_WBINVD,
+    );
     bytes[fo + FADT_MINOR_VERSION] = 5;
     put64(&mut bytes, fo + FADT_X_DSDT, dsdt);
     finish(&mut bytes[fo..fo + FADT_LEN as usize]);
 
     let do_ = (dsdt - ACPI_BASE) as usize;
     header(&mut bytes[do_..], b"DSDT", DSDT_LEN as u32, 2);
-    let aml = [S5_AML, PCI_ROOT_AML].concat();
-    bytes[do_ + TABLE_HEADER_LEN..do_ + DSDT_LEN as usize].copy_from_slice(&aml);
+    bytes[do_ + TABLE_HEADER_LEN..do_ + DSDT_LEN as usize].copy_from_slice(PCI_ROOT_AML);
     finish(&mut bytes[do_..do_ + DSDT_LEN as usize]);
 
     bytes
@@ -174,48 +169,24 @@ mod tests {
         }
     }
 
+    /// Nothing in the measured tables points Linux at chipset power-management
+    /// ports: the FADT is hardware-reduced with no PM1 blocks, and the DSDT
+    /// states no sleep state to enter, so no shim has registers to set up.
     #[test]
-    fn both_shims_initialize_the_power_registers_the_fadt_describes() {
+    fn the_tables_describe_no_power_management_hardware() {
         let a = build();
         let f = ACPI_FADT as usize;
         let word = |at| u16::from_le_bytes(a[f + at..f + at + 2].try_into().unwrap());
         let dword = |at| u32::from_le_bytes(a[f + at..f + at + 4].try_into().unwrap());
         assert_eq!(word(FADT_SCI) as u64, ACPI_SCI_IRQ);
-        assert_eq!(dword(FADT_FLAGS) & (1 << 20 | 1 << 4), 0);
+        assert_eq!(dword(FADT_FLAGS), FADT_HW_REDUCED_ACPI | FADT_WBINVD);
         assert_eq!(word(FADT_BOOT_ARCH), FADT_NO_CMOS_RTC);
-        let base = dword(FADT_PM1A_EVENT) as u64;
-        assert_eq!(dword(FADT_PM1A_CONTROL) as u64, base + 4);
-        assert_eq!(a[f + FADT_PM1_EVENT_LEN], 4);
-        assert_eq!(a[f + FADT_PM1_CONTROL_LEN], 2);
-
-        let writes = [
-            (PCI_CONFIG_ADDRESS, Q35_LPC_PMBASE),
-            (PCI_CONFIG_DATA, base),
-            (PCI_CONFIG_ADDRESS, Q35_LPC_ACPI_CTRL),
-            (PCI_CONFIG_DATA, Q35_ACPI_ENABLE),
-        ];
-        let shim = crate::shim::shim();
-        for tdx in [false, true] {
-            let requests = shim.power(tdx);
-            assert_eq!(requests.len(), writes.len());
-            for (request, (port, value)) in requests.iter().zip(writes) {
-                let expected = if tdx {
-                    [0, 0xfc00, 0, 30, 4, 1, port, value]
-                } else {
-                    [
-                        SVM_EXIT_IOIO,
-                        port << 16 | 4 << 4 | IOIO_ADDR_64,
-                        0,
-                        value,
-                        1 << 63,
-                        7 << 50,
-                        GHCB_PROTOCOL,
-                        0,
-                    ]
-                };
-                assert_eq!(*request, expected, "TDX={tdx}");
-            }
-        }
+        // PM1a/b event and control blocks, the PM timer and both GPE blocks.
+        assert!(a[f + 56..f + 92].iter().all(|b| *b == 0));
+        let d = ACPI_DSDT as usize;
+        let aml = &a[d + TABLE_HEADER_LEN..d + DSDT_LEN as usize];
+        assert_eq!(aml, PCI_ROOT_AML);
+        assert!(!aml.windows(4).any(|w| w == b"_S5_"));
     }
 
     /// The measured page ends where the shim's table begins: nothing below it

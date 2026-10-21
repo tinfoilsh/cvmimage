@@ -468,15 +468,6 @@ mod tests {
             share < walk && walk < private,
             "the block is shared out of order"
         );
-        let power_writes: Vec<_> = calls
-            .iter()
-            .filter(|(_, name)| *name == "snp_port_write")
-            .collect();
-        assert_eq!(power_writes.len(), 4);
-        assert!(power_writes
-            .iter()
-            .all(|(at, _)| walk < *at && *at < private));
-
         // ...and inside the walk, private comes before validated.
         let psc = once("psc_range");
         assert_eq!(routine(symbols, psc), "accept_private");

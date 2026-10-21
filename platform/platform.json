@@ -139,6 +139,17 @@
     "profile": "single",
     "qemu_source": "qemu:10.1.0"
   },
+  "medium_3d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 6,
+    "memory": "131072M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
   "medium_4d_new": {
     "acpi_memory": "65536M",
     "cpus": 16,

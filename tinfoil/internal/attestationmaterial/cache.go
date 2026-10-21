@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	refreshBefore  = 24 * time.Hour
-	retryAfter     = time.Minute
-	refreshTimeout = 35 * time.Second
+	// New endorsements can supersede cached collateral before it expires.
+	refreshInterval = time.Minute
+	retryAfter      = time.Minute
+	refreshTimeout  = 35 * time.Second
 )
 
 var ErrUnavailable = errors.New("attestation collateral unavailable")
@@ -42,7 +43,7 @@ func NewCache(request wire.Request, fetcher Fetcher) *Cache {
 		request:      request,
 		fetcher:      fetcher,
 		now:          time.Now,
-		refreshAfter: refreshBefore,
+		refreshAfter: refreshInterval,
 		retryAfter:   retryAfter,
 	}
 }
@@ -111,7 +112,7 @@ func (c *Cache) refresh(ctx context.Context, done chan struct{}) error {
 	} else {
 		c.response = &response
 		remaining := response.ExpiresAt.Sub(now)
-		c.nextAttempt = response.ExpiresAt.Add(-min(c.refreshAfter, remaining/2))
+		c.nextAttempt = now.Add(min(c.refreshAfter, remaining/2))
 	}
 	c.refreshing = nil
 	close(done)

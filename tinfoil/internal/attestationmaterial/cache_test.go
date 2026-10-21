@@ -3,8 +3,8 @@ package attestationmaterial
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
@@ -45,43 +45,101 @@ func TestCacheFetchesLazily(t *testing.T) {
 }
 
 func TestCacheRefreshesOnceWhenDue(t *testing.T) {
-	now := time.Now()
-	started := make(chan struct{})
-	release := make(chan struct{})
-	completed := make(chan struct{})
-	var mu sync.Mutex
-	calls := 0
-	cache := NewCache(wire.Request{Repo: "repo", Platform: "tdx"}, fetchFunc(func(_ context.Context, _ wire.Request) (wire.Response, error) {
-		mu.Lock()
-		calls++
-		call := calls
-		mu.Unlock()
-		if call == 2 {
-			close(started)
-			<-release
-			close(completed)
-		}
-		return response(now.Add(48*time.Hour), "entry"), nil
-	}))
-	cache.now = func() time.Time { return now }
-	if _, err := cache.Current(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	for _, test := range []struct {
+		name         string
+		lifetime     time.Duration
+		refreshAfter time.Duration
+	}{
+		{name: "long-lived collateral", lifetime: 24 * time.Hour, refreshAfter: time.Minute},
+		{name: "near expiry", lifetime: 20 * time.Second, refreshAfter: 10 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				release := make(chan struct{})
+				calls := 0
+				cache := NewCache(wire.Request{Repo: "repo", Platform: "tdx"}, fetchFunc(func(_ context.Context, _ wire.Request) (wire.Response, error) {
+					calls++
+					if calls == 1 {
+						return response(time.Now().Add(test.lifetime), "old"), nil
+					}
+					<-release
+					return response(time.Now().Add(test.lifetime), "new"), nil
+				}))
+				if _, err := cache.Current(context.Background()); err != nil {
+					t.Fatal(err)
+				}
 
-	now = now.Add(24 * time.Hour)
-	for range 5 {
+				time.Sleep(test.refreshAfter - time.Nanosecond)
+				got, err := cache.Current(context.Background())
+				synctest.Wait()
+				if err != nil || len(got) != 1 || got[0].ID != "old" || calls != 1 {
+					t.Fatalf("before refresh: collateral=%v error=%v calls=%d", got, err, calls)
+				}
+
+				time.Sleep(time.Nanosecond)
+				for range 5 {
+					go func() {
+						got, err := cache.Current(context.Background())
+						if err != nil || len(got) != 1 || got[0].ID != "old" {
+							t.Errorf("during refresh: collateral=%v error=%v", got, err)
+						}
+					}()
+				}
+				synctest.Wait()
+				if calls != 2 {
+					t.Fatalf("fetch calls = %d, want 2", calls)
+				}
+				close(release)
+				synctest.Wait()
+				got, err = cache.Current(context.Background())
+				if err != nil || len(got) != 1 || got[0].ID != "new" || calls != 2 {
+					t.Fatalf("after refresh: collateral=%v error=%v calls=%d", got, err, calls)
+				}
+			})
+		})
+	}
+}
+
+func TestCacheKeepsValidCollateralWhenRefreshFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		cache := NewCache(wire.Request{Repo: "repo", Platform: "tdx"}, fetchFunc(func(_ context.Context, _ wire.Request) (wire.Response, error) {
+			calls++
+			switch calls {
+			case 1:
+				return response(time.Now().Add(24*time.Hour), "old"), nil
+			case 2:
+				return wire.Response{}, errors.New("ATC unavailable")
+			default:
+				return response(time.Now().Add(24*time.Hour), "new"), nil
+			}
+		}))
 		if _, err := cache.Current(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-	}
-	waitForSignal(t, started)
-	mu.Lock()
-	if calls != 2 {
-		t.Fatalf("fetch calls = %d, want 2", calls)
-	}
-	mu.Unlock()
-	close(release)
-	waitForSignal(t, completed)
+
+		time.Sleep(time.Minute)
+		for range 5 {
+			got, err := cache.Current(context.Background())
+			if err != nil || len(got) != 1 || got[0].ID != "old" {
+				t.Fatalf("failed refresh: collateral=%v error=%v", got, err)
+			}
+			synctest.Wait()
+		}
+		if calls != 2 {
+			t.Fatalf("fetch calls = %d, want 2", calls)
+		}
+
+		time.Sleep(time.Minute)
+		if _, err := cache.Current(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		got, err := cache.Current(context.Background())
+		if err != nil || len(got) != 1 || got[0].ID != "new" || calls != 3 {
+			t.Fatalf("after retry: collateral=%v error=%v calls=%d", got, err, calls)
+		}
+	})
 }
 
 func TestCacheFailsClosedAfterExpiry(t *testing.T) {
@@ -120,14 +178,5 @@ func response(expiresAt time.Time, id string) wire.Response {
 			Subjects: []string{"subject"},
 			Data:     []byte(`{"value":true}`),
 		}},
-	}
-}
-
-func waitForSignal(t *testing.T, signal <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-signal:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for cache refresh")
 	}
 }

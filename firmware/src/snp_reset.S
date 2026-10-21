@@ -6,41 +6,14 @@
 .include "lazy.inc"
 .section .reset,"ax"
 
-.code32
+.code64
 .global snp_reset_start
+# The VMSA hands over 64-bit long mode on the measured page tables, with the
+# stack, the data segments and RFLAGS (interrupts and direction clear) already
+# as the shim needs them (vmsa.rs), so there is no mode switch to make.
 # Nothing here may depend on CPUID, trapped I/O or an exception. Page state
 # changes and the fixed PM-register writes use the GHCB explicitly.
 snp_reset_start:
-    cli
-    cld
-    mov $BSP_STACK_TOP, %esp
-
-    # The VMSA hands over 32-bit protected mode with paging off, so the shim enables it.
-    mov $0xc0000080, %ecx
-    rdmsr
-    or $0x900, %eax                 # EFER.LME | EFER.NXE
-    wrmsr
-    mov $PAGE_TABLES, %eax
-    mov %eax, %cr3
-    mov %cr0, %eax
-    bts $31, %eax
-    mov %eax, %cr0
-    call 1f
-1:  pop %eax
-    add $(snp_long_mode-1b), %eax
-    push $BOOT_CS
-    push %eax
-    lret
-
-.code64
-snp_long_mode:
-    mov $BOOT_DS, %eax
-    mov %eax, %ds
-    mov %eax, %es
-    mov %eax, %ss
-    mov %eax, %fs
-    mov %eax, %gs
-
     # The guest's own E820 map, which the measurement leaves to the shim because
     # measuring it would bind this image to a machine size.
     call host_regions

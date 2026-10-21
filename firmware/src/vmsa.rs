@@ -6,10 +6,12 @@ use crate::layout::*;
 use igvm::snp_defs::{SevFeatures, SevSelector, SevVmsa};
 use zerocopy::{AsBytes, FromZeroes};
 
-// The VMSA reset state, pinned here because the launch digest covers all of it.
-const VMSA_CR0: u64 = 0x31;
+// The VMSA state, pinned here because the launch digest covers all of it: long
+// mode with paging on the measured identity map, so no code before the shim
+// switches modes. CR0 is PG|NE|ET|PE; EFER is SVME|NXE|LMA|LME.
+const VMSA_CR0: u64 = 0x8000_0031;
 const VMSA_CR4: u64 = 0x60;
-const VMSA_EFER: u64 = 0x1000;
+const VMSA_EFER: u64 = 0x1d00;
 const VMSA_RFLAGS: u64 = 2;
 const VMSA_XCR0: u64 = 1;
 const VMSA_PAT: u64 = 0x0007_0406_0007_0406;
@@ -17,7 +19,7 @@ const VMSA_DR6: u64 = 0xffff_0ff0;
 const VMSA_DR7: u64 = 0x400;
 const VMSA_MXCSR: u32 = 0x1f80;
 const VMSA_X87_FCW: u16 = 0x037f;
-const SEG_CODE32_ATTR: u16 = 0x0c9b;
+const SEG_CODE64_ATTR: u16 = 0x0a9b;
 const SEG_DATA_ATTR: u16 = 0x0c93;
 const SEG_LIMIT: u32 = 0xffff_ffff;
 
@@ -38,10 +40,10 @@ pub fn bsp_vmsa() -> Box<SevVmsa> {
     v.ds = data;
     v.fs = data;
     v.gs = data;
-    // The VMSA enters 32-bit protected mode; the shim far-returns to BOOT_CS.
+    // 64-bit code (L set, D clear), the descriptor the measured GDT holds at BOOT_CS.
     v.cs = SevSelector {
-        selector: BOOT_CS32 as u16,
-        attrib: SEG_CODE32_ATTR,
+        selector: BOOT_CS as u16,
+        attrib: SEG_CODE64_ATTR,
         limit: SEG_LIMIT,
         base: 0,
     };
@@ -59,10 +61,9 @@ pub fn bsp_vmsa() -> Box<SevVmsa> {
     };
     v.ldtr = v.idtr;
     v.tr = v.idtr;
-    // The KVM reset state the shim starts from, paging and long mode left to it.
     v.efer = VMSA_EFER;
     v.cr4 = VMSA_CR4;
-    v.cr3 = 0;
+    v.cr3 = PAGE_TABLES;
     v.cr0 = VMSA_CR0;
     v.dr6 = VMSA_DR6;
     v.dr7 = VMSA_DR7;
@@ -84,7 +85,7 @@ pub fn validate_vmsa(v: &SevVmsa, rip: u64, rsp: u64, rsi: u64) -> Result<(), St
         s.selector == sel as u16 && s.attrib == attrib && s.limit == SEG_LIMIT && s.base == 0
     };
     let pinned = v.cr0 == VMSA_CR0
-        && v.cr3 == 0
+        && v.cr3 == PAGE_TABLES
         && v.cr4 == VMSA_CR4
         && v.efer == VMSA_EFER
         && v.rdx == 0
@@ -102,7 +103,7 @@ pub fn validate_vmsa(v: &SevVmsa, rip: u64, rsp: u64, rsi: u64) -> Result<(), St
         && v.gdtr.base == BSP_STACK
         && v.gdtr.limit == GDT_LIMIT as u32
         && v.idtr.limit == 0
-        && data(&v.cs, BOOT_CS32, SEG_CODE32_ATTR)
+        && data(&v.cs, BOOT_CS, SEG_CODE64_ATTR)
         && data(&v.ds, BOOT_DS, SEG_DATA_ATTR)
         && data(&v.ss, BOOT_DS, SEG_DATA_ATTR)
         && v.sev_features.into_bits() == SNP_SEV_FEATURES;
@@ -162,13 +163,13 @@ mod tests {
     fn vmsa_is_the_pinned_reset_state() {
         let v = bsp_vmsa();
         assert_eq!(vmsa_page(&v).len(), 4096);
-        assert_eq!(v.cr0, 0x31);
-        assert_eq!(v.cr3, 0);
+        assert_eq!(v.cr0, 0x8000_0031);
+        assert_eq!(v.cr3, PAGE_TABLES);
         assert_eq!(v.cr4, 0x60);
-        assert_eq!(v.efer, 0x1000);
+        assert_eq!(v.efer, 0x1d00);
         assert_eq!(v.rdx, 0);
-        assert_eq!(v.cs.selector, BOOT_CS32 as u16);
-        assert_eq!(v.cs.attrib, 0x0c9b);
+        assert_eq!(v.cs.selector, BOOT_CS as u16);
+        assert_eq!(v.cs.attrib, 0x0a9b);
         assert_eq!(v.mxcsr, 0x1f80);
         assert_eq!(v.x87_fcw, 0x037f);
         assert_eq!(v.rsi, ZERO_PAGE);

@@ -21,7 +21,7 @@ let
   policyConfigArgs = lib.concatMapStringsSep " " (path: "${path}") policyConfigs;
 
   sourceDeb = pkgs.fetchurl {
-    url = "https://snapshot.ubuntu.com/ubuntu/20260721T000000Z/pool/main/l/linux/linux-source-7.0.0_7.0.0-28.28_all.deb";
+    url = "https://snapshot.ubuntu.com/ubuntu/20261021T000000Z/pool/main/l/linux/linux-source-7.0.0_7.0.0-28.28_all.deb";
     hash = "sha256-3VmUsZmhywax8za7CGxcI6klj9z9y7fcyNOvqaXZLhM=";
   };
 

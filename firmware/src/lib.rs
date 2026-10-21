@@ -1,11 +1,11 @@
 //! The measured initial state of a confidential guest: the physical map, ACPI
 //! tables, zero page, page tables, reset shims, and on SEV-SNP the boot
-//! processor's save area, which is the only one the launch digest takes. The kernel and initramfs are inputs; this crate decides only
-//! where they sit. Two things are left out, because measuring either would bind
-//! an image to a machine size: the MADT, which a shim writes from the processor
-//! count the loader leaves in an unmeasured parameter page, and the E820 map
-//! and accept ranges, which a shim derives from the memory map the loader
-//! leaves in another.
+//! processor's save area, which is the only one the launch digest takes. The
+//! kernel and initramfs are inputs; this crate decides only where they sit. Two things a shim finishes at boot, because measuring
+//! either would bind an image to a machine size: the MADT, from the processor
+//! count the loader leaves in an unmeasured parameter page, and the end of the
+//! guest's RAM, from the memory map the loader leaves in another -- which has
+//! to be one of the shapes this crate measured, whose tables are built here.
 //!
 //! Serializing that state and hashing it belongs to the compiler. The split is
 //! the trust boundary: these bytes are measured, the compiler's are not.
@@ -31,15 +31,22 @@ use vmsa::{cc_blob, SNP_SHIM};
 pub struct Launch {
     /// Every region of the guest physical map, in ascending address order.
     pub placed: Vec<Placed>,
-    /// The memory an SEV-SNP loader must have backed where this image places
-    /// pages -- and nowhere else: the shim converts the rest of a guest's RAM
-    /// itself, so no declaration here binds the image to a machine size.
-    /// Intel TDX asks a loader for none, and leaves it empty.
+    /// The memory an SEV-SNP loader must have made private before launch:
+    /// what this image places, and the ranges the shim validates (`accept`).
+    /// None of it depends on the guest's size: the rest of RAM Linux converts
+    /// as it uses it, so no declaration here binds the image to a machine
+    /// size. Intel TDX asks a loader for none, and leaves it empty.
     pub required_memory: Vec<boot::Region>,
-    /// The measured spans the shim merges the loader's map into, and derives
-    /// that E820 table and the ranges it accepts from -- for whatever machine
-    /// the loader describes, not this one.
+    /// Every span this image places at a fixed address.
     pub spans: Vec<boot::Region>,
+    /// The memory shapes the image runs in, as the shapes page measures them.
+    pub shapes: Vec<boot::Shape>,
+    /// Below this, the shim accepts all of the RAM the image did not place;
+    /// past it, Linux accepts what it uses but for the units the image places
+    /// in (`boot::span_units`).
+    pub lazy: u64,
+    /// The ranges the shim accepts (`boot::shim_accept`).
+    pub accept: Vec<(u64, u64)>,
     /// Where the shim jumps once the map is in place.
     pub entry: u64,
     /// Measured bytes this crate authors, excluding kernel and initramfs.
@@ -61,8 +68,14 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         Placed::parameters(PARAM_PAGE),
         Placed::parameters(PARAM_MAP_PAGE),
         Placed::measured(MAILBOX, "", RESERVED, vec![0u8; PAGE as usize]),
-        Placed::measured(PAGE_TABLES, "", RESERVED, identity_map(0, false)),
+        Placed::measured(PAGE_TABLES, "", RESERVED, identity_map(0)),
         Placed::measured(BSP_STACK, "", RESERVED, boot::gdt_stack()),
+        Placed::measured(
+            SHAPES_PAGE,
+            "shapes",
+            RESERVED,
+            vec![0u8; SHAPES_SIZE as usize],
+        ),
         Placed::measured(KERNEL_SETUP_BASE, "kernel_setup", RESERVED, p.setup.clone()),
         Placed::measured(EFI_PAGE, "efi", RESERVED, efi::page()),
         Placed::measured(KERNEL_BASE, "kernel", RAM, p.kernel),
@@ -76,7 +89,8 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    let shim_page = shim(RESET_SHIM, p.entry, &spans, lazy_bound(p.info))?;
+    let (shapes, lazy, accept) = memory(&mut placed, &spans, p.info, false)?;
+    let shim_page = shim(RESET_SHIM, p.entry, shapes.len(), lazy, &accept)?;
     boot::fill(&mut placed, RESET_ALIAS, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
 
@@ -86,14 +100,17 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         placed,
         required_memory: Vec::new(),
         spans,
+        shapes,
+        lazy,
+        accept,
         entry: p.entry,
         shim_owned,
     })
 }
 
 /// The AMD SEV-SNP map: firmware-owned CPUID and secrets pages, a
-/// confidential-computing blob reached through setup_data, a shared alias in
-/// the page tables, and a shim below the kernel rather than at the reset vector.
+/// confidential-computing blob reached through setup_data, and a shim below
+/// the kernel rather than at the reset vector.
 pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result<Launch, String> {
     let p = prepare(kernel_path, initramfs_path, params)?;
 
@@ -109,14 +126,14 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         Placed::host(SNP_CPUID),
         Placed::host(SNP_SECRETS),
         Placed::measured(SNP_CC_BLOB, "cc_blob", RAM, cc_blob()),
-        Placed::measured(
-            PAGE_TABLES,
-            "",
-            RESERVED,
-            identity_map(params.cbit as u64, true),
-        ),
+        Placed::measured(PAGE_TABLES, "", RESERVED, identity_map(params.cbit as u64)),
         Placed::measured(BSP_STACK, "", RESERVED, boot::gdt_stack()),
-        Placed::measured(SNP_GHCB, "", RESERVED, vec![0u8; PAGE as usize]),
+        Placed::measured(
+            SHAPES_PAGE,
+            "shapes",
+            RESERVED,
+            vec![0u8; SHAPES_SIZE as usize],
+        ),
         Placed::measured(EFI_PAGE, "efi", RESERVED, efi::page()),
         Placed::measured(SHIM_BASE, "shim", RESERVED, vec![0u8; PAGE as usize]),
         Placed::measured(KERNEL_SETUP_BASE, "kernel_setup", RESERVED, p.setup.clone()),
@@ -126,27 +143,34 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
     boot::validate(&placed, params.memory)?;
     let spans = boot::shim_spans(&placed);
-    // Only what this image loads. A loader converts these to private as it
-    // imports them, so what this declares is that it has them backed at all;
-    // the guest's own RAM is the shim's to convert, through the page state
-    // changes psc.inc makes, and one image serves a guest of any size.
-    let required_memory = spans
-        .iter()
-        .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
-        .collect();
     // The setup_data chain is one measured SETUP_CC_BLOB record.
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    let shim_page = shim(SNP_SHIM, p.entry, &spans, lazy_bound(p.info))?;
+    let (shapes, lazy, accept) = memory(&mut placed, &spans, p.info, true)?;
+    let shim_page = shim(SNP_SHIM, p.entry, shapes.len(), lazy, &accept)?;
     boot::fill(&mut placed, SHIM_BASE, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
+    // What this image loads, which a loader converts to private as it imports
+    // it, and the RAM below the lazy bound, which it converts because this
+    // asks it to: the shim validates that and asks the host for nothing. Past
+    // the bound Linux converts what it uses, so one image serves a guest of
+    // any size.
+    let mut required_memory: Vec<boot::Region> = spans
+        .iter()
+        .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
+        .chain(accept.iter().map(|(lo, hi)| (*lo, hi - lo, RAM)))
+        .collect();
+    required_memory.sort_unstable();
 
     placed.sort_by_key(|p| p.base);
     Ok(Launch {
         placed,
         required_memory,
         spans,
+        shapes,
+        lazy,
+        accept,
         entry: p.entry,
         shim_owned,
     })
@@ -154,9 +178,32 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
 
 /// Everything below the end of the kernel's decompression is accepted by the
 /// shim, since the decompressor runs before Linux's own acceptance does; past
-/// it, whole 2-MiB units are Linux's to accept (see lazy.inc).
+/// it, whole 2-MiB units are Linux's to accept (see shape.inc).
 fn lazy_bound(info: boot::KernelInfo) -> u64 {
     align_up(KERNEL_BASE + info.init_size as u64, UNACCEPTED_UNIT)
+}
+
+/// The shapes, the lazy bound and the ranges the shim accepts, as `memory`
+/// works them out.
+type Memory = (Vec<boot::Shape>, u64, Vec<(u64, u64)>);
+
+/// The memory side of a launch: the shapes the guest's map may take, measured
+/// into the shapes page; the lazy bound; and the ranges the shim accepts.
+fn memory(
+    placed: &mut [Placed],
+    spans: &[boot::Region],
+    info: boot::KernelInfo,
+    amd: bool,
+) -> Result<Memory, String> {
+    let lazy = lazy_bound(info);
+    let shapes = boot::qemu_shapes(amd, boot::least_memory(spans, lazy));
+    boot::fill(
+        placed,
+        SHAPES_PAGE,
+        boot::shapes_page(&shapes, spans, lazy)?,
+    )?;
+    let accept = boot::shim_accept(spans, lazy);
+    Ok((shapes, lazy, accept))
 }
 
 /// Formats an io::Error with the action that failed.

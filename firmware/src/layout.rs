@@ -24,19 +24,15 @@ layout! {
     SNP_SECRETS = 0x000f_1000;
     SNP_CC_BLOB = 0x000f_2000;
     PAGE_TABLES = 0x0010_0000;
-    // The most either platform places: one PML4 page and the four PDPT pages of
-    // 1-GiB pages that cover MAP_LIMIT, plus on SNP a further PDPT page aliasing
-    // physical GiB 0 without the C-bit (see SHARED_ALIAS). TDX places the first
-    // five only.
-    PAGE_TABLE_SIZE = 6 * PAGE;
+    // One PML4 page and the four PDPT pages of 1-GiB pages that cover MAP_LIMIT.
+    PAGE_TABLE_SIZE = 5 * PAGE;
     BSP_STACK = 0x0010_7000;
     BSP_STACK_SIZE = 0x0001_0000;
     BSP_STACK_TOP = BSP_STACK + BSP_STACK_SIZE;
-    // The Guest-Hypervisor Communication Block, through which the shim asks the
-    // host to make guest RAM private before it validates it. The image measures
-    // the page private, as every page it places is; the shim shares it for the
-    // length of the accept walk and hands it back private.
-    SNP_GHCB = 0x0011_7000;
+    // The memory shapes this image runs in: for each, the loader's map it
+    // accepts and the E820 and EFI tables it hands Linux (see SHAPE_* below).
+    SHAPES_PAGE = 0x0011_7000;
+    SHAPES_SIZE = 2 * PAGE;
     SHIM_BASE = 0x0012_0000;
     SHIM_SIZE = PAGE;
     KERNEL_SETUP_BASE = 0x0012_1000;
@@ -56,55 +52,9 @@ layout! {
     // The 10-byte pseudo-descriptor follows the GDT, so a shim `lgdt`s without a stack.
     GDT_PTR = BSP_STACK + GDT_LIMIT + 1;
 
-    // Physical GiB 0 seen again through PML4[4] with the C-bit clear, which is
-    // how the shim writes the one page it shares: a block the host reads has to
-    // be addressed the way the host reads it.
-    SHARED_ALIAS = 0x200_0000_0000;
-    GHCB_ALIAS = SHARED_ALIAS + SNP_GHCB;
-    GHCB_RAX = 0x1f8;
-
-    // The fields of a GHCB a page state change states, as in the GHCB
-    // specification's save area, and the byte of the valid bitmap that marks
-    // all four of them present -- bit n of that bitmap is the field at offset
-    // 8n, so the four consecutive fields are four consecutive bits.
-    GHCB_SW_EXIT_CODE = 0x390;
-    GHCB_SW_EXIT_INFO_1 = 0x398;
-    GHCB_SW_EXIT_INFO_2 = 0x3a0;
-    GHCB_SW_SCRATCH = 0x3a8;
-    GHCB_VALID_BITMAP = 0x3f0;
-    GHCB_VALID_BYTE = GHCB_SW_EXIT_CODE / 8 / 8;
-    GHCB_VALID_BITS = 0xf << (GHCB_SW_EXIT_CODE / 8 % 8);
-    // The shared buffer a request's scratch area has to lie inside, the version
-    // page state changes arrived in, and the only usage code a host accepts.
-    GHCB_SHARED_BUFFER = 0x800;
-    GHCB_SHARED_BUFFER_END = 0xff0;
-    GHCB_PROTOCOL_VERSION = 0xffa;
-    GHCB_USAGE = 0xffc;
-    GHCB_PROTOCOL = 2;
-    SVM_VMGEXIT_PSC = 0x8000_0010;
-
     ACPI_SCI_IRQ = 9;
     Q35_PIT_GSI = 2;
     IOAPIC_ADDRESS = 0xfec0_0000;
-
-    // The page state change descriptor, which the shim builds in that buffer:
-    // a header the host moves through, then one entry a span of pages. The
-    // shim writes it through the alias and names it to the host by address.
-    PSC_BUFFER = GHCB_ALIAS + GHCB_SHARED_BUFFER;
-    PSC_BUFFER_GPA = SNP_GHCB + GHCB_SHARED_BUFFER;
-    PSC_CUR_ENTRY = 0;
-    PSC_END_ENTRY = 2;
-    PSC_ENTRIES = 8;
-    // As many entries as the buffer holds, which is also as many as a host reads.
-    PSC_MAX_ENTRIES = (GHCB_SHARED_BUFFER_END - GHCB_SHARED_BUFFER - PSC_ENTRIES) / 8;
-    // An entry holds the page number in bits 51:12, so a page-aligned address
-    // is already one; these two bits say what to do with it and how large it is.
-    PSC_ENTRY_PRIVATE = 52;
-    PSC_ENTRY_LARGE = 56;
-    // The low bits of an entry are the host's own cursor into it: how far into
-    // the span it has reached, which is how it reports having converted part
-    // of one entry and no more.
-    PSC_ENTRY_CUR_PAGE = PAGE - 1;
 
     // The EFI tables both shims hand Linux so that it accepts most of guest RAM
     // itself, as it allocates: Linux finds unaccepted memory only through an
@@ -113,12 +63,12 @@ layout! {
     // runtime services and that one table. One measured page holds the system
     // table, its configuration table, the vendor string, the memory map and,
     // in its last bytes, the unaccepted table's header; the bitmap that header
-    // begins follows it in RAM the accept walk clears before marking any of it.
+    // begins follows it in RAM the shim accepts, and so zeroes, before marking any of it.
     EFI_PAGE = 0x0040_0000;
     EFI_CONFIG_TABLE = 0x80;
     EFI_VENDOR = 0xa0;
-    // The memory map: a descriptor the image measures for this page, then one
-    // a shim appends for each RAM entry of the E820 map it builds. Once
+    // The memory map: a descriptor the image measures for this page, then the
+    // shape's own descriptors, one for each RAM entry of its E820 map. Once
     // efi_info names a map, Linux's decompressor picks the physical address it
     // randomizes the kernel to from that map alone, so it names the RAM.
     EFI_MEMMAP = 0xc0;
@@ -138,48 +88,53 @@ layout! {
     BP_EFI_INFO = 0x1c0;
     BP_EFI_MEMMAP_SIZE = BP_EFI_INFO + 20;
 
-    // The GHCB MSR protocol: one request a VMGEXIT, needing no block at all,
-    // which is what the shim terminates through and sets the block up with.
+    // The GHCB MSR protocol, which needs no shared page: the one request an SNP
+    // shim makes, to terminate.
     GHCB_MSR = 0xc001_0130;
-    GHCB_MSR_REG_GPA_REQ = 0x012;
-    GHCB_MSR_REG_GPA_RESP = 0x013;
-    GHCB_MSR_PSC_REQ = 0x014;
-    GHCB_MSR_PSC_RESP = 0x015;
-    // The two state changes this protocol has to carry, because the block
-    // cannot be shared through itself. WRMSR takes each of them in halves.
-    GHCB_SHARE_REQ = (2 << 52) | SNP_GHCB | GHCB_MSR_PSC_REQ;
-    GHCB_PRIVATE_REQ = (1 << 52) | SNP_GHCB | GHCB_MSR_PSC_REQ;
 
     // The fixed part of the MADT, measured inside the shim page that builds the rest.
     SHIM_MADT = 0x0000_0b80;
-    // Where each shim finds its data block: the kernel entry point, the least
-    // memory this image can run in, and the spans it placed.
+    // Where each shim finds its data block: the kernel entry point, how many
+    // shapes the shapes page holds, and the ranges to accept.
     SHIM_DATA = 0x0000_0c00;
     // The block runs to the reset vector; nothing else lives in the page.
     SHIM_DATA_SIZE = RESET_VECTOR - SHIM_DATA;
     // A TD fetches its first instruction from the last 16 bytes of this page.
     RESET_VECTOR = PAGE - 16;
 
-    // The data block: two words, then the placed spans, then a zero one.
     SHIM_DATA_ENTRY = 0;
-    SHIM_DATA_MIN_MEMORY = 8;
-    SHIM_DATA_SPANS = 16;
-    // ...and, in its last word, the 2-MiB-aligned address below which a shim
-    // accepts all of guest RAM itself rather than leaving it to Linux.
-    SHIM_DATA_LAZY = SHIM_DATA_SIZE - 8;
-    // One region of the guest's map: where it starts, where it ends, and what
-    // E820 calls it. The measured spans and the loader's regions share a shape,
-    // because a shim merges them into one list.
-    SPAN_LEN = 24;
-    SPAN_HI = 8;
-    SPAN_KIND = 16;
+    SHIM_DATA_SHAPES = 8;
+    // The RAM the shim accepts (boot::shim_accept), as pairs of addresses,
+    // then a zero pair.
+    SHIM_DATA_ACCEPT = 16;
 
-    // Where a shim builds that list. Both buffers are inside the measured stack
-    // page, so no shim writes anywhere the image did not already place.
-    SHIM_HOST_REGIONS = BSP_STACK + 0x1000;
-    SHIM_HOST_REGIONS_END = SHIM_HOST_REGIONS + 0x1000;
-    SHIM_REGIONS = BSP_STACK + 0x2000;
-    SHIM_REGIONS_END = SHIM_REGIONS + 0x1000;
+    // One shape: the loader's map, entry for entry, with one RAM entry whose
+    // size is the host's to choose within bounds; the E820 table and the EFI
+    // descriptors this image hands Linux for it, the variable entry's end left
+    // to the shim, which is the last of each; and the RAM ranges whose units
+    // Linux accepts.
+    SHAPE_LEN = 0x800;
+    // How many entries the loader's map has, and which of them is variable.
+    SHAPE_ENTRIES = 0;
+    SHAPE_VAR = 8;
+    // The least and most the variable entry may end at, once rounded down to a unit.
+    SHAPE_VAR_MIN = 16;
+    SHAPE_VAR_MAX = 24;
+    // The loader's map: first page, page count (ignored for the variable
+    // entry) and IGVM type, a word each.
+    SHAPE_MAP = 32;
+    SHAPE_MAP_ENTRY_LEN = 24;
+    SHAPE_MAP_MAX = 4;
+    SHAPE_E820_COUNT = 128;
+    SHAPE_EFI_COUNT = 144;
+    // RAM ranges as pairs, an end of zero meaning the top of RAM.
+    SHAPE_RAM_COUNT = 160;
+    SHAPE_RAM = 168;
+    SHAPE_RAM_MAX = 5;
+    SHAPE_E820 = 256;
+    SHAPE_E820_MAX = 32;
+    SHAPE_EFI = SHAPE_E820 + SHAPE_E820_MAX * E820_ENTRY_LEN;
+    SHAPE_EFI_MAX = 16;
 
     ACPI_XSDT = 0x100;
     ACPI_FADT = 0x200;
@@ -216,14 +171,13 @@ layout! {
     E820_RESERVED = 2;
     E820_ACPI = 3;
 
-    // IGVM_VHS_MEMORY_MAP_ENTRY, and the whole page of them a loader may fill.
+    // IGVM_VHS_MEMORY_MAP_ENTRY, of which the loader fills a page: QEMU writes
+    // its E820 table there, sorted.
     MAP_ENTRY_LEN = 24;
     MAP_ENTRY_PAGES = 8;
     MAP_ENTRY_TYPE = 16;
-    // The most of that map a shim reads. QEMU describes a q35 guest in a
-    // handful of entries; a map longer than this is refused, not truncated.
-    MAP_ENTRIES = 32;
     MAP_TYPE_MEMORY = 0;
+    MAP_TYPE_RESERVED = 1;
 
     // The identity map reaches this far; past it a shim faults with no IDT installed.
     MAP_LIMIT = 2048 * GIB;
@@ -233,6 +187,13 @@ layout! {
     // q35 splits a guest this size or larger, opening a PCI aperture (hw/i386/pc_q35.c).
     Q35_SPLIT = 0xb000_0000;
     Q35_LOWMEM = 2 * GIB;
+    // What KVM reserves for its identity map and TSS (target/i386/kvm/kvm.c).
+    KVM_IDENTITY = 0xfeff_c000;
+    KVM_IDENTITY_SIZE = 0x4000;
+    // AMD's HyperTransport range, which QEMU reserves on an AMD guest and moves
+    // RAM above when it would reach it (hw/i386/pc.c).
+    AMD_HT_START = 0xfd_0000_0000;
+    AMD_HT_END = 0x100_0000_0000;
     // The highest map top this image describes, which MAX_RAM is the RAM behind.
     MAX_MEMORY = MAP_LIMIT;
 }
@@ -245,22 +206,20 @@ const _: () = assert!(RESET_ALIAS < MAP_LIMIT);
 const _: () = assert!(MAX_MEMORY == FOUR_GIB + MAX_RAM - Q35_LOWMEM);
 // A shim reads the map as page numbers, so its bound is one too.
 const _: () = assert!(MAX_MEMORY.is_multiple_of(PAGE));
-// The E820 map a shim writes has to fit boot_params: a gap and a region
-// apiece, plus the RAM above the last of them.
+// A shape's E820 table has to fit boot_params, and its map, plus the empty
+// entry a shim reads after it, the loader's page.
+const _: () = assert!(SHAPE_E820_MAX <= E820_MAX);
 const _: () = assert!(BP_E820_TABLE + E820_MAX * E820_ENTRY_LEN <= PAGE);
-// The map is read one entry past the last, to refuse one longer than this.
-const _: () = assert!((MAP_ENTRIES + 1) * MAP_ENTRY_LEN <= PAGE);
-// Each extent can leave a gap before it and a region of its own, and every
-// measured span joins them; the merged list then has to fit its buffer too.
-const _: () = assert!(2 * MAP_ENTRIES * SPAN_LEN <= SHIM_HOST_REGIONS_END - SHIM_HOST_REGIONS);
-const _: () =
-    assert!(SHIM_DATA_SIZE + 2 * MAP_ENTRIES * SPAN_LEN <= SHIM_REGIONS_END - SHIM_REGIONS);
-// Both buffers sit in the stack page, clear of the stack itself.
-const _: () =
-    assert!(BSP_STACK + PAGE <= SHIM_HOST_REGIONS && SHIM_HOST_REGIONS_END <= SHIM_REGIONS);
-const _: () = assert!(SHIM_REGIONS_END + PAGE <= BSP_STACK_TOP);
+const _: () = assert!((SHAPE_MAP_MAX + 1) * MAP_ENTRY_LEN <= PAGE);
+// A shape record holds its fields, its map, its tables and nothing past them.
+const _: () = assert!(SHAPE_MAP + SHAPE_MAP_MAX * SHAPE_MAP_ENTRY_LEN <= SHAPE_E820_COUNT);
+const _: () = assert!(SHAPE_RAM + SHAPE_RAM_MAX * 16 <= SHAPE_E820);
+const _: () = assert!(SHAPE_EFI + SHAPE_EFI_MAX * EFI_MEMDESC_SIZE <= SHAPE_LEN);
+const _: () = assert!(SHAPES_SIZE.is_multiple_of(SHAPE_LEN));
+// The measured descriptor and a shape's own fit the EFI page's map.
+const _: () = assert!(SHAPE_EFI_MAX < EFI_MEMMAP_MAX);
 
-// A shim accepts the gaps between these regions, so they tile in the order it skips them.
+// The low pages, in the order they are laid out.
 const _: () = assert!(ACPI_BASE + PAGE == PARAM_PAGE && PARAM_PAGE + PAGE == PARAM_MAP_PAGE);
 const _: () = assert!(PARAM_MAP_PAGE + PAGE <= MAILBOX);
 const _: () = assert!(MAILBOX + PAGE <= PAGE_TABLES);
@@ -268,51 +227,24 @@ const _: () = assert!(SNP_CPUID + PAGE == SNP_SECRETS && SNP_SECRETS + PAGE == S
 const _: () = assert!(SNP_CC_BLOB + PAGE <= PAGE_TABLES);
 const _: () = assert!(PAGE_TABLES + PAGE_TABLE_SIZE <= BSP_STACK);
 const _: () = assert!(GDT_PTR + 10 <= BSP_STACK_TOP);
-const _: () = assert!(BSP_STACK_TOP <= SNP_GHCB && SNP_GHCB + PAGE <= SHIM_BASE);
-const _: () = assert!(SHARED_ALIAS == MAP_LIMIT);
-// The shared alias covers the first GiB of the map, which is where the block is.
-const _: () = assert!(SNP_GHCB < GIB);
-// A page state change entry has 40 bits of page number and nothing above them.
-const _: () = assert!(MAX_MEMORY <= 1 << 52);
-// Four fields, four consecutive bitmap bits, all inside one byte of it. The
-// byte and the bits are derived from the exit code, so this holds the layout
-// together rather than to the specification -- it would hold just as well for
-// a wrong exit code. What the block the shim fills has to say is read out of
-// it and compared with the specification's own numbers in a test.
-const _: () = assert!(
-    GHCB_SW_EXIT_INFO_1 == GHCB_SW_EXIT_CODE + 8
-        && GHCB_SW_EXIT_INFO_2 == GHCB_SW_EXIT_CODE + 16
-        && GHCB_SW_SCRATCH == GHCB_SW_EXIT_CODE + 24
-);
-const _: () = assert!(GHCB_VALID_BITS < 0x100 && GHCB_VALID_BYTE < 16);
+const _: () = assert!(BSP_STACK_TOP <= SHAPES_PAGE && SHAPES_PAGE + SHAPES_SIZE <= SHIM_BASE);
 // The EFI page and the bitmap after it lie between the shim's pages and the
-// kernel, in a gap of the measured map the accept walk clears before it marks
-// any of the bitmap: the header the shim sizes runs straight into it.
+// kernel, in a gap of the measured map the shim accepts, and so zeroes,
+// before it marks any of the bitmap: the header the shim sizes runs into it.
 const _: () = assert!(KERNEL_SETUP_END <= EFI_PAGE && EFI_PAGE.is_multiple_of(PAGE));
 const _: () = assert!(UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE <= KERNEL_BASE);
 const _: () = assert!(UNACCEPTED_UNIT == 1 << UNACCEPTED_UNIT_SHIFT);
 // The bitmap has a bit for every unit the identity map reaches.
 const _: () = assert!(UNACCEPTED_BITMAP_SIZE * 8 * UNACCEPTED_UNIT >= MAX_MEMORY);
 const _: () = assert!(EFI_CONFIG_TABLE + 24 <= EFI_VENDOR && EFI_VENDOR + 16 <= EFI_MEMMAP);
-// The measured descriptor and at least as many as a guest's E820 map has RAM
-// entries in practice; a longer map is cut short, which leaves KASLR fewer
-// places to choose from rather than a wrong one.
-const _: () = assert!(EFI_MEMMAP_MAX >= 64);
-const _: () = assert!(SHIM_DATA_LAZY.is_multiple_of(8) && SHIM_DATA_LAZY > SHIM_DATA_SPANS);
-// A host's cursor into an entry sits below the page number, not in it.
-const _: () = assert!(PSC_ENTRY_CUR_PAGE < 1 << 12);
-// The descriptor has to lie wholly inside the shared buffer, and its entry
-// count has to be the one a host derives from that buffer's size.
-const _: () = assert!(GHCB_VALID_BITMAP + 16 <= GHCB_SHARED_BUFFER);
-const _: () =
-    assert!(PSC_ENTRIES + PSC_MAX_ENTRIES * 8 == GHCB_SHARED_BUFFER_END - GHCB_SHARED_BUFFER);
-const _: () = assert!(PSC_MAX_ENTRIES == 253);
-// The header the shim zeroes is one word, and the count fits the field holding it.
-const _: () = assert!(PSC_CUR_ENTRY == 0 && PSC_END_ENTRY == 2 && PSC_ENTRIES == 8);
-const _: () = assert!(PSC_MAX_ENTRIES <= u16::MAX as u64);
-// One PML4 page, one PDPT per PDPT_SPAN, and on SNP one more for the alias.
+const _: () = assert!(SHIM_DATA_ACCEPT > SHIM_DATA_SHAPES);
+// One PML4 page and one PDPT per PDPT_SPAN.
 const _: () = assert!(MAP_LIMIT.is_multiple_of(PDPT_SPAN));
-const _: () = assert!(PAGE_TABLE_SIZE == (MAP_LIMIT / PDPT_SPAN + 2) * PAGE);
+const _: () = assert!(PAGE_TABLE_SIZE == (MAP_LIMIT / PDPT_SPAN + 1) * PAGE);
+// The variable entry is bounded in pages before a shim adds to it.
+const _: () = assert!(MAX_MEMORY <= 1 << 52);
+// RAM moved past HyperTransport starts at 1 TiB, which the identity map reaches.
+const _: () = assert!(AMD_HT_END < MAP_LIMIT && KVM_IDENTITY + KVM_IDENTITY_SIZE <= RESET_ALIAS);
 const _: () = assert!(SHIM_BASE + SHIM_SIZE == KERNEL_SETUP_BASE);
 const _: () = assert!(KERNEL_SETUP_END <= KERNEL_BASE);
 const _: () = assert!(KERNEL_BASE < INITRAMFS_BASE);

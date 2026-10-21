@@ -1,7 +1,6 @@
 .include "layout.inc"
 .include "madt.inc"
-.include "map.inc"
-.include "lazy.inc"
+.include "shape.inc"
 .section .reset,"ax"
 
 .code32
@@ -39,22 +38,17 @@ long_mode:
     jnz ap_wait
     mov $BSP_STACK_TOP, %rsp
 
-    # The two tables the measurement leaves to the shim, because measuring
-    # either would bind this image to a machine size: the guest's own E820 map,
-    # and below it the MADT.
-    call host_regions
-    call merge_regions
+    # The guest's map is one of the shapes the image measured: its E820 and
+    # EFI tables are copied, and only the top of RAM is the loader's to say.
+    # RAM below the lazy bound is accepted here, from a measured list; past
+    # it, Linux accepts it as it allocates, finding the units it has to in the
+    # EFI table efi.rs describes. The MADT is the other table left to the shim.
+    call shape_match
     mov $ZERO_PAGE, %edi
-    call e820_build
-    # Guest RAM is accepted here up to the lazy bound; past it, Linux accepts
-    # it as it allocates, finding the units it has to in the EFI table efi.rs
-    # describes, and the RAM it may randomize the kernel into in its map.
-    mov $ZERO_PAGE, %edi
-    call efi_memmap_build
-    call unaccepted_size
-    call accept_walk
+    call shape_apply
+    call accept_fixed
+    call mark_lazy
 
-boot_kernel:
     madt_build die, 1
     mov $ZERO_PAGE, %rsi
     lea shim_data(%rip), %rax
@@ -92,12 +86,11 @@ accept_2m:
 accept_done:
     ret
 
-map_code die_map, accept_lazy
-lazy_code accept_range
+shape_code die_map, accept_range
 
-# A map this image will not run in, reported as the top of RAM it refused.
+# A map this image will not run in.
 die_map:
-    mov %r8, %r12
+    xor %r12d, %r12d
     jmp die
 
 # APs wait here until the OS claims them through the measured ACPI wakeup mailbox.
@@ -133,8 +126,8 @@ fatal:
 madt_template:
     madt_header
 
-    # The entry point, the least memory this image runs in, and the spans it
-    # placed, all written here by the builder.
+    # The entry point, the shape count, the lazy bound and the ranges to
+    # accept, all written here by the builder.
     .org SHIM_DATA
 shim_data:
     .fill SHIM_DATA_SIZE,1,0

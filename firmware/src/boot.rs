@@ -260,7 +260,7 @@ pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
             return Err(format!("placed regions overlap at {:#x}", pair[1].0));
         }
     }
-    // The unaccepted bitmap has to be RAM the accept walk clears, not a span.
+    // The unaccepted bitmap has to be RAM the shim accepts, and so zeroes, not a span.
     let bitmap = (
         UNACCEPTED_BITMAP,
         UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
@@ -289,12 +289,12 @@ pub fn validate(placed: &[Placed], memory: u64) -> Result<(), String> {
 }
 
 /// One region of a guest's map: where it starts, where it ends, and what E820
-/// calls it. A shim merges the measured spans and the loader's regions into
-/// one list of these and builds both tables from it.
+/// calls it. The image merges its spans and a shape's regions into one list
+/// of these and builds the shape's tables from it.
 pub type Region = (u64, u64, u32);
 
-/// The map a shim builds its E820 table and accept list from: every span this
-/// image places at a fixed address. It is measured, so it is one list for
+/// The map the shapes' tables and the accept list are built from: every span
+/// this image places at a fixed address. It is measured, so it is one list for
 /// every guest the image can run in, and it says nothing about how much RAM
 /// that guest has or where its apertures are -- the loader's map says that.
 pub fn shim_spans(placed: &[Placed]) -> Vec<Region> {
@@ -322,7 +322,7 @@ pub fn min_memory(spans: &[Region]) -> u64 {
 /// The parts of the loader's map that are not RAM, and the top of the RAM that
 /// is: the gaps between its extents, which are where a guest's devices are
 /// given their windows, and anything it marks as something other than memory.
-/// This is what a shim derives at boot, and what the shim is held to.
+/// The shapes' tables are built from it.
 pub fn host_regions(extents: &[(u64, u64, bool)]) -> (u64, Vec<Region>) {
     let (mut top, mut at) = (0, 0);
     let mut out = Vec::new();
@@ -390,7 +390,7 @@ pub fn e820(regions: &[Region], memory: u64) -> Vec<Region> {
     out
 }
 
-/// The ranges a shim accepts: [0, memory) minus everything the loader already accepted.
+/// [0, memory) minus the regions given, in order.
 pub fn accept_ranges(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
     let mut at = 0;
@@ -403,6 +403,309 @@ pub fn accept_ranges(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
     out.push((at, memory));
     out.retain(|(lo, hi)| lo < hi);
     out
+}
+
+/// The units past the lazy bound that are the shim's rather than Linux's: each
+/// one a RAM span of the image's places a page in, and the one after the
+/// span's end. The image's pages arrive accepted, so Linux accepting their
+/// unit again would terminate the guest; and Linux frees some of those pages
+/// later (the initramfs) without the guard it keeps after memory it accepts
+/// itself, so the next unit must be accepted for `load_unaligned_zeropad()`
+/// to read into, as an EFI loader leaves it.
+pub fn span_units(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
+    spans
+        .iter()
+        .filter(|(_, hi, kind)| *kind == RAM && *hi >= lazy)
+        .map(|(lo, hi, _)| {
+            let lo = (*lo).max(lazy) / UNACCEPTED_UNIT * UNACCEPTED_UNIT;
+            (lo, hi / UNACCEPTED_UNIT * UNACCEPTED_UNIT + UNACCEPTED_UNIT)
+        })
+        .collect()
+}
+
+/// The ranges a shim accepts: all of the RAM below the lazy bound the image
+/// did not place, and what it leaves free of the units past it that are the
+/// shim's (`span_units`), none of which a shape marks for Linux.
+pub fn shim_accept(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
+    let mut cover = vec![(0, lazy)];
+    cover.extend(span_units(spans, lazy));
+    cover.sort_unstable();
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    let mut done = 0;
+    for (lo, hi) in cover {
+        if hi <= done {
+            continue;
+        }
+        let lo = lo.max(done);
+        for (a, b) in accept_ranges(spans, hi) {
+            let a = a.max(lo);
+            if a < b {
+                out.push((a, b));
+            }
+        }
+        done = hi;
+    }
+    out
+}
+
+/// One layout a loader gives a guest, as its memory map parameter states it:
+/// every entry, in the order QEMU sorts them, one of them RAM whose end the
+/// host chooses within this shape's bounds.
+#[derive(Clone, Debug)]
+pub struct Shape {
+    /// Start, length and IGVM type; the variable entry's length is that of
+    /// the least guest the shape describes.
+    pub entries: Vec<(u64, u64, u16)>,
+    pub var: usize,
+    /// The least and most the variable entry may end at, whole units both.
+    pub min_end: u64,
+    pub max_end: u64,
+}
+
+const MAP_MEMORY: u16 = MAP_TYPE_MEMORY as u16;
+const MAP_RESERVED: u16 = MAP_TYPE_RESERVED as u16;
+
+impl Shape {
+    /// The loader's map for a guest whose variable RAM ends at `end`.
+    pub fn map(&self, end: u64) -> Vec<(u64, u64, u16)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(n, (lo, len, kind))| match n == self.var {
+                true => (*lo, end - lo, *kind),
+                false => (*lo, *len, *kind),
+            })
+            .collect()
+    }
+
+    /// The same map as host_regions reads it: start, end and whether it is RAM.
+    pub fn extents(&self, end: u64) -> Vec<(u64, u64, bool)> {
+        self.map(end)
+            .iter()
+            .map(|(lo, len, kind)| (*lo, lo + len, *kind == MAP_MEMORY))
+            .collect()
+    }
+
+    /// The E820 map this image hands Linux for that guest: what the shim
+    /// copies, and the model it is held to.
+    pub fn e820(&self, spans: &[Region], end: u64) -> Vec<Region> {
+        let (top, host) = host_regions(&self.extents(end));
+        e820(&merge(spans, &host), top)
+    }
+}
+
+/// The shapes QEMU's q35 gives a guest as tinfoild launches one: a guest
+/// smaller than Q35_SPLIT has all its RAM below the PCI aperture, and a larger
+/// one 2 GiB there and the rest at 4 GiB -- or, on AMD, past HyperTransport
+/// once it would reach it (hw/i386/pc.c, hw/i386/pc_q35.c). Every one carries
+/// the range KVM reserves for its identity map and TSS (target/i386/kvm/kvm.c),
+/// and on AMD, which tinfoild gives 52 physical address bits, the
+/// HyperTransport range QEMU reserves. `least` is the least RAM below the
+/// aperture this image runs in. A loader whose map is none of these is refused:
+/// a new layout is a new shape here, not a guess at boot.
+pub fn qemu_shapes(amd: bool, least: u64) -> Vec<Shape> {
+    let kvm = (KVM_IDENTITY, KVM_IDENTITY_SIZE, MAP_RESERVED);
+    let ht = (AMD_HT_START, AMD_HT_END - AMD_HT_START, MAP_RESERVED);
+    let mut small = vec![(0, least, MAP_MEMORY), kvm];
+    let mut split = vec![
+        (0, Q35_LOWMEM, MAP_MEMORY),
+        kvm,
+        (FOUR_GIB, UNACCEPTED_UNIT, MAP_MEMORY),
+    ];
+    if amd {
+        small.push(ht);
+        split.push(ht);
+    }
+    let mut shapes = vec![
+        Shape {
+            entries: small,
+            var: 0,
+            min_end: least,
+            max_end: Q35_SPLIT - UNACCEPTED_UNIT,
+        },
+        Shape {
+            entries: split,
+            var: 2,
+            min_end: FOUR_GIB + UNACCEPTED_UNIT,
+            max_end: if amd { AMD_HT_START } else { MAP_LIMIT },
+        },
+    ];
+    if amd {
+        shapes.push(Shape {
+            entries: vec![
+                (0, Q35_LOWMEM, MAP_MEMORY),
+                kvm,
+                ht,
+                (AMD_HT_END, UNACCEPTED_UNIT, MAP_MEMORY),
+            ],
+            var: 3,
+            min_end: AMD_HT_END + UNACCEPTED_UNIT,
+            max_end: MAP_LIMIT,
+        });
+    }
+    shapes
+}
+
+/// The least RAM below the aperture an image runs in: everything it placed
+/// there, and everything the shim accepts.
+pub fn least_memory(spans: &[Region], lazy: u64) -> u64 {
+    span_units(spans, lazy).iter().map(|u| u.1).fold(
+        align_up(min_memory(spans).max(lazy), UNACCEPTED_UNIT),
+        u64::max,
+    )
+}
+
+/// One shape as the record a shim matches the loader's map against and copies
+/// its tables from (see SHAPE_* in layout.rs). Everything about the shape that
+/// does not depend on where its variable entry ends is fixed here, and checked
+/// to stay fixed however far between its bounds that end moves.
+pub fn shape_record(shape: &Shape, spans: &[Region], lazy: u64) -> Result<Vec<u8>, String> {
+    let unit = |v: u64| v.is_multiple_of(UNACCEPTED_UNIT);
+    let (var_lo, _, var_kind) = shape.entries[shape.var];
+    if shape.entries.len() > SHAPE_MAP_MAX as usize
+        || var_kind != MAP_MEMORY
+        || !unit(var_lo)
+        || !unit(shape.min_end)
+        || !unit(shape.max_end)
+        || shape.min_end <= var_lo
+        || shape.min_end > shape.max_end
+        || shape.max_end > MAX_MEMORY
+    {
+        return Err(format!("shape {shape:?} cannot be described"));
+    }
+    // Nothing the image places and no other entry of the loader's may begin
+    // between the least and the most the variable entry ends at: each would
+    // change the table as that end moves. (The gap after the entry moves with
+    // it, and is no entry of the table.)
+    let fixed = shape
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(n, _)| *n != shape.var)
+        .map(|(_, e)| e.0);
+    if let Some(lo) = spans
+        .iter()
+        .map(|r| r.0)
+        .chain(fixed)
+        .find(|lo| *lo >= shape.min_end && *lo < shape.max_end)
+    {
+        return Err(format!(
+            "{lo:#x} lies where the variable RAM of {shape:?} reaches"
+        ));
+    }
+    let e820 = shape.e820(spans, shape.min_end);
+    let last = *e820.last().unwrap();
+    if last.0 + last.1 != shape.min_end || last.2 != RAM || last.0 > var_lo.max(min_memory(spans)) {
+        return Err(format!(
+            "the E820 map of {shape:?} does not end in its variable RAM"
+        ));
+    }
+    let efi: Vec<Region> = e820.iter().copied().filter(|e| e.2 == RAM).collect();
+    // RAM a shim marks for Linux to accept: whole units past the lazy bound
+    // but those that are the shim's, the last piece of the variable range
+    // running to the top of RAM. Each of the shim's lies in RAM the shape
+    // has, since the shim accepts it, and nothing else the image places past
+    // the bound may lie there, since it would arrive accepted and be marked.
+    let map = shape.map(shape.min_end);
+    let in_ram = |lo: u64, hi: u64| {
+        map.iter()
+            .any(|(m, len, kind)| *kind == MAP_MEMORY && *m <= lo && hi <= m + len)
+    };
+    let owned = span_units(spans, lazy);
+    if let Some(u) = owned.iter().find(|(lo, hi)| !in_ram(*lo, *hi)) {
+        return Err(format!(
+            "{:#x} the shim accepts is no RAM of {shape:?}",
+            u.0
+        ));
+    }
+    if let Some(s) = spans.iter().find(|(lo, hi, kind)| {
+        *kind != RAM
+            && *hi > lazy
+            && map
+                .iter()
+                .any(|(m, len, k)| *k == MAP_MEMORY && *lo < m + len && *m < *hi)
+    }) {
+        return Err(format!("{:#x} is placed in RAM past the lazy bound", s.0));
+    }
+    let mut ram: Vec<(u64, u64)> = Vec::new();
+    for (n, (lo, len, kind)) in map.iter().enumerate() {
+        let (mut at, end) = ((*lo).max(lazy), lo + len);
+        if *kind != MAP_MEMORY || at >= end {
+            continue;
+        }
+        for (unit_lo, unit_hi) in &owned {
+            if *unit_lo >= end || *unit_hi <= at {
+                continue;
+            }
+            if *unit_lo > at {
+                ram.push((at, *unit_lo));
+            }
+            at = at.max(*unit_hi);
+        }
+        if n == shape.var {
+            ram.push((at, 0));
+        } else if at < end {
+            ram.push((at, end));
+        }
+    }
+    if e820.len() > SHAPE_E820_MAX as usize
+        || efi.len() > SHAPE_EFI_MAX as usize
+        || ram.len() > SHAPE_RAM_MAX as usize
+        || ram.iter().any(|(lo, hi)| !unit(*lo) || !unit(*hi))
+        || !unit(lazy)
+    {
+        return Err(format!("shape {shape:?} does not fit its record"));
+    }
+
+    let mut v = vec![0u8; SHAPE_LEN as usize];
+    put64(&mut v, SHAPE_ENTRIES as usize, shape.entries.len() as u64);
+    put64(&mut v, SHAPE_VAR as usize, shape.var as u64);
+    put64(&mut v, SHAPE_VAR_MIN as usize, shape.min_end);
+    put64(&mut v, SHAPE_VAR_MAX as usize, shape.max_end);
+    for (n, (lo, len, kind)) in shape.entries.iter().enumerate() {
+        let at = (SHAPE_MAP + n as u64 * SHAPE_MAP_ENTRY_LEN) as usize;
+        put64(&mut v, at, lo / PAGE);
+        put64(&mut v, at + 8, len / PAGE);
+        put64(&mut v, at + 16, *kind as u64);
+    }
+    put64(&mut v, SHAPE_E820_COUNT as usize, e820.len() as u64);
+    put64(&mut v, SHAPE_EFI_COUNT as usize, efi.len() as u64);
+    put64(&mut v, SHAPE_RAM_COUNT as usize, ram.len() as u64);
+    for (n, (lo, hi)) in ram.iter().enumerate() {
+        let at = SHAPE_RAM as usize + 16 * n;
+        put64(&mut v, at, *lo);
+        put64(&mut v, at + 8, *hi);
+    }
+    for (n, (base, len, kind)) in e820.iter().enumerate() {
+        let at = (SHAPE_E820 + n as u64 * E820_ENTRY_LEN) as usize;
+        put64(&mut v, at, *base);
+        put64(&mut v, at + 8, *len);
+        put32(&mut v, at + 16, *kind);
+    }
+    for (n, (base, len, _)) in efi.iter().enumerate() {
+        let at = (SHAPE_EFI + n as u64 * EFI_MEMDESC_SIZE) as usize;
+        put32(&mut v, at, EFI_CONVENTIONAL_MEMORY as u32);
+        put64(&mut v, at + 8, *base);
+        put64(&mut v, at + 24, len / PAGE);
+        put64(&mut v, at + 32, EFI_MEMORY_WB);
+    }
+    Ok(v)
+}
+
+/// The measured shapes page: every shape's record, one after another.
+pub fn shapes_page(shapes: &[Shape], spans: &[Region], lazy: u64) -> Result<Vec<u8>, String> {
+    if shapes.is_empty() || shapes.len() as u64 * SHAPE_LEN > SHAPES_SIZE {
+        return Err(format!(
+            "{} shapes do not fit the shapes page",
+            shapes.len()
+        ));
+    }
+    let mut v = Vec::new();
+    for shape in shapes {
+        v.extend(shape_record(shape, spans, lazy)?);
+    }
+    v.resize(SHAPES_SIZE as usize, 0);
+    Ok(v)
 }
 
 fn get16(v: &[u8], at: usize) -> u16 {

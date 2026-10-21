@@ -69,56 +69,62 @@ pub(crate) fn prepare(
     })
 }
 
-/// The shim, with the entry point, the least memory this image can run in and
-/// the zero-terminated spans it placed packed in. The E820 map and the ranges
-/// to accept both follow from those spans and the memory the loader reports,
-/// so neither the guest's RAM nor anything derived from it is measured here.
-pub fn data_block(entry: u64, spans: &[boot::Region], lazy: u64) -> Result<Vec<u8>, String> {
-    // Each span can cost the E820 map a gap entry and an entry of its own, and
-    // the RAM above the last of them one more. What the loader's map adds to
-    // that is not known until boot, so the shim counts the entries it writes
-    // and terminates rather than overrunning boot_params.
-    if 2 * spans.len() + 1 > E820_MAX as usize {
-        return Err(format!(
-            "{} placed spans can describe more than the {E820_MAX} E820 entries \
-             boot_params holds",
-            spans.len()
-        ));
-    }
-    let mut data = entry.to_le_bytes().to_vec();
-    data.extend_from_slice(&boot::min_memory(spans).to_le_bytes());
-    for (lo, hi, kind) in spans {
-        data.extend_from_slice(&lo.to_le_bytes());
-        data.extend_from_slice(&hi.to_le_bytes());
-        data.extend_from_slice(&kind.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-    }
-    data.extend_from_slice(&[0u8; SPAN_LEN as usize]);
-    if data.len() > SHIM_DATA_LAZY as usize {
-        return Err(format!(
-            "shim data block needs {} of the {SHIM_DATA_LAZY} bytes its spans have",
-            data.len()
-        ));
-    }
-    // accept_lazy marks every whole unit past the bound, so one that left the
+/// The shim's data block: the entry point, how many shapes the shapes page
+/// holds, and the ranges the shim accepts (`shim_accept`), then a zero pair.
+/// The lazy bound the shapes and the ranges were made for is checked here. All of it follows from what this image placed, so nothing about
+/// the guest's RAM is measured here.
+pub fn data_block(
+    entry: u64,
+    shapes: usize,
+    lazy: u64,
+    accept: &[(u64, u64)],
+) -> Result<Vec<u8>, String> {
+    // mark_lazy marks every whole unit past the bound, so one that left the
     // bitmap or the decompressor to Linux would mark memory nothing accepts.
     if !lazy.is_multiple_of(UNACCEPTED_UNIT) || lazy < UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE {
         return Err(format!(
             "{lazy:#x} is not a lazy bound past the unaccepted bitmap"
         ));
     }
+    // ...and the bitmap is zero when it marks it only because it is accepted.
+    let bitmap = (
+        UNACCEPTED_BITMAP,
+        UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
+    );
+    if !accept
+        .iter()
+        .any(|(lo, hi)| *lo <= bitmap.0 && bitmap.1 <= *hi)
+    {
+        return Err("the unaccepted bitmap lies outside the RAM the shim accepts".into());
+    }
+    if accept.iter().any(|(lo, hi)| lo >= hi) || accept.windows(2).any(|w| w[0].1 > w[1].0) {
+        return Err("an accept range is empty or out of order".into());
+    }
+    let mut data = entry.to_le_bytes().to_vec();
+    data.extend_from_slice(&(shapes as u64).to_le_bytes());
+    for (lo, hi) in accept {
+        data.extend_from_slice(&lo.to_le_bytes());
+        data.extend_from_slice(&hi.to_le_bytes());
+    }
+    data.extend_from_slice(&[0u8; 16]);
+    if data.len() > SHIM_DATA_SIZE as usize {
+        return Err(format!(
+            "shim data block needs {} of its {SHIM_DATA_SIZE} bytes",
+            data.len()
+        ));
+    }
     data.resize(SHIM_DATA_SIZE as usize, 0);
-    put64(&mut data, SHIM_DATA_LAZY as usize, lazy);
     Ok(data)
 }
 
 pub(crate) fn shim(
     blob: &[u8],
     entry: u64,
-    spans: &[boot::Region],
+    shapes: usize,
     lazy: u64,
+    accept: &[(u64, u64)],
 ) -> Result<Vec<u8>, String> {
-    let data = data_block(entry, spans, lazy)?;
+    let data = data_block(entry, shapes, lazy, accept)?;
     let (mut shim, at) = (blob.to_vec(), SHIM_DATA as usize);
     if shim[at..at + data.len()].iter().any(|b| *b != 0) {
         return Err("shim code overruns its data block".into());
@@ -147,24 +153,16 @@ pub(crate) fn shim_owned(placed: &[Placed]) -> Result<usize, String> {
 /// on SNP. It is measured, so it is built for the whole of MAP_LIMIT whatever
 /// RAM the guest turns out to have: one PML4 entry and one PDPT of 1-GiB pages
 /// per 512 GiB.
-pub(crate) fn identity_map(c_bit: u64, shared_alias: bool) -> Vec<u8> {
+pub(crate) fn identity_map(c_bit: u64) -> Vec<u8> {
     let c = if c_bit == 0 { 0 } else { 1u64 << c_bit };
     let pdpts = MAP_LIMIT / PDPT_SPAN;
-    let pages = pdpts + 1 + u64::from(shared_alias);
-    let mut v = vec![0u8; (pages * PAGE) as usize];
+    let mut v = vec![0u8; ((pdpts + 1) * PAGE) as usize];
     for pdpt in 0..pdpts {
         let at = (pdpt * 8) as usize;
         put64(&mut v, at, (PAGE_TABLES + (pdpt + 1) * PAGE) | c | 3);
     }
     for gib in 0..MAP_LIMIT / GIB {
         put64(&mut v, (PAGE + gib * 8) as usize, (gib * GIB) | c | 0x83);
-    }
-    if shared_alias {
-        // The slot above the mapped range -> a PDPT whose first entry is
-        // physical GiB 0, unencrypted.
-        let at = (pdpts * 8) as usize;
-        put64(&mut v, at, (PAGE_TABLES + (pdpts + 1) * PAGE) | c | 3);
-        put64(&mut v, ((pdpts + 1) * PAGE) as usize, 0x83);
     }
     v
 }
@@ -243,7 +241,7 @@ mod tests {
 
     #[test]
     fn identity_map_reaches_the_bound_memory_is_held_to() {
-        let p = identity_map(0, false);
+        let p = identity_map(0);
         // PML4[0] points at the PDPT that follows it, whose entries are 1-GiB pages.
         assert_eq!(
             u64::from_le_bytes(p[..8].try_into().unwrap()),
@@ -252,7 +250,7 @@ mod tests {
         assert_eq!(pdpte(&p, 0), 0x83);
         assert_eq!(pdpte(&p, MAP_LIMIT - GIB), (MAP_LIMIT - GIB) | 0x83);
         assert_eq!(pdpte(&p, RESET_ALIAS) & 1, 1);
-        let e = identity_map(DEFAULT_CBIT as u64, false);
+        let e = identity_map(DEFAULT_CBIT as u64);
         assert_eq!(p.len(), e.len());
         for at in (0..p.len()).step_by(8) {
             let (plain, enc) = (
@@ -269,32 +267,11 @@ mod tests {
             );
         }
     }
-    /// On SNP the slot just above the mapped range reaches physical GiB 0 again
-    /// with the C-bit clear, and nothing else.
-    #[test]
-    fn the_shared_alias_maps_gib_zero_unencrypted() {
-        let pdpts = MAP_LIMIT / PDPT_SPAN;
-        let m = identity_map(DEFAULT_CBIT as u64, true);
-        assert_eq!(m.len() as u64, (pdpts + 2) * PAGE);
-        let at = (pdpts * 8) as usize;
-        let entry = u64::from_le_bytes(m[at..at + 8].try_into().unwrap());
-        assert_eq!(
-            entry,
-            (PAGE_TABLES + (pdpts + 1) * PAGE) | 1 << DEFAULT_CBIT | 3
-        );
-        let alias = &m[((pdpts + 1) * PAGE) as usize..];
-        assert_eq!(u64::from_le_bytes(alias[..8].try_into().unwrap()), 0x83);
-        assert!(alias[8..].iter().all(|b| *b == 0));
-        // The alias is the first address past the identity map, so nothing the
-        // guest reaches through the map can reach it.
-        assert_eq!(SHARED_ALIAS, pdpts * PDPT_SPAN);
-    }
-
     /// Four PML4 entries, one per PDPT, each of 512 1-GiB pages: the map covers
     /// MAP_LIMIT whatever RAM the guest has, because it is measured.
     #[test]
     fn the_map_is_built_for_the_whole_limit_however_large_the_guest_is() {
-        let m = identity_map(0, false);
+        let m = identity_map(0);
         let pdpts = MAP_LIMIT / PDPT_SPAN;
         assert_eq!(m.len() as u64, (pdpts + 1) * PAGE);
         for pdpt in 0..pdpts {
@@ -314,7 +291,7 @@ mod tests {
             .iter()
             .all(|b| *b == 0));
     }
-    /// map.inc and madt.inc are held to boot.rs and acpi.rs by tests that run
+    /// shape.inc and madt.inc are held to boot.rs and acpi.rs by tests that run
     /// them. Nothing in those tests says the shim runs them: a routine the boot
     /// path never calls, or calls in the wrong order, or hands to the wrong
     /// primitive, assembles and passes exactly as well as one it does. That is
@@ -324,7 +301,7 @@ mod tests {
     fn each_shim_runs_the_routines_it_is_built_from() {
         for (blob, dis, entered, accept) in [
             (RESET_SHIM, RESET_LISTING, "long_mode", "accept_range"),
-            (SNP_SHIM, SNP_LISTING, "snp_reset_start", "accept_private"),
+            (SNP_SHIM, SNP_LISTING, "snp_reset_start", "validate_range"),
         ] {
             let code = listing(dis);
             let symbols = symbols(dis);
@@ -346,19 +323,12 @@ mod tests {
                     .collect()
             };
 
-            // The boot path runs these once each, in this order: the EFI map
-            // is completed from the E820 table, and the bitmap sized, before
-            // the walk marks any of it.
+            // The boot path runs these once each, in this order: the map is
+            // matched before anything is written from it, and the bitmap is
+            // marked only once the RAM it lives in is accepted.
             // The SNP shim starts with the first of these, at offset 0.
             let mut last = None;
-            for name in [
-                "host_regions",
-                "merge_regions",
-                "e820_build",
-                "efi_memmap_build",
-                "unaccepted_size",
-                "accept_walk",
-            ] {
+            for name in ["shape_match", "shape_apply", "accept_fixed", "mark_lazy"] {
                 let at = sites(name);
                 assert_eq!(at.len(), 1, "{name} is reached from {} places", at.len());
                 assert_eq!(
@@ -370,24 +340,19 @@ mod tests {
                 last = Some(at[0]);
             }
 
-            // ...and e820_build and efi_memmap_build are each given the zero
-            // page, the one to write the table into and the other to read it.
-            for name in ["e820_build", "efi_memmap_build"] {
-                let at = code
-                    .iter()
-                    .position(|(_, text)| target(text) == Some(name))
-                    .unwrap();
-                assert_eq!(
-                    code[at - 1].1,
-                    ["mov", &format!("${ZERO_PAGE:#x},%edi")],
-                    "{name} is handed something other than the zero page"
-                );
-            }
+            // ...and shape_apply is given the zero page to write the table into.
+            let at = code
+                .iter()
+                .position(|(_, text)| target(text) == Some("shape_apply"))
+                .unwrap();
+            assert_eq!(
+                code[at - 1].1,
+                ["mov", &format!("${ZERO_PAGE:#x},%edi")],
+                "shape_apply is handed something other than the zero page"
+            );
 
-            // accept_walk hands its ranges to accept_lazy and to nothing else:
-            // once from the loop, once as it tails out. accept_lazy hands them
-            // on to this platform's own primitive, once for the part before
-            // the units it marks and once, as it tails out, for the part after.
+            // accept_fixed hands its ranges to this platform's own primitive
+            // and to nothing else.
             let from = |caller: &str| -> Vec<&str> {
                 calls
                     .iter()
@@ -396,32 +361,14 @@ mod tests {
                     .collect()
             };
             assert_eq!(
-                from("accept_walk"),
-                ["accept_lazy", "accept_lazy"],
-                "accept_walk hands ranges elsewhere"
+                from("accept_fixed"),
+                [accept],
+                "accept_fixed hands ranges elsewhere"
             );
-            // Every transfer out of accept_lazy, the conditional one included
-            // (a range with no whole unit past the bound goes straight on).
-            let out_of_lazy: Vec<&str> = code
-                .iter()
-                .filter(|(at, text)| {
-                    routine(&symbols, *at) == "accept_lazy"
-                        && text
-                            .first()
-                            .is_some_and(|m| m.starts_with('j') || *m == "call")
-                })
-                .filter_map(|(_, text)| text.last()?.strip_prefix('<')?.strip_suffix('>'))
-                // Its own loop, which objdump may name after whichever layout
-                // constant the address happens to equal, as target() knows.
-                .filter(|name| {
-                    let base = name.split('+').next().unwrap();
-                    base != "accept_lazy" && !SYMBOLS.iter().any(|(s, _)| *s == base)
-                })
-                .collect();
             assert_eq!(
-                out_of_lazy,
-                [accept, accept, accept],
-                "accept_lazy hands ranges elsewhere"
+                from("shape_match"),
+                ["shape_try"],
+                "shape_match tries the shapes some other way"
             );
 
             // The shim page really is what the listing describes.
@@ -430,68 +377,53 @@ mod tests {
         }
     }
 
-    /// Only the SNP shim converts memory, and the order is the whole of it:
-    /// the block is shared before the walk that needs it and handed back after,
-    /// and each range is made private before it is validated. A psc_range that
-    /// ran after its PVALIDATE, or a walk that ran before the block was
-    /// shared, assembles and passes every other test exactly as well.
+    /// Neither shim converts memory or shares a page: the SNP shim validates
+    /// what the loader made private before launch, and exits to the host only
+    /// to terminate; the TDX shim calls the TDX module, and the host only to
+    /// report a failure. A port write, a page state change or a second exit
+    /// assembles and passes every other test exactly as well.
     #[test]
-    fn only_the_snp_shim_converts_memory_and_it_does_so_before_it_validates() {
-        let tdx = symbols(RESET_LISTING);
-        let (code, snp) = (listing(SNP_LISTING), symbols(SNP_LISTING));
-        let symbols = &snp;
-        let calls: Vec<(u64, &str)> = code
+    fn no_shim_asks_the_host_for_anything_but_to_stop() {
+        let snp = listing(SNP_LISTING);
+        let snp_symbols = symbols(SNP_LISTING);
+        let exits: Vec<u64> = snp
             .iter()
-            .filter_map(|(at, text)| target(text).map(|name| (*at, name)))
+            .filter(|(_, text)| text.first() == Some(&"vmgexit"))
+            .map(|(at, _)| *at)
             .collect();
-        let once = |name: &str| -> u64 {
-            let at: Vec<u64> = calls
-                .iter()
-                .filter(|(_, n)| *n == name)
-                .map(|(at, _)| *at)
-                .collect();
-            assert_eq!(at.len(), 1, "{name} is reached from {} places", at.len());
-            at[0]
-        };
-        // Shared, walked, handed back, all three on the boot path in that order.
-        let share = once("ghcb_share");
-        let walk = once("accept_walk");
-        let private = once("ghcb_private");
-        for at in [share, walk, private] {
-            assert_eq!(
-                routine(symbols, at),
-                "snp_reset_start",
-                "{at:#x} is off the boot path"
-            );
-        }
-        assert!(
-            share < walk && walk < private,
-            "the block is shared out of order"
+        assert_eq!(
+            exits.len(),
+            1,
+            "the SNP shim exits to the host {} times",
+            exits.len()
         );
-        // ...and inside the walk, private comes before validated.
-        let psc = once("psc_range");
-        assert_eq!(routine(symbols, psc), "accept_private");
-        let validate = calls
-            .iter()
-            .find(|(at, n)| routine(symbols, *at) == "accept_private" && *n == "validate_range")
-            .expect("accept_private never validates");
-        assert!(
-            psc < validate.0,
-            "the range is validated before it is private"
-        );
-
-        // The TDX shim does not use the GHCB to convert memory.
-        for name in [
-            "psc_range",
-            "psc_complete",
-            "psc_vmgexit",
-            "ghcb_share",
-            "ghcb_private",
+        assert_eq!(routine(&snp_symbols, exits[0]), "die_step");
+        let port_io = [
+            "in", "inb", "inw", "inl", "out", "outb", "outw", "outl", "insb", "insw", "insl",
+            "outsb", "outsw", "outsl",
+        ];
+        for (code, symbols) in [
+            (snp, snp_symbols),
+            (listing(RESET_LISTING), symbols(RESET_LISTING)),
         ] {
             assert!(
-                !tdx.iter().any(|(_, n)| *n == name),
-                "the TDX shim carries {name}"
+                !code
+                    .iter()
+                    .any(|(_, text)| text.first().is_some_and(|m| port_io.contains(m))),
+                "a shim does port I/O"
             );
+            for name in [
+                "psc_range",
+                "ghcb_share",
+                "ghcb_private",
+                "host_regions",
+                "accept_walk",
+            ] {
+                assert!(
+                    !symbols.iter().any(|(_, n)| *n == name),
+                    "a shim carries {name}"
+                );
+            }
         }
     }
 
@@ -515,24 +447,28 @@ mod tests {
         );
     }
 
-    /// The SNP shim PVALIDATEs and zeroes through the map, so every range it walks is mapped.
+    /// The shims accept and mark through the identity map, so every range
+    /// either touches is mapped: the fixed ranges below the bound, and the RAM
+    /// of every shape up to the most it may end at.
     #[test]
     fn every_range_the_shim_is_told_to_touch_is_mapped() {
-        for ram in [DEFAULT_RAM, 16 * GIB, MAX_RAM] {
-            let params = Params::snp(ram, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
-            let map = identity_map(params.cbit as u64, true);
-            let placed = vec![Placed::measured(
-                KERNEL_BASE,
-                "",
-                RAM,
-                vec![0u8; PAGE as usize],
-            )];
-            let spans = boot::shim_spans(&placed);
-            let (top, host) = boot::host_regions(&params.extents());
-            for (_, hi) in boot::accept_ranges(&boot::merge(&spans, &host), top) {
-                assert_eq!(pdpte(&map, hi - PAGE) & 1, 1, "{hi:#x} is unmapped");
+        let map = identity_map(DEFAULT_CBIT as u64);
+        let placed = vec![Placed::measured(
+            KERNEL_BASE,
+            "",
+            RAM,
+            vec![0u8; PAGE as usize],
+        )];
+        let spans = boot::shim_spans(&placed);
+        let lazy = KERNEL_BASE + 0x400_0000;
+        for (_, hi) in boot::shim_accept(&spans, lazy) {
+            assert_eq!(pdpte(&map, hi - PAGE) & 1, 1, "{hi:#x} is unmapped");
+        }
+        for amd in [false, true] {
+            for shape in boot::qemu_shapes(amd, boot::least_memory(&spans, lazy)) {
+                assert!(shape.max_end <= MAP_LIMIT);
+                assert_eq!(pdpte(&map, shape.max_end - PAGE) & 1, 1);
             }
         }
-        assert!(Params::snp(MAX_RAM + PAGE, DEFAULT_VCPUS, DEFAULT_CBIT, "").is_err());
     }
 }

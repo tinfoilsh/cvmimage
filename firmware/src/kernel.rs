@@ -324,7 +324,7 @@ mod tests {
     fn each_shim_runs_the_routines_it_is_built_from() {
         for (blob, dis, entered, accept) in [
             (RESET_SHIM, RESET_LISTING, "long_mode", "accept_range"),
-            (SNP_SHIM, SNP_LISTING, "snp_long_mode", "accept_private"),
+            (SNP_SHIM, SNP_LISTING, "snp_reset_start", "accept_private"),
         ] {
             let code = listing(dis);
             let symbols = symbols(dis);
@@ -349,7 +349,8 @@ mod tests {
             // The boot path runs these once each, in this order: the EFI map
             // is completed from the E820 table, and the bitmap sized, before
             // the walk marks any of it.
-            let mut last = 0;
+            // The SNP shim starts with the first of these, at offset 0.
+            let mut last = None;
             for name in [
                 "host_regions",
                 "merge_regions",
@@ -365,8 +366,8 @@ mod tests {
                     entered,
                     "{name} is not on the boot path"
                 );
-                assert!(at[0] > last, "{name} runs out of order");
-                last = at[0];
+                assert!(last.is_none_or(|l| at[0] > l), "{name} runs out of order");
+                last = Some(at[0]);
             }
 
             // ...and e820_build and efi_memmap_build are each given the zero
@@ -459,7 +460,7 @@ mod tests {
         for at in [share, walk, private] {
             assert_eq!(
                 routine(symbols, at),
-                "snp_long_mode",
+                "snp_reset_start",
                 "{at:#x} is off the boot path"
             );
         }

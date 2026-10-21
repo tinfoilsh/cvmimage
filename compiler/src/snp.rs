@@ -1,7 +1,7 @@
 use crate::image::{
-    component, components, config_field, mmio_holes, page_directive, param_gpa,
-    parameter_directives, write_manifest, zeros, Component, ReportFields, COMPAT, PARAM_AREA,
-    PARAM_MAP_AREA, PARAM_OFFSET, PARAM_PAGES,
+    component, components, config_field, page_directive, param_gpa, parameter_directives,
+    write_manifest, zeros, Component, ReportFields, COMPAT, PARAM_AREA, PARAM_MAP_AREA,
+    PARAM_OFFSET, PARAM_PAGES,
 };
 use igvm::{
     IgvmDirectiveHeader, IgvmFile, IgvmInitializationHeader, IgvmPlatformHeader, IgvmRevision,
@@ -68,20 +68,10 @@ struct LaunchPage {
 }
 
 #[derive(Serialize)]
-struct Topology {
-    sockets: u8,
-    cores: u32,
-    threads_per_core: u8,
-    vcpus: u32,
-}
-#[derive(Serialize)]
 struct Manifest {
     format_version: u32,
     platform: &'static str,
-    memory_bytes: u64,
-    topology: Topology,
     command_line: String,
-    mmio_holes: Vec<String>,
     kernel_entry: String,
     expected_snp_measurement: String,
     guest_policy: String,
@@ -128,7 +118,7 @@ pub fn build(
             }
             Fill::Host => add_special(&mut pages, region.base, PAGE_SECRETS),
             Fill::Measured(data) => add_normal(&mut pages, region.base, data),
-            Fill::Parameters | Fill::Mmio(_) => {}
+            Fill::Parameters => {}
         }
     }
     validate_pages(&pages)?;
@@ -220,17 +210,9 @@ pub fn build(
     let mut components = components(&placed);
     components.insert("vmsa", component(SNP_VMSA, &vmsa));
     let manifest = Manifest {
-        format_version: 3,
+        format_version: 4,
         platform: "sev-snp",
-        memory_bytes: params.memory,
-        topology: Topology {
-            sockets: 1,
-            cores: params.vcpus,
-            threads_per_core: 1,
-            vcpus: params.vcpus,
-        },
         command_line: params.cmdline.clone(),
-        mmio_holes: mmio_holes(params),
         kernel_entry: format!("0x{:08x}", launch.entry),
         expected_snp_measurement: hex::encode(measurement),
         guest_policy: policy_hex(),
@@ -681,51 +663,15 @@ mod tests {
         assert_ne!(two, launch_measurement(&pages, &[ap, bsp]));
     }
 
-    /// Nothing an image carries depends on the processor count any more: the
-    /// MADT that did is written by the shim from an unmeasured parameter, and
-    /// only the boot processor's save area is measured.
     #[test]
-    fn the_processor_count_leaves_the_launch_digest_alone() {
+    fn an_snp_image_carries_one_vp_context() {
         let dir = tempdir().unwrap();
         let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
         fs::write(&k, test_kernel()).unwrap();
         fs::write(&i, vec![7u8; 100_000]).unwrap();
-        let image = |cpus: u32| {
-            let out = dir.path().join(format!("out{cpus}.igvm"));
-            let params = Params::snp(DEFAULT_RAM, cpus, DEFAULT_CBIT, "").unwrap();
-            build(&k, &i, &out, &params, None, None, 0).unwrap();
-            let bytes = fs::read(&out).unwrap();
-            let parsed = IgvmFile::new_from_binary(&bytes, None).unwrap();
-            let loaded: Vec<String> = parsed
-                .directives()
-                .iter()
-                .filter_map(|d| match d {
-                    IgvmDirectiveHeader::PageData { gpa, data, .. } => {
-                        Some(format!("{gpa:#x} {}", hex::encode(Sha384::digest(data))))
-                    }
-                    IgvmDirectiveHeader::ParameterInsert(p) => Some(format!("{:#x} -", p.gpa)),
-                    _ => None,
-                })
-                .collect();
-            (loaded, measure_snp(&bytes).unwrap())
-        };
-        let (loaded, digest) = image(2);
-        for cpus in [4, 8] {
-            let other = image(cpus);
-            assert_eq!(loaded, other.0, "the loaded pages moved with --vcpus");
-            assert_eq!(digest, other.1, "the launch digest moved with --vcpus");
-        }
-    }
-
-    #[test]
-    fn an_snp_image_carries_one_vp_context_whatever_the_processor_count() {
-        let dir = tempdir().unwrap();
-        let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
-        fs::write(&k, test_kernel()).unwrap();
-        fs::write(&i, vec![7u8; 100_000]).unwrap();
-        for cpus in [1u32, 2, 4] {
-            let out = dir.path().join(format!("out{cpus}.igvm"));
-            let params = Params::snp(DEFAULT_RAM, cpus, DEFAULT_CBIT, "").unwrap();
+        {
+            let out = dir.path().join("out.igvm");
+            let params = Params::snp(DEFAULT_CBIT, "").unwrap();
             build(&k, &i, &out, &params, None, None, 0).unwrap();
             let bytes = fs::read(&out).unwrap();
             let file = IgvmFile::new_from_binary(&bytes, None).unwrap();
@@ -742,7 +688,7 @@ mod tests {
                 })
                 .collect();
             indexes.sort_unstable();
-            assert_eq!(indexes, vec![0], "--vcpus {cpus} changed the contexts");
+            assert_eq!(indexes, vec![0], "only the boot processor is measured");
         }
     }
 
@@ -755,9 +701,9 @@ mod tests {
         fs::write(&initramfs, vec![7u8; 100_000]).unwrap();
         let cmdline = "root=/dev/mapper/root roothash=aa11";
 
-        let digest = |k: &Path, i: &Path, c: &str, vcpus: u32| -> String {
+        let digest = |k: &Path, i: &Path, c: &str| -> String {
             let out = dir.path().join("out.igvm");
-            let params = Params::snp(DEFAULT_RAM, vcpus, DEFAULT_CBIT, c).unwrap();
+            let params = Params::snp(DEFAULT_CBIT, c).unwrap();
             build(k, i, &out, &params, None, None, 0).unwrap();
             let manifest = fs::read(format!("{}.manifest.json", out.display())).unwrap();
             let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
@@ -767,14 +713,14 @@ mod tests {
                 .to_owned()
         };
 
-        let base = digest(&kernel, &initramfs, cmdline, DEFAULT_VCPUS);
-        assert_eq!(base, digest(&kernel, &initramfs, cmdline, DEFAULT_VCPUS));
+        let base = digest(&kernel, &initramfs, cmdline);
+        assert_eq!(base, digest(&kernel, &initramfs, cmdline));
 
         let other = dir.path().join("bzImage.other");
         let mut bytes = test_kernel();
         bytes[4096] ^= 1;
         fs::write(&other, bytes).unwrap();
-        let moved = digest(&other, &initramfs, cmdline, DEFAULT_VCPUS);
+        let moved = digest(&other, &initramfs, cmdline);
         assert_ne!(
             base, moved,
             "one byte of the kernel left the measurement alone"
@@ -784,24 +730,14 @@ mod tests {
         let mut bytes = vec![7u8; 100_000];
         bytes[1000] ^= 1;
         fs::write(&other, bytes).unwrap();
-        let moved = digest(&kernel, &other, cmdline, DEFAULT_VCPUS);
+        let moved = digest(&kernel, &other, cmdline);
         assert_ne!(
             base, moved,
             "one byte of the initramfs left the measurement alone"
         );
 
-        let moved = digest(
-            &kernel,
-            &initramfs,
-            "root=/dev/mapper/root roothash=ab11",
-            DEFAULT_VCPUS,
-        );
+        let moved = digest(&kernel, &initramfs, "root=/dev/mapper/root roothash=ab11");
         assert_ne!(base, moved, "the command line left the measurement alone");
-
-        // Not a measured input: the launch covers the boot processor's save
-        // area alone, which is what lets one release serve any processor count.
-        let same = digest(&kernel, &initramfs, cmdline, DEFAULT_VCPUS + 1);
-        assert_eq!(base, same, "the processor count moved the measurement");
     }
 
     /// On SEV-SNP a required-memory directive is not a check: QEMU converts the
@@ -821,8 +757,8 @@ mod tests {
         );
         fs::write(&k, test_kernel()).unwrap();
         fs::write(&i, vec![7u8; 100_000]).unwrap();
-        let declared = |ram| {
-            let params = Params::snp(ram, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
+        let declared = || {
+            let params = Params::snp(DEFAULT_CBIT, "").unwrap();
             build(&k, &i, &out, &params, None, None, 0).unwrap();
             let bytes = fs::read(&out).unwrap();
             let file = IgvmFile::new_from_binary(&bytes, None).unwrap();
@@ -851,8 +787,8 @@ mod tests {
             }
             (spans, loaded)
         };
-        let (spans, mut loaded) = declared(8 * GIB);
-        let params = Params::snp(8 * GIB, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
+        let (spans, mut loaded) = declared();
+        let params = Params::snp(DEFAULT_CBIT, "").unwrap();
         let launch = tinfoil_firmware::snp(&k, &i, &params).unwrap();
         for (lo, hi) in &launch.accept {
             for gpa in (*lo..*hi).step_by(PAGE as usize) {
@@ -864,15 +800,6 @@ mod tests {
             "the image requires something it neither loads nor validates"
         );
         assert!(spans.iter().any(|(lo, hi)| *lo == 0 && launch.lazy <= *hi));
-        // The RAM the guest is given does not enter it, which is the point:
-        // one image, any -m, and the shim converting what the guest was given.
-        for ram in [DEFAULT_RAM, 2 * GIB, 64 * GIB, MAX_RAM] {
-            assert_eq!(
-                declared(ram).0,
-                spans,
-                "{ram:#x} of RAM moved the declaration"
-            );
-        }
         // Nothing the image loads is left out, so nothing is imported into
         // memory a loader was never told to have.
         assert!(spans
@@ -896,7 +823,7 @@ mod tests {
         let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
         fs::write(&k, test_kernel()).unwrap();
         fs::write(&i, vec![7u8; 100_000]).unwrap();
-        let params = Params::snp(DEFAULT_RAM, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
+        let params = Params::snp(DEFAULT_CBIT, "").unwrap();
         let launch = tinfoil_firmware::snp(&k, &i, &params).unwrap();
         let covered = |lo: u64, hi: u64| {
             launch
@@ -945,35 +872,6 @@ mod tests {
             } else {
                 n += 1;
             }
-        }
-    }
-
-    /// The RAM a guest is given no longer reaches the digest: the shim takes
-    /// the end of RAM from the memory map the loader deposits after the
-    /// measurement is closed, and the required memory the image declares is
-    /// its own pages and fixed accept ranges rather than a machine's.
-    #[test]
-    fn the_guest_size_leaves_the_measurement_alone() {
-        let dir = tempdir().unwrap();
-        let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
-        fs::write(&k, test_kernel()).unwrap();
-        fs::write(&i, vec![7u8; 100_000]).unwrap();
-        let digest = |ram| {
-            let out = dir.path().join("out.igvm");
-            let params = Params::snp(ram, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
-            build(&k, &i, &out, &params, None, None, 0).unwrap();
-            measure_snp(&fs::read(&out).unwrap()).unwrap()
-        };
-        let base = digest(8 * GIB);
-        for ram in [
-            DEFAULT_RAM,
-            2 * GIB,
-            16 * GIB,
-            64 * GIB,
-            1024 * GIB,
-            MAX_RAM,
-        ] {
-            assert_eq!(base, digest(ram), "{ram:#x} of RAM moved the digest");
         }
     }
 

@@ -93,10 +93,7 @@ fn mrconfigid_field(hash: Option<&str>) -> Result<String, String> {
 struct Manifest {
     format_version: u32,
     platform: &'static str,
-    memory_bytes: u64,
-    vcpus: u32,
     command_line: String,
-    mmio_holes: Vec<String>,
     kernel_entry: String,
     expected_mrtd: String,
     shim_owned_bytes: usize,
@@ -134,12 +131,9 @@ pub fn build(
     fs::write(output, &file).map_err(io_error("write IGVM"))?;
 
     let manifest = Manifest {
-        format_version: 3,
+        format_version: 4,
         platform: "tdx",
-        memory_bytes: params.memory,
-        vcpus: params.vcpus,
         command_line: params.cmdline.clone(),
-        mmio_holes: mmio_holes(params),
         kernel_entry: format!("0x{:08x}", launch.entry),
         expected_mrtd: hex::encode(expected_mrtd),
         shim_owned_bytes: launch.shim_owned,
@@ -147,14 +141,6 @@ pub fn build(
         components: components(&launch.placed),
     };
     write_manifest(output, &manifest)
-}
-
-pub fn mmio_holes(params: &Params) -> Vec<String> {
-    params
-        .mmio
-        .iter()
-        .map(|(base, size)| format!("0x{base:08x}:0x{size:x}"))
-        .collect()
 }
 
 pub fn write_manifest<T: Serialize>(output: &Path, manifest: &T) -> Result<(), String> {
@@ -186,7 +172,7 @@ pub fn launch_pages(placed: &[Placed]) -> Result<Vec<Page>, String> {
                     data: Some(data),
                 }))
             }
-            Fill::Parameters | Fill::Mmio(_) => {}
+            Fill::Parameters => {}
             Fill::Host => {
                 return Err(format!(
                     "{:#x} is placed but has no measured contents",
@@ -394,10 +380,10 @@ pub fn measure_tdx(file: &[u8]) -> Result<[u8; 48], String> {
 pub mod tests {
     use super::*;
     use tempfile::tempdir;
-    use tinfoil_firmware::boot::{Shape, ABSENT, RAM, RESERVED};
+    use tinfoil_firmware::boot::{Shape, RAM, RESERVED};
 
     pub fn params() -> Params {
-        Params::tdx(DEFAULT_RAM, DEFAULT_VCPUS, "").unwrap()
+        Params::tdx("").unwrap()
     }
 
     /// A bzImage-shaped stub: enough of the setup header for the builder to accept it.
@@ -426,14 +412,7 @@ pub mod tests {
         );
         fs::write(&k, test_kernel()).unwrap();
         fs::write(&i, vec![7u8; 100_000]).unwrap();
-        build(
-            &k,
-            &i,
-            &out,
-            &Params::tdx(DEFAULT_RAM, 1, "").unwrap(),
-            None,
-        )
-        .unwrap();
+        build(&k, &i, &out, &Params::tdx("").unwrap(), None).unwrap();
 
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(out.with_extension("igvm.manifest.json")).unwrap())
@@ -469,13 +448,10 @@ pub mod tests {
     #[test]
     fn required_cmdline_is_appended_whatever_the_operator_asks_for() {
         assert_eq!(params().cmdline, "panic=-1 no5lvl");
-        let p = Params::tdx(DEFAULT_RAM, 1, "quiet").unwrap();
+        let p = Params::tdx("quiet").unwrap();
         assert_eq!(p.cmdline, "quiet no5lvl");
-        let p = Params::tdx(DEFAULT_RAM, 1, "no5lvl x").unwrap();
+        let p = Params::tdx("no5lvl x").unwrap();
         assert_eq!(p.cmdline, "no5lvl x");
-        assert!(Params::tdx(DEFAULT_RAM, 0, "").is_err());
-        assert!(Params::tdx(0x1000, 1, "").is_err());
-        assert!(Params::tdx(DEFAULT_RAM, MAX_VCPUS + 1, "").is_err());
     }
 
     /// Every input the measurement is claimed to cover must move it. An input
@@ -493,25 +469,25 @@ pub mod tests {
         fs::write(&initramfs, vec![7u8; 100_000]).unwrap();
         let cmdline = "root=/dev/mapper/root roothash=aa11";
 
-        let mrtd = |k: &Path, i: &Path, c: &str, vcpus: u32| -> String {
+        let mrtd = |k: &Path, i: &Path, c: &str| -> String {
             let out = dir.path().join("out.igvm");
-            let params = Params::tdx(DEFAULT_RAM, vcpus, c).unwrap();
+            let params = Params::tdx(c).unwrap();
             build(k, i, &out, &params, None).unwrap();
             let manifest = fs::read(format!("{}.manifest.json", out.display())).unwrap();
             let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
             manifest["expected_mrtd"].as_str().unwrap().to_owned()
         };
 
-        let base = mrtd(&kernel, &initramfs, cmdline, DEFAULT_VCPUS);
+        let base = mrtd(&kernel, &initramfs, cmdline);
         // A baseline that moved on its own would make every assertion below
         // pass for the wrong reason.
-        assert_eq!(base, mrtd(&kernel, &initramfs, cmdline, DEFAULT_VCPUS));
+        assert_eq!(base, mrtd(&kernel, &initramfs, cmdline));
 
         let other = dir.path().join("bzImage.other");
         let mut bytes = test_kernel();
         bytes[4096] ^= 1;
         fs::write(&other, bytes).unwrap();
-        let moved = mrtd(&other, &initramfs, cmdline, DEFAULT_VCPUS);
+        let moved = mrtd(&other, &initramfs, cmdline);
         assert_ne!(
             base, moved,
             "one byte of the kernel left the measurement alone"
@@ -521,7 +497,7 @@ pub mod tests {
         let mut bytes = vec![7u8; 100_000];
         bytes[1000] ^= 1;
         fs::write(&other, bytes).unwrap();
-        let moved = mrtd(&kernel, &other, cmdline, DEFAULT_VCPUS);
+        let moved = mrtd(&kernel, &other, cmdline);
         assert_ne!(
             base, moved,
             "one byte of the initramfs left the measurement alone"
@@ -529,58 +505,8 @@ pub mod tests {
 
         // One hex digit of the root hash. The command line is what binds the
         // image to a root filesystem, so this is the mutation that matters most.
-        let moved = mrtd(
-            &kernel,
-            &initramfs,
-            "root=/dev/mapper/root roothash=ab11",
-            DEFAULT_VCPUS,
-        );
+        let moved = mrtd(&kernel, &initramfs, "root=/dev/mapper/root roothash=ab11");
         assert_ne!(base, moved, "the command line left the measurement alone");
-    }
-
-    /// The processor count and the guest's RAM are the two launch inputs the
-    /// digest no longer covers: the tables that depended on them are written by
-    /// the shim, out of parameters the loader fills after the measurement is
-    /// closed. Holding the rest of the image still, MRTD must not move with
-    /// either -- that is the whole point of taking those tables out of the
-    /// measured pages.
-    #[test]
-    fn the_machine_size_leaves_the_measurement_alone() {
-        let mrtd = |ram, vcpus| {
-            let params = Params::tdx(ram, vcpus, "").unwrap();
-            built(&params).1["expected_mrtd"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        };
-        let base = mrtd(DEFAULT_RAM, 2);
-        for vcpus in [4, 8, MAX_VCPUS] {
-            assert_eq!(
-                base,
-                mrtd(DEFAULT_RAM, vcpus),
-                "{vcpus} processors moved MRTD"
-            );
-        }
-        for ram in [
-            DEFAULT_RAM + PAGE,
-            2 * GIB,
-            8 * GIB,
-            64 * GIB,
-            1024 * GIB,
-            MAX_RAM,
-        ] {
-            assert_eq!(base, mrtd(ram, 2), "{ram:#x} of RAM moved MRTD");
-        }
-    }
-
-    /// The image is byte-identical too, not merely equally measured: nothing a
-    /// TDX file states depends on the machine it is launched on.
-    #[test]
-    fn a_tdx_image_is_the_same_file_whatever_machine_it_is_built_for() {
-        let one = built(&Params::tdx(DEFAULT_RAM, 2, "").unwrap()).0;
-        for (ram, vcpus) in [(8 * GIB, 8u32), (MAX_RAM, MAX_VCPUS)] {
-            assert_eq!(one, built(&Params::tdx(ram, vcpus, "").unwrap()).0);
-        }
     }
 
     /// Builds from stub inputs and returns the IGVM file and the manifest beside it.
@@ -623,16 +549,16 @@ pub mod tests {
     }
 
     /// Builds both platforms' launch state from stub inputs.
-    fn launched(dir: &Path, ram: u64, snp: bool) -> (Params, tinfoil_firmware::Launch) {
+    fn launched(dir: &Path, snp: bool) -> (Params, tinfoil_firmware::Launch) {
         let (k, i) = (dir.join("bzImage"), dir.join("initrd"));
         if !k.exists() {
             fs::write(&k, test_kernel()).unwrap();
             fs::write(&i, vec![7u8; 100_000]).unwrap();
         }
         let params = if snp {
-            Params::snp(ram, 1, DEFAULT_CBIT, "").unwrap()
+            Params::snp(DEFAULT_CBIT, "").unwrap()
         } else {
-            Params::tdx(ram, 1, "").unwrap()
+            Params::tdx("").unwrap()
         };
         let launch = if snp {
             tinfoil_firmware::snp(&k, &i, &params)
@@ -647,7 +573,7 @@ pub mod tests {
     /// both sides of it, and on AMD on both sides of HyperTransport.
     const SIZES: [u64; 10] = [
         0x2020_0000,
-        DEFAULT_RAM,
+        GIB,
         2 * GIB,
         Q35_SPLIT - PAGE,
         Q35_SPLIT,
@@ -738,7 +664,7 @@ pub mod tests {
     fn the_shim_accepts_exactly_the_ram_below_the_bound_it_did_not_place() {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
-            let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+            let (_, launch) = launched(dir.path(), snp);
             let block = data_block_of(&launch, snp);
             let word = |at: u64| u64::from_le_bytes(block[at as usize..][..8].try_into().unwrap());
             assert_eq!(word(SHIM_DATA_ENTRY), KERNEL_BASE + 0x200);
@@ -797,7 +723,7 @@ pub mod tests {
             fs::write(dir.path().join("bzImage"), test_kernel()).unwrap();
             fs::write(dir.path().join("initrd"), vec![7u8; len as usize]).unwrap();
             for snp in [false, true] {
-                let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+                let (_, launch) = launched(dir.path(), snp);
                 let end = (INITRAMFS_BASE + len).div_ceil(PAGE) * PAGE;
                 let guard = (end / UNIT * UNIT, end / UNIT * UNIT + UNIT);
                 assert!(
@@ -831,7 +757,7 @@ pub mod tests {
     fn every_qemu_layout_is_a_shape() {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
-            let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+            let (_, launch) = launched(dir.path(), snp);
             let shim = shim_for(&launch, snp);
             for ram in SIZES {
                 let map = qemu_map(ram, snp);
@@ -861,7 +787,7 @@ pub mod tests {
     fn the_shim_builds_the_tables_each_shape_specifies() {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
-            let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+            let (_, launch) = launched(dir.path(), snp);
             let shim = shim_for(&launch, snp);
             let (efi, zero) = (
                 placed_page(&launch, EFI_PAGE),
@@ -914,7 +840,6 @@ pub mod tests {
                     let placed: Vec<(u64, u64)> = launch
                         .placed
                         .iter()
-                        .filter(|p| p.e820 != ABSENT)
                         .map(|p| (p.base, p.base + p.span()))
                         .collect();
                     assert!(
@@ -959,7 +884,7 @@ pub mod tests {
                     // loaded the kernel and initramfs into.
                     for (_, base, pages, _) in &got.efi[1..] {
                         let end = base + pages * PAGE;
-                        for p in launch.placed.iter().filter(|p| p.e820 != ABSENT) {
+                        for p in &launch.placed {
                             let overlaps = p.base < end && *base < p.base + p.span();
                             assert!(!overlaps || p.e820 == RAM, "{what}: {:#x} is free", p.base);
                         }
@@ -976,7 +901,7 @@ pub mod tests {
     fn a_map_that_is_no_shape_is_refused() {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
-            let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+            let (_, launch) = launched(dir.path(), snp);
             let shim = shim_for(&launch, snp);
             let (efi, zero) = (
                 placed_page(&launch, EFI_PAGE),
@@ -1092,46 +1017,13 @@ pub mod tests {
         assert!(manifest["expected_mrtd"].is_string());
     }
 
-    /// A map that misses the aperture QEMU builds leaves no window for BARs.
-    #[test]
-    fn the_pci_aperture_follows_the_ram_the_machine_has() {
-        let small = Params::tdx(2 * GIB, 1, "").unwrap();
-        assert_eq!((small.memory, small.mmio.len()), (2 * GIB, 0));
-        assert_eq!(Params::tdx(3 * GIB, 1, "").unwrap().memory, 5 * GIB);
-        let p = Params::tdx(8 * GIB, 1, "").unwrap();
-        assert_eq!(p.memory, 10 * GIB);
-        // TDX loads the reset page inside the aperture; SNP loads nothing there.
-        assert_eq!(p.mmio, vec![(2 * GIB, RESET_ALIAS - 2 * GIB)]);
-        let snp = Params::snp(8 * GIB, DEFAULT_VCPUS, DEFAULT_CBIT, "").unwrap();
-        assert_eq!(snp.mmio, vec![(2 * GIB, 2 * GIB)]);
-
-        let placed: Vec<Placed> = p
-            .mmio
-            .iter()
-            .map(|(base, size)| Placed::mmio(*base, *size))
-            .chain([Placed::measured(
-                RESET_ALIAS,
-                "",
-                RESERVED,
-                vec![0u8; PAGE as usize],
-            )])
-            .collect();
-        let e820 = boot::e820(&boot::spans(&placed), p.memory);
-        assert!(e820
-            .iter()
-            .all(|(base, size, kind)| *kind != RAM || base + size <= 2 * GIB || *base >= 4 * GIB));
-        assert!(e820
-            .iter()
-            .any(|(base, size, kind)| (*base, *size, *kind) == (4 * GIB, 6 * GIB, RAM)));
-    }
-
     /// Past 4 GiB of map the reset page lies inside the guest's own address
     /// space, so the shape a large TDX guest takes reserves it in E820 and the
     /// shim accepts nothing there.
     #[test]
     fn a_large_guest_leaves_the_reset_page_out_of_its_ram() {
         let dir = tempdir().unwrap();
-        let (_, launch) = launched(dir.path(), 8 * GIB, false);
+        let (_, launch) = launched(dir.path(), false);
         let e820 = launch.shapes[1].e820(&launch.spans, 10 * GIB);
         assert!(e820.contains(&(RESET_ALIAS, PAGE, RESERVED)));
         assert!(!e820.iter().any(|(base, size, kind)| *kind == RAM
@@ -1186,7 +1078,7 @@ pub mod tests {
         const { assert!(KERNEL_SETUP_END + PAGE <= GUEST_ALLOWANCE) };
         let dir = tempdir().unwrap();
         for snp in [false, true] {
-            let (_, launch) = launched(dir.path(), 8 * GIB, snp);
+            let (_, launch) = launched(dir.path(), snp);
             let shim = shim_for(&launch, snp);
             for ram in SIZES.into_iter().filter(|r| r.is_multiple_of(UNIT)) {
                 shim.loader_memory_map(&qemu_map(ram, snp));

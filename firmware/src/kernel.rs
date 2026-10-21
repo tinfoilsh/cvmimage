@@ -1,7 +1,7 @@
 //! A bzImage and an initramfs as measured pages. The setup header is patched
 //! as a loader would, because the patched bytes are what the digest covers.
 
-use crate::boot::{self, put64, Fill, Placed};
+use crate::boot::{self, put64, Placed};
 use crate::io_error;
 use crate::layout::*;
 use std::{fs, path::Path};
@@ -36,13 +36,10 @@ pub(crate) fn prepare(
     if KERNEL_BASE + info.init_size as u64 > INITRAMFS_BASE {
         return Err("kernel init_size overlaps the fixed initramfs address".into());
     }
-    if initramfs_end > params.memory {
-        return Err("initramfs exceeds the memory the image describes".into());
-    }
-    // boot_params addresses the initramfs with a 32-bit field, so its last
-    // byte must be below 4 GiB; an exclusive end of exactly 4 GiB is fine.
-    if initramfs_end > FOUR_GIB {
-        return Err("initramfs does not fit below 4 GiB".into());
+    // Every shape has RAM up to 2 GiB and no shape promises more below 4 GiB,
+    // which is also all boot_params' 32-bit field reaches.
+    if initramfs_end > Q35_LOWMEM {
+        return Err("initramfs does not fit below 2 GiB".into());
     }
     if info.setup_bytes > KERNEL_SETUP_AREA_SIZE as usize {
         return Err("bzImage setup area exceeds its fixed measured reservation".into());
@@ -138,7 +135,6 @@ pub(crate) fn shim_owned(placed: &[Placed]) -> Result<usize, String> {
     let owned: usize = placed
         .iter()
         .filter(|p| p.base < KERNEL_SETUP_BASE || p.base == RESET_ALIAS)
-        .filter(|p| !matches!(p.fill, Fill::Mmio(_)))
         .map(|p| p.span() as usize)
         .sum();
     if owned > SHIM_LIMIT {

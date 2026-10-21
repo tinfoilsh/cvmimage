@@ -194,16 +194,13 @@ layout! {
     // RAM above when it would reach it (hw/i386/pc.c).
     AMD_HT_START = 0xfd_0000_0000;
     AMD_HT_END = 0x100_0000_0000;
-    // The highest map top this image describes, which MAX_RAM is the RAM behind.
+    // The highest top of RAM a shape lets the loader's map reach.
     MAX_MEMORY = MAP_LIMIT;
 }
 
 pub const SHIM_LIMIT: usize = 256 * 1024;
 
-// A split guest's map reaches 4 GiB plus the RAM that did not fit below the aperture.
-pub const MAX_RAM: u64 = MAP_LIMIT - FOUR_GIB + Q35_LOWMEM;
 const _: () = assert!(RESET_ALIAS < MAP_LIMIT);
-const _: () = assert!(MAX_MEMORY == FOUR_GIB + MAX_RAM - Q35_LOWMEM);
 // A shim reads the map as page numbers, so its bound is one too.
 const _: () = assert!(MAX_MEMORY.is_multiple_of(PAGE));
 // A shape's E820 table has to fit boot_params, and its map, plus the empty
@@ -281,8 +278,6 @@ const POLICY_RESERVED_ONE: u64 = 1 << 17;
 pub const SNP_GUEST_POLICY: u64 =
     POLICY_ABI_MINOR | POLICY_ABI_MAJOR | POLICY_SMT | POLICY_RESERVED_ONE;
 
-pub const DEFAULT_RAM: u64 = 0x4000_0000;
-pub const DEFAULT_VCPUS: u32 = 4;
 pub const DEFAULT_CMDLINE: &str = "panic=-1";
 // The encrypted identity map is built around this bit; no code before Linux discovers it.
 pub const DEFAULT_CBIT: u8 = 51;
@@ -290,53 +285,24 @@ pub const DEFAULT_CBIT: u8 = 51;
 // The measured page tables are four-level, so this is appended to every command line.
 const REQUIRED_CMDLINE: &str = "no5lvl";
 
+/// What a build is asked for. None of it is the guest's size or processor
+/// count: the shim takes the end of RAM from the loader's map, within the
+/// shapes the image measures, and the processor count from its VP-count page.
 pub struct Params {
-    /// Top of the guest-physical map: low RAM, the PCI aperture and high RAM.
-    pub memory: u64,
-    pub vcpus: u32,
     pub cmdline: String,
     pub cbit: u8,
-    /// The q35 PCI aperture, absent from E820 so Linux assigns BARs out of it,
-    /// and accepted by no shim.
-    pub mmio: Vec<(u64, u64)>,
 }
 
 impl Params {
-    /// The extents QEMU's memory map will describe for a guest this size, each
-    /// with whether it is ordinary memory: everything below the aperture, and
-    /// the rest above 4 GiB (hw/i386/pc.c). The shim reads this from the
-    /// loader rather than being told, so this is only what the build expects
-    /// the loader to say.
-    pub fn extents(&self) -> Vec<(u64, u64, bool)> {
-        if self.mmio.is_empty() {
-            vec![(0, self.memory, true)]
-        } else {
-            vec![(0, Q35_LOWMEM, true), (FOUR_GIB, self.memory, true)]
-        }
-    }
-}
-
-impl Params {
-    /// The TDX shim runs from the reset page, so the aperture stops short of it.
-    pub fn tdx(ram: u64, vcpus: u32, cmdline: &str) -> Result<Self, String> {
-        Self::new(ram, vcpus, cmdline, DEFAULT_CBIT, RESET_ALIAS)
+    pub fn tdx(cmdline: &str) -> Result<Self, String> {
+        Self::new(cmdline, DEFAULT_CBIT)
     }
 
-    /// The SNP map, which places nothing inside the aperture, so it runs to 4 GiB.
-    pub fn snp(ram: u64, vcpus: u32, cbit: u8, cmdline: &str) -> Result<Self, String> {
-        Self::new(ram, vcpus, cmdline, cbit, FOUR_GIB)
+    pub fn snp(cbit: u8, cmdline: &str) -> Result<Self, String> {
+        Self::new(cmdline, cbit)
     }
 
-    fn new(ram: u64, vcpus: u32, cmdline: &str, cbit: u8, hole_end: u64) -> Result<Self, String> {
-        if !ram.is_multiple_of(PAGE) || ram <= INITRAMFS_BASE || ram > MAX_RAM {
-            return Err(format!(
-                "--ram must be page-aligned, larger than {INITRAMFS_BASE:#x} \
-                 and at most {MAX_RAM:#x}"
-            ));
-        }
-        if vcpus == 0 || vcpus > MAX_VCPUS {
-            return Err(format!("--vcpus must be between 1 and {MAX_VCPUS}"));
-        }
+    fn new(cmdline: &str, cbit: u8) -> Result<Self, String> {
         // Above 51 is not a physical address bit in four-level paging, so the
         // identity map would set a reserved bit or NX on every mapping.
         if !(32..=51).contains(&cbit) {
@@ -358,24 +324,7 @@ impl Params {
         {
             return Err("--cmdline must not enable EFI runtime services".into());
         }
-        // A split guest restacks above 4 GiB, so the map reaches past the RAM it has.
-        let split = ram >= Q35_SPLIT;
-        let memory = if split {
-            FOUR_GIB + ram - Q35_LOWMEM
-        } else {
-            ram
-        };
-        let mmio: Vec<(u64, u64)> = split
-            .then_some((Q35_LOWMEM, hole_end - Q35_LOWMEM))
-            .into_iter()
-            .collect();
-        Ok(Params {
-            memory,
-            vcpus,
-            cmdline,
-            cbit,
-            mmio,
-        })
+        Ok(Params { cmdline, cbit })
     }
 }
 

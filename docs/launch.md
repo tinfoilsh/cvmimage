@@ -157,8 +157,6 @@ fields this image fixes.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--ram` | `1G` | Guest RAM the manifest records; leaves the image bytes alone |
-| `--vcpus` | `4` | Processor count, 1 to 255; leaves the measurement alone |
 | `--cmdline` | `panic=-1` | Linux command line |
 | `--config-hash` | zero | TDX `MRCONFIGID` or SNP `HOST_DATA` |
 | `--cbit` | `51` | SNP encryption bit |
@@ -177,10 +175,12 @@ The processor ceiling is 255: the MADT Local APIC structure states an 8-bit
 APIC id and `0xff` is the xAPIC broadcast, so a larger count numbered two
 processors the same.
 
-The manifest is `format_version` 3. Versions 1 and 2 measured the guest's
-memory and processor count; version 3 does not, so `memory_bytes`, `vcpus` and
-`mmio_holes` record what the build was asked for rather than anything the
-digest covers. Only the `launch` object states what a report must say.
+The manifest is `format_version` 4. Versions 1 and 2 measured the guest's
+memory and processor count; version 3 did not, but still recorded the RAM the
+build was asked for (`memory_bytes`, `mmio_holes`). Version 4 drops those:
+neither the guest's RAM nor its processor count is a build input, so it drops
+`vcpus` and the SEV-SNP `topology` too: only the loader's memory map and
+VP-count page say them. Only the `launch` object states what a report must say.
 
 On SEV-SNP this needs a host kernel that accepts
 `KVM_SEV_SNP_MEASURE_BSP_ONLY` and `-object sev-snp-guest,measure-bsp-only=on`.
@@ -229,11 +229,10 @@ match it.
 ## Memory map
 
 For q35 guests with at least 2816 MiB, 2 GiB goes below 4 GiB, the rest above,
-and the PCI aperture lies between them. The shim reads the map the machine
-actually has rather than assuming this one, so a host that lays memory out
-differently is described, not refused -- but one that describes a machine the
-image cannot run in terminates it. QEMU's `-m` does not have to be the `--ram`
-the file was built with: the same bytes boot a guest of either size.
+and the PCI aperture lies between them. The image measures the layouts it runs
+in (`boot::qemu_shapes`), and the shim checks the loader's map is one of them,
+taking only the end of RAM from it; a host that lays memory out any other way
+is refused. The same bytes boot a guest of any size those layouts allow.
 
 The measured page tables map the first 2 TiB with 1-GiB pages, whatever the
 guest turns out to have, because they are measured and so cannot depend on it.

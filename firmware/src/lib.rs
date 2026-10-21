@@ -83,8 +83,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         // The map covers the reset page, so the shim is never told to accept what it runs from.
         Placed::measured(RESET_ALIAS, "shim", RESERVED, vec![0u8; PAGE as usize]),
     ];
-    placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
-    boot::validate(&placed, params.memory)?;
+    boot::validate(&placed)?;
     let spans = boot::shim_spans(&placed);
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
     efi::claim_boot(&mut zero);
@@ -140,8 +139,7 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         Placed::measured(KERNEL_BASE, "kernel", RAM, p.kernel),
         Placed::measured(INITRAMFS_BASE, "initramfs", RAM, p.initramfs),
     ];
-    placed.extend(params.mmio.iter().map(|(b, n)| Placed::mmio(*b, *n)));
-    boot::validate(&placed, params.memory)?;
+    boot::validate(&placed)?;
     let spans = boot::shim_spans(&placed);
     // The setup_data chain is one measured SETUP_CC_BLOB record.
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;

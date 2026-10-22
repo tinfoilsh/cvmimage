@@ -16,17 +16,16 @@
 .macro shape_code fail
 
 # The shape the loader's map is -> %rbx the shape, %r8 the top of guest RAM.
-# Clobbers rax, rcx, rdx, rsi, rdi, r9, r10 and r11.
+# The measured page ends its shapes with an empty record.
+# Clobbers rax, rdx, rsi, rdi, r9, r10 and r11.
 shape_match:
-    mov shim_data+SHIM_DATA_SHAPES(%rip), %rcx
     mov $SHAPES_PAGE, %ebx
-1:  test %rcx, %rcx
-    jz \fail                        # a map that is none of them
+1:  cmpq $0, SHAPE_ENTRIES(%rbx)
+    je \fail                        # a map that is none of them
     call shape_try
     test %r8, %r8
     jnz 2f
     add $SHAPE_LEN, %rbx
-    dec %rcx
     jmp 1b
 2:  ret
 

@@ -18,7 +18,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha384};
 use std::{collections::BTreeMap, fs, path::Path};
 use tinfoil_firmware::{
-    boot::{self, Fill},
+    boot::{self, Fill, Placed},
     io_error,
     layout::*,
     vmsa::{bsp_vmsa, validate_vmsa, vmsa_page},
@@ -100,7 +100,6 @@ pub fn build(
     let host_data = config_field(config_hash, 32)?;
     let launch = tinfoil_firmware::snp(kernel_path, initramfs_path, params)?;
     let placed = launch.placed;
-    let required_memory = launch.required_memory;
     let owned = launch.shim_owned;
 
     // The parameter area first, in the order a loader imports it: see image::launch_pages.
@@ -140,13 +139,7 @@ pub fn build(
     // on SEV-SNP this directive is how a loader converts memory to private,
     // not a check it makes, and a guest that has all its RAM converted for it
     // is a guest whose image states a machine size.
-    let mut spans: Vec<(u64, u64)> = Vec::new();
-    for (base, size, _) in &required_memory {
-        match spans.last_mut() {
-            Some(last) if last.1 == *base => last.1 = base + size,
-            _ => spans.push((*base, base + size)),
-        }
-    }
+    let spans = required_memory(&placed);
     let mut directives = Vec::new();
     for (base, end) in spans {
         let mut at = base;
@@ -374,6 +367,22 @@ fn extend(old: [u8; 48], gpa: u64, kind: u8, page: &[u8]) -> [u8; 48] {
     info[PAGE_INFO_GPA..PAGE_INFO_GPA + 8].copy_from_slice(&gpa.to_le_bytes());
     Sha384::digest(info).into()
 }
+/// The memory a loader must have backed and private before launch: what the
+/// image places, its zero pages included, as ascending merged spans. None of
+/// it depends on the guest's size: the rest of RAM Linux converts as it uses.
+fn required_memory(placed: &[Placed]) -> Vec<(u64, u64)> {
+    let mut regions: Vec<(u64, u64)> = placed.iter().map(|p| (p.base, p.base + p.span())).collect();
+    regions.sort_unstable();
+    let mut spans: Vec<(u64, u64)> = Vec::new();
+    for (lo, hi) in regions {
+        match spans.last_mut() {
+            Some(last) if last.1 == lo => last.1 = hi,
+            _ => spans.push((lo, hi)),
+        }
+    }
+    spans
+}
+
 fn add_normal(out: &mut Vec<LaunchPage>, base: u64, data: &[u8]) {
     out.extend(boot::pages(base, data).map(|(gpa, data)| LaunchPage {
         gpa,
@@ -777,7 +786,7 @@ mod tests {
     /// worth of it would bind one published image to one guest size, so this
     /// states the pages the image loads -- all of them, its zero pages
     /// included, because a loader that has none backed there cannot import
-    /// them. Nothing past the bound but those: the rest is Linux's.
+    /// them. Nothing else: the rest is Linux's.
     #[test]
     fn required_memory_is_what_the_image_loads() {
         let dir = tempdir().unwrap();
@@ -856,12 +865,8 @@ mod tests {
         fs::write(&i, vec![7u8; 100_000]).unwrap();
         let params = Params::snp(DEFAULT_CBIT, "").unwrap();
         let launch = tinfoil_firmware::snp(&k, &i, &params).unwrap();
-        let covered = |lo: u64, hi: u64| {
-            launch
-                .required_memory
-                .iter()
-                .any(|(base, size, _)| *base <= lo && hi <= base + size)
-        };
+        let required = required_memory(&launch.placed);
+        let covered = |lo: u64, hi: u64| required.iter().any(|(a, b)| *a <= lo && hi <= *b);
         for (name, lo, hi) in [
             ("the zero page", ZERO_PAGE, ZERO_PAGE + PAGE),
             ("the ACPI page", ACPI_BASE, ACPI_BASE + PAGE),

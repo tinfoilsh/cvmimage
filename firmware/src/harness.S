@@ -71,13 +71,6 @@ harness_madt_bare:
 
 .data
 .balign 8
-# The data block the shims carry in their measured page, which a test fills.
-.globl harness_shim_data
-harness_shim_data:
-shim_data:
-    .fill SHIM_DATA_SIZE,1,0
-
-.balign 8
 harness_sp:
     .quad 0
 

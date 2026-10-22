@@ -18,7 +18,6 @@ extern "C" {
     fn harness_boot_map(zero: *mut u8) -> u64;
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
-    static mut harness_shim_data: [u8; SHIM_DATA_SIZE as usize];
     static harness_madt_template: [u8; MADT_TEMPLATE_LEN as usize];
 }
 
@@ -97,8 +96,7 @@ fn read(base: u64, at: u64, len: u64) -> Vec<u8> {
 }
 
 /// What the boot path left behind for one map: the top of RAM it found, the
-/// tables it wrote, each range it accepted in order, and each unit it left
-/// Linux to accept.
+/// tables it wrote, and each unit it left Linux to accept.
 #[derive(Debug)]
 pub struct BootMap {
     pub top: u64,
@@ -149,12 +147,9 @@ impl Shim {
         self.loader_memory_map(&entries)
     }
 
-    /// The shapes page and data block an image carries, byte for byte.
-    pub fn image(&self, shapes_page: &[u8], block: &[u8]) -> &Self {
+    /// The shapes page an image carries, byte for byte.
+    pub fn image(&self, shapes_page: &[u8]) -> &Self {
         fill(SHAPES_PAGE, 0, shapes_page);
-        let data = unsafe { &mut *std::ptr::addr_of_mut!(harness_shim_data) };
-        data.fill(0);
-        data[..block.len()].copy_from_slice(block);
         self
     }
 

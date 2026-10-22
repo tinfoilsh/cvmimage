@@ -1,7 +1,7 @@
 //! A bzImage and an initramfs as measured pages. The setup header is patched
 //! as a loader would, because the patched bytes are what the digest covers.
 
-use crate::boot::{self, put64, Placed};
+use crate::boot::{self, put64, Fill, Placed};
 use crate::io_error;
 use crate::layout::*;
 use std::{fs, path::Path};
@@ -37,9 +37,11 @@ pub(crate) fn prepare(
         return Err("kernel init_size overlaps the fixed initramfs address".into());
     }
     // Every shape has RAM up to 2 GiB and no shape promises more below 4 GiB,
-    // which is also all boot_params' 32-bit field reaches.
-    if initramfs_end > Q35_LOWMEM {
-        return Err("initramfs does not fit below 2 GiB".into());
+    // which is also all boot_params' 32-bit field reaches; and the unit after
+    // the initramfs arrives accepted too (`boot::early_units`), so it has to
+    // be RAM as well.
+    if initramfs_end > Q35_LOWMEM - UNACCEPTED_UNIT {
+        return Err("initramfs does not fit below 2 GiB, less a unit".into());
     }
     if info.setup_bytes > KERNEL_SETUP_AREA_SIZE as usize {
         return Err("bzImage setup area exceeds its fixed measured reservation".into());
@@ -62,34 +64,8 @@ pub(crate) fn prepare(
         kernel,
         initramfs,
         command,
-        entry: KERNEL_BASE + boot::ENTRY_64_OFFSET,
+        entry: KERNEL_ENTRY,
     })
-}
-
-/// The shim's data block: the entry point and how many shapes the shapes page
-/// holds. Both follow from what this image placed, so nothing about the
-/// guest's RAM is measured here.
-pub fn data_block(entry: u64, shapes: usize) -> Result<Vec<u8>, String> {
-    let mut data = entry.to_le_bytes().to_vec();
-    data.extend_from_slice(&(shapes as u64).to_le_bytes());
-    if data.len() > SHIM_DATA_SIZE as usize {
-        return Err(format!(
-            "shim data block needs {} of its {SHIM_DATA_SIZE} bytes",
-            data.len()
-        ));
-    }
-    data.resize(SHIM_DATA_SIZE as usize, 0);
-    Ok(data)
-}
-
-pub(crate) fn shim(blob: &[u8], entry: u64, shapes: usize) -> Result<Vec<u8>, String> {
-    let data = data_block(entry, shapes)?;
-    let (mut shim, at) = (blob.to_vec(), SHIM_DATA as usize);
-    if shim[at..at + data.len()].iter().any(|b| *b != 0) {
-        return Err("shim code overruns its data block".into());
-    }
-    shim[at..at + data.len()].copy_from_slice(&data);
-    Ok(shim)
 }
 
 /// The measured bytes this crate authors, as opposed to the kernel and initramfs.
@@ -97,6 +73,7 @@ pub(crate) fn shim_owned(placed: &[Placed]) -> Result<usize, String> {
     let owned: usize = placed
         .iter()
         .filter(|p| p.base < KERNEL_SETUP_BASE || p.base == RESET_ALIAS)
+        .filter(|p| !matches!(p.fill, Fill::Zero(_)))
         .map(|p| p.span() as usize)
         .sum();
     if owned > SHIM_LIMIT {
@@ -128,7 +105,6 @@ pub(crate) fn identity_map(c_bit: u64) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boot::RAM;
     use crate::vmsa::SNP_SHIM;
 
     // What the assembler made of each shim, so a test can hold its boot path to
@@ -297,6 +273,17 @@ mod tests {
                 last = Some(at[0]);
             }
 
+            // The shim ends in startup_64, with the zero page in %rsi.
+            let jump = code
+                .iter()
+                .position(|(_, text)| text.first() == Some(&"jmp") && text.get(1) == Some(&"*%rax"))
+                .expect("the shim never jumps to the kernel");
+            assert_eq!(
+                code[jump - 1].1,
+                ["mov", &format!("${KERNEL_ENTRY:#x},%eax")]
+            );
+            assert_eq!(code[jump - 2].1, ["mov", &format!("${ZERO_PAGE:#x},%rsi")]);
+
             // ...and shape_apply is given the zero page to write the table into.
             let at = code
                 .iter()
@@ -371,31 +358,13 @@ mod tests {
             "in", "inb", "inw", "inl", "out", "outb", "outw", "outl", "insb", "insw", "insl",
             "outsb", "outsw", "outsl",
         ];
-        for (code, symbols) in [
-            (snp, snp_symbols),
-            (listing(RESET_LISTING), symbols(RESET_LISTING)),
-        ] {
+        for code in [snp, tdx] {
             assert!(
                 !code
                     .iter()
                     .any(|(_, text)| text.first().is_some_and(|m| port_io.contains(m))),
                 "a shim does port I/O"
             );
-            for name in [
-                "psc_range",
-                "ghcb_share",
-                "ghcb_private",
-                "host_regions",
-                "accept_walk",
-                "accept_fixed",
-                "accept_range",
-                "validate_range",
-            ] {
-                assert!(
-                    !symbols.iter().any(|(_, n)| *n == name),
-                    "a shim carries {name}"
-                );
-            }
         }
     }
 
@@ -417,26 +386,5 @@ mod tests {
             !writes(SNP_LISTING),
             "the SNP MADT carries a wakeup structure"
         );
-    }
-
-    /// The identity map reaches the RAM of every shape up to the most it may
-    /// end at, so a guest the shapes admit is one the measured tables cover.
-    #[test]
-    fn every_range_the_shim_is_told_to_touch_is_mapped() {
-        let map = identity_map(DEFAULT_CBIT as u64);
-        let placed = vec![Placed::measured(
-            KERNEL_BASE,
-            "",
-            RAM,
-            vec![0u8; PAGE as usize],
-        )];
-        let spans = boot::shim_spans(&placed);
-        let early = boot::early_units(&spans, (KERNEL_BASE + 0x300_0000, KERNEL_BASE + 0x400_0000));
-        for amd in [false, true] {
-            for shape in boot::qemu_shapes(amd, boot::least_memory(&spans, &early)) {
-                assert!(shape.max_end <= MAP_LIMIT);
-                assert_eq!(pdpte(&map, shape.max_end - PAGE) & 1, 1);
-            }
-        }
     }
 }

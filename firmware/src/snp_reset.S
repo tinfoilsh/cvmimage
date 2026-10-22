@@ -29,8 +29,8 @@ snp_reset_start:
     madt_build die_step, 0
 
     mov $ZERO_PAGE, %rsi
-    lea shim_data(%rip), %rax
-    jmp *(%rax)
+    mov $KERNEL_ENTRY, %eax
+    jmp *%rax
 
 shape_code die_map
 
@@ -62,10 +62,5 @@ fatal:
     .org SHIM_MADT
 madt_template:
     madt_header
-
-    # The entry point and the shape count, written here by the builder.
-    .org SHIM_DATA
-shim_data:
-    .fill SHIM_DATA_SIZE,1,0
 
     .fill 0x1000-(.-snp_reset_start),1,0

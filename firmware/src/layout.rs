@@ -64,7 +64,7 @@ layout! {
     // table, its configuration table, the vendor string, the memory map and,
     // in its last bytes, the unaccepted table's header; the bitmap that header
     // begins follows it in the image's zero pages, so it arrives zero.
-    EFI_PAGE = 0x0040_0000;
+    EFI_PAGE = 0x0015_0000;
     EFI_CONFIG_TABLE = 0x80;
     EFI_VENDOR = 0xa0;
     // The memory map: a descriptor the image measures for this page, then the
@@ -127,8 +127,8 @@ layout! {
     // RAM ranges as pairs, an end of zero meaning the top of RAM.
     SHAPE_RAM_COUNT = 160;
     SHAPE_RAM = 168;
-    SHAPE_RAM_MAX = 5;
-    SHAPE_E820 = 256;
+    SHAPE_RAM_MAX = 8;
+    SHAPE_E820 = 320;
     SHAPE_E820_MAX = 32;
     SHAPE_EFI = SHAPE_E820 + SHAPE_E820_MAX * E820_ENTRY_LEN;
     SHAPE_EFI_MAX = 16;
@@ -226,7 +226,8 @@ const _: () = assert!(BSP_STACK_TOP <= SHAPES_PAGE && SHAPES_PAGE + SHAPES_SIZE 
 // kernel, the bitmap in a gap of the measured map that the image fills with
 // zero pages: the header the shim sizes runs into it.
 const _: () = assert!(KERNEL_SETUP_END <= EFI_PAGE && EFI_PAGE.is_multiple_of(PAGE));
-const _: () = assert!(UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE <= KERNEL_BASE);
+// Both in the first unit, which arrives accepted for Linux's legacy scans.
+const _: () = assert!(UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE <= UNACCEPTED_UNIT);
 const _: () = assert!(UNACCEPTED_UNIT == 1 << UNACCEPTED_UNIT_SHIFT);
 // The bitmap has a bit for every unit the identity map reaches.
 const _: () = assert!(UNACCEPTED_BITMAP_SIZE * 8 * UNACCEPTED_UNIT >= MAX_MEMORY);

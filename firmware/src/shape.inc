@@ -114,11 +114,10 @@ shape_apply:
     ret
 
 # A bit in the unaccepted bitmap for each whole unit of the shape's RAM ranges,
-# for Linux to accept as it allocates. The image built them to start at or
-# past the lazy bound and to leave out the units that are the shim's
-# (boot::span_units): those it places a page in, and the guard after each,
-# which it fills with measured zero pages, so all arrive accepted. Nothing
-# else is marked:
+# for Linux to accept as it allocates. The image built them to leave out the
+# units that arrive accepted (boot::early_units): the first, those it places a
+# page in, the guard after the initramfs and the decompressor's, which it
+# fills out with measured zero pages. Nothing else is marked:
 # Linux also accepts the unit after a range it accepts whenever that unit's
 # bit is set, so a bit past the end of RAM would send it to accept memory no
 # one backed. The bitmap is accepted RAM, and so zero, by now.

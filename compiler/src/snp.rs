@@ -824,13 +824,13 @@ mod tests {
             (spans, loaded)
         };
         let (spans, loaded) = declared();
-        let params = Params::snp(DEFAULT_CBIT, "").unwrap();
-        let launch = tinfoil_firmware::snp(&k, &i, &params).unwrap();
         assert_eq!(
             spans, loaded,
             "the image requires something it does not load"
         );
-        assert!(spans.iter().any(|(lo, hi)| *lo == 0 && launch.lazy <= *hi));
+        assert!(spans
+            .iter()
+            .any(|(lo, hi)| *lo == 0 && UNACCEPTED_UNIT <= *hi));
         // Nothing the image loads is left out, so nothing is imported into
         // memory a loader was never told to have.
         assert!(spans

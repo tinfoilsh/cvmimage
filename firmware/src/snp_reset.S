@@ -13,9 +13,9 @@
 snp_reset_start:
     # The guest's map is one of the shapes the image measured: its E820 and
     # EFI tables are copied, and only the top of RAM is the loader's to say.
-    # RAM below the lazy bound arrives validated, as measured pages; past it,
-    # Linux converts and validates the units it allocates, finding them in
-    # the EFI table efi.rs describes.
+    # The RAM Linux needs before it can accept any arrives validated, as
+    # measured pages; the rest Linux converts and validates as it allocates,
+    # finding the units it has to in the EFI table efi.rs describes.
     call shape_match
     mov $ZERO_PAGE, %edi
     call shape_apply
@@ -63,8 +63,7 @@ fatal:
 madt_template:
     madt_header
 
-    # The entry point, the shape count, the lazy bound and the ranges to
-    # accept, all written here by the builder.
+    # The entry point and the shape count, written here by the builder.
     .org SHIM_DATA
 shim_data:
     .fill SHIM_DATA_SIZE,1,0

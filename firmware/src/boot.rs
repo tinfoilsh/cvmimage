@@ -49,6 +49,10 @@ pub struct KernelInfo {
     pub setup_bytes: usize,
     pub init_size: u32,
     pub cmdline_max: u32,
+    /// The decompressor's own size, .bss included (`ZO__end`): what it moves
+    /// itself to the top of its init_size buffer as, before it can accept
+    /// anything.
+    pub decompressor_size: u64,
 }
 
 pub fn parse_bzimage(image: &[u8]) -> Result<KernelInfo, String> {
@@ -92,11 +96,47 @@ pub fn parse_bzimage(image: &[u8]) -> Result<KernelInfo, String> {
     if setup_bytes + ENTRY_64_OFFSET as usize >= image.len() {
         return Err("bzImage has no protected-mode payload".into());
     }
+    let init_size = get32(image, HDR_INIT_SIZE);
+    let decompressor_size = decompressor_size(&image[setup_bytes..], init_size as u64)?;
     Ok(KernelInfo {
         setup_bytes,
-        init_size: get32(image, HDR_INIT_SIZE),
+        init_size,
         cmdline_max: get32(image, HDR_CMDLINE_SIZE),
+        decompressor_size,
     })
+}
+
+/// The 64-bit entry of x86's compressed kernel loads init_size and takes the
+/// decompressor's size off it, `movl BP_init_size(%rsi), %ebx; subl
+/// $rva(_end), %ebx` (arch/x86/boot/compressed/head_64.S), to find where it
+/// moves itself to. The header states no other way to learn that size, so it
+/// is read out of that instruction, and a kernel without it is refused rather
+/// than guessed at: the decompressor runs there before it can accept memory.
+const DECOMPRESSOR_SIZE_LOAD: [u8; 8] = [0x8b, 0x9e, 0x60, 0x02, 0x00, 0x00, 0x81, 0xeb];
+
+fn decompressor_size(payload: &[u8], init_size: u64) -> Result<u64, String> {
+    let entry = &payload[..payload.len().min(PAGE as usize)];
+    let mut found = entry
+        .windows(DECOMPRESSOR_SIZE_LOAD.len() + 4)
+        .filter(|w| w[..DECOMPRESSOR_SIZE_LOAD.len()] == DECOMPRESSOR_SIZE_LOAD)
+        .map(|w| get32(w, DECOMPRESSOR_SIZE_LOAD.len()) as u64);
+    let (Some(size), None) = (found.next(), found.next()) else {
+        return Err("the decompressor's size is not stated once at its 64-bit entry".into());
+    };
+    if !size.is_multiple_of(PAGE) || size < payload.len() as u64 || size > init_size {
+        return Err(format!(
+            "decompressor size {size:#x} is not a page-aligned size between the payload's and init_size"
+        ));
+    }
+    Ok(size)
+}
+
+/// Where the decompressor runs before it can accept memory: its own size,
+/// moved to the top of the init_size buffer at KERNEL_BASE. Its stack, heap,
+/// page tables and boot GHCB are there (compressed/head_64.S, misc.c, sev.c).
+pub fn decompressor_area(info: KernelInfo) -> (u64, u64) {
+    let top = KERNEL_BASE + info.init_size as u64;
+    (top - info.decompressor_size, top)
 }
 
 /// The zero page, minus the E820 map: that table depends on the RAM the guest
@@ -392,47 +432,55 @@ pub fn complement(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
     out
 }
 
-/// The units past the lazy bound that arrive accepted rather than being left
-/// to Linux: each one a RAM span of the image's places a page in, and the one
-/// after the span's end. The image's pages arrive accepted, so Linux accepting
-/// their unit again would terminate the guest; and Linux frees some of those
-/// pages later (the initramfs) without the guard it keeps after memory it
-/// accepts itself, so the next unit must be accepted for
-/// `load_unaligned_zeropad()` to read into, as an EFI loader leaves it.
-pub fn span_units(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
-    spans
-        .iter()
-        .filter(|(_, hi, kind)| *kind == RAM && *hi >= lazy)
-        .map(|(lo, hi, _)| {
-            let lo = (*lo).max(lazy) / UNACCEPTED_UNIT * UNACCEPTED_UNIT;
-            (lo, hi / UNACCEPTED_UNIT * UNACCEPTED_UNIT + UNACCEPTED_UNIT)
-        })
-        .collect()
+/// The 2 MiB units that arrive accepted, the rest of RAM being left to Linux
+/// to accept as it allocates (linux-7.0, read against the bzImage rc.10 ships):
+///
+/// - the first, which Linux reads before it accepts anything: the BIOS data
+///   area, and on TDX the legacy scans of [0, 1 MiB) (setup.c, ebda.c);
+/// - every unit the image places a page in: those pages arrive accepted, so
+///   Linux accepting their unit would accept them twice and stop the guest;
+/// - after a RAM span that ends on a unit, the next unit too. Linux frees the
+///   initramfs through free_reserved_area(), without the guard it keeps after
+///   memory it accepts itself, and load_unaligned_zeropad() reads past it;
+/// - the decompressor's area (`decompressor_area`), where it runs before it
+///   can accept anything. The kernel it writes out it accepts itself
+///   (compressed/misc.c), whichever address KASLR picks.
+///
+/// Every span that does not lie in RAM is left out: no unit of it is RAM to
+/// accept. Merged and in ascending order.
+pub fn early_units(spans: &[Region], area: (u64, u64)) -> Vec<(u64, u64)> {
+    let unit = UNACCEPTED_UNIT;
+    let mut units = vec![(0, unit), (area.0 / unit * unit, align_up(area.1, unit))];
+    for (lo, hi, kind) in spans.iter().filter(|(lo, _, _)| *lo < Q35_LOWMEM) {
+        let end = if *kind == RAM {
+            hi / unit * unit + unit
+        } else {
+            align_up(*hi, unit)
+        };
+        units.push((lo / unit * unit, end));
+    }
+    units.sort_unstable();
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    for (lo, hi) in units {
+        match out.last_mut() {
+            Some(last) if lo <= last.1 => last.1 = last.1.max(hi),
+            _ => out.push((lo, hi)),
+        }
+    }
+    out
 }
 
 /// The RAM the image fills with measured zero pages, so that it arrives
-/// accepted: all of it below the lazy bound the image did not otherwise place,
-/// which the decompressor uses before Linux's acceptance runs, and what it
-/// leaves free of the units past it that are not Linux's (`span_units`), none
-/// of which a shape marks.
-pub fn zero_ranges(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
-    let mut cover = vec![(0, lazy)];
-    cover.extend(span_units(spans, lazy));
-    cover.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::new();
-    let mut done = 0;
-    for (lo, hi) in cover {
-        if hi <= done {
-            continue;
-        }
-        let lo = lo.max(done);
-        for (a, b) in complement(spans, hi) {
-            let a = a.max(lo);
+/// accepted: what its early units (`early_units`) hold beyond its own spans.
+pub fn zero_ranges(spans: &[Region], early: &[(u64, u64)]) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    for (lo, hi) in early {
+        for (a, b) in complement(spans, *hi) {
+            let a = a.max(*lo);
             if a < b {
                 out.push((a, b));
             }
         }
-        done = hi;
     }
     out
 }
@@ -537,18 +585,22 @@ pub fn qemu_shapes(amd: bool, least: u64) -> Vec<Shape> {
 
 /// The least RAM below the aperture an image runs in: everything it placed
 /// there, and all the RAM it delivers accepted.
-pub fn least_memory(spans: &[Region], lazy: u64) -> u64 {
-    span_units(spans, lazy).iter().map(|u| u.1).fold(
-        align_up(min_memory(spans).max(lazy), UNACCEPTED_UNIT),
-        u64::max,
-    )
+pub fn least_memory(spans: &[Region], early: &[(u64, u64)]) -> u64 {
+    early
+        .iter()
+        .map(|u| u.1)
+        .fold(align_up(min_memory(spans), UNACCEPTED_UNIT), u64::max)
 }
 
 /// One shape as the record a shim matches the loader's map against and copies
 /// its tables from (see SHAPE_* in layout.rs). Everything about the shape that
 /// does not depend on where its variable entry ends is fixed here, and checked
 /// to stay fixed however far between its bounds that end moves.
-pub fn shape_record(shape: &Shape, spans: &[Region], lazy: u64) -> Result<Vec<u8>, String> {
+pub fn shape_record(
+    shape: &Shape,
+    spans: &[Region],
+    early: &[(u64, u64)],
+) -> Result<Vec<u8>, String> {
     let unit = |v: u64| v.is_multiple_of(UNACCEPTED_UNIT);
     let (var_lo, _, var_kind) = shape.entries[shape.var];
     if shape.entries.len() > SHAPE_MAP_MAX as usize
@@ -590,40 +642,36 @@ pub fn shape_record(shape: &Shape, spans: &[Region], lazy: u64) -> Result<Vec<u8
         ));
     }
     let efi: Vec<Region> = e820.iter().copied().filter(|e| e.2 == RAM).collect();
-    // RAM a shim marks for Linux to accept: whole units past the lazy bound
-    // but those that arrive accepted (`span_units`), the last piece of the
-    // variable range running to the top of RAM. Each of those lies in RAM the
-    // shape has, since the image fills it with zero pages, and nothing else
-    // the image places past the bound may lie there, since it would arrive
-    // accepted and be marked.
+    // RAM a shim marks for Linux to accept: every whole unit but those that
+    // arrive accepted (`early_units`), the last piece of the variable range
+    // running to the top of RAM. Each of those lies in RAM the shape has,
+    // since the image fills it with zero pages, and no span the image places
+    // in RAM lies outside them, since it would arrive accepted and be marked.
     let map = shape.map(shape.min_end);
     let in_ram = |lo: u64, hi: u64| {
         map.iter()
             .any(|(m, len, kind)| *kind == MAP_MEMORY && *m <= lo && hi <= m + len)
     };
-    let owned = span_units(spans, lazy);
-    if let Some(u) = owned.iter().find(|(lo, hi)| !in_ram(*lo, *hi)) {
+    if let Some(u) = early.iter().find(|(lo, hi)| !in_ram(*lo, *hi)) {
         return Err(format!(
             "{:#x} the image delivers accepted is no RAM of {shape:?}",
             u.0
         ));
     }
-    if let Some(s) = spans.iter().find(|(lo, hi, kind)| {
-        *kind != RAM
-            && *hi > lazy
-            && map
-                .iter()
-                .any(|(m, len, k)| *k == MAP_MEMORY && *lo < m + len && *m < *hi)
+    if let Some(s) = spans.iter().find(|(lo, hi, _)| {
+        map.iter()
+            .any(|(m, len, k)| *k == MAP_MEMORY && *lo < m + len && *m < *hi)
+            && !early.iter().any(|(a, b)| a <= lo && hi <= b)
     }) {
-        return Err(format!("{:#x} is placed in RAM past the lazy bound", s.0));
+        return Err(format!("{:#x} is placed in RAM no early unit holds", s.0));
     }
     let mut ram: Vec<(u64, u64)> = Vec::new();
     for (n, (lo, len, kind)) in map.iter().enumerate() {
-        let (mut at, end) = ((*lo).max(lazy), lo + len);
+        let (mut at, end) = (*lo, lo + len);
         if *kind != MAP_MEMORY || at >= end {
             continue;
         }
-        for (unit_lo, unit_hi) in &owned {
+        for (unit_lo, unit_hi) in early {
             if *unit_lo >= end || *unit_hi <= at {
                 continue;
             }
@@ -642,7 +690,6 @@ pub fn shape_record(shape: &Shape, spans: &[Region], lazy: u64) -> Result<Vec<u8
         || efi.len() > SHAPE_EFI_MAX as usize
         || ram.len() > SHAPE_RAM_MAX as usize
         || ram.iter().any(|(lo, hi)| !unit(*lo) || !unit(*hi))
-        || !unit(lazy)
     {
         return Err(format!("shape {shape:?} does not fit its record"));
     }
@@ -683,7 +730,11 @@ pub fn shape_record(shape: &Shape, spans: &[Region], lazy: u64) -> Result<Vec<u8
 }
 
 /// The measured shapes page: every shape's record, one after another.
-pub fn shapes_page(shapes: &[Shape], spans: &[Region], lazy: u64) -> Result<Vec<u8>, String> {
+pub fn shapes_page(
+    shapes: &[Shape],
+    spans: &[Region],
+    early: &[(u64, u64)],
+) -> Result<Vec<u8>, String> {
     if shapes.is_empty() || shapes.len() as u64 * SHAPE_LEN > SHAPES_SIZE {
         return Err(format!(
             "{} shapes do not fit the shapes page",
@@ -692,7 +743,7 @@ pub fn shapes_page(shapes: &[Shape], spans: &[Region], lazy: u64) -> Result<Vec<
     }
     let mut v = Vec::new();
     for shape in shapes {
-        v.extend(shape_record(shape, spans, lazy)?);
+        v.extend(shape_record(shape, spans, early)?);
     }
     v.resize(SHAPES_SIZE as usize, 0);
     Ok(v)
@@ -763,6 +814,36 @@ mod tests {
         map.push(Placed::host(ACPI_BASE));
         assert!(validate(&map).is_err());
         assert!(validate(&map[..1]).is_ok());
+    }
+
+    /// The decompressor's size is read from the one instruction that states
+    /// it, and anything else is refused rather than guessed at.
+    #[test]
+    fn the_decompressor_size_is_read_from_its_entry_or_refused() {
+        let payload = |at: usize, size: u32, twice: bool| {
+            let mut p = vec![0u8; 0x2000];
+            let mut put = |at: usize| {
+                p[at..at + 8].copy_from_slice(&DECOMPRESSOR_SIZE_LOAD);
+                p[at + 8..at + 12].copy_from_slice(&size.to_le_bytes());
+            };
+            put(at);
+            if twice {
+                put(at + 0x40);
+            }
+            p
+        };
+        assert_eq!(
+            decompressor_size(&payload(0x236, 0x3000, false), 0x20_0000),
+            Ok(0x3000)
+        );
+        // Not there, twice, unaligned, smaller than the payload, past init_size.
+        assert!(decompressor_size(&vec![0u8; 0x2000], 0x20_0000).is_err());
+        assert!(decompressor_size(&payload(0x236, 0x3000, true), 0x20_0000).is_err());
+        assert!(decompressor_size(&payload(0x236, 0x3001, false), 0x20_0000).is_err());
+        assert!(decompressor_size(&payload(0x236, 0x1000, false), 0x20_0000).is_err());
+        assert!(decompressor_size(&payload(0x236, 0x30_0000, false), 0x20_0000).is_err());
+        // Only the entry page is searched.
+        assert!(decompressor_size(&payload(0x1100, 0x3000, false), 0x20_0000).is_err());
     }
 
     #[test]

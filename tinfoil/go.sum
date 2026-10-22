@@ -99,8 +99,8 @@ github.com/tinfoilsh/tinfoil-config v0.1.17 h1:MU2ENuroO2gxIF+n/Rw9KGNgQje+9H5bT
 github.com/tinfoilsh/tinfoil-config v0.1.17/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
 github.com/tinfoilsh/tinfoil-config v0.1.18 h1:I0R2hxEj7AbGSufup0wVZie8c9QXpwfqph0szL3f0+o=
 github.com/tinfoilsh/tinfoil-config v0.1.18/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
-github.com/tinfoilsh/tinfoil-config v0.1.19-0.20261022174819-29980dfc867c h1:5PAgyuD7XmQTleQ7+6HnpDT0DmqRQm2hpyhKVlshtHY=
-github.com/tinfoilsh/tinfoil-config v0.1.19-0.20261022174819-29980dfc867c/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
+github.com/tinfoilsh/tinfoil-config v0.1.19-0.20261022223447-cb03230cefb9 h1:Ls1DspvzsqMAdEG71am2auSoI123n9hMFpxBcBr5QhA=
+github.com/tinfoilsh/tinfoil-config v0.1.19-0.20261022223447-cb03230cefb9/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.2.0.20261012221336-4e83c0ce632f h1:b2tVCwOIDo6F5Gl7OglVM00Y8qSYGP6EJB+r7xPtHCk=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.2.0.20261012221336-4e83c0ce632f/go.mod h1:1zCk7XLvOEkVcb5sLTNf2oeNhzhLP+D8ESO07wXDI50=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=

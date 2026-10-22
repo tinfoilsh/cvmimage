@@ -293,23 +293,24 @@ Two consequences the digest hides:
 
 ## Releases
 
-A cvmimage version tag publishes `cvmc` alongside the kernel, initramfs and
-root disk it was built against. The release manifest records the SHA-256 of
-each complete IGVM image, including its guest firmware, under
-`igvm.variants.cpu` and `igvm.variants.gpu`. Each variant contains `snp` and
-`tdx` artifact hashes, `snp_launch` and `tdx_launch` measurements, and its
-kernel, initramfs, root disk and measured command line. The release manifest
-uses `igvm.format_version: 2`; compiler manifests retain their own format.
+A cvmimage version tag publishes `cvmc` alongside separate CPU and GPU images.
+Each image has a format 1 manifest recording its kernel, initramfs, root disk,
+measured command line, SNP and TDX artifact hashes, and launch measurements.
+Compiler manifests retain their own format.
 
-A config pin such as `0.15.0+gpu@sha256:<manifest digest>` selects the GPU
-measurements. Without a selector it selects CPU. The verifier chooses SNP or
-TDX from the authenticated quote, then checks only that variant's measurements.
-The approved config hash remains bound through SNP `HOST_DATA` or TDX
-`MRCONFIGID`. Both variants use the same base release tag and manifest digest.
-Format 1 manifests retain their original behavior and do not accept selectors.
+The `v0.15.0` release publishes `tinfoil-inference-v0.15.0-manifest.json` and
+`tinfoil-inference-v0.15.0+gpu-manifest.json`, each with its own digest and
+build-provenance subject. Configs pin `0.15.0@sha256:<cpu-manifest-digest>` or
+`0.15.0+gpu@sha256:<gpu-manifest-digest>`. The full version identifies the
+manifest and its artifacts; the base version identifies the release workflow.
 
-Artifact names end in `-cpu` or `-gpu` before the extension. The compiler
-binary and the shared manifest have build-provenance attestations.
+ATC supplies the pinned manifest and its provenance and freshness endorsements.
+The verifier checks the exact manifest digest and version, then compares its
+SNP or TDX measurements with the authenticated quote. The approved config hash
+remains bound through SNP `HOST_DATA` or TDX `MRCONFIGID`.
+
+GPU artifact names include `+gpu` after the version; CPU names retain the base
+version. All published artifacts have build-provenance attestations.
 
 ```sh
 curl -O https://images.tinfoil.sh/cvm/cvmc-v1.2.3

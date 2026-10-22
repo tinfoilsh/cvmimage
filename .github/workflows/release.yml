@@ -12,7 +12,8 @@ jobs:
     name: Release
     runs-on: large
     outputs:
-      config-pin: ${{ steps.manifest-digest.outputs.config-pin }}
+      cpu-pin: ${{ steps.manifest-digest.outputs.cpu-pin }}
+      gpu-pin: ${{ steps.manifest-digest.outputs.gpu-pin }}
       prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
     permissions:
       contents: write
@@ -67,14 +68,20 @@ jobs:
             result-cpu result-gpu result-cvmc/bin/cvmc
           echo "RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
 
-      - name: Hash the manifest
+      - name: Hash the manifests
         id: manifest-digest
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
-          manifest_sha256="$(sha256sum "$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')"
-          echo "config-pin=${REF_NAME#v}@sha256:${manifest_sha256}" >> "$GITHUB_OUTPUT"
+          for variant in cpu gpu; do
+            version="$REF_NAME"
+            if [ "$variant" = gpu ]; then
+              version="${REF_NAME}+gpu"
+            fi
+            digest="$(sha256sum "$RELEASE_DIR/tinfoil-inference-${version}-manifest.json" | awk '{print $1}')"
+            echo "${variant}-pin=${version#v}@sha256:${digest}" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
@@ -87,25 +94,24 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_IMAGES_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: https://${{ secrets.R2_IMAGES_ACCOUNT_ID }}.r2.cloudflarestorage.com
           R2_BUCKET: ${{ secrets.R2_IMAGES_BUCKET }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
           aws="$(/nix/var/nix/profiles/default/bin/nix-build \
             --no-out-link -I . -A release-upload-cli)/bin/aws"
-          manifest="$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json"
           for file in "$RELEASE_DIR"/*; do
-            if [ "$file" = "$manifest" ]; then
+            if [[ "$file" == *-manifest.json ]]; then
               continue
             fi
             "$aws" s3 cp "$file" \
               "s3://${R2_BUCKET}/cvm/$(basename "$file")" \
               --only-show-errors --no-progress
           done
-          # Last: it is the index, and it names launch measurements for images
-          # that have to exist before anything reads it.
-          "$aws" s3 cp "$manifest" \
-            "s3://${R2_BUCKET}/cvm/$(basename "$manifest")" \
-            --only-show-errors --no-progress
+          # Publish manifests after the artifacts they reference.
+          for manifest in "$RELEASE_DIR"/*-manifest.json; do
+            "$aws" s3 cp "$manifest" \
+              "s3://${R2_BUCKET}/cvm/$(basename "$manifest")" \
+              --only-show-errors --no-progress
+          done
 
       - name: Create release
         env:
@@ -113,28 +119,23 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
           IS_PRERELEASE: ${{ steps.check-prerelease.outputs.is_prerelease }}
-          CONFIG_PIN: ${{ steps.manifest-digest.outputs.config-pin }}
+          CPU_PIN: ${{ steps.manifest-digest.outputs.cpu-pin }}
+          GPU_PIN: ${{ steps.manifest-digest.outputs.gpu-pin }}
         run: |
           set -Eeuo pipefail
-          manifest="$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json"
           PRERELEASE_FLAG=""
           if [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
           fi
 
+          notes="$RUNNER_TEMP/release-notes.md"
+          printf 'CPU image:\n\n    cvm-version: "%s"\n\nGPU image:\n\n    cvm-version: "%s"\n' "$CPU_PIN" "$GPU_PIN" > "$notes"
           gh release create "$REF_NAME" \
             -R "$REPOSITORY" \
             $PRERELEASE_FLAG \
-            --title "$REF_NAME" \
-            --notes "CPU config pin: \`${CONFIG_PIN}\`
-          GPU config pin: \`${CONFIG_PIN/@/+gpu@}\`
-
-          Both variants share this manifest. Artifact names include \`-cpu\` or \`-gpu\` before the extension.
-
-          \`\`\`json
-          $(cat "$manifest")
-          \`\`\`" \
+            --title "$REF_NAME" --notes-file "$notes" \
             "$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json" \
+            "$RELEASE_DIR/tinfoil-inference-${REF_NAME}+gpu-manifest.json" \
             "$RELEASE_DIR/tinfoil-inference-${REF_NAME}-checksums.sha256"
 
   update-readme:
@@ -171,12 +172,14 @@ jobs:
       - name: Update config pin
         if: steps.latest.outputs.update == 'true'
         env:
-          CONFIG_PIN: ${{ needs.release.outputs.config-pin }}
+          CPU_PIN: ${{ needs.release.outputs.cpu-pin }}
+          GPU_PIN: ${{ needs.release.outputs.gpu-pin }}
         run: |
           set -Eeuo pipefail
           test "$(grep -c '^cvm-version:' README.md)" -eq 1
+          CONFIG_PIN="$CPU_PIN"
           if grep -q '^cvm-version:.*+gpu@' README.md; then
-            CONFIG_PIN="${CONFIG_PIN/@/+gpu@}"
+            CONFIG_PIN="$GPU_PIN"
           fi
           sed -i "s|^cvm-version:.*|cvm-version: \"${CONFIG_PIN}\"|" README.md
 

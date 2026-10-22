@@ -16,9 +16,11 @@ The digest is the SHA-256 of the release's `tinfoil-inference-v<version>-manifes
 [Release notes](https://github.com/tinfoilsh/cvmimage/releases) include the complete
 config line; stable releases also update this example automatically.
 
-The default pin selects the CPU image. Add `+gpu` before `@sha256:` to select
-the GPU image from the same manifest. The selector is part of the approved
-config; `gpus` specifies the hardware count independently.
+The default pin selects the CPU image. For GPU support, use
+`<version>+gpu@sha256:<gpu-manifest-sha256>` with the digest of
+`tinfoil-inference-v<version>+gpu-manifest.json`. Each image has its own manifest
+and digest. The pin is part of the approved config; `gpus` specifies the hardware
+count independently.
 
 ## Building
 

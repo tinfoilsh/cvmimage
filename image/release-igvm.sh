@@ -6,25 +6,25 @@ output="$2"
 cpu_image="$3"
 gpu_image="$4"
 compiler="$5"
-manifest_format=2
+manifest_format=1
 compiler_manifest_format=4
 variants=(cpu gpu)
 platforms=(snp tdx)
 
 mkdir "$output"
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
 sha256() { sha256sum "$1" | awk '{print $1}'; }
 
 for variant in "${variants[@]}"; do
   image="$cpu_image"
+  artifact_version="$version"
   if [ "$variant" = gpu ]; then
     image="$gpu_image"
+    artifact_version="${version}+gpu"
   fi
   roothash="$(tr -d '\n' < "$image/tinfoilcvm.roothash")"
   cmdline="root=/dev/mapper/root roothash=$roothash pci=nocrs pcie_ports=compat"
   for platform in "${platforms[@]}"; do
-    igvm="$output/tinfoil-${platform}-${version}-${variant}.igvm"
+    igvm="$output/tinfoil-${platform}-${artifact_version}.igvm"
     "$compiler" build --platform "$platform" \
       --kernel "$image/tinfoilcvm.vmlinuz" \
       --initramfs "$image/tinfoilcvm.initrd" \
@@ -46,8 +46,8 @@ for variant in "${variants[@]}"; do
     fi
   done
 
-  snp="$output/tinfoil-snp-${version}-${variant}.igvm"
-  tdx="$output/tinfoil-tdx-${version}-${variant}.igvm"
+  snp="$output/tinfoil-snp-${artifact_version}.igvm"
+  tdx="$output/tinfoil-tdx-${artifact_version}.igvm"
   # cvmc appends no5lvl; publish the command line it actually measured.
   measured_cmdline="$(jq -er '.command_line' "$snp.manifest.json")"
   test "$measured_cmdline" = "$(jq -er '.command_line' "$tdx.manifest.json")"
@@ -57,6 +57,7 @@ for variant in "${variants[@]}"; do
   esac
 
   jq -n \
+    --arg version "$artifact_version" --argjson format "$manifest_format" \
     --arg root "$roothash" \
     --arg initrd "$(sha256 "$image/tinfoilcvm.initrd")" \
     --arg kernel "$(sha256 "$image/tinfoilcvm.vmlinuz")" \
@@ -65,17 +66,14 @@ for variant in "${variants[@]}"; do
     --arg cmdline "$measured_cmdline" \
     --argjson snp_launch "$(jq -c '.launch | {measurement}' "$snp.manifest.json")" \
     --argjson tdx_launch "$(jq -c '.launch | {mrtd, rtmr0, rtmr1, rtmr2, rtmr3}' "$tdx.manifest.json")" \
-    '{root: $root, initrd: $initrd, kernel: $kernel, raw: $raw,
-      snp: $snp, tdx: $tdx, snp_launch: $snp_launch, tdx_launch: $tdx_launch, cmdline: $cmdline}' \
-    > "$work/$variant.json"
+    '{version: $version, root: $root, initrd: $initrd, kernel: $kernel, raw: $raw,
+      igvm: {format_version: $format, snp: $snp, tdx: $tdx,
+        snp_launch: $snp_launch, tdx_launch: $tdx_launch, cmdline: $cmdline}}' \
+    > "$output/tinfoil-inference-${artifact_version}-manifest.json"
   for extension in initrd vmlinuz raw; do
-    cp "$image/tinfoilcvm.$extension" "$output/tinfoil-inference-${version}-${variant}.$extension"
+    cp "$image/tinfoilcvm.$extension" "$output/tinfoil-inference-${artifact_version}.$extension"
   done
 done
 
-jq -n --arg version "$version" --argjson format "$manifest_format" \
-  --slurpfile cpu "$work/cpu.json" --slurpfile gpu "$work/gpu.json" \
-  '{version: $version, igvm: {format_version: $format, variants: {cpu: $cpu[0], gpu: $gpu[0]}}}' \
-  > "$output/tinfoil-inference-${version}-manifest.json"
 cp "$compiler" "$output/cvmc-${version}"
 (cd "$output" && sha256sum ./* > "tinfoil-inference-${version}-checksums.sha256")

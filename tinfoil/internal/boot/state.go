@@ -2,6 +2,7 @@ package boot
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -158,24 +159,65 @@ func (t *Tracker) RecordSubstages(name string, substages []Stage) {
 }
 
 func (t *Tracker) flushLocked() error {
-	data, err := json.MarshalIndent(t.state, "", "  ")
+	return persistState(StatePath, &t.state)
+}
+
+// persistState writes state to path atomically.
+func persistState(path string, state *State) error {
+	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling boot state: %w", err)
 	}
-	return writeStateAtomic(StatePath, data)
+	return writeStateAtomic(path, data)
 }
 
 // Load reads the boot state from the ramdisk.
 func Load() (*State, error) {
-	data, err := os.ReadFile(StatePath)
+	return loadState(StatePath)
+}
+
+func loadState(path string) (*State, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", StatePath, err)
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parsing boot state: %w", err)
 	}
 	return &state, nil
+}
+
+// CompleteFailure seals a recorded boot failure after every state writer has
+// stopped. The status-only shim then serves the state read-only, and every
+// other writer refuses sealed states.
+func CompleteFailure() error {
+	return completeFailure(StatePath)
+}
+
+func completeFailure(path string) error {
+	state, err := loadState(path)
+	if err != nil {
+		return err
+	}
+	if !state.HasFailed() {
+		return fmt.Errorf("no failed boot stage recorded")
+	}
+	skipPending(state.Stages)
+	if state.CompletedAt.IsZero() {
+		state.CompletedAt = time.Now()
+	}
+	return persistState(path, state)
+}
+
+func skipPending(stages []Stage) {
+	for i := range stages {
+		if stages[i].Status == StatusPending {
+			stages[i].Status = StatusSkipped
+			stages[i].Detail = "not run because boot failed"
+		}
+		skipPending(stages[i].Stages)
+	}
 }
 
 // IsComplete returns true if all stages have resolved (no pending stages).
@@ -241,15 +283,28 @@ func boundedStateText(value string, limit int) string {
 	return value[:end] + "..."
 }
 
+// IsSealed reports whether the state is terminal: completed with a recorded
+// failure. Sealed states are immutable; every writer must refuse to alter one.
+func (s *State) IsSealed() bool {
+	return !s.CompletedAt.IsZero() && s.HasFailed()
+}
+
 // RecordStage loads the current state from disk, updates or appends a stage,
 // and writes it back. Safe to call from a separate process after boot has exited.
 func RecordStage(name, status string, duration time.Duration, detail string) error {
-	state, err := Load()
+	return recordStage(StatePath, name, status, duration, detail)
+}
+
+func recordStage(path, name, status string, duration time.Duration, detail string) error {
+	state, err := loadState(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("loading boot state: %w", err)
 		}
 		state = &State{StartedAt: time.Now()}
+	}
+	if state.IsSealed() {
+		return fmt.Errorf("boot state is sealed: refusing to record stage %q", name)
 	}
 	stage := Stage{Name: name, Status: status, Duration: duration, Detail: detail}
 	updated := false
@@ -263,23 +318,22 @@ func RecordStage(name, status string, duration time.Duration, detail string) err
 	if !updated {
 		state.Stages = append(state.Stages, stage)
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling boot state: %w", err)
-	}
-	return writeStateAtomic(StatePath, data)
+	return persistState(path, state)
 }
 
 // Complete sets CompletedAt on the persisted state.
 func Complete() error {
-	state, err := Load()
+	return complete(StatePath)
+}
+
+func complete(path string) error {
+	state, err := loadState(path)
 	if err != nil {
 		return fmt.Errorf("loading boot state: %w", err)
 	}
-	state.CompletedAt = time.Now()
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling boot state: %w", err)
+	if state.IsSealed() {
+		return errors.New("boot state is sealed: refusing to complete")
 	}
-	return writeStateAtomic(StatePath, data)
+	state.CompletedAt = time.Now()
+	return persistState(path, state)
 }

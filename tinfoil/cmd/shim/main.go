@@ -43,6 +43,7 @@ var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
 	attestationFD      = flag.Int("attestation-fd", noAttestationFD, "Inherited attestation Unix listener")
+	statusOnly         = flag.Bool("status-only", false, "Serve only boot status; never upgrade or write boot state")
 )
 
 const (
@@ -56,9 +57,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var handler atomic.Value
-	var cert atomic.Pointer[tls.Certificate]
-
 	// Start with an ephemeral self-signed cert and a minimal handler that
 	// serves only boot-stages. This lets the backend poll boot progress before
 	// boot has provisioned the real TLS cert and other artifacts.
@@ -66,8 +64,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to generate ephemeral cert: %v", err)
 	}
+	var cert atomic.Pointer[tls.Certificate]
 	cert.Store(&ephemeral)
 
+	var handler atomic.Value
 	handler.Store(http.HandlerFunc(bootStagesHandler().ServeHTTP))
 
 	tlsConfig := &tls.Config{
@@ -95,10 +95,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Wait for boot to provision artifacts, then upgrade to the full handler.
-	go upgradeWhenReady(&handler, &cert)
-
-	log.Printf("Starting tinfoil shim (waiting for boot)")
+	if *statusOnly {
+		// PID1 sealed the boot failure and restarted the shim solely so the
+		// host can read the terminal state. Never write boot state here.
+		log.Printf("Starting tinfoil shim (status-only)")
+	} else {
+		// Wait for boot to provision artifacts, then upgrade to the full handler.
+		go upgradeWhenReady(&handler, &cert)
+		log.Printf("Starting tinfoil shim (waiting for boot)")
+	}
 	if err := serveWithAttestation(ctx, srv, localListener); err != nil {
 		log.Fatal(err)
 	}

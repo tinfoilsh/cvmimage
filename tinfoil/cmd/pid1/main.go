@@ -112,6 +112,7 @@ type lifecycleDeps struct {
 	nvidia           func(context.Context) error
 	lockModules      func() error
 	debugFailure     func(context.Context, error)
+	reportFailure    func(context.Context, error) error
 	setupFS          func(pidruntime.LogFunc) error
 	sysctls          func(pidruntime.LogFunc) error
 	ramdisk          func(pidruntime.LogFunc) error
@@ -171,7 +172,45 @@ func run(parent context.Context) (result error) {
 		kill:             serviceKillGrace,
 		cmdline:          cmdline,
 	}
+	deps.reportFailure = func(ctx context.Context, failure error) error {
+		return reportFailure(ctx, manager, failure)
+	}
 	return runLifecycle(parent, deps, readiness)
+}
+
+// reportFailure seals the boot failure once every state writer has stopped and
+// serves it read-only until shutdown. No attestation listener is passed: the
+// workloads are gone, so only the host polls this shim over TLS.
+func reportFailure(ctx context.Context, manager *supervisor.Manager, failure error) error {
+	initLogf("boot failed: %v; retaining boot status after cleanup", failure)
+	if err := boot.CompleteFailure(); err != nil {
+		return fmt.Errorf("sealing boot failure: %w", err)
+	}
+	return serveBootFailure(ctx, supervisor.New(ctx, manager, supervisor.Config{}), nil, serviceTermGrace, serviceKillGrace)
+}
+
+// serveBootFailure runs the status-only shim under its own supervisor so
+// workload cleanup cannot stop the terminal status endpoint, and parks until
+// shutdown. It never publishes readiness or starts workloads.
+func serveBootFailure(
+	parent context.Context,
+	services serviceControl,
+	attestationSocket *os.File,
+	term, kill time.Duration,
+) (result error) {
+	defer func() {
+		drainErr := services.Drain([][]string{{shimName}}, term, kill)
+		if parent.Err() != nil {
+			result = drainErr
+		} else {
+			result = errors.Join(result, drainErr)
+		}
+	}()
+	if err := services.Start(parent, shimService(attestationSocket, true)); err != nil {
+		return err
+	}
+	<-parent.Done()
+	return nil
 }
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
@@ -187,19 +226,32 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}()
 	bootCtx := parent
 	runtimeCtx, cancelRuntime := context.WithCancel(parent)
+	// Registered first so it runs last (LIFO): on failure the debug console
+	// parks only after the terminal status shim is already up.
+	defer func() {
+		if result != nil && console != nil && deps.debugFailure != nil {
+			deps.debugFailure(parent, result)
+		}
+	}()
 	defer func() {
 		readiness.FailClosed()
 		cancelRuntime()
+		if localAttestationSocket != nil {
+			// Close before draining so the drained shim's inherited copy is the
+			// last reference and before the failure reporter rebinds the path.
+			localAttestationSocket.Close()
+			localAttestationSocket = nil
+		}
 		drainErr := deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
 		if parent.Err() != nil {
 			result = drainErr
 		} else {
 			result = errors.Join(result, drainErr)
 		}
-	}()
-	defer func() {
-		if result != nil && console != nil && deps.debugFailure != nil {
-			deps.debugFailure(parent, result)
+		// Only restart the status endpoint once every old state writer and
+		// workload has stopped. Normal shutdown must not start new services.
+		if result != nil && drainErr == nil && parent.Err() == nil && deps.reportFailure != nil {
+			result = errors.Join(result, deps.reportFailure(parent, result))
 		}
 	}()
 
@@ -261,16 +313,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err != nil {
 		return fmt.Errorf("local attestation socket: %w", err)
 	}
-	shimCommand := hardenedCommand(hardening.ServiceShim, boot.ShimBinary)
-	shimFD := shimCommand.AddExtraFile(localAttestationSocket)
-	shimCommand.Args = append(shimCommand.Args, fmt.Sprintf("--attestation-fd=%d", shimFD))
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: shimName, Required: true, Restart: true,
-		DrainUntilExit: true,
-		Command:        shimCommand,
-		Ready:          endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
-		PIDFile:        boot.ShimPIDPath,
-	}); err != nil {
+	if err := deps.services.Start(bootCtx, shimService(localAttestationSocket, false)); err != nil {
 		return err
 	}
 	bootCommand := hardenedCommand(
@@ -323,6 +366,26 @@ func withSecretHandoff(command supervisor.Command, handoff *os.File) supervisor.
 	childFD := command.AddExtraFile(handoff)
 	command.Args = append(command.Args, fmt.Sprintf("--secrets-fd=%d", childFD))
 	return command
+}
+
+// shimService builds the shim service spec shared by normal boot and the
+// post-failure status reporter. statusOnly sets the shim's --status-only flag.
+func shimService(attestationSocket *os.File, statusOnly bool) supervisor.Service {
+	shimCommand := hardenedCommand(hardening.ServiceShim, boot.ShimBinary)
+	if attestationSocket != nil {
+		shimFD := shimCommand.AddExtraFile(attestationSocket)
+		shimCommand.Args = append(shimCommand.Args, fmt.Sprintf("--attestation-fd=%d", shimFD))
+	}
+	if statusOnly {
+		shimCommand.Args = append(shimCommand.Args, "--status-only")
+	}
+	return supervisor.Service{
+		Name: shimName, Required: true, Restart: true,
+		DrainUntilExit: true,
+		Command:        shimCommand,
+		Ready:          endpointReady("tcp", "127.0.0.1:443", shimReadyLimit),
+		PIDFile:        boot.ShimPIDPath,
+	}
 }
 
 type nvidiaBootstrapControl interface {

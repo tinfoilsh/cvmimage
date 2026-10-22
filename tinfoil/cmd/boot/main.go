@@ -137,7 +137,7 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
 
-	if err := attestGPU(config, tracker); err != nil {
+	if err := attestGPU(config, tracker.Record); err != nil {
 		return err
 	}
 

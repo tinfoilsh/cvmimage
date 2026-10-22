@@ -13,14 +13,20 @@ import (
 func TestRestrictShimFilesystemsBindsOnlyAttestationDevices(t *testing.T) {
 	kernel := &fakeFilesystemKernel{kinds: map[string]devicePathKind{
 		tdxReportSource: devicePathDirectory,
-		filepath.Join(attestationDeviceSource, "null"):               devicePathNode,
-		filepath.Join(attestationDeviceSource, "tdx_guest"):          devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidiactl"):          devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia0"):            devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia-caps"):        devicePathDirectory,
-		filepath.Join(attestationDeviceSource, "nvidia-nvswitchctl"): devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia-nvlink"):      devicePathNode,
 	}}
+	var want []mountCall
+	names := append([]string{"null", "tdx_guest", "sev-guest"}, gpuDeviceFixture()...)
+	for _, name := range names {
+		source := filepath.Join(attestationDeviceSource, name)
+		kind := devicePathNode
+		flags := uintptr(unix.MS_BIND)
+		if name == "nvidia-caps" {
+			kind = devicePathDirectory
+			flags |= unix.MS_REC
+		}
+		kernel.kinds[source] = kind
+		want = append(want, mountCall{source: source, target: "/dev/" + name, flags: flags})
+	}
 	if err := restrictServiceFilesystems(kernel, true); err != nil {
 		t.Fatalf("restrictServiceFilesystems: %v", err)
 	}
@@ -30,15 +36,6 @@ func TestRestrictShimFilesystemsBindsOnlyAttestationDevices(t *testing.T) {
 		if strings.HasPrefix(call.source, attestationDeviceSource+"/") {
 			bindings = append(bindings, call)
 		}
-	}
-	want := []mountCall{
-		{source: filepath.Join(attestationDeviceSource, "null"), target: "/dev/null", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "tdx_guest"), target: "/dev/tdx_guest", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidiactl"), target: "/dev/nvidiactl", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidia-caps"), target: "/dev/nvidia-caps", flags: unix.MS_BIND | unix.MS_REC},
-		{source: filepath.Join(attestationDeviceSource, "nvidia-nvswitchctl"), target: "/dev/nvidia-nvswitchctl", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidia-nvlink"), target: "/dev/nvidia-nvlink", flags: unix.MS_BIND},
-		{source: filepath.Join(attestationDeviceSource, "nvidia0"), target: "/dev/nvidia0", flags: unix.MS_BIND},
 	}
 	if !reflect.DeepEqual(bindings, want) {
 		t.Fatalf("attestation bindings = %#v, want %#v", bindings, want)

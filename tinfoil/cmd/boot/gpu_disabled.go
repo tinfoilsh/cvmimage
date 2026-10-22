@@ -4,13 +4,16 @@ package main
 
 import (
 	"fmt"
+	"time"
 	"tinfoil/internal/boot"
 )
 
-func attestGPU(config *Config, tracker *boot.Tracker) error {
+func attestGPU(config *Config, record func(string, string, time.Duration, string)) error {
 	if config.GPUs != 0 {
-		return fmt.Errorf("CPU runtime does not support GPUs")
+		err := fmt.Errorf("CPU runtime does not support GPUs")
+		record(boot.StageGPUAttestation, boot.StatusFailed, 0, err.Error())
+		return err
 	}
-	tracker.Record("gpu-attestation", boot.StatusSkipped, 0, "CPU runtime")
+	record("gpu-attestation", boot.StatusSkipped, 0, "CPU runtime")
 	return nil
 }

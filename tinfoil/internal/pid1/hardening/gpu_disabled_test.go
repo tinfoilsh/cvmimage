@@ -11,9 +11,14 @@ import (
 func TestCPUAttestationViewExcludesGPUDevices(t *testing.T) {
 	kernel := &fakeFilesystemKernel{kinds: map[string]devicePathKind{
 		filepath.Join(attestationDeviceSource, "sev-guest"): devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidia0"):   devicePathNode,
-		filepath.Join(attestationDeviceSource, "nvidiactl"): devicePathNode,
 	}}
+	for _, name := range gpuDeviceFixture() {
+		kind := devicePathNode
+		if name == "nvidia-caps" {
+			kind = devicePathDirectory
+		}
+		kernel.kinds[filepath.Join(attestationDeviceSource, name)] = kind
+	}
 	if err := restrictServiceFilesystems(kernel, true); err != nil {
 		t.Fatal(err)
 	}

@@ -32,8 +32,10 @@ before launch, and that makes anything loaded after the initial measurement
 harder to account for.
 
 `cvmc` prepares the whole boot environment at build time, so boot reduces to a
-4 KiB reset shim that establishes processor state, initializes private RAM, and
-enters Linux.
+4 KiB reset shim that checks the host's memory map against the layouts the
+image measured, fills in the end of RAM and the processor count, and enters
+Linux. It accepts no memory: the loader delivers what Linux needs accepted, as
+measured pages, and Linux accepts the rest itself.
 
 ## Design
 
@@ -41,84 +43,39 @@ At build time the compiler validates the `bzImage`, places the kernel and
 initramfs, and constructs the zero page, ACPI tables, GDT, stack, command line
 and identity page tables.
 
-Pages already imported must not be accepted or validated again, so the build
-produces one placement map, covering the pages imported from the IGVM file and
-carried in the shim's own page. Everything that describes the guest's memory —
-the E820 map Linux is handed and the ranges the shim initializes — follows from
-that map and from what the loader says the machine is, and is built at boot.
+Everything the guest is handed is decided at build time from one placement
+map, and measured, but two numbers the host chooses after the measurement is
+closed: the processor count and how much RAM the guest has. Measuring either
+would bind every image to one machine. The image declares two IGVM parameter
+areas, one page each; a loader deposits the processor count in the first and
+its memory map in the second. Each area's address, size and kind enter the
+measurement; only the contents do not, and both are untrusted.
 
-Two things the image would otherwise carry depend on the size of the machine,
-and measuring either would bind every image to one machine:
+The shim (`firmware/src/shape.inc`, `madt.inc`) then:
 
-- the **Multiple APIC Description Table (MADT)**, which lists one entry per
-  processor, and
-- the **E820 map** in the zero page and the list of ranges the shim initializes,
-  both of which depend on how much RAM the guest has.
+- **matches the memory map against the image's shapes.** The image measures
+  each layout QEMU's q35 gives the guests tinfoild launches (`boot::qemu_shapes`:
+  all RAM below 4 GiB; split at 4 GiB; on AMD, moved past HyperTransport to
+  1 TiB), each with its E820 table and EFI descriptors. The loader's map has to
+  be one of them entry for entry, with only the end of one RAM entry free within
+  the shape's measured bounds. Anything else terminates the guest. The shim
+  copies that shape's tables and sets the end;
+- **marks the units Linux accepts** in the unaccepted-memory bitmap (see Lazy
+  acceptance);
+- **builds the MADT** from the processor count, refusing one outside
+  1..=`MAX_VCPUS`;
+- jumps to `startup_64` with the zero page in `%rsi`.
 
-So the image declares two IGVM parameter areas instead, one page each. A loader
-deposits the processor count in the first and its own memory map in the second,
-and the shim builds all three tables at boot. The measured ACPI page stops where
-the MADT begins, the zero page leaves its E820 table zero, and the shim's own
-page carries the fixed half of the MADT and the list of spans this image placed.
-Each area's address, size and parameter kind enter the measurement; only the
-contents do not.
+On TDX it first switches from 32-bit mode to long mode on the measured page
+tables, and parks application processors in the ACPI wakeup mailbox. On SEV-SNP
+the measured save area starts the boot processor in long mode, and Linux brings
+up the other processors itself through the GHCB AP-creation call, so only the
+boot processor's save area is measured and the processor count stays out of the
+measurement. The SNP shim exits to the host only to terminate, through the GHCB
+MSR protocol; neither shim does port I/O.
 
-Both parameters are untrusted, because the host writes them after the
-measurement is closed. A processor count outside 1..=`MAX_VCPUS` terminates the
-shim rather than being clamped.
-
-The loader's memory map is not copied anywhere. What the shim takes from it is
-where the guest's RAM begins and ends and where it does not: the gaps between
-its extents are the windows the guest's devices are given, and anything the map
-marks as something other than memory is reserved. The shim merges those regions
-with the spans its own measured page lists, and builds the E820 table and the
-accept list from the merged list by the same rules `boot::e820` and
-`boot::accept_ranges` state. So nothing outside the RAM the host described is
-ever accepted as private memory, no aperture is claimed as RAM, and every page
-the image itself placed keeps its own entry -- including the reset page, which
-sits inside an aperture and must not be handed to a device.
-
-Every layout decision downstream of those extents stays the image's. The map
-itself has to be one this image can run in, and terminates the shim rather than
-being clamped if it is not: its extents must ascend without overlapping, must
-not wrap, must not reach past what the measured page tables map, and the first
-of them must be the memory the loader loaded this image into, reaching at least
-as far as the last page it placed. An E820 table that would overrun
-`boot_params` terminates it too, rather than being truncated.
-
-An extent that *starts* at or past the end of the mapped range ends the walk
-instead: there is nothing there for this image to describe, and a host is free
-to say what it likes about addresses the guest will never touch. Everything
-below the top of RAM has already been described by then, so the rest of the map
-is ignored rather than refused — including a map longer than the shim reads,
-which is otherwise refused rather than described in part.
-
-Taking the extents rather than assuming them is what lets one image run on a
-machine laid out differently from the usual q35 one -- QEMU restacks a large
-guest's memory above 1 TiB on AMD hosts, past the HyperTransport range it
-reserves (`hw/i386/pc.c`) -- and it is what keeps the accept list clear of the
-64-bit windows a passed-through device's BARs are assigned out of, which lie
-above the RAM the map describes.
-
-The RAM does not either, and the file no longer asks a loader for it. What an
-SEV-SNP image requires is the pages it loads and nothing else, because a loader
-with no memory backed under them cannot import them; the rest of the guest's
-RAM is the shim's own to convert, which it asks its host for a batch at a time
-before validating each range. So the file does not move with the guest size.
-
-On TDX every image page contributes to the measurement register for the trust
-domain (MRTD). The shim enters long mode, parks
-application processors in the ACPI wakeup mailbox, accepts the private RAM
-Linux needs before it can accept memory itself, and jumps to Linux.
-
-On SEV-SNP the digest covers the normal pages and the boot processor's VMSA.
-The shim enters long mode, makes private, validates and clears the RAM Linux
-needs before it can accept memory itself, and jumps to Linux.
-
-It starts no application processor. Only the boot processor is given a save
-area, and Linux brings the rest up itself through the Guest-Hypervisor
-Communication Block (GHCB) AP-creation call, building each save area in its own
-private memory. That is what keeps the processor count out of the measurement.
+On TDX every image page contributes to MRTD. On SEV-SNP the digest covers the
+normal pages and the boot processor's VMSA.
 
 The SNP image reaches Linux through a confidential-computing blob on the
 `setup_data` chain. The record and the blob share one measured page of E820 RAM
@@ -129,14 +86,10 @@ outside the RAM map, leaving every PCI device without an MSI domain.
 There is no later measured boot. No RTMR is extended, no event log is produced,
 and no DICE identity is derived.
 
-The measured ACPI tables describe Q35's power-management (PM) event and control
-registers, the I/O APIC, the ACPI system control interrupt (SCI) and the S5
-soft-off state. Before entering Linux, the boot processor maps the PM registers
-through the LPC bridge's PCI configuration space, with four fixed writes made
-through its platform's I/O hypercall. Linux's tiny power-button driver delivers
-a host power-down request to PID 1 as SIGTERM; after draining services, PID 1
-enters S5. `pci=noacpi` would stop the SCI being routed, so the command line
-uses `pci=nocrs`, which gives the PCI root all of I/O and memory space as before.
+The measured FADT is hardware-reduced: there are no PM registers, no SCI
+handling of power events and no `_S5`, so the guest has no ACPI power-off. A
+host stops a guest by stopping QEMU. The command line uses `pci=nocrs`, which
+gives the PCI root all of I/O and memory space.
 
 ## Build
 
@@ -254,29 +207,33 @@ services and that one table, as an OVMF guest is after `ExitBootServices` with
 `CONFIG_EFI_DISABLE_RUNTIME`. The table's bitmap, one bit a 2-MiB unit, follows
 the page in the image's zero pages, so it arrives accepted and clear.
 
-At boot the shim (`firmware/src/lazy.inc`):
+What Linux needs accepted before its own acceptance works arrives accepted,
+as measured zero pages the image places and the loader imports
+(`boot::early_units`, read against Linux 7.0):
 
-- accepts everything below a measured bound -- the end of the kernel's
-  decompression, rounded up to a unit -- because the decompressor runs before
-  Linux's acceptance does;
-- past it, accepts the part units at each end of a range and the first whole
-  unit after a range's start, and marks every other whole unit in the bitmap.
-  A unit is marked only if nothing in it was accepted or placed, since
-  validating a page twice terminates the guest, and never right after a span
-  Linux frees later, which `load_unaligned_zeropad()` could read into;
-- completes the EFI memory map with one conventional-memory descriptor for each
-  RAM entry of the E820 map it built. Once `efi_info` names a map, Linux's
-  decompressor picks the physical address it randomizes the kernel to from
-  that map alone, and accepts the range it picks; Linux proper takes RAM from
-  E820. A map cut short at the page's capacity only narrows KASLR.
+- the first 2 MiB unit, for the BIOS data area and, on TDX, the legacy scans of
+  [0, 1 MiB);
+- every unit the image places a page in, since those pages arrive accepted and
+  accepting their unit again terminates the guest;
+- after a RAM span that ends on a unit boundary, the next unit: Linux frees the
+  initramfs without the guard it keeps after memory it accepts itself, and
+  `load_unaligned_zeropad()` reads past it;
+- the decompressor's own area at the top of its `init_size` buffer, where it
+  moves itself, its stack, heap, page tables and boot GHCB before it can accept
+  anything. Its size is read from `startup_64`'s `subl $rva(_end), %ebx`; a
+  kernel without that instruction is refused. The kernel it writes out it
+  accepts itself, wherever KASLR puts it.
 
-The bitmap and the map are written by measured code into private memory the
-host cannot reach, so the host influences neither. Every page is still cleared
-before first use, by Linux as it accepts it, and `init_on_alloc` and
-`init_on_free` stay on. The cost moves to first touch: a workload that writes
-most of its RAM at start pays roughly what an eager boot did, spread over the
-processors that allocate it. `accept_memory=eager` on the command line restores
-eager acceptance inside Linux.
+Every other unit of RAM the shim marks in the bitmap (`mark_lazy`, from the
+shape's measured RAM ranges). Once `efi_info` names a map, Linux's decompressor
+picks the physical address it randomizes the kernel to from the shape's EFI
+descriptors; Linux proper takes RAM from E820.
+
+Zero pages cost launch time on SEV-SNP, where the security processor takes
+about 0.55 ms a 4 KiB page even with 2 MiB launch updates; for rc.10 they are
+about 13 MiB. Every page is still cleared before first use, and
+`init_on_alloc` and `init_on_free` stay on. `accept_memory=eager` on the
+command line makes Linux accept every marked unit at boot.
 
 ## Linux requirements
 
@@ -387,7 +344,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 `cargo test` links the shims' own assembly into the test binary and runs it:
-`firmware/src/harness.S` assembles the same `madt.inc` and `map.inc` macros the
+`firmware/src/harness.S` assembles the same `madt.inc` and `shape.inc` macros the
 measured shims are built from, the test maps the pages they address at their
 guest-physical addresses, and `firmware/src/shim.rs` hands them a loader's
 parameters and diffs what they produce against the generators in `acpi.rs` and

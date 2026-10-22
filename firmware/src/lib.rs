@@ -1,8 +1,9 @@
 //! The measured initial state of a confidential guest: the physical map, ACPI
 //! tables, zero page, page tables, reset shims, and on SEV-SNP the boot
 //! processor's save area, which is the only one the launch digest takes. The
-//! kernel and initramfs are inputs; this crate decides only where they sit. Two things a shim finishes at boot, because measuring
-//! either would bind an image to a machine size: the MADT, from the processor
+//! kernel and initramfs are inputs; this crate decides only where they sit.
+//! Two things a shim finishes at boot, because measuring either would bind an
+//! image to a machine size: the MADT, from the processor
 //! count the loader leaves in an unmeasured parameter page, and the end of the
 //! guest's RAM, from the memory map the loader leaves in another -- which has
 //! to be one of the shapes this crate measured, whose tables are built here.
@@ -21,7 +22,7 @@ pub mod shim;
 pub mod vmsa;
 
 use boot::{Placed, ACPI, RAM, RESERVED};
-use kernel::{identity_map, prepare, shim, shim_owned, RESET_SHIM};
+use kernel::{identity_map, prepare, shim_owned, RESET_SHIM};
 use layout::*;
 use std::{io, path::Path};
 use vmsa::{cc_blob, SNP_SHIM};
@@ -31,12 +32,6 @@ use vmsa::{cc_blob, SNP_SHIM};
 pub struct Launch {
     /// Every region of the guest physical map, in ascending address order.
     pub placed: Vec<Placed>,
-    /// The memory an SEV-SNP loader must have made private before launch:
-    /// what this image places, its zero pages included. None of it depends on
-    /// the guest's size: the rest of RAM Linux converts as it uses it, so no
-    /// declaration here binds the image to a machine size. Intel TDX asks a
-    /// loader for none, and leaves it empty.
-    pub required_memory: Vec<boot::Region>,
     /// Every span this image places at a fixed address.
     pub spans: Vec<boot::Region>,
     /// The memory shapes the image runs in, as the shapes page measures them.
@@ -89,18 +84,14 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
     let (shapes, early, zeros) = memory(&mut placed, &spans, p.info, false)?;
-    let shim_page = shim(RESET_SHIM, p.entry, shapes.len())?;
-    boot::fill(&mut placed, RESET_ALIAS, shim_page)?;
-    let shim_owned = shim_owned(&placed)?;
-    // Placed after the shapes and the authored-bytes count, both of which
-    // they follow from rather than feed.
+    boot::fill(&mut placed, RESET_ALIAS, RESET_SHIM.to_vec())?;
     placed.extend(zeros.iter().map(|(lo, hi)| Placed::zero(*lo, hi - lo)));
+    let shim_owned = shim_owned(&placed)?;
 
     // Ascending GPA order: how a loader adds pages and the digest is built.
     placed.sort_by_key(|p| p.base);
     Ok(Launch {
         placed,
-        required_memory: Vec::new(),
         spans,
         shapes,
         early,
@@ -149,26 +140,12 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
     let (shapes, early, zeros) = memory(&mut placed, &spans, p.info, true)?;
-    let shim_page = shim(SNP_SHIM, p.entry, shapes.len())?;
-    boot::fill(&mut placed, SHIM_BASE, shim_page)?;
-    let shim_owned = shim_owned(&placed)?;
-    // Placed after the shapes and the authored-bytes count, both of which
-    // they follow from rather than feed.
+    boot::fill(&mut placed, SHIM_BASE, SNP_SHIM.to_vec())?;
     placed.extend(zeros.iter().map(|(lo, hi)| Placed::zero(*lo, hi - lo)));
-    // What this image loads, its zero pages included, which a loader converts
-    // to private as it imports it. Past the bound Linux converts what it uses,
-    // so one image serves a guest of any size.
-    let mut required_memory: Vec<boot::Region> = spans
-        .iter()
-        .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
-        .chain(zeros.iter().map(|(lo, hi)| (*lo, hi - lo, RAM)))
-        .collect();
-    required_memory.sort_unstable();
-
+    let shim_owned = shim_owned(&placed)?;
     placed.sort_by_key(|p| p.base);
     Ok(Launch {
         placed,
-        required_memory,
         spans,
         shapes,
         early,
@@ -191,7 +168,10 @@ fn memory(
     amd: bool,
 ) -> Result<Memory, String> {
     let early = boot::early_units(spans, boot::decompressor_area(info));
-    let shapes = boot::qemu_shapes(amd, boot::least_memory(spans, &early));
+    // The least guest holds every early unit, the last of which ends past
+    // everything the image places in RAM.
+    let least = early.last().map_or(UNACCEPTED_UNIT, |u| u.1);
+    let shapes = boot::qemu_shapes(amd, least);
     boot::fill(
         placed,
         SHAPES_PAGE,

@@ -94,16 +94,12 @@ layout! {
 
     // The fixed part of the MADT, measured inside the shim page that builds the rest.
     SHIM_MADT = 0x0000_0b80;
-    // Where each shim finds its data block: the kernel entry point and how
-    // many shapes the shapes page holds.
-    SHIM_DATA = 0x0000_0c00;
-    // The block runs to the reset vector; nothing else lives in the page.
-    SHIM_DATA_SIZE = RESET_VECTOR - SHIM_DATA;
     // A TD fetches its first instruction from the last 16 bytes of this page.
     RESET_VECTOR = PAGE - 16;
 
-    SHIM_DATA_ENTRY = 0;
-    SHIM_DATA_SHAPES = 8;
+    // The kernel's 64-bit entry, startup_64, 0x200 into the protected-mode
+    // payload (Documentation/arch/x86/boot.rst).
+    KERNEL_ENTRY = KERNEL_BASE + 0x200;
 
     // One shape: the loader's map, entry for entry, with one RAM entry whose
     // size is the host's to choose within bounds; the E820 table and the EFI
@@ -242,11 +238,10 @@ const _: () = assert!(AMD_HT_END < MAP_LIMIT && KVM_IDENTITY + KVM_IDENTITY_SIZE
 const _: () = assert!(SHIM_BASE + SHIM_SIZE == KERNEL_SETUP_BASE);
 const _: () = assert!(KERNEL_SETUP_END <= KERNEL_BASE);
 const _: () = assert!(KERNEL_BASE < INITRAMFS_BASE);
-const _: () = assert!(SHIM_DATA + SHIM_DATA_SIZE <= SHIM_SIZE);
 // An IGVM VP context indexes processors in 16 bits.
 const _: () = assert!(MAX_VCPUS <= u16::MAX as u32);
 // The park stub is a handful of instructions; it must not run into the template.
-const _: () = assert!(SHIM_MADT + MADT_TEMPLATE_LEN <= SHIM_DATA);
+const _: () = assert!(SHIM_MADT + MADT_TEMPLATE_LEN <= RESET_VECTOR);
 // A TD fetches its first instruction from the top of the 32-bit address space.
 const _: () = assert!(RESET_ALIAS + PAGE == 0x1_0000_0000);
 

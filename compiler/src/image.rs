@@ -308,7 +308,7 @@ fn igvm(pages: &[Page]) -> Result<Vec<u8>, String> {
 }
 
 /// Reads an image back the way a loader does, refusing any directive that is
-/// neither a measured page nor the one parameter area.
+/// neither a measured page nor one of the two parameter areas.
 fn igvm_pages(file: &[u8]) -> Result<Vec<Page>, String> {
     let mut out = Vec::new();
     for directive in IgvmFile::new_from_binary(file, None)
@@ -435,6 +435,9 @@ pub mod tests {
     }
 
     /// A bzImage-shaped stub: enough of the setup header for the builder to accept it.
+    pub const TEST_INIT_SIZE: u64 = 0x300_0000;
+    pub const TEST_DECOMPRESSOR: u64 = 0x30_0000;
+
     pub fn test_kernel() -> Vec<u8> {
         let mut kernel = vec![0u8; 8192];
         kernel[0x1f1] = 4;
@@ -446,13 +449,58 @@ pub mod tests {
         kernel[0x234] = 1;
         kernel[0x236] = 1;
         kernel[0x238..0x23c].copy_from_slice(&0x800u32.to_le_bytes());
-        kernel[0x260..0x264].copy_from_slice(&0x20_0000u32.to_le_bytes());
+        kernel[0x260..0x264].copy_from_slice(&(TEST_INIT_SIZE as u32).to_le_bytes());
         // startup_64's `movl BP_init_size(%rsi), %ebx; subl $rva(_end), %ebx`,
-        // for a decompressor of 12 KiB, in the payload after five sectors.
+        // in the payload after five sectors. As in a real kernel, the
+        // decompressor's area at the top of init_size is units of its own,
+        // well clear of the payload's.
         kernel[0xa00 + 0x236..0xa00 + 0x23e]
             .copy_from_slice(&[0x8b, 0x9e, 0x60, 0x02, 0x00, 0x00, 0x81, 0xeb]);
-        kernel[0xa00 + 0x23e..0xa00 + 0x242].copy_from_slice(&0x3000u32.to_le_bytes());
+        kernel[0xa00 + 0x23e..0xa00 + 0x242]
+            .copy_from_slice(&(TEST_DECOMPRESSOR as u32).to_le_bytes());
         kernel
+    }
+
+    /// A zero range is written as 4 KiB pages up to the first 2 MiB boundary,
+    /// whole 2 MiB pages, then 4 KiB pages again, and reads back as the same
+    /// pages, which is what the digest is computed over.
+    #[test]
+    fn zero_pages_go_out_as_2mib_runs_and_come_back_as_pages() {
+        // The loader's two pages first, as every image has them.
+        let mut pages: Vec<Page> = [PARAM_PAGE, PARAM_MAP_PAGE]
+            .map(|gpa| Page { gpa, data: None })
+            .into();
+        pages.push(Page {
+            gpa: 0x1f_c000,
+            data: Some(vec![1; PAGE as usize]),
+        });
+        pages.extend(
+            (0x1f_d000..0x40_2000)
+                .step_by(PAGE as usize)
+                .map(|gpa| Page {
+                    gpa,
+                    data: Some(Vec::new()),
+                }),
+        );
+        let file = igvm(&pages).unwrap();
+        let mut sizes = Vec::new();
+        for d in IgvmFile::new_from_binary(&file, None).unwrap().directives() {
+            if let IgvmDirectiveHeader::PageData {
+                gpa, flags, data, ..
+            } = d
+            {
+                sizes.push((*gpa, flags.is_2mb_page(), data.is_empty()));
+            }
+        }
+        let mut expected = vec![(0x1f_c000, false, false)];
+        expected.extend([0x1f_d000, 0x1f_e000, 0x1f_f000].map(|g| (g, false, true)));
+        expected.push((0x20_0000, true, true));
+        expected.extend([0x40_0000, 0x40_1000].map(|g| (g, false, true)));
+        assert_eq!(sizes, expected);
+        assert!(
+            igvm_pages(&file).unwrap() == pages,
+            "the pages read back differ"
+        );
     }
 
     #[test]
@@ -678,24 +726,16 @@ pub mod tests {
             .to_vec()
     }
 
-    /// The shim's data block, out of the page an image carries it in.
-    fn data_block_of(launch: &tinfoil_firmware::Launch, snp: bool) -> Vec<u8> {
-        let page = placed_page(launch, if snp { SHIM_BASE } else { RESET_ALIAS });
-        page[SHIM_DATA as usize..(SHIM_DATA + SHIM_DATA_SIZE) as usize].to_vec()
-    }
-
-    /// A shim loaded with an image's own shapes page and data block.
-    fn shim_for(launch: &tinfoil_firmware::Launch, snp: bool) -> tinfoil_firmware::shim::Shim {
+    /// A shim loaded with an image's own shapes page.
+    fn shim_for(launch: &tinfoil_firmware::Launch) -> tinfoil_firmware::shim::Shim {
         let shim = tinfoil_firmware::shim::shim();
-        shim.image(
-            &placed_page(launch, SHAPES_PAGE),
-            &data_block_of(launch, snp),
-        );
+        shim.image(&placed_page(launch, SHAPES_PAGE));
         shim
     }
 
     /// The units Linux is owed for a guest of `shape` whose RAM tops out at
-    /// `top`: every whole one of its RAM at or past the bound, and no other.
+    /// `top`: every whole unit of its RAM the image places nothing in (its
+    /// zero pages included), and no other.
     fn owed_units(shape: &Shape, top: u64, placed: &[(u64, u64)]) -> Vec<u64> {
         shape
             .extents(top)
@@ -720,14 +760,6 @@ pub mod tests {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             let (_, launch) = launched(dir.path(), snp);
-            let block = data_block_of(&launch, snp);
-            let word = |at: u64| u64::from_le_bytes(block[at as usize..][..8].try_into().unwrap());
-            assert_eq!(word(SHIM_DATA_ENTRY), KERNEL_BASE + 0x200);
-            assert_eq!(word(SHIM_DATA_SHAPES), launch.shapes.len() as u64);
-            assert!(
-                block[16..].iter().all(|b| *b == 0),
-                "the data block lists more"
-            );
             let zeros: Vec<(u64, u64)> = launch
                 .placed
                 .iter()
@@ -766,11 +798,16 @@ pub mod tests {
             let held = |lo: u64, hi: u64| launch.early.iter().any(|(a, b)| *a <= lo && hi <= *b);
             assert!(held(0, UNIT), "snp={snp}: the first unit is Linux's");
             assert!(held(KERNEL_BASE, KERNEL_BASE + PAGE));
-            let top = KERNEL_BASE + 0x20_0000;
+            let top = KERNEL_BASE + TEST_INIT_SIZE;
             assert!(
-                held(top - 0x3000, top),
+                held(top - TEST_DECOMPRESSOR, top),
                 "snp={snp}: the decompressor's area is Linux's"
             );
+            // ...and nothing between the payload's unit and its area.
+            assert!(!launch
+                .early
+                .iter()
+                .any(|(a, b)| *a < top - TEST_DECOMPRESSOR - UNIT && *b > KERNEL_BASE + UNIT));
         }
     }
 
@@ -796,7 +833,7 @@ pub mod tests {
                     "len={len:#x}, snp={snp}: [{end:#x}, {:#x}) is not accepted",
                     guard.1
                 );
-                let shim = shim_for(&launch, snp);
+                let shim = shim_for(&launch);
                 shim.loader_memory_map(&qemu_map(8 * GIB, snp));
                 let got = shim
                     .boot_map(
@@ -820,7 +857,7 @@ pub mod tests {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             let (_, launch) = launched(dir.path(), snp);
-            let shim = shim_for(&launch, snp);
+            let shim = shim_for(&launch);
             for ram in SIZES {
                 let map = qemu_map(ram, snp);
                 shim.loader_memory_map(&map);
@@ -841,8 +878,8 @@ pub mod tests {
     /// data block, EFI page and zero page, for every shape it carries at both
     /// of its bounds and between them, an end off a unit boundary included.
     /// It has to hand Linux exactly the tables boot.rs specifies for that
-    /// guest, and leave Linux exactly the whole units of RAM past the bound
-    /// that do not arrive accepted: a unit marked and delivered accepted both
+    /// guest, and leave Linux exactly the whole units of RAM that do not
+    /// arrive accepted: a unit marked and delivered accepted both
     /// would be validated twice, which terminates the guest, and a unit marked
     /// past the RAM would send Linux to accept memory no one backed.
     #[test]
@@ -850,7 +887,7 @@ pub mod tests {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             let (_, launch) = launched(dir.path(), snp);
-            let shim = shim_for(&launch, snp);
+            let shim = shim_for(&launch);
             let (efi, zero) = (
                 placed_page(&launch, EFI_PAGE),
                 placed_page(&launch, ZERO_PAGE),
@@ -958,7 +995,7 @@ pub mod tests {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             let (_, launch) = launched(dir.path(), snp);
-            let shim = shim_for(&launch, snp);
+            let shim = shim_for(&launch);
             let (efi, zero) = (
                 placed_page(&launch, EFI_PAGE),
                 placed_page(&launch, ZERO_PAGE),
@@ -1135,7 +1172,7 @@ pub mod tests {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             let (_, launch) = launched(dir.path(), snp);
-            let shim = shim_for(&launch, snp);
+            let shim = shim_for(&launch);
             for ram in SIZES.into_iter().filter(|r| r.is_multiple_of(UNIT)) {
                 shim.loader_memory_map(&qemu_map(ram, snp));
                 let got = shim

@@ -23,7 +23,7 @@ const SETUP_HEADER: usize = HDR_SETUP_SECTS;
 const SETUP_HEADER_END: usize = 0x290;
 const SETUP_HEADER_MIN: usize = 0x268;
 // The 64-bit entry point sits this far into the protected-mode payload.
-pub const ENTRY_64_OFFSET: u64 = 0x200;
+pub const ENTRY_64_OFFSET: u64 = KERNEL_ENTRY - KERNEL_BASE;
 
 const BOOT_FLAG: u16 = 0xaa55;
 const BOOT_PROTOCOL_2_12: u16 = 0x020c;
@@ -293,21 +293,6 @@ pub fn validate(placed: &[Placed]) -> Result<(), String> {
             return Err(format!("placed regions overlap at {:#x}", pair[1].0));
         }
     }
-    // The unaccepted bitmap has to lie in the zero pages (`zero_ranges`), so
-    // that it arrives zero, not in a span with other contents.
-    let bitmap = (
-        UNACCEPTED_BITMAP,
-        UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
-    );
-    if let Some(p) = shim_spans(placed)
-        .iter()
-        .find(|(lo, hi, _)| *lo < bitmap.1 && bitmap.0 < *hi)
-    {
-        return Err(format!(
-            "placed region {:#x} overlaps the unaccepted bitmap",
-            p.0
-        ));
-    }
     for p in placed {
         if !p.base.is_multiple_of(PAGE) {
             return Err(format!("placed region {:#x} is not page-aligned", p.base));
@@ -332,18 +317,6 @@ pub fn shim_spans(placed: &[Placed]) -> Vec<Region> {
         .collect();
     v.sort_unstable();
     v
-}
-
-/// The least memory a guest can be given and still hold what this image placed
-/// in it. The reset page is left out: it is the last page of the address space,
-/// not of the guest's RAM.
-pub fn min_memory(spans: &[Region]) -> u64 {
-    spans
-        .iter()
-        .filter(|(lo, _, _)| *lo != RESET_ALIAS)
-        .map(|(_, hi, _)| *hi)
-        .max()
-        .unwrap_or(0)
 }
 
 /// The parts of the loader's map that are not RAM, and the top of the RAM that
@@ -417,21 +390,6 @@ pub fn e820(regions: &[Region], memory: u64) -> Vec<Region> {
     out
 }
 
-/// [0, memory) minus the regions given, in order.
-pub fn complement(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    for (lo, hi, _) in regions.iter().copied() {
-        if lo > at {
-            out.push((at, lo.min(memory)));
-        }
-        at = at.max(hi);
-    }
-    out.push((at, memory));
-    out.retain(|(lo, hi)| lo < hi);
-    out
-}
-
 /// The 2 MiB units that arrive accepted, the rest of RAM being left to Linux
 /// to accept as it allocates (linux-7.0, read against the bzImage rc.10 ships):
 ///
@@ -475,11 +433,15 @@ pub fn early_units(spans: &[Region], area: (u64, u64)) -> Vec<(u64, u64)> {
 pub fn zero_ranges(spans: &[Region], early: &[(u64, u64)]) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
     for (lo, hi) in early {
-        for (a, b) in complement(spans, *hi) {
-            let a = a.max(*lo);
-            if a < b {
-                out.push((a, b));
+        let mut at = *lo;
+        for (a, b, _) in spans.iter().filter(|(a, b, _)| a < hi && b > lo) {
+            if *a > at {
+                out.push((at, *a));
             }
+            at = at.max(*b);
+        }
+        if at < *hi {
+            out.push((at, *hi));
         }
     }
     out
@@ -583,15 +545,6 @@ pub fn qemu_shapes(amd: bool, least: u64) -> Vec<Shape> {
     shapes
 }
 
-/// The least RAM below the aperture an image runs in: everything it placed
-/// there, and all the RAM it delivers accepted.
-pub fn least_memory(spans: &[Region], early: &[(u64, u64)]) -> u64 {
-    early
-        .iter()
-        .map(|u| u.1)
-        .fold(align_up(min_memory(spans), UNACCEPTED_UNIT), u64::max)
-}
-
 /// One shape as the record a shim matches the loader's map against and copies
 /// its tables from (see SHAPE_* in layout.rs). Everything about the shape that
 /// does not depend on where its variable entry ends is fixed here, and checked
@@ -636,7 +589,10 @@ pub fn shape_record(
     }
     let e820 = shape.e820(spans, shape.min_end);
     let last = *e820.last().unwrap();
-    if last.0 + last.1 != shape.min_end || last.2 != RAM || last.0 > var_lo.max(min_memory(spans)) {
+    if last.0 + last.1 != shape.min_end
+        || last.2 != RAM
+        || last.0 > var_lo.max(early.last().map_or(0, |u| u.1))
+    {
         return Err(format!(
             "the E820 map of {shape:?} does not end in its variable RAM"
         ));
@@ -735,9 +691,10 @@ pub fn shapes_page(
     spans: &[Region],
     early: &[(u64, u64)],
 ) -> Result<Vec<u8>, String> {
-    if shapes.is_empty() || shapes.len() as u64 * SHAPE_LEN > SHAPES_SIZE {
+    // The shim stops at the first empty record, so one must follow the last.
+    if shapes.is_empty() || (shapes.len() as u64 + 1) * SHAPE_LEN > SHAPES_SIZE {
         return Err(format!(
-            "{} shapes do not fit the shapes page",
+            "{} shapes and an empty record do not fit the shapes page",
             shapes.len()
         ));
     }
@@ -793,19 +750,32 @@ mod tests {
         assert!(!e.iter().any(|x| x.0 == KERNEL_BASE));
     }
 
+    /// The zero pages fill each early unit around what the image places, and
+    /// lie on nothing it places: a page loaded and zeroed both is the
+    /// image contradicting itself.
     #[test]
-    fn the_complement_is_exactly_what_is_not_placed() {
-        let map = map();
-        let ranges = complement(&shim_spans(&map), RAM_TOP);
-        let placed: Vec<_> = map.iter().map(|p| (p.base, p.base + p.span())).collect();
-        // Nothing placed is ever accepted: that is the page-aliasing attack.
-        for (lo, hi) in &ranges {
-            assert!(placed.iter().all(|(a, b)| hi <= a || lo >= b));
+    fn zero_ranges_fill_the_early_units_around_the_image() {
+        let spans = shim_spans(&map());
+        let early = early_units(&spans, (KERNEL_BASE + 0x40_0000, KERNEL_BASE + 0x60_0000));
+        let zeros = zero_ranges(&spans, &early);
+        for (lo, hi) in &zeros {
+            assert!(spans.iter().all(|(a, b, _)| hi <= a || lo >= b));
         }
-        // ...and nothing else is left out.
-        let covered: u64 = ranges.iter().map(|(l, h)| h - l).sum();
-        let taken: u64 = placed.iter().map(|(l, h)| h - l).sum();
-        assert_eq!(covered + taken, RAM_TOP);
+        for (lo, hi) in &early {
+            let mut tiles: Vec<(u64, u64)> = spans
+                .iter()
+                .map(|(a, b, _)| (*a, *b))
+                .chain(zeros.iter().copied())
+                .filter(|(a, b)| a < hi && b > lo)
+                .collect();
+            tiles.sort_unstable();
+            let mut at = *lo;
+            for (a, b) in tiles {
+                assert_eq!(a, at, "{at:#x} is neither placed nor zero");
+                at = b;
+            }
+            assert_eq!(at, *hi);
+        }
     }
 
     #[test]

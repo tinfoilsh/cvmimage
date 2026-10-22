@@ -447,6 +447,11 @@ pub mod tests {
         kernel[0x236] = 1;
         kernel[0x238..0x23c].copy_from_slice(&0x800u32.to_le_bytes());
         kernel[0x260..0x264].copy_from_slice(&0x20_0000u32.to_le_bytes());
+        // startup_64's `movl BP_init_size(%rsi), %ebx; subl $rva(_end), %ebx`,
+        // for a decompressor of 12 KiB, in the payload after five sectors.
+        kernel[0xa00 + 0x236..0xa00 + 0x23e]
+            .copy_from_slice(&[0x8b, 0x9e, 0x60, 0x02, 0x00, 0x00, 0x81, 0xeb]);
+        kernel[0xa00 + 0x23e..0xa00 + 0x242].copy_from_slice(&0x3000u32.to_le_bytes());
         kernel
     }
 
@@ -691,12 +696,12 @@ pub mod tests {
 
     /// The units Linux is owed for a guest of `shape` whose RAM tops out at
     /// `top`: every whole one of its RAM at or past the bound, and no other.
-    fn owed_units(shape: &Shape, top: u64, lazy: u64, placed: &[(u64, u64)]) -> Vec<u64> {
+    fn owed_units(shape: &Shape, top: u64, placed: &[(u64, u64)]) -> Vec<u64> {
         shape
             .extents(top)
             .iter()
             .filter(|(_, _, ram)| *ram)
-            .flat_map(|(lo, hi, _)| (lo.max(&lazy) / UNIT)..(hi / UNIT))
+            .flat_map(|(lo, hi, _)| (lo / UNIT)..(hi / UNIT))
             .filter(|u| {
                 !placed
                     .iter()
@@ -705,12 +710,13 @@ pub mod tests {
             .collect()
     }
 
-    /// The image delivers accepted, as measured zero pages, the RAM below the
-    /// lazy bound it did not otherwise place, and past the bound only what it
-    /// leaves of the units it places in: no page it loaded twice, nothing
-    /// else of Linux's, and no gap. The shim is told nothing about memory.
+    /// The image delivers accepted, as measured zero pages, exactly what its
+    /// early units hold beyond its own pages, and those units are the ones
+    /// Linux needs before it can accept memory: the first, every one the image
+    /// places a page in, and the decompressor's, which it runs in before it
+    /// accepts anything. The shim is told nothing about memory.
     #[test]
-    fn the_image_delivers_exactly_the_ram_below_the_bound_accepted() {
+    fn the_image_delivers_exactly_its_early_units_accepted() {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             let (_, launch) = launched(dir.path(), snp);
@@ -732,42 +738,39 @@ pub mod tests {
                 zeros, launch.zeros,
                 "snp={snp}: zero pages are not what was placed"
             );
-            let placed: Vec<(u64, u64)> = launch
-                .spans
-                .iter()
-                .filter(|(lo, _, _)| *lo < launch.lazy)
-                .map(|(lo, hi, _)| (*lo, *hi))
-                .collect();
-            let mut tiles: Vec<(u64, u64)> = zeros
-                .iter()
-                .copied()
-                .filter(|(lo, _)| *lo < launch.lazy)
-                .chain(placed)
-                .collect();
-            tiles.sort_unstable();
-            let mut at = 0;
-            for (lo, hi) in tiles {
-                assert_eq!(
-                    lo, at,
-                    "snp={snp}: {at:#x} is neither a zero page nor placed"
-                );
-                at = hi;
+            // Each early unit is exactly the image's pages and its zero pages.
+            for (lo, hi) in &launch.early {
+                let mut tiles: Vec<(u64, u64)> = launch
+                    .spans
+                    .iter()
+                    .map(|(a, b, _)| (*a, *b))
+                    .chain(zeros.iter().copied())
+                    .filter(|(a, b)| a < hi && b > lo)
+                    .collect();
+                tiles.sort_unstable();
+                let mut at = *lo;
+                for (a, b) in tiles {
+                    assert_eq!(
+                        a, at,
+                        "snp={snp}: {at:#x} is neither a zero page nor placed"
+                    );
+                    at = b;
+                }
+                assert_eq!(at, *hi, "snp={snp}: {at:#x} ends an early unit short");
             }
+            assert!(zeros
+                .iter()
+                .all(|(a, b)| launch.early.iter().any(|(lo, hi)| lo <= a && b <= hi)));
+            // ...and they are the ones Linux needs: the first, the kernel's,
+            // and the decompressor's at the top of its init_size buffer.
+            let held = |lo: u64, hi: u64| launch.early.iter().any(|(a, b)| *a <= lo && hi <= *b);
+            assert!(held(0, UNIT), "snp={snp}: the first unit is Linux's");
+            assert!(held(KERNEL_BASE, KERNEL_BASE + PAGE));
+            let top = KERNEL_BASE + 0x20_0000;
             assert!(
-                at >= launch.lazy,
-                "snp={snp}: RAM below the bound is left out"
+                held(top - 0x3000, top),
+                "snp={snp}: the decompressor's area is Linux's"
             );
-            // Past the bound, only what the image leaves of the units it
-            // places in.
-            for (lo, hi) in zeros.iter().filter(|(_, hi)| *hi > launch.lazy) {
-                let unit = lo / UNIT * UNIT;
-                assert!(
-                    launch.spans.iter().any(|(s, e, kind)| *kind == RAM
-                        && *s < (hi - 1) / UNIT * UNIT + UNIT
-                        && *e > unit),
-                    "snp={snp}: {lo:#x} past the bound shares no unit with the image"
-                );
-            }
         }
     }
 
@@ -906,11 +909,7 @@ pub mod tests {
                             .any(|(lo, hi)| *lo < (u + 1) * UNIT && *hi > u * UNIT)),
                         "{what}: a unit the image placed a page in is marked"
                     );
-                    assert_eq!(
-                        got.units,
-                        owed_units(shape, top, launch.lazy, &placed),
-                        "{what}: units"
-                    );
+                    assert_eq!(got.units, owed_units(shape, top, &placed), "{what}: units");
                     // Each page of RAM the guest is told of arrives accepted
                     // (the image's pages, its zero pages among them) or lies
                     // in a unit Linux accepts: exactly one of them. A page that is none is

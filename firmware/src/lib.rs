@@ -41,10 +41,10 @@ pub struct Launch {
     pub spans: Vec<boot::Region>,
     /// The memory shapes the image runs in, as the shapes page measures them.
     pub shapes: Vec<boot::Shape>,
-    /// Below this, all of the RAM arrives accepted, as the image's pages or
-    /// its zero pages; past it, Linux accepts what it uses but for the units
-    /// the image places in (`boot::span_units`).
-    pub lazy: u64,
+    /// The 2 MiB units that arrive accepted (`boot::early_units`), as the
+    /// image's pages or its zero pages; Linux accepts the rest of RAM as it
+    /// uses it.
+    pub early: Vec<(u64, u64)>,
     /// The RAM delivered as measured zero pages (`boot::zero_ranges`), so
     /// that it arrives accepted.
     pub zeros: Vec<(u64, u64)>,
@@ -88,7 +88,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    let (shapes, lazy, zeros) = memory(&mut placed, &spans, p.info, false)?;
+    let (shapes, early, zeros) = memory(&mut placed, &spans, p.info, false)?;
     let shim_page = shim(RESET_SHIM, p.entry, shapes.len())?;
     boot::fill(&mut placed, RESET_ALIAS, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
@@ -103,7 +103,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         required_memory: Vec::new(),
         spans,
         shapes,
-        lazy,
+        early,
         zeros,
         entry: p.entry,
         shim_owned,
@@ -148,7 +148,7 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    let (shapes, lazy, zeros) = memory(&mut placed, &spans, p.info, true)?;
+    let (shapes, early, zeros) = memory(&mut placed, &spans, p.info, true)?;
     let shim_page = shim(SNP_SHIM, p.entry, shapes.len())?;
     boot::fill(&mut placed, SHIM_BASE, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
@@ -171,58 +171,45 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         required_memory,
         spans,
         shapes,
-        lazy,
+        early,
         zeros,
         entry: p.entry,
         shim_owned,
     })
 }
 
-/// Everything below the end of the kernel's decompression arrives accepted,
-/// since the decompressor runs before Linux's own acceptance does; past it,
-/// whole 2-MiB units are Linux's to accept (see shape.inc).
-fn lazy_bound(info: boot::KernelInfo) -> u64 {
-    align_up(KERNEL_BASE + info.init_size as u64, UNACCEPTED_UNIT)
-}
+/// The shapes, the early units and the zero ranges, as `memory` works them out.
+type Memory = (Vec<boot::Shape>, Vec<(u64, u64)>, Vec<(u64, u64)>);
 
-/// The shapes, the lazy bound and the zero ranges, as `memory` works them out.
-type Memory = (Vec<boot::Shape>, u64, Vec<(u64, u64)>);
-
-/// The memory side of a launch: the shapes the guest's map may take, measured
-/// into the shapes page; the lazy bound; and the RAM delivered as zero pages.
+/// The memory side of a launch: the units that arrive accepted, the shapes
+/// the guest's map may take, measured into the shapes page, and the RAM of
+/// those units the image fills with zero pages.
 fn memory(
     placed: &mut [Placed],
     spans: &[boot::Region],
     info: boot::KernelInfo,
     amd: bool,
 ) -> Result<Memory, String> {
-    let lazy = lazy_bound(info);
-    let shapes = boot::qemu_shapes(amd, boot::least_memory(spans, lazy));
+    let early = boot::early_units(spans, boot::decompressor_area(info));
+    let shapes = boot::qemu_shapes(amd, boot::least_memory(spans, &early));
     boot::fill(
         placed,
         SHAPES_PAGE,
-        boot::shapes_page(&shapes, spans, lazy)?,
+        boot::shapes_page(&shapes, spans, &early)?,
     )?;
-    let zeros = boot::zero_ranges(spans, lazy);
-    // mark_lazy marks every whole unit past the bound, so one that left the
-    // bitmap or the decompressor to Linux would mark memory nothing accepts;
-    // and the bitmap must arrive zero, which the zero pages make it.
+    let zeros = boot::zero_ranges(spans, &early);
+    // The bitmap must arrive zero, which the zero pages make it.
     let bitmap = (
         UNACCEPTED_BITMAP,
         UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
     );
-    if !lazy.is_multiple_of(UNACCEPTED_UNIT) || lazy < bitmap.1 {
-        return Err(format!(
-            "{lazy:#x} is not a lazy bound past the unaccepted bitmap"
-        ));
-    }
     if !zeros
         .iter()
         .any(|(lo, hi)| *lo <= bitmap.0 && bitmap.1 <= *hi)
     {
         return Err("the unaccepted bitmap lies outside the zero pages".into());
     }
-    Ok((shapes, lazy, zeros))
+    Ok((shapes, early, zeros))
 }
 
 /// Formats an io::Error with the action that failed.

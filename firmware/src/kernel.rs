@@ -431,9 +431,9 @@ mod tests {
             vec![0u8; PAGE as usize],
         )];
         let spans = boot::shim_spans(&placed);
-        let lazy = KERNEL_BASE + 0x400_0000;
+        let early = boot::early_units(&spans, (KERNEL_BASE + 0x300_0000, KERNEL_BASE + 0x400_0000));
         for amd in [false, true] {
-            for shape in boot::qemu_shapes(amd, boot::least_memory(&spans, lazy)) {
+            for shape in boot::qemu_shapes(amd, boot::least_memory(&spans, &early)) {
                 assert!(shape.max_end <= MAP_LIMIT);
                 assert_eq!(pdpte(&map, shape.max_end - PAGE) & 1, 1);
             }

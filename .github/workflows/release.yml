@@ -61,8 +61,11 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          bash image/release-igvm.sh "$REF_NAME" /tmp/out \
+          set -Eeuo pipefail
+          release_dir="$(mktemp -d "$RUNNER_TEMP/igvm-release.XXXXXX")/artifacts"
+          bash image/release-igvm.sh "$REF_NAME" "$release_dir" \
             result-cpu result-gpu result-cvmc/bin/cvmc
+          echo "RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
 
       - name: Hash the manifest
         id: manifest-digest
@@ -70,13 +73,13 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -Eeuo pipefail
-          manifest_sha256="$(sha256sum "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')"
+          manifest_sha256="$(sha256sum "$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json" | awk '{print $1}')"
           echo "config-pin=${REF_NAME#v}@sha256:${manifest_sha256}" >> "$GITHUB_OUTPUT"
 
       - name: Attest artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3.0.0
         with:
-          subject-path: /tmp/out/*
+          subject-path: ${{ env.RELEASE_DIR }}/*
 
       - name: Upload attested artifacts to R2
         env:
@@ -89,8 +92,8 @@ jobs:
           set -Eeuo pipefail
           aws="$(/nix/var/nix/profiles/default/bin/nix-build \
             --no-out-link -I . -A release-upload-cli)/bin/aws"
-          manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
-          for file in /tmp/out/*; do
+          manifest="$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json"
+          for file in "$RELEASE_DIR"/*; do
             if [ "$file" = "$manifest" ]; then
               continue
             fi
@@ -113,7 +116,7 @@ jobs:
           CONFIG_PIN: ${{ steps.manifest-digest.outputs.config-pin }}
         run: |
           set -Eeuo pipefail
-          manifest="/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json"
+          manifest="$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json"
           PRERELEASE_FLAG=""
           if [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
@@ -131,8 +134,8 @@ jobs:
           \`\`\`json
           $(cat "$manifest")
           \`\`\`" \
-            "/tmp/out/tinfoil-inference-${REF_NAME}-manifest.json" \
-            "/tmp/out/tinfoil-inference-${REF_NAME}-checksums.sha256"
+            "$RELEASE_DIR/tinfoil-inference-${REF_NAME}-manifest.json" \
+            "$RELEASE_DIR/tinfoil-inference-${REF_NAME}-checksums.sha256"
 
   update-readme:
     name: Update README config example

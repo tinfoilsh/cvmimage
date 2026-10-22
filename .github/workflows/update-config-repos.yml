@@ -17,6 +17,7 @@ jobs:
     if: github.event_name != 'release' || (!github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v'))
     permissions:
       contents: read
+      attestations: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       digest: ${{ steps.version.outputs.digest }}

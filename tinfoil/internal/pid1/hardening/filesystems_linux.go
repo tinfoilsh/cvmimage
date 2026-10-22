@@ -212,24 +212,6 @@ func resetStagingDirectory(kernel filesystemKernel, path string) error {
 	return nil
 }
 
-func attestationDevicePaths() []string {
-	paths := []string{
-		"null",
-		"tdx_guest",
-		"sev-guest",
-		"nvidiactl",
-		"nvidia-uvm",
-		"nvidia-uvm-tools",
-		"nvidia-caps",
-		"nvidia-nvswitchctl",
-		"nvidia-nvlink",
-	}
-	for index := 0; index < 16; index++ {
-		paths = append(paths, fmt.Sprintf("nvidia%d", index), fmt.Sprintf("nvidia-nvswitch%d", index))
-	}
-	return paths
-}
-
 func mountRestrictedProc(kernel filesystemKernel) error {
 	flags := uintptr(unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC)
 	if err := kernel.mount("proc", "/proc", "proc", flags, "hidepid=2"); err != nil {

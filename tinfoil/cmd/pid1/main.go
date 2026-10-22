@@ -178,15 +178,102 @@ func run(parent context.Context) (result error) {
 	return runLifecycle(parent, deps, readiness)
 }
 
-// reportFailure seals the boot failure once every state writer has stopped and
-// serves it read-only until shutdown. No attestation listener is passed: the
-// workloads are gone, so only the host polls this shim over TLS.
+// reportFailure seals the boot failure once every state writer has stopped,
+// scrubs every provisioned secret, and serves the terminal state read-only
+// until shutdown. No attestation listener is passed: the workloads are gone,
+// so only the host polls this shim over TLS.
 func reportFailure(ctx context.Context, manager *supervisor.Manager, failure error) error {
 	initLogf("boot failed: %v; retaining boot status after cleanup", failure)
-	if err := boot.CompleteFailure(); err != nil {
-		return fmt.Errorf("sealing boot failure: %w", err)
+	result := boot.CompleteFailure()
+	scrubErr := scrubProvisionedSecrets(scrubTargets)
+	if result != nil {
+		return fmt.Errorf("sealing boot failure: %w", result)
+	}
+	if scrubErr != nil {
+		return fmt.Errorf("scrubbing provisioned secrets: %w", scrubErr)
 	}
 	return serveBootFailure(ctx, supervisor.New(ctx, manager, supervisor.Config{}), nil, serviceTermGrace, serviceKillGrace)
+}
+
+// scrubTargets are the private artifacts boot provisions before the failing
+// stage. Everything that remains serves the terminal boot state only.
+var scrubTargets = []string{
+	boot.ExternalConfigPath, // keyserver secret values after merge
+	boot.HPKEKeyPath,
+	boot.TLSDir,         // cert + key
+	boot.DockerConfigDir, // registry tokens incl. ECR refresh
+	boot.GCloudKeyPath,
+	boot.AttestedKeysDir, // workload private keys
+}
+
+// scrubProvisionedSecrets overwrites and removes every target. The
+// status-only shim reads only boot-state.json, so nothing running needs them.
+func scrubProvisionedSecrets(targets []string) error {
+	var errs []error
+	for _, target := range targets {
+		errs = append(errs, scrubPath(target))
+	}
+	return errors.Join(errs...)
+}
+
+func scrubPath(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		var errs []error
+		for _, entry := range entries {
+			errs = append(errs, scrubPath(filepath.Join(path, entry.Name())))
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove %s: %w", path, err))
+		}
+		return errors.Join(errs...)
+	}
+	if !info.Mode().IsRegular() {
+		return os.Remove(path)
+	}
+	return wipeFile(path, info.Size())
+}
+
+// wipeFile overwrites a regular file with zeros before unlinking it so the
+// secret bytes leave the ramdisk, not just the directory entry.
+func wipeFile(path string, size int64) error {
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	buf := make([]byte, 64*1024)
+	var writeErr error
+	for offset := int64(0); writeErr == nil && offset < size; offset += int64(len(buf)) {
+		if remaining := size - offset; remaining < int64(len(buf)) {
+			buf = buf[:remaining]
+		}
+		_, writeErr = file.WriteAt(buf, offset)
+	}
+	if writeErr == nil {
+		// Grow by one byte so a later same-name file cannot reuse the exact block.
+		_, writeErr = file.WriteAt([]byte{0}, size)
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return fmt.Errorf("overwrite %s: %w", path, errors.Join(writeErr, closeErr))
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", path, err)
+	}
+	return nil
 }
 
 // serveBootFailure runs the status-only shim under its own supervisor so

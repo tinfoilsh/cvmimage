@@ -32,33 +32,33 @@ pub struct Launch {
     /// Every region of the guest physical map, in ascending address order.
     pub placed: Vec<Placed>,
     /// The memory an SEV-SNP loader must have made private before launch:
-    /// what this image places, and the ranges the shim validates (`accept`).
-    /// None of it depends on the guest's size: the rest of RAM Linux converts
-    /// as it uses it, so no declaration here binds the image to a machine
-    /// size. Intel TDX asks a loader for none, and leaves it empty.
+    /// what this image places, its zero pages included. None of it depends on
+    /// the guest's size: the rest of RAM Linux converts as it uses it, so no
+    /// declaration here binds the image to a machine size. Intel TDX asks a
+    /// loader for none, and leaves it empty.
     pub required_memory: Vec<boot::Region>,
     /// Every span this image places at a fixed address.
     pub spans: Vec<boot::Region>,
     /// The memory shapes the image runs in, as the shapes page measures them.
     pub shapes: Vec<boot::Shape>,
-    /// Below this, the shim accepts all of the RAM the image did not place;
-    /// past it, Linux accepts what it uses but for the units the image places
-    /// in (`boot::span_units`).
+    /// Below this, all of the RAM arrives accepted, as the image's pages or
+    /// its zero pages; past it, Linux accepts what it uses but for the units
+    /// the image places in (`boot::span_units`).
     pub lazy: u64,
-    /// The ranges the shim accepts (`boot::shim_accept`).
-    pub accept: Vec<(u64, u64)>,
+    /// The RAM delivered as measured zero pages (`boot::zero_ranges`), so
+    /// that it arrives accepted.
+    pub zeros: Vec<(u64, u64)>,
     /// Where the shim jumps once the map is in place.
     pub entry: u64,
     /// Measured bytes this crate authors, excluding kernel and initramfs.
     pub shim_owned: usize,
 }
 
-/// The Intel TDX map. The shim runs from the reset page, so the map covers it
-/// and no loader is asked to accept the page the shim runs from.
+/// The Intel TDX map. The shim runs from the reset page, so the map covers it.
 pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result<Launch, String> {
     let p = prepare(kernel_path, initramfs_path, params)?;
 
-    // The one authoritative map: E820, the file's pages and the accept list follow from it.
+    // The one authoritative map: E820 and the file's pages follow from it.
     let initramfs_len = p.initramfs.len();
     let mut placed = vec![
         // Blank: the zero page describes the map it belongs to, so its contents come last.
@@ -80,7 +80,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         Placed::measured(EFI_PAGE, "efi", RESERVED, efi::page()),
         Placed::measured(KERNEL_BASE, "kernel", RAM, p.kernel),
         Placed::measured(INITRAMFS_BASE, "initramfs", RAM, p.initramfs),
-        // The map covers the reset page, so the shim is never told to accept what it runs from.
+        // The map covers the reset page, so it is measured like the rest.
         Placed::measured(RESET_ALIAS, "shim", RESERVED, vec![0u8; PAGE as usize]),
     ];
     boot::validate(&placed)?;
@@ -88,10 +88,13 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, 0)?;
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    let (shapes, lazy, accept) = memory(&mut placed, &spans, p.info, false)?;
-    let shim_page = shim(RESET_SHIM, p.entry, shapes.len(), lazy, &accept)?;
+    let (shapes, lazy, zeros) = memory(&mut placed, &spans, p.info, false)?;
+    let shim_page = shim(RESET_SHIM, p.entry, shapes.len())?;
     boot::fill(&mut placed, RESET_ALIAS, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
+    // Placed after the shapes and the authored-bytes count, both of which
+    // they follow from rather than feed.
+    placed.extend(zeros.iter().map(|(lo, hi)| Placed::zero(*lo, hi - lo)));
 
     // Ascending GPA order: how a loader adds pages and the digest is built.
     placed.sort_by_key(|p| p.base);
@@ -101,7 +104,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         spans,
         shapes,
         lazy,
-        accept,
+        zeros,
         entry: p.entry,
         shim_owned,
     })
@@ -113,7 +116,7 @@ pub fn tdx(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
 pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result<Launch, String> {
     let p = prepare(kernel_path, initramfs_path, params)?;
 
-    // The one authoritative map, as on TDX: E820, the imported pages and the accept list.
+    // The one authoritative map, as on TDX: E820 and the imported pages.
     let initramfs_len = p.initramfs.len();
     let mut placed = vec![
         // Blank: the zero page describes the map it belongs to, so its contents come last.
@@ -145,19 +148,20 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
     let mut zero = boot::zero_page(&p.setup, p.info, initramfs_len, ACPI_BASE, SNP_CC_BLOB)?;
     efi::claim_boot(&mut zero);
     boot::fill(&mut placed, ZERO_PAGE, zero)?;
-    let (shapes, lazy, accept) = memory(&mut placed, &spans, p.info, true)?;
-    let shim_page = shim(SNP_SHIM, p.entry, shapes.len(), lazy, &accept)?;
+    let (shapes, lazy, zeros) = memory(&mut placed, &spans, p.info, true)?;
+    let shim_page = shim(SNP_SHIM, p.entry, shapes.len())?;
     boot::fill(&mut placed, SHIM_BASE, shim_page)?;
     let shim_owned = shim_owned(&placed)?;
-    // What this image loads, which a loader converts to private as it imports
-    // it, and the RAM below the lazy bound, which it converts because this
-    // asks it to: the shim validates that and asks the host for nothing. Past
-    // the bound Linux converts what it uses, so one image serves a guest of
-    // any size.
+    // Placed after the shapes and the authored-bytes count, both of which
+    // they follow from rather than feed.
+    placed.extend(zeros.iter().map(|(lo, hi)| Placed::zero(*lo, hi - lo)));
+    // What this image loads, its zero pages included, which a loader converts
+    // to private as it imports it. Past the bound Linux converts what it uses,
+    // so one image serves a guest of any size.
     let mut required_memory: Vec<boot::Region> = spans
         .iter()
         .map(|(lo, hi, kind)| (*lo, hi - lo, *kind))
-        .chain(accept.iter().map(|(lo, hi)| (*lo, hi - lo, RAM)))
+        .chain(zeros.iter().map(|(lo, hi)| (*lo, hi - lo, RAM)))
         .collect();
     required_memory.sort_unstable();
 
@@ -168,25 +172,24 @@ pub fn snp(kernel_path: &Path, initramfs_path: &Path, params: &Params) -> Result
         spans,
         shapes,
         lazy,
-        accept,
+        zeros,
         entry: p.entry,
         shim_owned,
     })
 }
 
-/// Everything below the end of the kernel's decompression is accepted by the
-/// shim, since the decompressor runs before Linux's own acceptance does; past
-/// it, whole 2-MiB units are Linux's to accept (see shape.inc).
+/// Everything below the end of the kernel's decompression arrives accepted,
+/// since the decompressor runs before Linux's own acceptance does; past it,
+/// whole 2-MiB units are Linux's to accept (see shape.inc).
 fn lazy_bound(info: boot::KernelInfo) -> u64 {
     align_up(KERNEL_BASE + info.init_size as u64, UNACCEPTED_UNIT)
 }
 
-/// The shapes, the lazy bound and the ranges the shim accepts, as `memory`
-/// works them out.
+/// The shapes, the lazy bound and the zero ranges, as `memory` works them out.
 type Memory = (Vec<boot::Shape>, u64, Vec<(u64, u64)>);
 
 /// The memory side of a launch: the shapes the guest's map may take, measured
-/// into the shapes page; the lazy bound; and the ranges the shim accepts.
+/// into the shapes page; the lazy bound; and the RAM delivered as zero pages.
 fn memory(
     placed: &mut [Placed],
     spans: &[boot::Region],
@@ -200,8 +203,26 @@ fn memory(
         SHAPES_PAGE,
         boot::shapes_page(&shapes, spans, lazy)?,
     )?;
-    let accept = boot::shim_accept(spans, lazy);
-    Ok((shapes, lazy, accept))
+    let zeros = boot::zero_ranges(spans, lazy);
+    // mark_lazy marks every whole unit past the bound, so one that left the
+    // bitmap or the decompressor to Linux would mark memory nothing accepts;
+    // and the bitmap must arrive zero, which the zero pages make it.
+    let bitmap = (
+        UNACCEPTED_BITMAP,
+        UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
+    );
+    if !lazy.is_multiple_of(UNACCEPTED_UNIT) || lazy < bitmap.1 {
+        return Err(format!(
+            "{lazy:#x} is not a lazy bound past the unaccepted bitmap"
+        ));
+    }
+    if !zeros
+        .iter()
+        .any(|(lo, hi)| *lo <= bitmap.0 && bitmap.1 <= *hi)
+    {
+        return Err("the unaccepted bitmap lies outside the zero pages".into());
+    }
+    Ok((shapes, lazy, zeros))
 }
 
 /// Formats an io::Error with the action that failed.

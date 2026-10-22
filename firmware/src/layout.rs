@@ -15,7 +15,7 @@ layout! {
     ZERO_PAGE = 0x0000_7000;
     CMDLINE = 0x0002_0000;
     ACPI_BASE = 0x000e_0000;
-    // The two pages the loader fills and no shim accepts, both unmeasured: the
+    // The two pages the loader fills, both unmeasured: the
     // processor count, and the map of the machine the guest was given.
     PARAM_PAGE = 0x000e_1000;
     PARAM_MAP_PAGE = 0x000e_2000;
@@ -63,7 +63,7 @@ layout! {
     // runtime services and that one table. One measured page holds the system
     // table, its configuration table, the vendor string, the memory map and,
     // in its last bytes, the unaccepted table's header; the bitmap that header
-    // begins follows it in RAM the shim accepts, and so zeroes, before marking any of it.
+    // begins follows it in the image's zero pages, so it arrives zero.
     EFI_PAGE = 0x0040_0000;
     EFI_CONFIG_TABLE = 0x80;
     EFI_VENDOR = 0xa0;
@@ -94,8 +94,8 @@ layout! {
 
     // The fixed part of the MADT, measured inside the shim page that builds the rest.
     SHIM_MADT = 0x0000_0b80;
-    // Where each shim finds its data block: the kernel entry point, how many
-    // shapes the shapes page holds, and the ranges to accept.
+    // Where each shim finds its data block: the kernel entry point and how
+    // many shapes the shapes page holds.
     SHIM_DATA = 0x0000_0c00;
     // The block runs to the reset vector; nothing else lives in the page.
     SHIM_DATA_SIZE = RESET_VECTOR - SHIM_DATA;
@@ -104,9 +104,6 @@ layout! {
 
     SHIM_DATA_ENTRY = 0;
     SHIM_DATA_SHAPES = 8;
-    // The RAM the shim accepts (boot::shim_accept), as pairs of addresses,
-    // then a zero pair.
-    SHIM_DATA_ACCEPT = 16;
 
     // One shape: the loader's map, entry for entry, with one RAM entry whose
     // size is the host's to choose within bounds; the E820 table and the EFI
@@ -226,15 +223,14 @@ const _: () = assert!(PAGE_TABLES + PAGE_TABLE_SIZE <= BSP_STACK);
 const _: () = assert!(GDT_PTR + 10 <= BSP_STACK_TOP);
 const _: () = assert!(BSP_STACK_TOP <= SHAPES_PAGE && SHAPES_PAGE + SHAPES_SIZE <= SHIM_BASE);
 // The EFI page and the bitmap after it lie between the shim's pages and the
-// kernel, in a gap of the measured map the shim accepts, and so zeroes,
-// before it marks any of the bitmap: the header the shim sizes runs into it.
+// kernel, the bitmap in a gap of the measured map that the image fills with
+// zero pages: the header the shim sizes runs into it.
 const _: () = assert!(KERNEL_SETUP_END <= EFI_PAGE && EFI_PAGE.is_multiple_of(PAGE));
 const _: () = assert!(UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE <= KERNEL_BASE);
 const _: () = assert!(UNACCEPTED_UNIT == 1 << UNACCEPTED_UNIT_SHIFT);
 // The bitmap has a bit for every unit the identity map reaches.
 const _: () = assert!(UNACCEPTED_BITMAP_SIZE * 8 * UNACCEPTED_UNIT >= MAX_MEMORY);
 const _: () = assert!(EFI_CONFIG_TABLE + 24 <= EFI_VENDOR && EFI_VENDOR + 16 <= EFI_MEMMAP);
-const _: () = assert!(SHIM_DATA_ACCEPT > SHIM_DATA_SHAPES);
 // One PML4 page and one PDPT per PDPT_SPAN.
 const _: () = assert!(MAP_LIMIT.is_multiple_of(PDPT_SPAN));
 const _: () = assert!(PAGE_TABLE_SIZE == (MAP_LIMIT / PDPT_SPAN + 1) * PAGE);

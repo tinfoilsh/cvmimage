@@ -66,44 +66,12 @@ pub(crate) fn prepare(
     })
 }
 
-/// The shim's data block: the entry point, how many shapes the shapes page
-/// holds, and the ranges the shim accepts (`shim_accept`), then a zero pair.
-/// The lazy bound the shapes and the ranges were made for is checked here. All of it follows from what this image placed, so nothing about
-/// the guest's RAM is measured here.
-pub fn data_block(
-    entry: u64,
-    shapes: usize,
-    lazy: u64,
-    accept: &[(u64, u64)],
-) -> Result<Vec<u8>, String> {
-    // mark_lazy marks every whole unit past the bound, so one that left the
-    // bitmap or the decompressor to Linux would mark memory nothing accepts.
-    if !lazy.is_multiple_of(UNACCEPTED_UNIT) || lazy < UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE {
-        return Err(format!(
-            "{lazy:#x} is not a lazy bound past the unaccepted bitmap"
-        ));
-    }
-    // ...and the bitmap is zero when it marks it only because it is accepted.
-    let bitmap = (
-        UNACCEPTED_BITMAP,
-        UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
-    );
-    if !accept
-        .iter()
-        .any(|(lo, hi)| *lo <= bitmap.0 && bitmap.1 <= *hi)
-    {
-        return Err("the unaccepted bitmap lies outside the RAM the shim accepts".into());
-    }
-    if accept.iter().any(|(lo, hi)| lo >= hi) || accept.windows(2).any(|w| w[0].1 > w[1].0) {
-        return Err("an accept range is empty or out of order".into());
-    }
+/// The shim's data block: the entry point and how many shapes the shapes page
+/// holds. Both follow from what this image placed, so nothing about the
+/// guest's RAM is measured here.
+pub fn data_block(entry: u64, shapes: usize) -> Result<Vec<u8>, String> {
     let mut data = entry.to_le_bytes().to_vec();
     data.extend_from_slice(&(shapes as u64).to_le_bytes());
-    for (lo, hi) in accept {
-        data.extend_from_slice(&lo.to_le_bytes());
-        data.extend_from_slice(&hi.to_le_bytes());
-    }
-    data.extend_from_slice(&[0u8; 16]);
     if data.len() > SHIM_DATA_SIZE as usize {
         return Err(format!(
             "shim data block needs {} of its {SHIM_DATA_SIZE} bytes",
@@ -114,14 +82,8 @@ pub fn data_block(
     Ok(data)
 }
 
-pub(crate) fn shim(
-    blob: &[u8],
-    entry: u64,
-    shapes: usize,
-    lazy: u64,
-    accept: &[(u64, u64)],
-) -> Result<Vec<u8>, String> {
-    let data = data_block(entry, shapes, lazy, accept)?;
+pub(crate) fn shim(blob: &[u8], entry: u64, shapes: usize) -> Result<Vec<u8>, String> {
+    let data = data_block(entry, shapes)?;
     let (mut shim, at) = (blob.to_vec(), SHIM_DATA as usize);
     if shim[at..at + data.len()].iter().any(|b| *b != 0) {
         return Err("shim code overruns its data block".into());
@@ -295,9 +257,9 @@ mod tests {
     /// reach, so it is asserted against what the assembler actually emitted.
     #[test]
     fn each_shim_runs_the_routines_it_is_built_from() {
-        for (blob, dis, entered, accept) in [
-            (RESET_SHIM, RESET_LISTING, "long_mode", "accept_range"),
-            (SNP_SHIM, SNP_LISTING, "snp_reset_start", "validate_range"),
+        for (blob, dis, entered) in [
+            (RESET_SHIM, RESET_LISTING, "long_mode"),
+            (SNP_SHIM, SNP_LISTING, "snp_reset_start"),
         ] {
             let code = listing(dis);
             let symbols = symbols(dis);
@@ -320,11 +282,10 @@ mod tests {
             };
 
             // The boot path runs these once each, in this order: the map is
-            // matched before anything is written from it, and the bitmap is
-            // marked only once the RAM it lives in is accepted.
+            // matched before anything is written from it.
             // The SNP shim starts with the first of these, at offset 0.
             let mut last = None;
-            for name in ["shape_match", "shape_apply", "accept_fixed", "mark_lazy"] {
+            for name in ["shape_match", "shape_apply", "mark_lazy"] {
                 let at = sites(name);
                 assert_eq!(at.len(), 1, "{name} is reached from {} places", at.len());
                 assert_eq!(
@@ -347,8 +308,6 @@ mod tests {
                 "shape_apply is handed something other than the zero page"
             );
 
-            // accept_fixed hands its ranges to this platform's own primitive
-            // and to nothing else.
             let from = |caller: &str| -> Vec<&str> {
                 calls
                     .iter()
@@ -356,11 +315,6 @@ mod tests {
                     .map(|(_, name)| *name)
                     .collect()
             };
-            assert_eq!(
-                from("accept_fixed"),
-                [accept],
-                "accept_fixed hands ranges elsewhere"
-            );
             assert_eq!(
                 from("shape_match"),
                 ["shape_try"],
@@ -373,10 +327,10 @@ mod tests {
         }
     }
 
-    /// Neither shim converts memory or shares a page: the SNP shim validates
-    /// what the loader made private before launch, and exits to the host only
-    /// to terminate; the TDX shim calls the TDX module, and the host only to
-    /// report a failure. A port write, a page state change or a second exit
+    /// Neither shim accepts, converts or shares memory: the loader delivers
+    /// what Linux needs accepted as measured pages. The SNP shim exits to the
+    /// host only to terminate, and the TDX shim calls out only to report a
+    /// failure. A port write, a PVALIDATE, an accept or a second exit
     /// assembles and passes every other test exactly as well.
     #[test]
     fn no_shim_asks_the_host_for_anything_but_to_stop() {
@@ -394,6 +348,25 @@ mod tests {
             exits.len()
         );
         assert_eq!(routine(&snp_symbols, exits[0]), "die_step");
+        let tdx = listing(RESET_LISTING);
+        let tdx_symbols = symbols(RESET_LISTING);
+        let calls: Vec<u64> = tdx
+            .iter()
+            .filter(|(_, text)| text.first() == Some(&"tdcall"))
+            .map(|(at, _)| *at)
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "the TDX shim calls the TDX module {} times",
+            calls.len()
+        );
+        assert_eq!(routine(&tdx_symbols, calls[0]), "die");
+        assert!(
+            !snp.iter()
+                .any(|(_, text)| text.first() == Some(&"pvalidate")),
+            "the SNP shim validates memory"
+        );
         let port_io = [
             "in", "inb", "inw", "inl", "out", "outb", "outw", "outl", "insb", "insw", "insl",
             "outsb", "outsw", "outsl",
@@ -414,6 +387,9 @@ mod tests {
                 "ghcb_private",
                 "host_regions",
                 "accept_walk",
+                "accept_fixed",
+                "accept_range",
+                "validate_range",
             ] {
                 assert!(
                     !symbols.iter().any(|(_, n)| *n == name),
@@ -443,9 +419,8 @@ mod tests {
         );
     }
 
-    /// The shims accept and mark through the identity map, so every range
-    /// either touches is mapped: the fixed ranges below the bound, and the RAM
-    /// of every shape up to the most it may end at.
+    /// The identity map reaches the RAM of every shape up to the most it may
+    /// end at, so a guest the shapes admit is one the measured tables cover.
     #[test]
     fn every_range_the_shim_is_told_to_touch_is_mapped() {
         let map = identity_map(DEFAULT_CBIT as u64);
@@ -457,9 +432,6 @@ mod tests {
         )];
         let spans = boot::shim_spans(&placed);
         let lazy = KERNEL_BASE + 0x400_0000;
-        for (_, hi) in boot::shim_accept(&spans, lazy) {
-            assert_eq!(pdpte(&map, hi - PAGE) & 1, 1, "{hi:#x} is unmapped");
-        }
         for amd in [false, true] {
             for shape in boot::qemu_shapes(amd, boot::least_memory(&spans, lazy)) {
                 assert!(shape.max_end <= MAP_LIMIT);

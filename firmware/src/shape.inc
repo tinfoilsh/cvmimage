@@ -4,16 +4,16 @@
 # RAM entry, and copies the tables the image built for it.
 #
 #   \fail    where a map that is no shape this image knows terminates
-#   \accept  accepts [%r12, %r13) as private memory, and returns
 #
 # The routines run in this order, the shape in %rbx and the top of guest RAM in
 # %r8 from the first on: shape_match, shape_apply (with the zero page in %rdi),
-# accept_fixed, mark_lazy.
+# mark_lazy. The shim accepts no memory: the image delivers what Linux needs
+# accepted as measured pages, and Linux accepts the units mark_lazy marks.
 # None of it executes a privileged instruction, and the only addresses it names
 # are this layout's own, so the same assembly runs in the test harness that
 # holds it to boot.rs with those pages mapped where a guest has them.
 
-.macro shape_code fail, accept
+.macro shape_code fail
 
 # The shape the loader's map is -> %rbx the shape, %r8 the top of guest RAM.
 # Clobbers rax, rcx, rdx, rsi, rdi, r9, r10 and r11.
@@ -113,33 +113,12 @@ shape_apply:
     mov %rax, UNACCEPTED_SIZE
     ret
 
-# Every range the data block lists, each handed to \accept: the RAM below the
-# lazy bound this image did not place, and past it the rest of each unit the
-# image places a page in, which no bit marks. They are measured, so nothing
-# the loader says decides what is accepted.
-# Clobbers r12, r13 and what \accept does, plus rsi.
-accept_fixed:
-    lea shim_data+SHIM_DATA_ACCEPT(%rip), %rsi
-1:  mov (%rsi), %r12
-    mov 8(%rsi), %r13
-    test %r13, %r13
-    jz 2f                           # the terminating pair
-    push %rsi
-    push %r8
-    push %rbx
-    call \accept
-    pop %rbx
-    pop %r8
-    pop %rsi
-    add $16, %rsi
-    jmp 1b
-2:  ret
-
 # A bit in the unaccepted bitmap for each whole unit of the shape's RAM ranges,
 # for Linux to accept as it allocates. The image built them to start at or
 # past the lazy bound and to leave out the units that are the shim's
-# (boot::span_units): those it places a page in, which arrive accepted, and
-# the guard after each, which accept_fixed accepts. Nothing else is marked:
+# (boot::span_units): those it places a page in, and the guard after each,
+# which it fills with measured zero pages, so all arrive accepted. Nothing
+# else is marked:
 # Linux also accepts the unit after a range it accepts whenever that unit's
 # bit is set, so a bit past the end of RAM would send it to accept memory no
 # one backed. The bitmap is accepted RAM, and so zero, by now.

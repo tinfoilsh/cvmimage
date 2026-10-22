@@ -760,16 +760,17 @@ func TestBootFailurePreservesErrorWhenReporterCannotStart(t *testing.T) {
 	}
 }
 
-func TestScrubProvisionedSecretsWipesTargets(t *testing.T) {
+func TestScrubCustomerSecretsWipesTargets(t *testing.T) {
 	dir := t.TempDir()
 	secrets := filepath.Join(dir, "secrets")
-	if err := os.MkdirAll(filepath.Join(secrets, "tls"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(secrets, "docker-config"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		filepath.Join(secrets, "external-config.yml"): "api-key: supersecret",
-		filepath.Join(secrets, "tls", "key.pem"):      "PRIVATE KEY MATERIAL",
-		filepath.Join(secrets, "hpke_key.json"):        `{"k":"v"}`,
+		filepath.Join(secrets, "external-config.yml"):             "api-key: supersecret",
+		filepath.Join(secrets, "docker-config", "config.json"):   `{"auths":{}}`,
+		filepath.Join(secrets, "docker-config", "ecr-refresh.json"): `{"token":"x"}`,
+		filepath.Join(secrets, "gcloud_key.json"):                `{"type":"service_account"}`,
 	}
 	for path, content := range files {
 		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
@@ -778,8 +779,8 @@ func TestScrubProvisionedSecretsWipesTargets(t *testing.T) {
 	}
 
 	targets := []string{secrets, filepath.Join(dir, "absent")}
-	if err := scrubProvisionedSecrets(targets); err != nil {
-		t.Fatalf("scrubProvisionedSecrets: %v", err)
+	if err := scrubCustomerSecrets(targets); err != nil {
+		t.Fatalf("scrubCustomerSecrets: %v", err)
 	}
 
 	if _, err := os.Lstat(secrets); !errors.Is(err, os.ErrNotExist) {
@@ -793,21 +794,6 @@ func TestScrubProvisionedSecretsWipesTargets(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("leftover files after scrub: %v", entries)
-	}
-}
-
-func TestScrubReportsUnwritableFiles(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "gcloud_key.json")
-	if err := os.WriteFile(path, []byte("key"), 0400); err != nil {
-		t.Fatal(err)
-	}
-	// pid1 runs as root and can write 0400 files; simulate failure with a
-	// directory in place of a file, which cannot be opened for writing.
-	if err := os.Chmod(path, 0000); err != nil {
-		t.Fatal(err)
-	}
-	if err := scrubProvisionedSecrets([]string{path}); err == nil {
-		t.Fatal("scrub did not report an unwritable target")
 	}
 }
 

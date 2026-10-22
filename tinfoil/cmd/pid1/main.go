@@ -179,36 +179,38 @@ func run(parent context.Context) (result error) {
 }
 
 // reportFailure seals the boot failure once every state writer has stopped,
-// scrubs every provisioned secret, and serves the terminal state read-only
-// until shutdown. No attestation listener is passed: the workloads are gone,
-// so only the host polls this shim over TLS.
+// scrubs customer secrets, and serves the terminal state read-only until
+// shutdown. No attestation listener is passed: the workloads are gone, so
+// only the host polls this shim over TLS.
 func reportFailure(ctx context.Context, manager *supervisor.Manager, failure error) error {
 	initLogf("boot failed: %v; retaining boot status after cleanup", failure)
-	result := boot.CompleteFailure()
-	scrubErr := scrubProvisionedSecrets(scrubTargets)
-	if result != nil {
-		return fmt.Errorf("sealing boot failure: %w", result)
+	var scrubErr error
+	if err := boot.CompleteFailure(); err != nil {
+		// Without a sealed state there is nothing for the status shim to
+		// serve; scrub anyway so the failure path still leaves no secrets.
+		scrubErr = scrubCustomerSecrets(customerSecretTargets)
+		return errors.Join(fmt.Errorf("sealing boot failure: %w", err), scrubErr)
 	}
-	if scrubErr != nil {
-		return fmt.Errorf("scrubbing provisioned secrets: %w", scrubErr)
-	}
-	return serveBootFailure(ctx, supervisor.New(ctx, manager, supervisor.Config{}), nil, serviceTermGrace, serviceKillGrace)
+	scrubErr = scrubCustomerSecrets(customerSecretTargets)
+	// The host can only learn the failure from the status endpoint, so serve
+	// it even when the scrub failed; the scrub error still propagates.
+	return errors.Join(scrubErr, serveBootFailure(ctx, supervisor.New(ctx, manager, supervisor.Config{}), nil, serviceTermGrace, serviceKillGrace))
 }
 
-// scrubTargets are the private artifacts boot provisions before the failing
-// stage. Everything that remains serves the terminal boot state only.
-var scrubTargets = []string{
-	boot.ExternalConfigPath, // keyserver secret values after merge
-	boot.HPKEKeyPath,
-	boot.TLSDir,         // cert + key
-	boot.DockerConfigDir, // registry tokens incl. ECR refresh
+// customerSecretTargets holds the customer credential material boot copies
+// from the host config disk: the external config itself plus the registry
+// credentials derived from it. Keyserver-fetched values never touch disk —
+// they live only in the sealed memfd handoff, which dies with its holders —
+// and the TLS/HPKE/attested keys are per-deployment enclave material.
+var customerSecretTargets = []string{
+	boot.ExternalConfigPath, // customer-supplied secret values
+	boot.DockerConfigDir,    // registry tokens derived from them
 	boot.GCloudKeyPath,
-	boot.AttestedKeysDir, // workload private keys
 }
 
-// scrubProvisionedSecrets overwrites and removes every target. The
-// status-only shim reads only boot-state.json, so nothing running needs them.
-func scrubProvisionedSecrets(targets []string) error {
+// scrubCustomerSecrets overwrites and removes every target. The status-only
+// shim reads only boot-state.json, so nothing running needs them.
+func scrubCustomerSecrets(targets []string) error {
 	var errs []error
 	for _, target := range targets {
 		errs = append(errs, scrubPath(target))

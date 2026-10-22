@@ -1,7 +1,7 @@
 use crate::image::{
     component, components, config_field, page_directive, param_gpa, parameter_directives,
-    write_manifest, zeros, Component, ReportFields, COMPAT, PARAM_AREA, PARAM_MAP_AREA,
-    PARAM_OFFSET, PARAM_PAGES,
+    write_manifest, zero_directive, zero_run, zeros, Component, ReportFields, COMPAT, HUGE_PAGES,
+    PARAM_AREA, PARAM_MAP_AREA, PARAM_OFFSET, PARAM_PAGES,
 };
 use igvm::{
     IgvmDirectiveHeader, IgvmFile, IgvmInitializationHeader, IgvmPlatformHeader, IgvmRevision,
@@ -118,6 +118,11 @@ pub fn build(
             }
             Fill::Host => add_special(&mut pages, region.base, PAGE_SECRETS),
             Fill::Measured(data) => add_normal(&mut pages, region.base, data),
+            Fill::Zero(size) => pages.extend((0..size / PAGE).map(|i| LaunchPage {
+                gpa: region.base + i * PAGE,
+                data: Vec::new(),
+                kind: PAGE_NORMAL,
+            })),
             Fill::Parameters => {}
         }
     }
@@ -130,8 +135,8 @@ pub fn build(
     validate_vmsa(&bsp_vmsa, SHIM_BASE, BSP_STACK_TOP, ZERO_PAGE)?;
     let vmsa = vmsa_page(&bsp_vmsa);
     let measurement = launch_measurement(&pages, std::slice::from_ref(&vmsa));
-    // The loader must find memory backed where this image puts pages, and
-    // where the shim validates. It is asked for no more of the guest's RAM:
+    // The loader must find memory backed where this image puts pages, its
+    // zero pages included. It is asked for no more of the guest's RAM:
     // on SEV-SNP this directive is how a loader converts memory to private,
     // not a check it makes, and a guest that has all its RAM converted for it
     // is a guest whose image states a machine size.
@@ -156,11 +161,21 @@ pub fn build(
             at += bytes;
         }
     }
-    for p in &pages {
+    let zero = |p: &LaunchPage| (p.kind == PAGE_NORMAL && p.data.is_empty()).then_some(p.gpa);
+    let mut n = 0;
+    while n < pages.len() {
+        let p = &pages[n];
+        if zero_run(&pages, n, zero) {
+            directives.push(zero_directive(p.gpa, true));
+            n += HUGE_PAGES;
+            continue;
+        }
         match p.kind {
             PAGE_UNMEASURED => directives.extend(parameter_directives(p.gpa)?),
+            _ if zero(p).is_some() => directives.push(zero_directive(p.gpa, false)),
             kind => directives.push(page_directive(p.gpa, igvm_type(kind), p.data.clone())),
         }
+        n += 1;
     }
     // KVM consumes the save area last and only at this architectural high GPA.
     // One context, whatever -smp is: QEMU leaves a processor it has no context
@@ -343,9 +358,11 @@ fn igvm_type(kind: u8) -> IgvmPageDataType {
     }
 }
 
-// SNP_LAUNCH_UPDATE hashes page contents only for NORMAL and VMSA pages.
+// SNP_LAUNCH_UPDATE hashes page contents only for NORMAL and VMSA pages. A
+// zero page (no data) is the page of zeros the loader imports for it.
 fn extend(old: [u8; 48], gpa: u64, kind: u8, page: &[u8]) -> [u8; 48] {
     let content: [u8; 48] = match kind {
+        PAGE_NORMAL if page.is_empty() => Sha384::digest([0u8; PAGE as usize]).into(),
         PAGE_NORMAL | PAGE_VMSA => Sha384::digest(page).into(),
         _ => [0u8; 48],
     };
@@ -410,15 +427,30 @@ pub fn measure_snp(file: &[u8]) -> Result<[u8; 48], String> {
                 data_type,
                 data,
             } if *compatibility_mask == COMPAT => {
-                if flags.is_2mb_page() || flags.unmeasured() || flags.shared() {
-                    return Err(format!(
-                        "SNP IGVM page at {gpa:#x} is not a measured 4K page"
-                    ));
+                if flags.unmeasured() || flags.shared() {
+                    return Err(format!("SNP IGVM page at {gpa:#x} is not measured"));
+                }
+                // A 2 MiB page is only ever a run of zero pages.
+                if flags.is_2mb_page() {
+                    if *data_type != IgvmPageDataType::NORMAL || !data.is_empty() {
+                        return Err(format!(
+                            "SNP IGVM 2 MiB page at {gpa:#x} is not a run of zero pages"
+                        ));
+                    }
+                    pages.extend((0..HUGE_PAGES as u64).map(|i| LaunchPage {
+                        gpa: gpa + i * PAGE,
+                        data: Vec::new(),
+                        kind: PAGE_NORMAL,
+                    }));
+                    continue;
                 }
                 // Normal pages are hashed, so length must be exact. The
                 // firmware fills CPUID and secrets, whose contents are not
                 // hashed at all.
-                if *data_type == IgvmPageDataType::NORMAL && data.len() != PAGE as usize {
+                if *data_type == IgvmPageDataType::NORMAL
+                    && !data.is_empty()
+                    && data.len() != PAGE as usize
+                {
                     return Err(format!(
                         "SNP IGVM normal page at {gpa:#x} is {} bytes, expected {PAGE}",
                         data.len()
@@ -743,12 +775,11 @@ mod tests {
     /// On SEV-SNP a required-memory directive is not a check: QEMU converts the
     /// range to private in the RMP (target/i386/sev.c). Declaring a machine's
     /// worth of it would bind one published image to one guest size, so this
-    /// states the pages the image loads -- all of them, because a loader that
-    /// has none backed there cannot import them -- and the RAM below the lazy
-    /// bound the shim validates, which the loader converts so that the shim
-    /// asks the host for nothing. Nothing past the bound: that is Linux's.
+    /// states the pages the image loads -- all of them, its zero pages
+    /// included, because a loader that has none backed there cannot import
+    /// them. Nothing past the bound but those: the rest is Linux's.
     #[test]
-    fn required_memory_is_what_the_image_loads_and_the_ram_below_the_bound() {
+    fn required_memory_is_what_the_image_loads() {
         let dir = tempdir().unwrap();
         let (k, i, out) = (
             dir.path().join("bzImage"),
@@ -771,7 +802,12 @@ mod tests {
                         number_of_bytes,
                         ..
                     } => required.push((*gpa, *gpa + u64::from(*number_of_bytes))),
-                    IgvmDirectiveHeader::PageData { gpa, .. } => push_page(&mut loaded, *gpa),
+                    IgvmDirectiveHeader::PageData { gpa, flags, .. } => {
+                        let pages = if flags.is_2mb_page() { HUGE_PAGES } else { 1 };
+                        for n in 0..pages as u64 {
+                            push_page(&mut loaded, gpa + n * PAGE);
+                        }
+                    }
                     IgvmDirectiveHeader::ParameterInsert(p) => push_page(&mut loaded, p.gpa),
                     _ => {}
                 }
@@ -787,17 +823,12 @@ mod tests {
             }
             (spans, loaded)
         };
-        let (spans, mut loaded) = declared();
+        let (spans, loaded) = declared();
         let params = Params::snp(DEFAULT_CBIT, "").unwrap();
         let launch = tinfoil_firmware::snp(&k, &i, &params).unwrap();
-        for (lo, hi) in &launch.accept {
-            for gpa in (*lo..*hi).step_by(PAGE as usize) {
-                push_page(&mut loaded, gpa);
-            }
-        }
         assert_eq!(
             spans, loaded,
-            "the image requires something it neither loads nor validates"
+            "the image requires something it does not load"
         );
         assert!(spans.iter().any(|(lo, hi)| *lo == 0 && launch.lazy <= *hi));
         // Nothing the image loads is left out, so nothing is imported into
@@ -811,14 +842,14 @@ mod tests {
     }
 
     /// The shim writes the zero page, the EFI page and the ACPI page and reads
-    /// its shapes before it validates anything, and reads the page tables, the
+    /// its shapes, and reads the page tables, the
     /// loader's two parameter pages and its own stack throughout. All of those
     /// have to arrive private and validated, which is what the loader
     /// importing them does -- so every one has to be inside a span this image
     /// declares. One left out is a fault in the first instructions of a guest
     /// with no console.
     #[test]
-    fn every_page_the_shim_touches_before_it_converts_is_declared() {
+    fn every_page_the_shim_touches_is_declared() {
         let dir = tempdir().unwrap();
         let (k, i) = (dir.path().join("bzImage"), dir.path().join("initrd"));
         fs::write(&k, test_kernel()).unwrap();
@@ -847,11 +878,11 @@ mod tests {
         ] {
             assert!(covered(lo, hi), "{name} ({lo:#x}..{hi:#x}) is not declared");
         }
-        // ...and so is every range it validates.
-        for (lo, hi) in &launch.accept {
+        // ...and so are the zero pages Linux starts in.
+        for (lo, hi) in &launch.zeros {
             assert!(
                 covered(*lo, *hi),
-                "{lo:#x}..{hi:#x} is validated undeclared"
+                "{lo:#x}..{hi:#x} is delivered undeclared"
             );
         }
     }

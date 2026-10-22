@@ -252,7 +252,7 @@ page (`firmware/src/efi.rs`) and points `boot_params.efi_info` at it. It states
 an EFI boot that has already exited: a system table with no boot or runtime
 services and that one table, as an OVMF guest is after `ExitBootServices` with
 `CONFIG_EFI_DISABLE_RUNTIME`. The table's bitmap, one bit a 2-MiB unit, follows
-the page in RAM the shim accepts and clears first.
+the page in the image's zero pages, so it arrives accepted and clear.
 
 At boot the shim (`firmware/src/lazy.inc`):
 

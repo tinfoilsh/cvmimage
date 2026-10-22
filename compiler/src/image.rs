@@ -41,7 +41,36 @@ pub const PARAM_PAGES: [u64; 2] = [PARAM_PAGE, PARAM_MAP_PAGE];
 #[derive(PartialEq)]
 pub struct Page {
     pub gpa: u64,
+    /// The page's contents, empty for a zero page; None for the loader's
+    /// parameter page.
     pub data: Option<Vec<u8>>,
+}
+
+/// Whether the 512 pages from `n` are one 2-MiB-aligned run of zero pages,
+/// `zero` giving a zero page's address. A loader is handed such a run as one
+/// 2 MiB page, which it measures as the 512 4-KiB pages it holds.
+pub fn zero_run<T>(pages: &[T], n: usize, zero: impl Fn(&T) -> Option<u64>) -> bool {
+    let Some(base) = zero(&pages[n]) else {
+        return false;
+    };
+    base.is_multiple_of(HUGE_PAGE)
+        && pages.len() >= n + HUGE_PAGES
+        && (0..HUGE_PAGES).all(|i| zero(&pages[n + i]) == Some(base + i as u64 * PAGE))
+}
+
+pub const HUGE_PAGE: u64 = 0x20_0000;
+pub const HUGE_PAGES: usize = (HUGE_PAGE / PAGE) as usize;
+
+/// A zero page, or a 2 MiB run of them: a page directive with no data, which a
+/// loader imports as zeros and measures as a page of them.
+pub fn zero_directive(gpa: u64, huge: bool) -> IgvmDirectiveHeader {
+    IgvmDirectiveHeader::PageData {
+        gpa,
+        compatibility_mask: COMPAT,
+        flags: IgvmPageDataFlags::new().with_is_2mb_page(huge),
+        data_type: IgvmPageDataType::NORMAL,
+        data: Vec::new(),
+    }
 }
 
 #[derive(Serialize)]
@@ -172,6 +201,10 @@ pub fn launch_pages(placed: &[Placed]) -> Result<Vec<Page>, String> {
                     data: Some(data),
                 }))
             }
+            Fill::Zero(size) => out.extend((0..size / PAGE).map(|i| Page {
+                gpa: region.base + i * PAGE,
+                data: Some(Vec::new()),
+            })),
             Fill::Parameters => {}
             Fill::Host => {
                 return Err(format!(
@@ -241,8 +274,22 @@ fn igvm(pages: &[Page]) -> Result<Vec<u8>, String> {
         shared_gpa_boundary: 0,
     });
     let mut directives = Vec::new();
-    for p in pages {
+    let zero = |p: &Page| {
+        p.data
+            .as_ref()
+            .is_some_and(|d| d.is_empty())
+            .then_some(p.gpa)
+    };
+    let mut n = 0;
+    while n < pages.len() {
+        let p = &pages[n];
+        if zero_run(pages, n, zero) {
+            directives.push(zero_directive(p.gpa, true));
+            n += HUGE_PAGES;
+            continue;
+        }
         match &p.data {
+            Some(data) if data.is_empty() => directives.push(zero_directive(p.gpa, false)),
             Some(data) => directives.push(page_directive(
                 p.gpa,
                 IgvmPageDataType::NORMAL,
@@ -250,6 +297,7 @@ fn igvm(pages: &[Page]) -> Result<Vec<u8>, String> {
             )),
             None => directives.extend(parameter_directives(p.gpa)?),
         }
+        n += 1;
     }
     let file = IgvmFile::new(IgvmRevision::V1, vec![platform], vec![], directives)
         .map_err(|e| format!("construct TDX IGVM: {e}"))?;
@@ -276,15 +324,15 @@ fn igvm_pages(file: &[u8]) -> Result<Vec<Page>, String> {
                 data,
             } if *compatibility_mask == COMPAT
                 && *data_type == IgvmPageDataType::NORMAL
-                && !flags.is_2mb_page()
                 && !flags.unmeasured()
                 && !flags.shared()
-                && data.len() == PAGE as usize =>
+                && (data.is_empty() || data.len() == PAGE as usize && !flags.is_2mb_page()) =>
             {
-                out.push(Page {
-                    gpa: *gpa,
+                let count = if flags.is_2mb_page() { HUGE_PAGES } else { 1 };
+                out.extend((0..count as u64).map(|i| Page {
+                    gpa: gpa + i * PAGE,
                     data: Some(data.clone()),
-                })
+                }))
             }
             IgvmDirectiveHeader::ParameterArea {
                 number_of_bytes,
@@ -380,7 +428,7 @@ pub fn measure_tdx(file: &[u8]) -> Result<[u8; 48], String> {
 pub mod tests {
     use super::*;
     use tempfile::tempdir;
-    use tinfoil_firmware::boot::{Shape, RAM, RESERVED};
+    use tinfoil_firmware::boot::{Fill, Shape, RAM, RESERVED};
 
     pub fn params() -> Params {
         Params::tdx("").unwrap()
@@ -657,11 +705,12 @@ pub mod tests {
             .collect()
     }
 
-    /// The shim accepts the RAM below the lazy bound the image did not place,
-    /// and nothing else: no page it loaded (accepting one again would replace
-    /// it), no page past the bound (that is Linux's), and no gap.
+    /// The image delivers accepted, as measured zero pages, the RAM below the
+    /// lazy bound it did not otherwise place, and past the bound only what it
+    /// leaves of the units it places in: no page it loaded twice, nothing
+    /// else of Linux's, and no gap. The shim is told nothing about memory.
     #[test]
-    fn the_shim_accepts_exactly_the_ram_below_the_bound_it_did_not_place() {
+    fn the_image_delivers_exactly_the_ram_below_the_bound_accepted() {
         let dir = tempdir().unwrap();
         for snp in [false, true] {
             let (_, launch) = launched(dir.path(), snp);
@@ -669,20 +718,27 @@ pub mod tests {
             let word = |at: u64| u64::from_le_bytes(block[at as usize..][..8].try_into().unwrap());
             assert_eq!(word(SHIM_DATA_ENTRY), KERNEL_BASE + 0x200);
             assert_eq!(word(SHIM_DATA_SHAPES), launch.shapes.len() as u64);
-            let mut listed = Vec::new();
-            let mut at = SHIM_DATA_ACCEPT;
-            while word(at + 8) != 0 {
-                listed.push((word(at), word(at + 8)));
-                at += 16;
-            }
-            assert_eq!(listed, launch.accept);
+            assert!(
+                block[16..].iter().all(|b| *b == 0),
+                "the data block lists more"
+            );
+            let zeros: Vec<(u64, u64)> = launch
+                .placed
+                .iter()
+                .filter(|p| matches!(p.fill, Fill::Zero(_)))
+                .map(|p| (p.base, p.base + p.span()))
+                .collect();
+            assert_eq!(
+                zeros, launch.zeros,
+                "snp={snp}: zero pages are not what was placed"
+            );
             let placed: Vec<(u64, u64)> = launch
                 .spans
                 .iter()
                 .filter(|(lo, _, _)| *lo < launch.lazy)
                 .map(|(lo, hi, _)| (*lo, *hi))
                 .collect();
-            let mut tiles: Vec<(u64, u64)> = listed
+            let mut tiles: Vec<(u64, u64)> = zeros
                 .iter()
                 .copied()
                 .filter(|(lo, _)| *lo < launch.lazy)
@@ -691,7 +747,10 @@ pub mod tests {
             tiles.sort_unstable();
             let mut at = 0;
             for (lo, hi) in tiles {
-                assert_eq!(lo, at, "snp={snp}: {at:#x} is neither accepted nor placed");
+                assert_eq!(
+                    lo, at,
+                    "snp={snp}: {at:#x} is neither a zero page nor placed"
+                );
                 at = hi;
             }
             assert!(
@@ -700,7 +759,7 @@ pub mod tests {
             );
             // Past the bound, only what the image leaves of the units it
             // places in.
-            for (lo, hi) in listed.iter().filter(|(_, hi)| *hi > launch.lazy) {
+            for (lo, hi) in zeros.iter().filter(|(_, hi)| *hi > launch.lazy) {
                 let unit = lo / UNIT * UNIT;
                 assert!(
                     launch.spans.iter().any(|(s, e, kind)| *kind == RAM
@@ -712,8 +771,8 @@ pub mod tests {
         }
     }
 
-    /// However long the initramfs, the unit after its last page is the shim's
-    /// to accept and never Linux's: Linux frees the initramfs without the
+    /// However long the initramfs, the unit after its last page arrives
+    /// accepted and is never Linux's to accept: Linux frees the initramfs without the
     /// guard it keeps after memory it accepts itself, and
     /// load_unaligned_zeropad() reads past the last page of what it frees.
     #[test]
@@ -728,7 +787,7 @@ pub mod tests {
                 let guard = (end / UNIT * UNIT, end / UNIT * UNIT + UNIT);
                 assert!(
                     launch
-                        .accept
+                        .zeros
                         .iter()
                         .any(|(lo, hi)| *lo <= end && guard.1 <= *hi),
                     "len={len:#x}, snp={snp}: [{end:#x}, {:#x}) is not accepted",
@@ -779,8 +838,8 @@ pub mod tests {
     /// data block, EFI page and zero page, for every shape it carries at both
     /// of its bounds and between them, an end off a unit boundary included.
     /// It has to hand Linux exactly the tables boot.rs specifies for that
-    /// guest, accept exactly the image's fixed ranges, and leave Linux exactly
-    /// the whole units of RAM past the bound: a unit marked and accepted both
+    /// guest, and leave Linux exactly the whole units of RAM past the bound
+    /// that do not arrive accepted: a unit marked and delivered accepted both
     /// would be validated twice, which terminates the guest, and a unit marked
     /// past the RAM would send Linux to accept memory no one backed.
     #[test]
@@ -834,7 +893,6 @@ pub mod tests {
                         got.efi_size as usize,
                         got.efi.len() * EFI_MEMDESC_SIZE as usize
                     );
-                    assert_eq!(got.accepted, launch.accept, "{what}: accepted");
                     // Every page the image places arrives accepted, and Linux
                     // accepting one again terminates the guest.
                     let placed: Vec<(u64, u64)> = launch
@@ -853,14 +911,13 @@ pub mod tests {
                         owed_units(shape, top, launch.lazy, &placed),
                         "{what}: units"
                     );
-                    // Each page of RAM the guest is told of arrives accepted,
-                    // is accepted by the shim, or lies in a unit Linux
-                    // accepts: exactly one of them. A page that is none is
+                    // Each page of RAM the guest is told of arrives accepted
+                    // (the image's pages, its zero pages among them) or lies
+                    // in a unit Linux accepts: exactly one of them. A page that is none is
                     // touched unaccepted; one that is two is accepted twice.
                     let mut owners: Vec<(u64, u64)> = placed
                         .iter()
                         .copied()
-                        .chain(got.accepted.iter().copied())
                         .chain(got.units.iter().map(|u| (u * UNIT, (u + 1) * UNIT)))
                         .collect();
                     owners.sort_unstable();
@@ -1018,8 +1075,8 @@ pub mod tests {
     }
 
     /// Past 4 GiB of map the reset page lies inside the guest's own address
-    /// space, so the shape a large TDX guest takes reserves it in E820 and the
-    /// shim accepts nothing there.
+    /// space, so the shape a large TDX guest takes reserves it in E820 and no
+    /// zero page lies there.
     #[test]
     fn a_large_guest_leaves_the_reset_page_out_of_its_ram() {
         let dir = tempdir().unwrap();
@@ -1030,7 +1087,7 @@ pub mod tests {
             && *base < RESET_ALIAS + PAGE
             && RESET_ALIAS < base + size));
         assert!(!launch
-            .accept
+            .zeros
             .iter()
             .any(|(lo, hi)| *lo < RESET_ALIAS + PAGE && RESET_ALIAS < *hi));
     }

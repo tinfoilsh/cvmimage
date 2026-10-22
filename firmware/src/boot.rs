@@ -156,11 +156,15 @@ pub enum Fill {
     /// One SNP page the firmware fills: measured by address, never by content.
     Host,
     /// One page the loader fills from an IGVM parameter area: private on
-    /// arrival, so no shim accepts it, and measured by address alone.
+    /// arrival, and measured by address alone.
     Parameters,
+    /// This many bytes of zero pages: RAM Linux needs accepted before its own
+    /// acceptance runs, which the loader delivers accepted and measured as
+    /// zero (`zero_ranges`), so no shim accepts memory itself.
+    Zero(u64),
 }
 
-/// A span of the guest map, from which the E820 map, the file and the accept list follow.
+/// A span of the guest map, from which the E820 map and the file follow.
 pub struct Placed {
     pub base: u64,
     /// What the manifest publishes this region as; empty leaves it out.
@@ -186,6 +190,14 @@ impl Placed {
             fill: Fill::Host,
         }
     }
+    pub fn zero(base: u64, size: u64) -> Placed {
+        Placed {
+            base,
+            name: "",
+            e820: RAM,
+            fill: Fill::Zero(size),
+        }
+    }
     pub fn parameters(base: u64) -> Placed {
         Placed {
             base,
@@ -198,6 +210,7 @@ impl Placed {
         match &self.fill {
             Fill::Measured(d) => align_up(d.len() as u64, PAGE).max(PAGE),
             Fill::Host | Fill::Parameters => PAGE,
+            Fill::Zero(n) => *n,
         }
     }
     pub fn data(&self) -> &[u8] {
@@ -233,14 +246,15 @@ pub fn fill(placed: &mut [Placed], base: u64, data: Vec<u8>) -> Result<(), Strin
     Ok(())
 }
 
-/// Overlapping spans reach Linux as an E820 map and an accept list that disagree.
+/// Overlapping spans reach Linux as an E820 map and pages that disagree.
 pub fn validate(placed: &[Placed]) -> Result<(), String> {
     for pair in shim_spans(placed).windows(2) {
         if pair[0].1 > pair[1].0 {
             return Err(format!("placed regions overlap at {:#x}", pair[1].0));
         }
     }
-    // The unaccepted bitmap has to be RAM the shim accepts, and so zeroes, not a span.
+    // The unaccepted bitmap has to lie in the zero pages (`zero_ranges`), so
+    // that it arrives zero, not in a span with other contents.
     let bitmap = (
         UNACCEPTED_BITMAP,
         UNACCEPTED_BITMAP + UNACCEPTED_BITMAP_SIZE,
@@ -267,7 +281,7 @@ pub fn validate(placed: &[Placed]) -> Result<(), String> {
 /// of these and builds the shape's tables from it.
 pub type Region = (u64, u64, u32);
 
-/// The map the shapes' tables and the accept list are built from: every span
+/// The map the shapes' tables and the zero ranges are built from: every span
 /// this image places at a fixed address. It is measured, so it is one list for
 /// every guest the image can run in, and it says nothing about how much RAM
 /// that guest has -- the loader's map says that.
@@ -364,7 +378,7 @@ pub fn e820(regions: &[Region], memory: u64) -> Vec<Region> {
 }
 
 /// [0, memory) minus the regions given, in order.
-pub fn accept_ranges(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
+pub fn complement(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
     let mut at = 0;
     for (lo, hi, _) in regions.iter().copied() {
@@ -378,13 +392,13 @@ pub fn accept_ranges(regions: &[Region], memory: u64) -> Vec<(u64, u64)> {
     out
 }
 
-/// The units past the lazy bound that are the shim's rather than Linux's: each
-/// one a RAM span of the image's places a page in, and the one after the
-/// span's end. The image's pages arrive accepted, so Linux accepting their
-/// unit again would terminate the guest; and Linux frees some of those pages
-/// later (the initramfs) without the guard it keeps after memory it accepts
-/// itself, so the next unit must be accepted for `load_unaligned_zeropad()`
-/// to read into, as an EFI loader leaves it.
+/// The units past the lazy bound that arrive accepted rather than being left
+/// to Linux: each one a RAM span of the image's places a page in, and the one
+/// after the span's end. The image's pages arrive accepted, so Linux accepting
+/// their unit again would terminate the guest; and Linux frees some of those
+/// pages later (the initramfs) without the guard it keeps after memory it
+/// accepts itself, so the next unit must be accepted for
+/// `load_unaligned_zeropad()` to read into, as an EFI loader leaves it.
 pub fn span_units(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
     spans
         .iter()
@@ -396,10 +410,12 @@ pub fn span_units(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
         .collect()
 }
 
-/// The ranges a shim accepts: all of the RAM below the lazy bound the image
-/// did not place, and what it leaves free of the units past it that are the
-/// shim's (`span_units`), none of which a shape marks for Linux.
-pub fn shim_accept(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
+/// The RAM the image fills with measured zero pages, so that it arrives
+/// accepted: all of it below the lazy bound the image did not otherwise place,
+/// which the decompressor uses before Linux's acceptance runs, and what it
+/// leaves free of the units past it that are not Linux's (`span_units`), none
+/// of which a shape marks.
+pub fn zero_ranges(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
     let mut cover = vec![(0, lazy)];
     cover.extend(span_units(spans, lazy));
     cover.sort_unstable();
@@ -410,7 +426,7 @@ pub fn shim_accept(spans: &[Region], lazy: u64) -> Vec<(u64, u64)> {
             continue;
         }
         let lo = lo.max(done);
-        for (a, b) in accept_ranges(spans, hi) {
+        for (a, b) in complement(spans, hi) {
             let a = a.max(lo);
             if a < b {
                 out.push((a, b));
@@ -520,7 +536,7 @@ pub fn qemu_shapes(amd: bool, least: u64) -> Vec<Shape> {
 }
 
 /// The least RAM below the aperture an image runs in: everything it placed
-/// there, and everything the shim accepts.
+/// there, and all the RAM it delivers accepted.
 pub fn least_memory(spans: &[Region], lazy: u64) -> u64 {
     span_units(spans, lazy).iter().map(|u| u.1).fold(
         align_up(min_memory(spans).max(lazy), UNACCEPTED_UNIT),
@@ -575,10 +591,11 @@ pub fn shape_record(shape: &Shape, spans: &[Region], lazy: u64) -> Result<Vec<u8
     }
     let efi: Vec<Region> = e820.iter().copied().filter(|e| e.2 == RAM).collect();
     // RAM a shim marks for Linux to accept: whole units past the lazy bound
-    // but those that are the shim's, the last piece of the variable range
-    // running to the top of RAM. Each of the shim's lies in RAM the shape
-    // has, since the shim accepts it, and nothing else the image places past
-    // the bound may lie there, since it would arrive accepted and be marked.
+    // but those that arrive accepted (`span_units`), the last piece of the
+    // variable range running to the top of RAM. Each of those lies in RAM the
+    // shape has, since the image fills it with zero pages, and nothing else
+    // the image places past the bound may lie there, since it would arrive
+    // accepted and be marked.
     let map = shape.map(shape.min_end);
     let in_ram = |lo: u64, hi: u64| {
         map.iter()
@@ -587,7 +604,7 @@ pub fn shape_record(shape: &Shape, spans: &[Region], lazy: u64) -> Result<Vec<u8
     let owned = span_units(spans, lazy);
     if let Some(u) = owned.iter().find(|(lo, hi)| !in_ram(*lo, *hi)) {
         return Err(format!(
-            "{:#x} the shim accepts is no RAM of {shape:?}",
+            "{:#x} the image delivers accepted is no RAM of {shape:?}",
             u.0
         ));
     }
@@ -726,9 +743,9 @@ mod tests {
     }
 
     #[test]
-    fn accept_ranges_are_exactly_the_complement_of_the_placed_map() {
+    fn the_complement_is_exactly_what_is_not_placed() {
         let map = map();
-        let ranges = accept_ranges(&shim_spans(&map), RAM_TOP);
+        let ranges = complement(&shim_spans(&map), RAM_TOP);
         let placed: Vec<_> = map.iter().map(|p| (p.base, p.base + p.span())).collect();
         // Nothing placed is ever accepted: that is the page-aliasing attack.
         for (lo, hi) in &ranges {

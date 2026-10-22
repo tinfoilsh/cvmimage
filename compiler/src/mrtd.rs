@@ -17,6 +17,9 @@ pub fn calculate(pages: &[Page]) -> [u8; 48] {
         add[MR_GPA..MR_GPA + 8].copy_from_slice(&page.gpa.to_le_bytes());
         hash.update(add);
         let Some(data) = &page.data else { continue };
+        // A zero page is extended with the zeros the loader imports for it.
+        let zeros = [0u8; PAGE as usize];
+        let data: &[u8] = if data.is_empty() { &zeros } else { data };
         for offset in (0..PAGE as usize).step_by(MR_EXTEND_CHUNK) {
             let mut extend = [0u8; MR_RECORD_LEN];
             extend[..9].copy_from_slice(b"MR.EXTEND");

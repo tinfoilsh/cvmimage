@@ -40,13 +40,12 @@ long_mode:
 
     # The guest's map is one of the shapes the image measured: its E820 and
     # EFI tables are copied, and only the top of RAM is the loader's to say.
-    # RAM below the lazy bound is accepted here, from a measured list; past
-    # it, Linux accepts it as it allocates, finding the units it has to in the
+    # RAM below the lazy bound arrives accepted, as measured pages; past it,
+    # Linux accepts it as it allocates, finding the units it has to in the
     # EFI table efi.rs describes. The MADT is the other table left to the shim.
     call shape_match
     mov $ZERO_PAGE, %edi
     call shape_apply
-    call accept_fixed
     call mark_lazy
 
     madt_build die, 1
@@ -54,39 +53,7 @@ long_mode:
     lea shim_data(%rip), %rax
     jmp *(%rax)
 
-# Accept [%r12, %r13) as private memory, preferring 2-MiB pages; any other status is fatal.
-accept_range:
-    cmp %r13, %r12
-    jae accept_done
-    test $0x1fffff, %r12
-    jnz accept_4k
-    lea 0x200000(%r12), %r14
-    cmp %r13, %r14
-    ja accept_4k
-    mov %r12, %rcx
-    or $1, %rcx
-    mov $6, %rax
-    tdcall
-    test %rax, %rax
-    jz accept_2m
-    shr $32, %rax
-    cmp $0xc0000b0b, %eax           # TDX_PAGE_SIZE_MISMATCH
-    jne die
-accept_4k:
-    mov %r12, %rcx
-    mov $6, %rax
-    tdcall
-    test %rax, %rax
-    jnz die
-    add $PAGE, %r12
-    jmp accept_range
-accept_2m:
-    add $0x200000, %r12
-    jmp accept_range
-accept_done:
-    ret
-
-shape_code die_map, accept_range
+shape_code die_map
 
 # A map this image will not run in.
 die_map:

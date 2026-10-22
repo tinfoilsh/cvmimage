@@ -14,16 +14,11 @@ use crate::boot::{self, Region, Shape};
 use crate::layout::*;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-// As harness.S sizes it: two words a range.
-const HARNESS_RANGES: usize = 256;
-
 extern "C" {
     fn harness_boot_map(zero: *mut u8) -> u64;
     fn harness_madt_wakeup() -> u64;
     fn harness_madt_bare() -> u64;
     static mut harness_shim_data: [u8; SHIM_DATA_SIZE as usize];
-    static harness_ranges: [u64; 2 * HARNESS_RANGES];
-    static harness_count: u64;
     static harness_madt_template: [u8; MADT_TEMPLATE_LEN as usize];
 }
 
@@ -112,7 +107,6 @@ pub struct BootMap {
     /// one first, and the size efi_info states.
     pub efi: Vec<(u32, u64, u64, u64)>,
     pub efi_size: u32,
-    pub accepted: Vec<(u64, u64)>,
     pub units: Vec<u64>,
     pub unaccepted_size: u64,
 }
@@ -175,15 +169,6 @@ impl Shim {
         if top == 0 {
             return None;
         }
-        let count = unsafe { harness_count } as usize;
-        let ranges = unsafe { &*std::ptr::addr_of!(harness_ranges) };
-        assert!(
-            2 * count <= ranges.len(),
-            "the accepts overran their buffer"
-        );
-        let accepted = (0..count)
-            .map(|n| (ranges[2 * n], ranges[2 * n + 1]))
-            .collect();
         let efi_size = u32::from_le_bytes(
             zero_page[BP_EFI_MEMMAP_SIZE as usize..][..4]
                 .try_into()
@@ -207,7 +192,6 @@ impl Shim {
             e820: boot::read_e820(&zero_page),
             efi,
             efi_size,
-            accepted,
             units,
             unaccepted_size,
         })

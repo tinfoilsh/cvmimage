@@ -16,6 +16,10 @@ The digest is the SHA-256 of the release's `tinfoil-inference-v<version>-manifes
 [Release notes](https://github.com/tinfoilsh/cvmimage/releases) include the complete
 config line; stable releases also update this example automatically.
 
+The default pin selects the CPU image. Add `+gpu` before `@sha256:` to select
+the GPU image from the same manifest. The selector is part of the approved
+config; `gpus` specifies the hardware count independently.
+
 ## Building
 
 On an x86_64 Linux host without Nix, first install the pinned Nix release:
@@ -30,6 +34,10 @@ Then build the CVM image:
 ```sh
 nix-build -I . -A shipping-image -o result
 ```
+
+Use `-A variants.gpu.shipping-image` for the GPU image. The CPU image excludes
+NVIDIA drivers, firmware, CUDA libraries, GPU services and attestation, and
+kernel module support. Both variants share the same Nix inputs and build logic.
 
 This will produce the measured release artifacts: `tinfoilcvm.raw`, `tinfoilcvm.vmlinuz`, `tinfoilcvm.initrd`, `tinfoilcvm.roothash`.
 

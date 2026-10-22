@@ -53,6 +53,13 @@ This is intentionally kept simple: everything is built end-to-end in isolation, 
 The top-level `default.nix` pins one Nixpkgs source and exposes the complete set
 of image inputs:
 
+`nix/variant.nix` instantiates that graph with `gpuSupport = false` for
+`variants.cpu` and `true` for `variants.gpu`. Top-level image outputs select
+CPU. GPU Go code uses the `tinfoil_gpu` build tag; the CPU kernel disables
+modules, and its root filesystem omits NVIDIA payloads and GPU-only libraries.
+The package closures are locked separately. Run `nix-build -I . -A checks`
+to check both Go builds.
+
 
 | Output                             | Owner                                                  | Declaration                                                                                          |
 | ---------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |

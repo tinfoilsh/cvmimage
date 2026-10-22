@@ -295,8 +295,21 @@ Two consequences the digest hides:
 
 A cvmimage version tag publishes `cvmc` alongside the kernel, initramfs and
 root disk it was built against. The release manifest records the SHA-256 of
-each complete IGVM image, including its guest firmware, as `igvm.snp` and
-`igvm.tdx`. The compiler binary has its own build-provenance attestation.
+each complete IGVM image, including its guest firmware, under
+`igvm.variants.cpu` and `igvm.variants.gpu`. Each variant contains `snp` and
+`tdx` artifact hashes, `snp_launch` and `tdx_launch` measurements, and its
+kernel, initramfs, root disk and measured command line. The release manifest
+uses `igvm.format_version: 2`; compiler manifests retain their own format.
+
+A config pin such as `0.15.0+gpu@sha256:<manifest digest>` selects the GPU
+measurements. Without a selector it selects CPU. The verifier chooses SNP or
+TDX from the authenticated quote, then checks only that variant's measurements.
+The approved config hash remains bound through SNP `HOST_DATA` or TDX
+`MRCONFIGID`. Both variants use the same base release tag and manifest digest.
+Format 1 manifests retain their original behavior and do not accept selectors.
+
+Artifact names end in `-cpu` or `-gpu` before the extension. The compiler
+binary and the shared manifest have build-provenance attestations.
 
 ```sh
 curl -O https://images.tinfoil.sh/cvm/cvmc-v1.2.3

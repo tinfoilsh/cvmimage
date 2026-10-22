@@ -1,10 +1,12 @@
 package boot
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNetworkStagePrecedesIdentityAndAttestation(t *testing.T) {
@@ -146,6 +148,105 @@ func TestBoundedStateTextPreservesInvalidUTF8(t *testing.T) {
 func TestBoundedStateTextDoesNotSplitValidUTF8(t *testing.T) {
 	if got, want := boundedStateText("ab€cd", 4), "ab..."; got != want {
 		t.Fatalf("boundedStateText = %q, want %q", got, want)
+	}
+}
+
+func TestCompleteFailureSealsPendingStagesAndSubstages(t *testing.T) {
+	state := NewTracker(InitialStages).state
+	state.Stages[fixedStageIndex(t, StageCertificate)] = Stage{Name: StageCertificate, Status: StatusOK}
+	state.Stages[fixedStageIndex(t, StageContainers)] = Stage{
+		Name: StageContainers, Status: StatusFailed, Detail: "image pull failed",
+		Stages: []Stage{
+			{Name: "gpu-worker", Status: StatusFailed, Detail: "registry unreachable"},
+			{Name: "api", Status: StatusPending},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "boot-state.json")
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := completeFailure(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasFailed() || !got.IsComplete() || got.CompletedAt.IsZero() {
+		t.Fatalf("failure not sealed: %+v", got)
+	}
+	for _, stage := range got.Stages {
+		switch stage.Name {
+		case StageCertificate:
+			if stage.Status != StatusOK {
+				t.Fatalf("ok stage changed: %+v", stage)
+			}
+		case StageContainers:
+			if stage.Detail != "image pull failed" || stage.Stages[0].Detail != "registry unreachable" {
+				t.Fatalf("failure detail changed: %+v", stage)
+			}
+			if stage.Stages[1].Status != StatusSkipped || stage.Stages[1].Detail == "" {
+				t.Fatalf("pending substage not skipped: %+v", stage.Stages[1])
+			}
+		default:
+			if stage.Status != StatusSkipped || stage.Detail == "" {
+				t.Fatalf("pending stage not skipped: %+v", stage)
+			}
+		}
+	}
+}
+
+func TestCompleteFailureRequiresRecordedFailure(t *testing.T) {
+	for _, status := range []string{StatusPending, StatusOK} {
+		path := filepath.Join(t.TempDir(), "boot-state.json")
+		payload := []byte(`{"stages":[{"name":"certificate","status":"` + status + `"}]}`)
+		if err := os.WriteFile(path, payload, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := completeFailure(path); err == nil {
+			t.Fatal("sealed boot without a recorded failure")
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != string(payload) {
+			t.Fatalf("state changed: %s, %v", got, err)
+		}
+	}
+}
+
+// After pid1 seals a failure, any later writer (a stray shim invocation, a
+// restarted service) must fail instead of silently rewriting the record.
+func TestSealedStateRejectsWriters(t *testing.T) {
+	state := fixedBootState()
+	state.Stages[fixedStageIndex(t, StageModels)] = Stage{
+		Name: StageModels, Status: StatusFailed, Detail: "mount model: input/output error",
+	}
+	state.CompletedAt = time.Now()
+	path := filepath.Join(t.TempDir(), "boot-state.json")
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := recordStage(path, StageShim, StatusOK, time.Second, ""); err == nil {
+		t.Fatal("recordStage wrote a sealed state")
+	}
+	if err := complete(path); err == nil {
+		t.Fatal("complete wrote a sealed state")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("sealed state changed: %s", got)
 	}
 }
 

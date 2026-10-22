@@ -58,7 +58,7 @@ func TestPrepareSecretHandoffRejectsUnresolvedSecrets(t *testing.T) {
 		Containers: []Container{{Secrets: []string{"API_KEY"}}},
 	}
 	_, err := prepareSecretHandoff(context.Background(), config, &shimconfig.ExternalConfig{}, newHandoff(t), "config-digest", false, noFetch(t))
-	if err == nil || !strings.Contains(err.Error(), "1 declared secret(s) remain unresolved") {
+	if err == nil || !strings.Contains(err.Error(), "unresolved: API_KEY") {
 		t.Fatalf("error = %v", err)
 	}
 }

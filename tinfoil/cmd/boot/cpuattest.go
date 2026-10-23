@@ -31,12 +31,8 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 
 	if id.Domain == "localhost" || shimCfg.DummyAttestation {
 		log.Println("Using dummy attestation report")
-		doc := attestation.DummyReport(userData)
-		if err := writeAttestationDoc(doc); err != nil {
-			return nil, err
-		}
 		return &CPUAttestation{
-			V2Doc: doc,
+			V2Doc: attestation.DummyReport(userData),
 		}, nil
 	}
 
@@ -51,9 +47,6 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 		return nil, fmt.Errorf("building V2 document: %w", err)
 	}
 
-	if err := writeAttestationDoc(v2Doc); err != nil {
-		return nil, err
-	}
 	nonce := make([]byte, envelope.NonceSize)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generating collateral nonce: %w", err)

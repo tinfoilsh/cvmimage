@@ -22,12 +22,26 @@ type Validator interface {
 // credential's format, so a Chain should advance to the next validator.
 var ErrUnsupportedToken = errors.New("unsupported token format")
 
-// ValidationError carries the status and safe retry/quota metadata from a
-// credential rejection, without exposing internal validator messages.
+// OpenAI error types a refusal can carry, so client SDKs classify a refusal
+// the same way whichever validator decided it.
+// See https://platform.openai.com/docs/guides/error-codes
+const (
+	ErrTypeInvalidRequest     = "invalid_request_error"
+	ErrTypeInsufficientQuota  = "insufficient_quota"
+	ErrTypeRateLimit          = "rate_limit_error"
+	ErrTypeServiceUnavailable = "service_unavailable_error"
+	ErrTypeServer             = "server_error"
+)
+
+// ValidationError is a refused credential and the OpenAI-style error the
+// client receives for it. The validator that refuses the credential writes
+// the error, so the client learns why it was refused.
 type ValidationError struct {
-	StatusCode    int
-	RetryAfter    string
-	QuotaExceeded bool
+	StatusCode int
+	RetryAfter string
+	Type       string
+	Code       string
+	Message    string
 }
 
 func (e *ValidationError) Error() string {

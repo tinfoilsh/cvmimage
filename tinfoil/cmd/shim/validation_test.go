@@ -14,28 +14,36 @@ import (
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
+	"tinfoil/internal/key"
 	"tinfoil/internal/key/online"
 	"tinfoil/internal/legacy"
 )
 
+// TestOnlineValidationPreservesErrorsThroughEHBP pins that a control plane
+// refusal reaches the client with its status, Retry-After and, for an
+// OpenAI-style error, its message, while any other body stays private.
 func TestOnlineValidationPreservesErrorsThroughEHBP(t *testing.T) {
 	const privateDetail = "private control-plane detail"
+	const pausedMessage = "API access is paused because this billing period's usage reached the account's usage limit."
+	const keyLimitMessage = "Spend limit reached for this API key."
 	const retryDate = "Wed, 21 Oct 2037 07:28:00 GMT"
 	const origin = "https://client.example"
 	cases := []struct {
-		name      string
-		status    int
-		body      string
-		retry     []string
-		wantRetry string
-		wantType  string
-		wantCode  string
+		name        string
+		status      int
+		body        string
+		retry       []string
+		wantRetry   string
+		wantType    string
+		wantCode    string
+		wantMessage string
 	}{
-		{name: "unauthorized", status: http.StatusUnauthorized, wantType: errTypeInvalidRequest, wantCode: errCodeInvalidAPIKey},
-		{name: "forbidden", status: http.StatusForbidden, wantType: errTypeInvalidRequest, wantCode: errCodeInsufficientPermissions},
-		{name: "payment", status: http.StatusPaymentRequired, wantType: errTypeInsufficientQuota, wantCode: errCodeInsufficientQuota},
-		{name: "rate limit", status: http.StatusTooManyRequests, retry: []string{"42"}, wantRetry: "42", wantType: errTypeRateLimit, wantCode: errCodeRateLimitExceeded},
-		{name: "key quota", status: http.StatusTooManyRequests, body: `{"error":{"type":"insufficient_quota","code":"insufficient_quota","message":"` + privateDetail + `"}}`, wantType: errTypeInsufficientQuota, wantCode: errCodeInsufficientQuota},
+		{name: "paused account", status: http.StatusPaymentRequired, body: `{"error":{"type":"insufficient_quota","code":"insufficient_quota","message":"` + pausedMessage + `"}}`, wantType: "insufficient_quota", wantCode: "insufficient_quota", wantMessage: pausedMessage},
+		{name: "key limit", status: http.StatusTooManyRequests, body: `{"error":{"type":"insufficient_quota","code":"insufficient_quota","message":"` + keyLimitMessage + `"}}`, wantType: "insufficient_quota", wantCode: "insufficient_quota", wantMessage: keyLimitMessage},
+		{name: "unauthorized", status: http.StatusUnauthorized, wantType: errTypeInvalidRequest},
+		{name: "forbidden", status: http.StatusForbidden, wantType: errTypeInvalidRequest},
+		{name: "payment", status: http.StatusPaymentRequired, wantType: key.ErrTypeInsufficientQuota},
+		{name: "rate limit", status: http.StatusTooManyRequests, retry: []string{"42"}, wantRetry: "42", wantType: errTypeRateLimit},
 		{name: "bad request", status: http.StatusBadRequest, wantType: errTypeInvalidRequest},
 		{name: "not found", status: http.StatusNotFound, wantType: errTypeInvalidRequest},
 		{name: "bad gateway", status: http.StatusBadGateway, wantType: errTypeServer},
@@ -113,8 +121,12 @@ func TestOnlineValidationPreservesErrorsThroughEHBP(t *testing.T) {
 				if body.Error.Type != tc.wantType || code != tc.wantCode {
 					t.Errorf("type/code = %s/%s, want %s/%s", body.Error.Type, code, tc.wantType, tc.wantCode)
 				}
-				if strings.Contains(body.Error.Message, privateDetail) {
-					t.Fatal("private validator detail leaked")
+				wantMessage := tc.wantMessage
+				if wantMessage == "" {
+					wantMessage = http.StatusText(tc.status)
+				}
+				if body.Error.Message != wantMessage {
+					t.Errorf("message = %q, want %q", body.Error.Message, wantMessage)
 				}
 			})
 		}

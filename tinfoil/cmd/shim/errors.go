@@ -4,56 +4,49 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"tinfoil/internal/key"
 )
 
 // Error type strings returned in API error responses, following OpenAI's
 // taxonomy so client SDKs classify shim errors the same way they classify
-// upstream ones. See https://platform.openai.com/docs/guides/error-codes
+// upstream ones and credential refusals.
 const (
-	errTypeInvalidRequest     = "invalid_request_error"
-	errTypeInsufficientQuota  = "insufficient_quota"
-	errTypeRateLimit          = "rate_limit_error"
-	errTypeServiceUnavailable = "service_unavailable_error"
-	errTypeServer             = "server_error"
+	errTypeInvalidRequest     = key.ErrTypeInvalidRequest
+	errTypeRateLimit          = key.ErrTypeRateLimit
+	errTypeServiceUnavailable = key.ErrTypeServiceUnavailable
+	errTypeServer             = key.ErrTypeServer
 )
 
 // Machine-readable error codes carried in the `code` field. Codes shared
 // with OpenAI keep OpenAI's spelling.
 const (
-	errCodeMissingAPIKey           = "missing_api_key"
-	errCodeInvalidAPIKey           = "invalid_api_key"
-	errCodeInsufficientPermissions = "insufficient_permissions"
-	errCodeInsufficientQuota       = "insufficient_quota"
-	errCodeRateLimitExceeded       = "rate_limit_exceeded"
-	errCodeOriginNotAllowed        = "origin_not_allowed"
-	errCodeNotFound                = "not_found"
-	errCodeUpstreamUnreachable     = "upstream_unreachable"
-	errCodeServiceStarting         = "service_starting"
-	errCodeServiceFailed           = "service_failed"
-	errCodeInvalidNonce            = "invalid_nonce"
-	errCodeAttestationUnavailable  = "attestation_unavailable"
+	errCodeMissingAPIKey          = "missing_api_key"
+	errCodeRateLimitExceeded      = "rate_limit_exceeded"
+	errCodeOriginNotAllowed       = "origin_not_allowed"
+	errCodeNotFound               = "not_found"
+	errCodeUpstreamUnreachable    = "upstream_unreachable"
+	errCodeServiceStarting        = "service_starting"
+	errCodeServiceFailed          = "service_failed"
+	errCodeInvalidNonce           = "invalid_nonce"
+	errCodeAttestationUnavailable = "attestation_unavailable"
 )
 
 // Client-facing error messages, aligned with OpenAI's standard error messages
 // where applicable.
 const (
-	errMsgAPIKeyRequired          = "You didn't provide an API key."
-	errMsgInvalidAPIKey           = "Incorrect API key provided."
-	errMsgInsufficientPermissions = "Your API key does not have permission to access this resource."
-	errMsgQuotaExceeded           = "You exceeded your current quota, please check your plan and billing details."
-	errMsgKeyQuotaExceeded        = "You exceeded this API key's usage or spending limit."
-	errMsgValidationFailed        = "API key validation failed."
-	errMsgRateLimited             = "Rate limit reached for requests."
-	errMsgServerError             = "The server had an error while processing your request."
-	errMsgUpstreamUnreachable     = "The inference service is temporarily unreachable. Please try again."
-	errMsgOriginNotAllowed        = "CORS origin not allowed."
-	errMsgNotFound                = "Not found."
-	errMsgServiceStarting         = "The service is starting. Please try again shortly."
-	errMsgServiceFailed           = "The service failed to start."
-	errMsgInvalidNonce            = "Invalid nonce: must be exactly 32 bytes (64 hex chars)."
-	errMsgCollateralUnavailable   = "Attestation collateral is temporarily unavailable."
-	errMsgGPUEvidenceUnavailable  = "GPU attestation evidence is unavailable."
-	errMsgAttestationBuildFailed  = "Failed to build attestation."
+	errMsgAPIKeyRequired         = "You didn't provide an API key."
+	errMsgRateLimited            = "Rate limit reached for requests."
+	errMsgServerError            = "The server had an error while processing your request."
+	errMsgUpstreamUnreachable    = "The inference service is temporarily unreachable. Please try again."
+	errMsgOriginNotAllowed       = "CORS origin not allowed."
+	errMsgNotFound               = "Not found."
+	errMsgServiceStarting        = "The service is starting. Please try again shortly."
+	errMsgServiceFailed          = "The service failed to start."
+	errMsgInvalidNonce           = "Invalid nonce: must be exactly 32 bytes (64 hex chars)."
+	errMsgCollateralUnavailable  = "Attestation collateral is temporarily unavailable."
+	errMsgGPUEvidenceUnavailable = "GPU attestation evidence is unavailable."
+	errMsgAttestationBuildFailed = "Failed to build attestation."
 )
 
 // serviceStartingRetryAfterSeconds is the Retry-After hint sent while boot
@@ -92,24 +85,6 @@ var (
 		errType: errTypeInvalidRequest,
 		code:    errCodeMissingAPIKey,
 		message: errMsgAPIKeyRequired,
-	}
-	errInvalidAPIKey = apiError{
-		status:  http.StatusUnauthorized,
-		errType: errTypeInvalidRequest,
-		code:    errCodeInvalidAPIKey,
-		message: errMsgInvalidAPIKey,
-	}
-	errInsufficientPermissions = apiError{
-		status:  http.StatusForbidden,
-		errType: errTypeInvalidRequest,
-		code:    errCodeInsufficientPermissions,
-		message: errMsgInsufficientPermissions,
-	}
-	errQuotaExceeded = apiError{
-		status:  http.StatusPaymentRequired,
-		errType: errTypeInsufficientQuota,
-		code:    errCodeInsufficientQuota,
-		message: errMsgQuotaExceeded,
 	}
 	errRateLimited = apiError{
 		status:  http.StatusTooManyRequests,

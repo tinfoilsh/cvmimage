@@ -50,6 +50,27 @@ const (
 	fetchTimeout = 10 * time.Second
 )
 
+// invalidToken refuses a token that is malformed, unsigned by a current key,
+// or expired, or that names the wrong issuer or audience.
+func invalidToken() *key.ValidationError {
+	return &key.ValidationError{
+		StatusCode: http.StatusUnauthorized,
+		Type:       key.ErrTypeInvalidRequest,
+		Code:       "invalid_api_key",
+		Message:    "Incorrect API key provided.",
+	}
+}
+
+// missingScope refuses a valid token that does not grant inference access.
+func missingScope() *key.ValidationError {
+	return &key.ValidationError{
+		StatusCode: http.StatusForbidden,
+		Type:       key.ErrTypeInvalidRequest,
+		Code:       "insufficient_permissions",
+		Message:    "Your API key does not have permission to access this resource.",
+	}
+}
+
 // signingKeys caches a JWKS and refreshes it from the issuer.
 type signingKeys struct {
 	url    string
@@ -178,7 +199,7 @@ func (v *Validator) Validate(req key.Request) error {
 
 	token, err := josejwt.ParseSigned(req.APIKey, []jose.SignatureAlgorithm{jose.EdDSA})
 	if err != nil || len(token.Headers) == 0 {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return invalidToken()
 	}
 
 	// RFC 9068 registers the access-token type as "at+jwt"; RFC 7515 also
@@ -186,7 +207,7 @@ func (v *Validator) Validate(req key.Request) error {
 	// accept both forms case-insensitively.
 	typ, _ := token.Headers[0].ExtraHeaders[jose.HeaderType].(string)
 	if normalizeType(typ) != accessTokenType {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return invalidToken()
 	}
 
 	signingKey, ok := v.keys.lookup(token.Headers[0].KeyID)
@@ -194,17 +215,17 @@ func (v *Validator) Validate(req key.Request) error {
 		v.keys.refreshIfAllowed()
 		signingKey, ok = v.keys.lookup(token.Headers[0].KeyID)
 		if !ok {
-			return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+			return invalidToken()
 		}
 	}
 
 	var claims josejwt.Claims
 	var ext accessTokenClaims
 	if err := token.Claims(signingKey, &claims, &ext); err != nil {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return invalidToken()
 	}
 	if claims.Subject == "" || claims.Expiry == nil || claims.IssuedAt == nil || claims.ID == "" || ext.ClientID == "" {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return invalidToken()
 	}
 
 	if err := claims.Validate(josejwt.Expected{
@@ -212,11 +233,11 @@ func (v *Validator) Validate(req key.Request) error {
 		AnyAudience: josejwt.Audience{v.audience},
 		Time:        time.Now(),
 	}); err != nil {
-		return &key.ValidationError{StatusCode: http.StatusUnauthorized}
+		return invalidToken()
 	}
 
 	if !scopeContains(ext.Scope, v.scope) {
-		return &key.ValidationError{StatusCode: http.StatusForbidden}
+		return missingScope()
 	}
 
 	return nil

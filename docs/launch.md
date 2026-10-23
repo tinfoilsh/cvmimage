@@ -293,24 +293,11 @@ Two consequences the digest hides:
 
 ## Releases
 
-A cvmimage version tag publishes `cvmc` alongside separate CPU and GPU images.
-Each image has a format 1 manifest recording its kernel, initramfs, root disk,
-measured command line, SNP and TDX artifact hashes, and launch measurements.
-Compiler manifests retain their own format.
-
-The `v0.15.0` release publishes `tinfoil-inference-v0.15.0-manifest.json` and
-`tinfoil-inference-v0.15.0+gpu-manifest.json`, each with its own digest and
-build-provenance subject. Configs pin `0.15.0@sha256:<cpu-manifest-digest>` or
-`0.15.0+gpu@sha256:<gpu-manifest-digest>`. The full version identifies the
-manifest and its artifacts; the base version identifies the release workflow.
-
-ATC supplies the pinned manifest and its provenance and freshness endorsements.
-The verifier checks the exact manifest digest and version, then compares its
-SNP or TDX measurements with the authenticated quote. The approved config hash
-remains bound through SNP `HOST_DATA` or TDX `MRCONFIGID`.
-
-GPU artifact names include `+gpu` after the version; CPU names retain the base
-version. All published artifacts have build-provenance attestations.
+A cvmimage tag publishes `cvmc` and separate CPU and GPU IGVM images with
+build-provenance attestations. Each image has its own format 1 manifest with
+SNP and TDX hashes and launch measurements. Configs pin
+`0.15.0@sha256:<cpu-manifest-digest>` or
+`0.15.0+gpu@sha256:<gpu-manifest-digest>` from the same `v0.15.0` release.
 
 ```sh
 curl -O https://images.tinfoil.sh/cvm/cvmc-v1.2.3

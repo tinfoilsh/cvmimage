@@ -71,7 +71,7 @@ to check both Go builds.
 | Custom kernel                      | Nixpkgs `linuxManualConfig`                            | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
 | Three NVIDIA modules               | Nixpkgs kernel-module build                            | `nix/nvidia-modules.nix`                                                                             |
 | nvattest and libnvat               | Nixpkgs CMake and Rust builders                        | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock`                                                   |
-| Ubuntu package payloads            | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix`                                          |
+| Ubuntu package payloads            | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix`, `nix/runtime-packages-gpu-lock.nix`                                          |
 | NVIDIA, Docker, and debug payloads | Fixed-output archive fetches                           | `nix/runtime-sources.nix`                                                                            |
 | Repository configuration           | Direct additive copy                                   | `image/rootfs/`                                                                                      |
 | Rootfs and debug layer archives    | Fixed tar materializer                                 | `nix/rootfs.nix`                                                                                     |
@@ -167,10 +167,10 @@ Regenerate the reviewed Ubuntu package locks only when changing package inputs
 or snapshot indexes:
 
 ```sh
-nix-build --option sandbox true -I . -A variants.cpu.runtime-package-lock -o result-package-lock
-cp --no-preserve=mode result-package-lock nix/runtime-packages-cpu-lock.nix
-nix-build --option sandbox true -I . -A variants.gpu.runtime-package-lock -o result-package-lock
+nix-build --option sandbox true -I . -A runtime-package-lock -o result-package-lock
 cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
+nix-build --option sandbox true -I . -A variants.gpu.runtime-package-lock -o result-package-lock
+cp --no-preserve=mode result-package-lock nix/runtime-packages-gpu-lock.nix
 rm result-package-lock
 ```
 

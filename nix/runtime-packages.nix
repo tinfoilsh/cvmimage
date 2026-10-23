@@ -75,5 +75,5 @@ in
     packages = packageNames;
   };
 
-  packages = pkgs.lib.flatten (import (if gpuSupport then ./runtime-packages-lock.nix else ./runtime-packages-cpu-lock.nix) { inherit (pkgs) fetchurl; });
+  packages = pkgs.lib.flatten (import (if gpuSupport then ./runtime-packages-gpu-lock.nix else ./runtime-packages-lock.nix) { inherit (pkgs) fetchurl; });
 }

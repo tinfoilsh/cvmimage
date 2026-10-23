@@ -1,5 +1,5 @@
 # This is a generated file.  Do not modify!
-# Following are the Debian packages constituting the closure of: ca-certificates e2fsprogs iproute2 nftables libc6 libc-bin libcap2 libxml2-16 libstdc++6 libgcc-s1 zlib1g libtirpc3t64 libtirpc-common libseccomp2
+# Following are the Debian packages constituting the closure of: ca-certificates e2fsprogs iproute2 nftables libc6 libc-bin libcap2 libgcc-s1 zlib1g libseccomp2
 
 { fetchurl }:
 
@@ -394,24 +394,6 @@
     (fetchurl {
       url = "https://snapshot.ubuntu.com/ubuntu/20261021T000000Z/pool/main/g/glibc/libc-bin_2.43-2ubuntu2.4_amd64.deb";
       sha256 = "bc4f50a0aebbb348598749c291a3742f9485d94b044715d382388607b9159a1b";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20261021T000000Z/pool/main/libx/libxml2/libxml2-16_2.15.2+dfsg-0.1ubuntu0.3_amd64.deb";
-      sha256 = "e82ce35fd61483c1febf83232e76e54a296a6a78391983a24a904ff640b75c09";
-    })
-
-  ]
-
-  [
-
-    (fetchurl {
-      url = "https://snapshot.ubuntu.com/ubuntu/20261021T000000Z/pool/main/g/gcc-16/libstdc++6_16-20260322-1ubuntu1_amd64.deb";
-      sha256 = "a32b9ad585e39bdc7bd15d1eae6293461e6d466859a1dd2f7862d1e40f89b9d8";
     })
 
   ]

@@ -22,6 +22,13 @@ import (
 )
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
+	for _, format := range []string{collateral.ConfigEndorsementV1Format, collateral.ConfigEndorsementV2Format} {
+		t.Run(format, func(t *testing.T) { testConfigCollateralRequest(t, format) })
+	}
+}
+
+func testConfigCollateralRequest(t *testing.T, format string) {
+	t.Helper()
 	digest := strings.Repeat("a", 64)
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
 metadata:
@@ -43,8 +50,12 @@ network:
 		t.Fatal(err)
 	}
 	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Document: empty, Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest}
+	proof := []byte(`{"endorsement_ref":"test-reference"}`)
+	if format == collateral.ConfigEndorsementV2Format {
+		proof = []byte(`{"endorsement_ref":"test-reference","scope":{"certificate_der":"bGVhZg==","issuer_der":"cm9vdA==","issuance_bundle":{"proof":"issuance"}}}`)
+	}
 	collateral := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
-		Format: collateral.ConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
+		Format: format, Data: proof}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request attestationmaterial.Request
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -59,7 +70,11 @@ network:
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "collateral-request.json")
-	request, err := writeCollateralRequest(path, empty, external.Metadata, "")
+	configPath := filepath.Join(t.TempDir(), "private.yaml")
+	if err := os.WriteFile(configPath, []byte("# private audit bytes\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	request, err := writeCollateralRequest(path, empty, external.Metadata, configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +85,9 @@ network:
 	var persisted attestationmaterial.Request
 	if err := json.Unmarshal(data, &persisted); err != nil || !reflect.DeepEqual(persisted, request) {
 		t.Fatalf("persisted request = %#v, error = %v", persisted, err)
+	}
+	if len(persisted.Config) != 0 || strings.Contains(string(data), "config_base64") {
+		t.Fatal("registry collateral request disclosed config bytes")
 	}
 	client, err := attestationmaterial.NewClient(server.URL, nil)
 	if err != nil {

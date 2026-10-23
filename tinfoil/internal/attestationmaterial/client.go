@@ -40,15 +40,9 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response, error) {
-	var expectedFormat string
-	switch request.Profile {
-	case "":
-		expectedFormat = wire.FormatV2
-	case wire.FormatV3:
-		expectedFormat = wire.FormatV3
-	default:
-		return wire.Response{}, fmt.Errorf("unsupported collateral request profile %q", request.Profile)
+func (c *Client) Fetch(ctx context.Context, request Request) (wire.Response, error) {
+	if err := request.Validate(); err != nil {
+		return wire.Response{}, err
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -76,7 +70,7 @@ func (c *Client) Fetch(ctx context.Context, request wire.Request) (wire.Response
 		return wire.Response{}, fmt.Errorf("POST %s: %s: %s", c.endpoint, resp.Status, string(respBody))
 	}
 
-	response, err := ParseResponse(respBody, expectedFormat)
+	response, err := ParseResponse(respBody, wire.FormatV3)
 	if err != nil {
 		return wire.Response{}, err
 	}

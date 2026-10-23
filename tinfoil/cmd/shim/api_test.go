@@ -57,7 +57,7 @@ func testAuthServer(t *testing.T, validator key.Validator, authenticatedEndpoint
 		AuthenticatedEndpoints: &authenticatedEndpoints,
 	}
 	extCfg := &config.ExternalConfig{}
-	return NewShimServer(validator, nil, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, extCfg, "127.0.0.1:9999", nil)
+	return NewShimServer(validator, nil, tinfoilattestation.Identity{}, 0, id, nil, nil, cfg, extCfg, "127.0.0.1:9999", nil)
 }
 
 func testServer(t *testing.T, paths []string, upstreamPort int) http.Handler {
@@ -79,7 +79,7 @@ func testFullServer(t *testing.T, paths []string, upstreamPort int) http.Handler
 	}
 	extCfg := &config.ExternalConfig{}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
-	return NewShimServer(nil, nil, tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg, upstreamAddr, nil)
+	return NewShimServer(nil, nil, tinfoilattestation.Identity{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg, upstreamAddr, nil)
 }
 
 func testObservabilityServer(t *testing.T, paths []string) http.Handler {
@@ -92,7 +92,7 @@ func testObservabilityServer(t *testing.T, paths []string) http.Handler {
 
 	cfg := &config.Config{Paths: paths}
 	extCfg := &config.ExternalConfig{}
-	return NewObservabilityServer(tinfoilattestation.BodyV2{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg)
+	return NewObservabilityServer(tinfoilattestation.Identity{}, 0, id, nil, staticCollateralSource{}, cfg, extCfg)
 }
 
 func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
@@ -101,7 +101,7 @@ func TestV3AttestationReturns503WhenCollateralExpired(t *testing.T) {
 		t.Fatalf("creating identity: %v", err)
 	}
 	handler := NewObservabilityServer(
-		tinfoilattestation.BodyV2{},
+		tinfoilattestation.Identity{},
 		0,
 		id,
 		nil,
@@ -490,7 +490,7 @@ func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
 					t.Fatal(err)
 				}
 				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status}}
-				handler := NewShimServer(validator, nil, tinfoilattestation.BodyV2{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
+				handler := NewShimServer(validator, nil, tinfoilattestation.Identity{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
 				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
 				req.Header.Set("Authorization", "Bearer test-key")
 				var requestContext *identity.RequestContext
@@ -552,7 +552,7 @@ func TestLocalRateLimitSendsRetryAfter(t *testing.T) {
 	cfg := &config.Config{UpstreamPort: 9999}
 	// One token per minute with a burst of one: the second request is over budget.
 	limiter := NewRateLimiter(1.0/60, 1)
-	handler := NewShimServer(nil, limiter, tinfoilattestation.BodyV2{}, 0, id, nil, nil, cfg, &config.ExternalConfig{}, "127.0.0.1:9999", nil)
+	handler := NewShimServer(nil, limiter, tinfoilattestation.Identity{}, 0, id, nil, nil, cfg, &config.ExternalConfig{}, "127.0.0.1:9999", nil)
 
 	send := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))

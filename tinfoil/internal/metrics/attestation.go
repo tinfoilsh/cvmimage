@@ -9,8 +9,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/mod/semver"
-
-	"tinfoil/internal/legacy"
 )
 
 const (
@@ -27,7 +25,6 @@ const (
 	developmentSDKLabel     = "devel"
 	overflowSDKLabel        = "other"
 	noAttestationVersion    = "none"
-	attestationVersionV2    = "v2"
 	attestationVersionV3    = "v3"
 	attestationServed       = "served"
 	attestationClientError  = "client_error"
@@ -150,8 +147,6 @@ func (m *attestationMetrics) observe(endpoint string, next http.Handler) http.Ha
 			switch w.Header().Get(attestationFormatHeader) {
 			case envelope.AttestationV3Format:
 				version = attestationVersionV3
-			case string(legacy.SevGuestV2), string(legacy.TdxGuestV2), string(legacy.DummyV2):
-				version = attestationVersionV2
 			}
 		case response.Code >= http.StatusInternalServerError:
 			result = attestationServerError

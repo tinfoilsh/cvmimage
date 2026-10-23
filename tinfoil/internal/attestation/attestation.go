@@ -6,7 +6,6 @@
 package attestation
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -20,37 +19,25 @@ import (
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"tinfoil/internal/kernelcmdline"
-	"tinfoil/internal/legacy"
-
-	"tinfoil/internal/compress"
 )
 
 const (
-	PlatformDummy  = "dummy"
 	PlatformSEVSNP = "sev-snp"
 	PlatformTDX    = "tdx"
 )
 
-type BodyV2 struct {
+type Identity struct {
 	TLSKeyFP [32]byte
 	HPKEKey  [32]byte
-	// Workload keys are endorsed by v3 quotes only; Marshal omits them.
 	Workload []envelope.CryptoMaterialItem
 }
 
-func (a BodyV2) CryptoMaterial() []envelope.CryptoMaterialItem {
+func (a Identity) CryptoMaterial() []envelope.CryptoMaterialItem {
 	items := []envelope.CryptoMaterialItem{
 		{ID: envelope.CryptoMaterialIDTLS, Format: envelope.KeySPKIFPSHA256V1Format, Data: hex.EncodeToString(a.TLSKeyFP[:])},
 		{ID: envelope.CryptoMaterialIDHPKE, Format: envelope.KeyX25519HPKEV1Format, Data: hex.EncodeToString(a.HPKEKey[:])},
 	}
 	return append(items, a.Workload...)
-}
-
-func (a BodyV2) Marshal() [64]byte {
-	var result [64]byte
-	copy(result[:32], a.TLSKeyFP[:])
-	copy(result[32:], a.HPKEKey[:])
-	return result
 }
 
 // Guest device paths, one per platform.
@@ -142,35 +129,6 @@ func evidenceFormat(platform string) (string, error) {
 		return envelope.TDXQuoteV1Format, nil
 	default:
 		return "", fmt.Errorf("unsupported platform %q for v3 evidence", platform)
-	}
-}
-
-// V2Document wraps a raw report into the legacy V2 format (base64+gzip).
-func V2Document(rawReport []byte, platform string) (*legacy.Document, error) {
-	compressed, err := compress.Gzip(rawReport)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compress report: %w", err)
-	}
-	var format legacy.PredicateType
-	switch platform {
-	case PlatformSEVSNP:
-		format = legacy.SevGuestV2
-	case PlatformTDX:
-		format = legacy.TdxGuestV2
-	default:
-		return nil, fmt.Errorf("unsupported platform for V2: %s", platform)
-	}
-	return &legacy.Document{
-		Format: format,
-		Body:   base64.StdEncoding.EncodeToString(compressed),
-	}, nil
-}
-
-// DummyReport returns a non-cryptographic attestation document for dev/localhost use.
-func DummyReport(userData [64]byte) *legacy.Document {
-	return &legacy.Document{
-		Format: legacy.DummyV2,
-		Body:   hex.EncodeToString(userData[:]),
 	}
 }
 

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
-	verifier "tinfoil/internal/legacy"
 	"golang.org/x/net/publicsuffix"
 
 	"tinfoil/internal/boot"
@@ -27,58 +26,16 @@ const (
 	secretCloudflareZoneToken = "CLOUDFLARE_ZONE_TOKEN"
 	secretCertAuthToken       = "CERT_AUTH_TOKEN"
 
-	maxCertRetries     = 10
-	maxCertificateSANs = 100
+	maxCertRetries = 10
 
 	certProxyRetryInterval = 5 * time.Minute
 	acmeRetryInterval      = 18 * time.Minute
 )
 
-func obtainCertificate(id *NodeIdentity, att *verifier.Document, shimCfg *shimconfig.Config, externalConfig *shimconfig.ExternalConfig) error {
-	encodedSANDomain := "tinfoil.sh"
-	if shimCfg.TLSOwnSANDomain {
-		encodedSANDomain = id.Domain
-		if d, err := publicsuffix.EffectiveTLDPlusOne(id.Domain); err == nil {
-			encodedSANDomain = d
-		}
-	}
-
-	var encodedDomains []string
-	hpkeKeyDomains, err := dcode.Encode(id.HPKEKeyBytes, "hpke."+encodedSANDomain)
+func obtainCertificate(id *NodeIdentity, shimCfg *shimconfig.Config, externalConfig *shimconfig.ExternalConfig) error {
+	domains, err := certificateDomains(id, shimCfg)
 	if err != nil {
-		return fmt.Errorf("encoding HPKE key: %w", err)
-	}
-	encodedDomains = append(encodedDomains, hpkeKeyDomains...)
-
-	reservedSANs := 1
-	if shimCfg.TLSWildcard {
-		reservedSANs = 2
-	}
-
-	if shimCfg.PublishAttestation {
-		attHashDomains, err := dcode.Encode([]byte(att.Hash()), "hatt."+encodedSANDomain)
-		if err != nil {
-			return fmt.Errorf("encoding attestation hash: %w", err)
-		}
-		if len(attHashDomains)+len(encodedDomains)+reservedSANs <= maxCertificateSANs {
-			encodedDomains = append(encodedDomains, attHashDomains...)
-		} else {
-			return fmt.Errorf("attestation hash too large for certificate SANs")
-		}
-	}
-
-	var domains []string
-	switch {
-	case shimCfg.TLSMode == "cert-proxy" && shimCfg.TLSChallengeMode == "http":
-		domains = append([]string{id.Domain}, encodedDomains...)
-	case shimCfg.TLSMode != "cert-proxy" && (shimCfg.TLSChallengeMode == "tls" || shimCfg.TLSChallengeMode == "http"):
-		domains = []string{id.Domain}
-	default:
-		if shimCfg.TLSWildcard {
-			domains = append([]string{id.Domain, "*." + id.Domain}, encodedDomains...)
-		} else {
-			domains = append([]string{id.Domain}, encodedDomains...)
-		}
+		return err
 	}
 
 	log.Printf("Obtaining TLS certificate for %d domains (mode=%s)", len(domains), shimCfg.TLSMode)
@@ -142,6 +99,39 @@ func obtainCertificate(id *NodeIdentity, att *verifier.Document, shimCfg *shimco
 	}
 
 	return writeTLSArtifacts(cert, id.TLSKey)
+}
+
+func certificateDomains(id *NodeIdentity, shimCfg *shimconfig.Config) ([]string, error) {
+	encodedSANDomain := "tinfoil.sh"
+	if shimCfg.TLSOwnSANDomain {
+		encodedSANDomain = id.Domain
+		if d, err := publicsuffix.EffectiveTLDPlusOne(id.Domain); err == nil {
+			encodedSANDomain = d
+		}
+	}
+
+	var encodedDomains []string
+	hpkeKeyDomains, err := dcode.Encode(id.HPKEKeyBytes, "hpke."+encodedSANDomain)
+	if err != nil {
+		return nil, fmt.Errorf("encoding HPKE key: %w", err)
+	}
+	encodedDomains = append(encodedDomains, hpkeKeyDomains...)
+
+	var domains []string
+	switch {
+	case shimCfg.TLSMode == "cert-proxy" && shimCfg.TLSChallengeMode == "http":
+		domains = append([]string{id.Domain}, encodedDomains...)
+	case shimCfg.TLSMode != "cert-proxy" && (shimCfg.TLSChallengeMode == "tls" || shimCfg.TLSChallengeMode == "http"):
+		domains = []string{id.Domain}
+	default:
+		if shimCfg.TLSWildcard {
+			domains = append([]string{id.Domain, "*." + id.Domain}, encodedDomains...)
+		} else {
+			domains = append([]string{id.Domain}, encodedDomains...)
+		}
+	}
+
+	return domains, nil
 }
 
 func retryCertificate(fn func() (*tls.Certificate, error), interval time.Duration) (*tls.Certificate, error) {

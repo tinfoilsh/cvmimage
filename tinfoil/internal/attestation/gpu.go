@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"time"
 
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"tinfoil/internal/nvml"
 )

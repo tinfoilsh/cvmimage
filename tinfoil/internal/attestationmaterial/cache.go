@@ -22,7 +22,7 @@ const (
 var ErrUnavailable = errors.New("attestation collateral unavailable")
 
 type Fetcher interface {
-	Fetch(context.Context, wire.Request) (wire.Response, error)
+	Fetch(context.Context, Request) (wire.Response, error)
 }
 
 type Cache struct {
@@ -30,14 +30,15 @@ type Cache struct {
 	response     *wire.Response
 	refreshing   chan struct{}
 	nextAttempt  time.Time
-	request      wire.Request
+	request      Request
 	fetcher      Fetcher
 	now          func() time.Time
 	refreshAfter time.Duration
 	retryAfter   time.Duration
 }
 
-func NewCache(request wire.Request, fetcher Fetcher) *Cache {
+func NewCache(request Request, fetcher Fetcher) *Cache {
+	request.Document = bytes.Clone(request.Document)
 	return &Cache{
 		request:      request,
 		fetcher:      fetcher,

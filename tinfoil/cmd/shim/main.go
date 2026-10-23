@@ -24,12 +24,12 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
+	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
@@ -196,21 +196,24 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		if err != nil {
 			return err
 		}
-		collateralRequest, err := waitForArtifact("Collateral request", func() (wire.Request, error) {
-			return loadCollateralRequest(boot.CollateralRequestPath)
-		})
-		if err != nil {
-			return err
+		var collateralCache collateralSource
+		if att.Format != verifier.DummyV2 {
+			collateralRequest, err := waitForArtifact("Collateral request", func() (attestationmaterial.Request, error) {
+				return loadCollateralRequest(boot.CollateralRequestPath)
+			})
+			if err != nil {
+				return err
+			}
+			client, err := attestationmaterial.NewClient(config.ATC, nil)
+			if err != nil {
+				return err
+			}
+			collateralCache = attestationmaterial.NewCache(collateralRequest, client)
 		}
 
 		serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {
 			return identity.FromFile(boot.HPKEKeyPath)
 		})
-		if err != nil {
-			return err
-		}
-
-		collateralCache, err := newCollateralSource(collateralRequest, config)
 		if err != nil {
 			return err
 		}
@@ -221,7 +224,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		if !ok {
 			return fmt.Errorf("TLS key is not ECDSA")
 		}
-		identityBody := tinfoilattestation.BodyV2{
+		identityBody := tinfoilattestation.Identity{
 			TLSKeyFP: tlsutil.KeyFPBytes(&tlsPub.PublicKey),
 		}
 		copy(identityBody.HPKEKey[:], serverIdentity.MarshalPublicKey())

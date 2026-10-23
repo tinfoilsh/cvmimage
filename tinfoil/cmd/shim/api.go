@@ -200,7 +200,7 @@ func NewShimServer(
 	validator key.Validator,
 	rateLimiter *RateLimiter,
 	att *legacy.Document,
-	identityBody tinfoilattestation.BodyV2,
+	identityBody tinfoilattestation.Identity,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
@@ -310,7 +310,7 @@ func NewShimServer(
 
 func NewObservabilityServer(
 	att *legacy.Document,
-	identityBody tinfoilattestation.BodyV2,
+	identityBody tinfoilattestation.Identity,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
@@ -341,7 +341,7 @@ func registerObservabilityHandlers(
 	mux *http.ServeMux,
 	ehbpMiddleware func(http.Handler) http.Handler,
 	att *legacy.Document,
-	identityBody tinfoilattestation.BodyV2,
+	identityBody tinfoilattestation.Identity,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,

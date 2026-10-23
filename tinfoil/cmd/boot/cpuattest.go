@@ -2,43 +2,37 @@ package main
 
 import (
 	"crypto/ecdsa"
-	"encoding/base64"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 
-	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	envelope "github.com/tinfoilsh/tinfoil-go/document"
 
 	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/attestation"
+	"tinfoil/internal/attestationmaterial"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
 	tlsutil "tinfoil/internal/tls"
 )
 
 type CPUAttestation struct {
-	RawReport []byte
-	Platform  string
-	V2Doc     *verifier.Document
+	Document json.RawMessage
+	V2Doc    *verifier.Document
 }
 
 func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAttestation, error) {
 	aBody := id.attestationBody()
 	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
-	userData := aBody.Marshal()
+	userData := aBody.V2ReportData()
 
 	if id.Domain == "localhost" || shimCfg.DummyAttestation {
 		log.Println("Using dummy attestation report")
-		doc := attestation.DummyReport(userData)
-		if err := writeAttestationDoc(doc); err != nil {
-			return nil, err
-		}
 		return &CPUAttestation{
-			RawReport: userData[:],
-			Platform:  attestation.PlatformDummy,
-			V2Doc:     doc,
+			V2Doc: attestation.DummyReport(userData),
 		}, nil
 	}
 
@@ -53,21 +47,25 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 		return nil, fmt.Errorf("building V2 document: %w", err)
 	}
 
-	if err := writeAttestationDoc(v2Doc); err != nil {
-		return nil, err
+	nonce := make([]byte, envelope.NonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating collateral nonce: %w", err)
+	}
+	document, err := attestation.BuildAttestation(nil, nonce, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building collateral document: %w", err)
 	}
 
 	return &CPUAttestation{
-		RawReport: rawReport,
-		Platform:  platform,
-		V2Doc:     v2Doc,
+		Document: document,
+		V2Doc:    v2Doc,
 	}, nil
 }
 
-func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
+func (id *NodeIdentity) attestationBody() attestation.Identity {
 	var hpkeKey [32]byte
 	copy(hpkeKey[:], id.HPKEKeyBytes)
-	return attestation.BodyV2{
+	return attestation.Identity{
 		TLSKeyFP: tlsutil.KeyFPBytes(id.TLSKey.Public().(*ecdsa.PublicKey)),
 		HPKEKey:  hpkeKey,
 		Workload: id.WorkloadKeys,
@@ -86,24 +84,25 @@ func writeAttestationDoc(att *verifier.Document) error {
 	return nil
 }
 
-func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig) (wire.Request, error) {
-	if cpuAtt == nil || len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
-		return wire.Request{}, fmt.Errorf("raw CPU attestation is required")
+func writeCollateralRequest(path string, document json.RawMessage, metadata shimconfig.Metadata) (attestationmaterial.Request, error) {
+	if len(document) == 0 {
+		return attestationmaterial.Request{}, nil
 	}
-	request := wire.Request{
-		Platform:    cpuAtt.Platform,
-		QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport),
+	request := attestationmaterial.Request{
+		Version:  attestationmaterial.RequestVersionDocument,
+		Document: document,
+		Repo:     metadata.Repo,
+		Tag:      metadata.Tag,
 	}
-	if external != nil {
-		request.Repo = external.Metadata.Repo
-		request.Tag = external.Metadata.Tag
+	if err := request.Validate(); err != nil {
+		return attestationmaterial.Request{}, err
 	}
 	data, err := json.Marshal(request)
 	if err != nil {
-		return wire.Request{}, fmt.Errorf("marshaling collateral request: %w", err)
+		return attestationmaterial.Request{}, fmt.Errorf("marshaling collateral request: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return wire.Request{}, fmt.Errorf("writing collateral request: %w", err)
+		return attestationmaterial.Request{}, fmt.Errorf("writing collateral request: %w", err)
 	}
 	return request, nil
 }

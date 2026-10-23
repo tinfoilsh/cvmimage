@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
 	"github.com/tinfoilsh/tinfoil-go/document/collateral"
 
@@ -49,7 +48,7 @@ func fetchKeyserverSecrets(
 	config *Config,
 	ext *shimconfig.ExternalConfig,
 	nodeID *NodeIdentity,
-	collateralRequest wire.Request,
+	collateralRequest attestationmaterial.Request,
 	names []string,
 ) (map[string]string, error) {
 	if ext == nil || ext.Metadata.Repo == "" {
@@ -112,10 +111,10 @@ func fetchKeyserverSecrets(
 func prefetchKeyserverCollateral(
 	ctx context.Context,
 	config *Config,
-	request wire.Request,
+	request attestationmaterial.Request,
 ) ([]collateral.Entry, error) {
-	if request.Repo == "" || request.Platform == "" || request.Platform == attestation.PlatformDummy || request.QuoteBase64 == "" {
-		return nil, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
+	if request.Validate() != nil {
+		return nil, fmt.Errorf("keyserver secret fetch requires an attestation document")
 	}
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)
 	if err != nil {

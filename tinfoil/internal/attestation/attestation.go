@@ -25,19 +25,18 @@ import (
 )
 
 const (
-	PlatformDummy  = "dummy"
 	PlatformSEVSNP = "sev-snp"
 	PlatformTDX    = "tdx"
 )
 
-type BodyV2 struct {
+type Identity struct {
 	TLSKeyFP [32]byte
 	HPKEKey  [32]byte
-	// Workload keys are endorsed by v3 quotes only; Marshal omits them.
+	// Workload keys are endorsed by v3 quotes only; V2ReportData omits them.
 	Workload []envelope.CryptoMaterialItem
 }
 
-func (a BodyV2) CryptoMaterial() []envelope.CryptoMaterialItem {
+func (a Identity) CryptoMaterial() []envelope.CryptoMaterialItem {
 	items := []envelope.CryptoMaterialItem{
 		{ID: envelope.CryptoMaterialIDTLS, Format: envelope.KeySPKIFPSHA256V1Format, Data: hex.EncodeToString(a.TLSKeyFP[:])},
 		{ID: envelope.CryptoMaterialIDHPKE, Format: envelope.KeyX25519HPKEV1Format, Data: hex.EncodeToString(a.HPKEKey[:])},
@@ -45,7 +44,7 @@ func (a BodyV2) CryptoMaterial() []envelope.CryptoMaterialItem {
 	return append(items, a.Workload...)
 }
 
-func (a BodyV2) Marshal() [64]byte {
+func (a Identity) V2ReportData() [64]byte {
 	var result [64]byte
 	copy(result[:32], a.TLSKeyFP[:])
 	copy(result[32:], a.HPKEKey[:])

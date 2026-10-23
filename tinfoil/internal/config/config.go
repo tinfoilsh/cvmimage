@@ -17,7 +17,6 @@ const SecretMetricsAPIKey = "METRICS_API_KEY"
 const SourceLocal = "local"
 
 type Metadata struct {
-	Profile      string `yaml:"profile,omitempty"`
 	ConfigSource string `yaml:"config_source,omitempty"`
 
 	ID     string `yaml:"id"`

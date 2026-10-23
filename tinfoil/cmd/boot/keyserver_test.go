@@ -128,7 +128,7 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&collateralRequest); err != nil {
 			t.Fatal(err)
 		}
-		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Version != attestationmaterial.RequestVersionDocument || collateralRequest.Platform != "" || collateralRequest.QuoteBase64 != "" {
+		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Version != attestationmaterial.RequestVersionDocument || collateralRequest.Profile != wire.FormatV3 {
 			t.Fatalf("request = %#v", collateralRequest)
 		}
 		parsed, err := envelope.Parse(collateralRequest.Document, make([]byte, envelope.NonceSize))
@@ -145,23 +145,22 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 			t.Fatalf("preflight collateral must be an empty array: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(wire.Response{
-			Format:    wire.FormatV2,
+			Format:    wire.FormatV3,
 			ExpiresAt: time.Now().Add(time.Hour),
 		})
 	}))
 	defer server.Close()
 
 	config := &Config{ShimCfg: &shimconfig.Config{ATC: server.URL}}
-	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{Repo: "tinfoilsh/workload", Tag: "v1.2.3"}}
-	empty, err := envelope.Build(envelope.BuildInput{Nonce: make([]byte, envelope.NonceSize)}, func([64]byte) (string, []byte, error) {
+	external := &shimconfig.ExternalConfig{Metadata: shimconfig.Metadata{Repo: "tinfoilsh/workload", Tag: "v1.2.3", Digest: strings.Repeat("a", 64)}}
+	empty, err := envelope.Build(envelope.BuildInput{Nonce: make([]byte, envelope.NonceSize), CollateralFormat: wire.FormatV3}, func([64]byte) (string, []byte, error) {
 		return envelope.SEVSNPReportV1Format, []byte("raw quote"), nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cpu := &CPUAttestation{Document: empty, RawReport: []byte("raw quote"), Platform: "sev-snp"}
 	path := t.TempDir() + "/collateral-request.json"
-	collateralRequest, err := writeCollateralRequest(path, cpu, external, "")
+	collateralRequest, err := writeCollateralRequest(path, empty, external.Metadata, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +179,7 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(collateral.Collateral) != 0 || collateral.Format != wire.FormatV2 {
+	if len(collateral.Collateral) != 0 || collateral.Format != wire.FormatV3 {
 		t.Fatalf("collateral = %#v", collateral)
 	}
 }

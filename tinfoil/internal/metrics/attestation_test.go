@@ -12,8 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
-
-	"tinfoil/internal/legacy"
 )
 
 func TestAttestationRequestMetrics(t *testing.T) {
@@ -22,11 +20,11 @@ func TestAttestationRequestMetrics(t *testing.T) {
 		endpoint, format, sdk, version, userAgent string
 		status                                    int
 	}{
-		{AttestationEndpointUnversioned, string(legacy.SevGuestV2), "", "", "Go-http-client/1.1", http.StatusOK},
+		{AttestationEndpointUnversioned, envelope.AttestationV3Format, "", "", "Go-http-client/1.1", http.StatusOK},
 		{AttestationEndpointUnversioned, envelope.AttestationV3Format, "tinfoil-go", "v0.15.7", "Go-http-client/2.0", http.StatusOK},
 		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", "python-requests/2.32.5", http.StatusOK},
-		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", "", http.StatusBadRequest},
-		{AttestationEndpointV3, string(legacy.SevGuestV2), "tinfoil-go", "0.15.7", "", http.StatusServiceUnavailable},
+		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", "", http.StatusBadRequest},
+		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", "", http.StatusServiceUnavailable},
 		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", "", http.StatusFound},
 		{AttestationEndpointV3, "", "tinfoil-go", "0.15.7", "", http.StatusOK},
 	} {
@@ -49,7 +47,7 @@ func TestAttestationRequestMetrics(t *testing.T) {
 	require.NoError(t, testutil.CollectAndCompare(m.requests, strings.NewReader(`
 # HELP tfshim_attestation_requests_total Attestation HTTP requests by endpoint, served format, self-reported SDK, coarse User-Agent family, and response result; does not indicate client verification success.
 # TYPE tfshim_attestation_requests_total counter
-tfshim_attestation_requests_total{attestation_version="v2",client_family="go",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 1
+tfshim_attestation_requests_total{attestation_version="v3",client_family="go",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 1
 tfshim_attestation_requests_total{attestation_version="v3",client_family="go",endpoint="unversioned",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
 tfshim_attestation_requests_total{attestation_version="v3",client_family="python",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
 tfshim_attestation_requests_total{attestation_version="none",client_family="unknown",endpoint="v3",result="client_error",sdk="tinfoil-go",sdk_version="0.15.7"} 1
@@ -88,7 +86,7 @@ func TestAttestationClientFamilies(t *testing.T) {
 func TestAttestationClientFamiliesAggregateUserAgents(t *testing.T) {
 	m := newAttestationMetrics()
 	handler := m.observe(AttestationEndpointUnversioned, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(attestationFormatHeader, string(legacy.SevGuestV2))
+		w.Header().Set(attestationFormatHeader, envelope.AttestationV3Format)
 		w.WriteHeader(http.StatusOK)
 	}))
 	for _, userAgent := range []string{
@@ -104,9 +102,9 @@ func TestAttestationClientFamiliesAggregateUserAgents(t *testing.T) {
 	require.NoError(t, testutil.CollectAndCompare(m.requests, strings.NewReader(`
 # HELP tfshim_attestation_requests_total Attestation HTTP requests by endpoint, served format, self-reported SDK, coarse User-Agent family, and response result; does not indicate client verification success.
 # TYPE tfshim_attestation_requests_total counter
-tfshim_attestation_requests_total{attestation_version="v2",client_family="go",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
-tfshim_attestation_requests_total{attestation_version="v2",client_family="python",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
-tfshim_attestation_requests_total{attestation_version="v2",client_family="other",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
+tfshim_attestation_requests_total{attestation_version="v3",client_family="go",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
+tfshim_attestation_requests_total{attestation_version="v3",client_family="python",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
+tfshim_attestation_requests_total{attestation_version="v3",client_family="other",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 2
 `)))
 }
 

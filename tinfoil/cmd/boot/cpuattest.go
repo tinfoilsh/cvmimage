@@ -2,17 +2,12 @@ package main
 
 import (
 	"crypto/ecdsa"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
-
-	verifier "tinfoil/internal/legacy"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"
@@ -20,95 +15,46 @@ import (
 	tlsutil "tinfoil/internal/tls"
 )
 
-type CPUAttestation struct {
-	Document  json.RawMessage
-	RawReport []byte
-	Platform  string
-	V2Doc     *verifier.Document
+func fetchCPUAttestation(domain string, shimCfg *shimconfig.Config) (json.RawMessage, error) {
+	if domain == "localhost" || shimCfg.DummyAttestation {
+		return nil, nil
+	}
+	nonce, err := envelope.RandomNonce()
+	if err != nil {
+		return nil, fmt.Errorf("generating collateral nonce: %w", err)
+	}
+	return attestation.BuildAttestation(nil, nonce, nil, wire.Response{Format: wire.FormatV3})
 }
 
-func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config, metadata shimconfig.Metadata) (*CPUAttestation, error) {
-	aBody := id.attestationBody()
-	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
-	userData := aBody.Marshal()
-
-	if id.Domain == "localhost" || shimCfg.DummyAttestation {
-		log.Println("Using dummy attestation report")
-		doc := attestation.DummyReport(userData)
-		return &CPUAttestation{
-			RawReport: userData[:],
-			Platform:  attestation.PlatformDummy,
-			V2Doc:     doc,
-		}, nil
-	}
-
-	log.Println("Fetching hardware attestation report")
-	rawReport, platform, err := attestation.Report(userData)
-	if err != nil {
-		return nil, fmt.Errorf("fetching attestation report: %w", err)
-	}
-
-	v2Doc, err := attestation.V2Document(rawReport, platform)
-	if err != nil {
-		return nil, fmt.Errorf("building V2 document: %w", err)
-	}
-	var document json.RawMessage
-	if metadata.ConfigSource != shimconfig.SourceLocal {
-		nonce := make([]byte, envelope.NonceSize)
-		if _, err := rand.Read(nonce); err != nil {
-			return nil, fmt.Errorf("generating collateral nonce: %w", err)
-		}
-		document, err = attestation.BuildAttestation(nil, nonce, nil, wire.Response{Format: metadata.Profile})
-		if err != nil {
-			return nil, fmt.Errorf("building collateral document: %w", err)
-		}
-	}
-
-	return &CPUAttestation{
-		Document:  document,
-		RawReport: rawReport,
-		Platform:  platform,
-		V2Doc:     v2Doc,
-	}, nil
-}
-
-func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
+func (id *NodeIdentity) attestationBody() attestation.Identity {
 	var hpkeKey [32]byte
 	copy(hpkeKey[:], id.HPKEKeyBytes)
-	return attestation.BodyV2{
+	return attestation.Identity{
 		TLSKeyFP: tlsutil.KeyFPBytes(id.TLSKey.Public().(*ecdsa.PublicKey)),
 		HPKEKey:  hpkeKey,
 		Workload: id.WorkloadKeys,
 	}
 }
 
-func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig, runtimeVersion string) (attestationmaterial.Request, error) {
-	if cpuAtt == nil || len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
-		return attestationmaterial.Request{}, fmt.Errorf("raw CPU attestation is required")
+func writeCollateralRequest(path string, document json.RawMessage, metadata shimconfig.Metadata, configPath string) (attestationmaterial.Request, error) {
+	if len(document) == 0 {
+		return attestationmaterial.Request{}, nil
 	}
 	request := attestationmaterial.Request{
-		Version:  attestationmaterial.RequestVersionDocument,
-		Document: cpuAtt.Document,
+		Version: attestationmaterial.RequestVersionDocument, Document: document,
+		Profile: wire.FormatV3, Repo: metadata.Repo, Tag: metadata.Tag, Digest: metadata.Digest,
 	}
-	if cpuAtt.Platform == attestation.PlatformDummy {
-		request = attestationmaterial.Request{Platform: cpuAtt.Platform, QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport)}
-	}
-	if external != nil {
-		request.Repo = external.Metadata.Repo
-		request.Tag = external.Metadata.Tag
-		request.Profile = external.Metadata.Profile
-		request.Digest = external.Metadata.Digest
-		if external.Metadata.ConfigSource != "" {
-			if external.Metadata.ConfigSource != shimconfig.SourceLocal || request.Profile != wire.FormatV3 || runtimeVersion == "" {
-				return attestationmaterial.Request{}, fmt.Errorf("local config collateral requires a runtime and the v3 profile")
-			}
-			request.Repo, request.Tag, request.Digest = "", "", ""
-			request.Runtime = runtimeVersion
-			request.Version = attestationmaterial.RequestVersionLegacy
-			request.Document = nil
-			request.Platform = cpuAtt.Platform
-			request.QuoteBase64 = base64.StdEncoding.EncodeToString(cpuAtt.RawReport)
+	switch metadata.ConfigSource {
+	case "":
+	case shimconfig.SourceLocal:
+		request.Repo, request.Tag, request.Digest = "", "", ""
+		var err error
+		request.Config, err = os.ReadFile(configPath)
+		if err != nil {
+			return attestationmaterial.Request{}, fmt.Errorf("reading local config: %w", err)
 		}
+	default:
+		return attestationmaterial.Request{}, fmt.Errorf("unsupported config source %q", metadata.ConfigSource)
 	}
 	if err := request.Validate(); err != nil {
 		return attestationmaterial.Request{}, err

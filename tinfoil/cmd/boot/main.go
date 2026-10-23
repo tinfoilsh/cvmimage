@@ -125,17 +125,17 @@ func run(ctx context.Context, invocation invocation) error {
 	// 4. CPU attestation
 	start = time.Now()
 	log.Println("Fetching CPU attestation")
-	cpuAtt, err := fetchCPUAttestation(nodeID, config.ShimCfg, externalConfig.Metadata)
+	cpuAtt, err := fetchCPUAttestation(nodeID.Domain, config.ShimCfg)
 	if err != nil {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	collateralRequest, err := writeCollateralRequest(boot.CollateralRequestPath, cpuAtt, externalConfig, config.CVMVersion)
+	collateralRequest, err := writeCollateralRequest(boot.CollateralRequestPath, cpuAtt, externalConfig.Metadata, boot.ConfigPath)
 	if err != nil {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), string(cpuAtt.V2Doc.Format))
+	tracker.Record("cpu-attestation", boot.StatusOK, time.Since(start), "")
 
 	if err := attestGPU(config, tracker.Record); err != nil {
 		return err
@@ -144,7 +144,7 @@ func run(ctx context.Context, invocation invocation) error {
 	// 6. Certificate
 	start = time.Now()
 	log.Println("Obtaining TLS certificate")
-	if err := obtainCertificate(nodeID, cpuAtt.V2Doc, config.ShimCfg, externalConfig); err != nil {
+	if err := obtainCertificate(nodeID, config.ShimCfg, externalConfig); err != nil {
 		tracker.Record("certificate", boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("certificate acquisition failed: %w", err)
 	}

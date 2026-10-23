@@ -1,44 +1,41 @@
 package attestationmaterial
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+
+	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
 
-const (
-	RequestVersionLegacy   = 1
-	RequestVersionDocument = 2
-)
+const RequestVersionDocument = 2
 
-// Request versions ATC service plumbing independently of the attestation and
-// collateral formats. Document carries no collateral or private key material.
 type Request struct {
-	Version     int             `json:"version,omitempty"`
-	Repo        string          `json:"repo,omitempty"`
-	Tag         string          `json:"tag,omitempty"`
-	Profile     string          `json:"profile,omitempty"`
-	Digest      string          `json:"digest,omitempty"`
-	Runtime     string          `json:"runtime,omitempty"`
-	Document    json.RawMessage `json:"document,omitempty"`
-	Platform    string          `json:"platform,omitempty"`
-	QuoteBase64 string          `json:"quote_base64,omitempty"`
+	Version  int             `json:"version"`
+	Repo     string          `json:"repo,omitempty"`
+	Tag      string          `json:"tag,omitempty"`
+	Profile  string          `json:"profile"`
+	Digest   string          `json:"digest,omitempty"`
+	Config   []byte          `json:"config_base64,omitempty"`
+	Document json.RawMessage `json:"document"`
 }
 
 func (r Request) Validate() error {
-	switch r.Version {
-	case 0, RequestVersionLegacy:
-		if len(r.Document) != 0 || r.Platform == "" || r.QuoteBase64 == "" {
-			return fmt.Errorf("legacy collateral request requires platform and quote_base64 without a document")
-		}
-	case RequestVersionDocument:
-		if r.Runtime != "" {
-			return fmt.Errorf("private runtime-only requests require version %d", RequestVersionLegacy)
-		}
-		if len(r.Document) == 0 || string(r.Document) == "null" || r.Platform != "" || r.QuoteBase64 != "" {
-			return fmt.Errorf("document collateral request requires a document without platform or quote_base64")
-		}
-	default:
+	if r.Version != RequestVersionDocument {
 		return fmt.Errorf("unsupported collateral request version %d", r.Version)
+	}
+	if len(r.Document) == 0 || bytes.Equal(bytes.TrimSpace(r.Document), []byte("null")) {
+		return fmt.Errorf("collateral request requires an attestation document")
+	}
+	if r.Profile != wire.FormatV3 {
+		return fmt.Errorf("unsupported collateral request profile %q", r.Profile)
+	}
+	if len(r.Config) != 0 {
+		if r.Repo != "" || r.Tag != "" || r.Digest != "" {
+			return fmt.Errorf("local config and registry references are mutually exclusive")
+		}
+	} else if r.Repo == "" || r.Tag == "" || r.Digest == "" {
+		return fmt.Errorf("registry collateral request requires a project, revision, and config digest")
 	}
 	return nil
 }

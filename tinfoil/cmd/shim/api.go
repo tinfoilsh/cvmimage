@@ -198,7 +198,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 func NewShimServer(
 	validator key.Validator,
 	rateLimiter *RateLimiter,
-	identityBody tinfoilattestation.BodyV2,
+	identityBody tinfoilattestation.Identity,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
@@ -307,7 +307,7 @@ func NewShimServer(
 }
 
 func NewObservabilityServer(
-	identityBody tinfoilattestation.BodyV2,
+	identityBody tinfoilattestation.Identity,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
@@ -337,7 +337,7 @@ func wrapShimMux(config *config.Config, mux http.Handler) http.Handler {
 func registerObservabilityHandlers(
 	mux *http.ServeMux,
 	ehbpMiddleware func(http.Handler) http.Handler,
-	identityBody tinfoilattestation.BodyV2,
+	identityBody tinfoilattestation.Identity,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,

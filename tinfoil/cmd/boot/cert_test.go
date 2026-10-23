@@ -8,6 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/dcode"
 )
 
 func TestWithHTTP01FirewallUsesFixedMeasuredChain(t *testing.T) {
@@ -129,6 +132,40 @@ func TestMeasuredFirewallDefinesHTTP01Chain(t *testing.T) {
 	for _, protocolName := range []string{"ip protocol icmp", "l4proto ipv6-icmp"} {
 		if strings.Contains(text, protocolName) {
 			t.Fatalf("measured firewall policy depends on protocol-name parsing: %q", protocolName)
+		}
+	}
+}
+
+func TestCertificateDomainsKeepHPKEWithoutLegacyAttestation(t *testing.T) {
+	id := &NodeIdentity{Domain: "enclave.example.com", HPKEKeyBytes: []byte("public HPKE key")}
+	for _, ownDomain := range []bool{false, true} {
+		for _, wildcard := range []bool{false, true} {
+			config := &shimconfig.Config{TLSMode: "cert-proxy", TLSChallengeMode: "dns", TLSOwnSANDomain: ownDomain, TLSWildcard: wildcard, PublishAttestation: true}
+			domains, err := certificateDomains(id, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			suffix := "hpke.tinfoil.sh"
+			if ownDomain {
+				suffix = "hpke.example.com"
+			}
+			encoded, err := dcode.Encode(id.HPKEKeyBytes, suffix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{id.Domain}
+			if wildcard {
+				want = append(want, "*."+id.Domain)
+			}
+			want = append(want, encoded...)
+			if !reflect.DeepEqual(domains, want) {
+				t.Fatalf("certificate domains = %v, want %v", domains, want)
+			}
+			config.TLSMode, config.TLSChallengeMode = "acme", "http"
+			domains, err = certificateDomains(id, config)
+			if err != nil || !reflect.DeepEqual(domains, []string{id.Domain}) {
+				t.Fatalf("HTTP-01 certificate domains = %v, %v", domains, err)
+			}
 		}
 	}
 }

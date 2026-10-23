@@ -11,41 +11,20 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/verify/document"
 )
 
 func TestClientFetch(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		version int
-		profile string
 		format  string
 		wantErr string
 	}{
-		{name: "legacy", format: wire.FormatV2},
-		{name: "v3", profile: wire.FormatV3, format: wire.FormatV3},
-		{name: "versioned legacy", version: RequestVersionDocument, format: wire.FormatV2},
-		{name: "versioned registry", version: RequestVersionDocument, profile: wire.FormatV3, format: wire.FormatV3},
-		{name: "legacy rejects v3", format: wire.FormatV3, wantErr: "unexpected collaterals format"},
-		{name: "v3 rejects v2", profile: wire.FormatV3, format: wire.FormatV2, wantErr: "unexpected collaterals format"},
-		{name: "v3 rejects missing format", profile: wire.FormatV3, wantErr: "unexpected collaterals format"},
-		{name: "unsupported profile", profile: "unsupported", format: wire.FormatV2, wantErr: "unsupported collateral request profile"},
+		{name: "registry", format: wire.FormatV3},
+		{name: "rejects v2", format: wire.FormatV2, wantErr: "unexpected collaterals format"},
+		{name: "rejects missing format", wantErr: "unexpected collaterals format"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			wantRequest := Request{Profile: tc.profile, Repo: "tinfoilsh/example", Tag: "v1.2.3", Platform: "sev-snp", QuoteBase64: "cXVvdGU="}
-			if tc.version == RequestVersionDocument {
-				empty, err := document.Build(document.BuildInput{Nonce: make([]byte, document.NonceSize), CollateralFormat: tc.profile}, func([64]byte) (string, []byte, error) {
-					return document.SEVSNPReportV1Format, []byte("quote"), nil
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				wantRequest.Version, wantRequest.Document = tc.version, empty
-				wantRequest.Platform, wantRequest.QuoteBase64 = "", ""
-			}
-			if tc.profile == wire.FormatV3 {
-				wantRequest.Digest = strings.Repeat("b", 64)
-			}
+			wantRequest := Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "tinfoilsh/example", Tag: "v1.2.3", Digest: strings.Repeat("b", 64)}
 			wantResponse := wire.Response{Format: tc.format, ExpiresAt: time.Now().Add(time.Hour).UTC()}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/attestation-collaterals" {
@@ -87,7 +66,7 @@ func TestClientFetch(t *testing.T) {
 
 func TestClientRejectsExpiredResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV2, ExpiresAt: time.Now().Add(-time.Minute)})
+		json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(-time.Minute)})
 	}))
 	defer server.Close()
 
@@ -95,7 +74,7 @@ func TestClientRejectsExpiredResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if _, err := client.Fetch(context.Background(), Request{Repo: "repo", Platform: "tdx", QuoteBase64: "cXVvdGU="}); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Config: []byte("config")}); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expected expired response error, got %v", err)
 	}
 }
@@ -126,7 +105,7 @@ func TestClientDoesNotDowngradeRejectedDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Repo: "org/repo", Document: json.RawMessage(`{}`)})
+	_, err = client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Config: []byte("config"), Document: json.RawMessage(`{}`)})
 	if err == nil || !strings.Contains(err.Error(), "unsupported version") || requests != 1 {
 		t.Fatalf("requests=%d, error=%v", requests, err)
 	}

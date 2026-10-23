@@ -469,35 +469,33 @@ func TestWriteAPIErrorEmitsFourFieldEnvelope(t *testing.T) {
 	}
 }
 
-// TestValidationFailureDistinguishesForbiddenFromUnauthorized pins that a
-// credential the validator accepted but refused for lack of permission is
-// not reported as an incorrect key, which would send the user off to
-// regenerate a key that was fine.
-func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
-	cases := []struct {
-		name       string
-		status     int
-		wantStatus int
-		wantCode   string
-		wantType   string
-	}{
-		{"unauthorized is invalid key", http.StatusUnauthorized, http.StatusUnauthorized, errCodeInvalidAPIKey, errTypeInvalidRequest},
-		{"forbidden is insufficient permissions", http.StatusForbidden, http.StatusForbidden, errCodeInsufficientPermissions, errTypeInvalidRequest},
-		{"payment required stays 402", http.StatusPaymentRequired, http.StatusPaymentRequired, errCodeInsufficientQuota, errTypeInsufficientQuota},
-		{"too many requests is rate limit", http.StatusTooManyRequests, http.StatusTooManyRequests, errCodeRateLimitExceeded, errTypeRateLimit},
+// TestValidationFailureWritesTheRefusal pins that the client receives the
+// error the validator wrote, so it learns why its credential was refused,
+// and that a status outside the error range never reaches the client.
+func TestValidationFailureWritesTheRefusal(t *testing.T) {
+	refusal := &key.ValidationError{
+		StatusCode: http.StatusPaymentRequired,
+		RetryAfter: "30",
+		Type:       "insufficient_quota",
+		Code:       "insufficient_quota",
+		Message:    "API access is paused because the account is out of credits.",
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			writeValidationFailure(rec, &key.ValidationError{StatusCode: tc.status})
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
-			}
-			body := decodeErrorEnvelope(t, rec)
-			if body.Code == nil || *body.Code != tc.wantCode || body.Type != tc.wantType {
-				t.Fatalf("code/type = %v/%s, want %s/%s", body.Code, body.Type, tc.wantCode, tc.wantType)
-			}
-		})
+	rec := httptest.NewRecorder()
+	writeValidationFailure(rec, refusal)
+	body := decodeErrorEnvelope(t, rec)
+	if rec.Code != refusal.StatusCode || rec.Header().Get("Retry-After") != refusal.RetryAfter {
+		t.Fatalf("status/retry = %d/%q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if body.Type != refusal.Type || body.Code == nil || *body.Code != refusal.Code || body.Message != refusal.Message {
+		t.Fatalf("unexpected error body: %+v", body)
+	}
+
+	for _, status := range []int{http.StatusOK, http.StatusFound, 600} {
+		rec := httptest.NewRecorder()
+		writeValidationFailure(rec, &key.ValidationError{StatusCode: status, Type: "insufficient_quota", Message: "relayed"})
+		if rec.Code != http.StatusInternalServerError || decodeErrorEnvelope(t, rec).Message != errMsgServerError {
+			t.Fatalf("status %d reached the client as %d: %s", status, rec.Code, rec.Body.String())
+		}
 	}
 }
 
@@ -506,7 +504,7 @@ func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
 		name string
 		err  apiError
 	}{
-		{"payment", apiError{status: http.StatusPaymentRequired, errType: errTypeInsufficientQuota, code: errCodeInsufficientQuota, message: errMsgQuotaExceeded}},
+		{"payment", apiError{status: http.StatusPaymentRequired, errType: "insufficient_quota", code: "insufficient_quota", message: "API access is paused because the account is out of credits."}},
 		{"rate limit", apiError{status: http.StatusTooManyRequests, errType: errTypeRateLimit, code: errCodeRateLimitExceeded, message: errMsgRateLimited}},
 	} {
 		for _, encrypted := range []bool{false, true} {
@@ -515,7 +513,7 @@ func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status}}
+				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status, Type: tc.err.errType, Code: tc.err.code, Message: tc.err.message}}
 				handler := NewShimServer(validator, nil, &legacy.Document{}, tinfoilattestation.Identity{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
 				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
 				req.Header.Set("Authorization", "Bearer test-key")

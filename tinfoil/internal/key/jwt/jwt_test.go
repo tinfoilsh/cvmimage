@@ -76,14 +76,20 @@ func newTestValidator(t *testing.T, jwksURL string) *Validator {
 	return NewValidator(jwksURL, testIssuer, AccessTokenAudience, RequiredScope)
 }
 
+// expectStatus also pins the error the client receives, which the JWT
+// validator writes itself because no control plane response carries one.
 func expectStatus(t *testing.T, err error, want int) {
 	t.Helper()
 	var ve *key.ValidationError
 	if !errors.As(err, &ve) {
 		t.Fatalf("expected ValidationError, got %v", err)
 	}
-	if ve.StatusCode != want {
-		t.Fatalf("status = %d, want %d", ve.StatusCode, want)
+	refusals := map[int]key.ValidationError{
+		http.StatusUnauthorized: {StatusCode: http.StatusUnauthorized, Type: "invalid_request_error", Code: "invalid_api_key", Message: "Incorrect API key provided."},
+		http.StatusForbidden:    {StatusCode: http.StatusForbidden, Type: "invalid_request_error", Code: "insufficient_permissions", Message: "Your API key does not have permission to access this resource."},
+	}
+	if *ve != refusals[want] {
+		t.Fatalf("refusal = %+v, want %+v", *ve, refusals[want])
 	}
 }
 

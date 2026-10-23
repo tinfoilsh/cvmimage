@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/ecdsa"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -21,16 +20,14 @@ import (
 )
 
 type CPUAttestation struct {
-	Document  json.RawMessage
-	RawReport []byte
-	Platform  string
-	V2Doc     *verifier.Document
+	Document json.RawMessage
+	V2Doc    *verifier.Document
 }
 
 func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAttestation, error) {
 	aBody := id.attestationBody()
 	log.Printf("Attestation body: tls_fp=%x hpke=%x", aBody.TLSKeyFP, aBody.HPKEKey)
-	userData := aBody.Marshal()
+	userData := aBody.V2ReportData()
 
 	if id.Domain == "localhost" || shimCfg.DummyAttestation {
 		log.Println("Using dummy attestation report")
@@ -39,9 +36,7 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 			return nil, err
 		}
 		return &CPUAttestation{
-			RawReport: userData[:],
-			Platform:  attestation.PlatformDummy,
-			V2Doc:     doc,
+			V2Doc: doc,
 		}, nil
 	}
 
@@ -69,17 +64,15 @@ func fetchCPUAttestation(id *NodeIdentity, shimCfg *shimconfig.Config) (*CPUAtte
 	}
 
 	return &CPUAttestation{
-		Document:  document,
-		RawReport: rawReport,
-		Platform:  platform,
-		V2Doc:     v2Doc,
+		Document: document,
+		V2Doc:    v2Doc,
 	}, nil
 }
 
-func (id *NodeIdentity) attestationBody() attestation.BodyV2 {
+func (id *NodeIdentity) attestationBody() attestation.Identity {
 	var hpkeKey [32]byte
 	copy(hpkeKey[:], id.HPKEKeyBytes)
-	return attestation.BodyV2{
+	return attestation.Identity{
 		TLSKeyFP: tlsutil.KeyFPBytes(id.TLSKey.Public().(*ecdsa.PublicKey)),
 		HPKEKey:  hpkeKey,
 		Workload: id.WorkloadKeys,
@@ -98,23 +91,18 @@ func writeAttestationDoc(att *verifier.Document) error {
 	return nil
 }
 
-func writeCollateralRequest(path string, cpuAtt *CPUAttestation, external *shimconfig.ExternalConfig) (attestationmaterial.Request, error) {
-	if cpuAtt == nil || len(cpuAtt.RawReport) == 0 || cpuAtt.Platform == "" {
-		return attestationmaterial.Request{}, fmt.Errorf("raw CPU attestation is required")
+func writeCollateralRequest(path string, document json.RawMessage, metadata shimconfig.Metadata) (attestationmaterial.Request, error) {
+	if len(document) == 0 {
+		return attestationmaterial.Request{}, nil
 	}
 	request := attestationmaterial.Request{
 		Version:  attestationmaterial.RequestVersionDocument,
-		Document: cpuAtt.Document,
-	}
-	if cpuAtt.Platform == attestation.PlatformDummy {
-		request = attestationmaterial.Request{Platform: cpuAtt.Platform, QuoteBase64: base64.StdEncoding.EncodeToString(cpuAtt.RawReport)}
+		Document: document,
+		Repo:     metadata.Repo,
+		Tag:      metadata.Tag,
 	}
 	if err := request.Validate(); err != nil {
 		return attestationmaterial.Request{}, err
-	}
-	if external != nil {
-		request.Repo = external.Metadata.Repo
-		request.Tag = external.Metadata.Tag
 	}
 	data, err := json.Marshal(request)
 	if err != nil {

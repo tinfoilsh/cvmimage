@@ -6,17 +6,14 @@ import (
 	"reflect"
 	"testing"
 	"tinfoil/internal/attestationmaterial"
-
-	"tinfoil/internal/attestation"
-	"tinfoil/internal/config"
 )
 
 func TestLoadCollateralRequest(t *testing.T) {
 	want := attestationmaterial.Request{
-		Repo:        "tinfoilsh/workload",
-		Tag:         "v1",
-		Platform:    "tdx",
-		QuoteBase64: "cXVvdGU=",
+		Repo:     "tinfoilsh/workload",
+		Tag:      "v1",
+		Version:  attestationmaterial.RequestVersionDocument,
+		Document: json.RawMessage(`{}`),
 	}
 	got, err := loadCollateralRequest(writeCollateralRequestArtifact(t, want))
 	if err != nil {
@@ -27,21 +24,11 @@ func TestLoadCollateralRequest(t *testing.T) {
 	}
 }
 
-func TestNewCollateralSourceSkipsDummy(t *testing.T) {
-	source, err := newCollateralSource(attestationmaterial.Request{Repo: "repo", Platform: attestation.PlatformDummy}, &config.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if source != nil {
-		t.Fatal("dummy collateral source was created")
-	}
-}
-
 func TestLoadCollateralRequestRejectsIncompleteArtifact(t *testing.T) {
 	for name, request := range map[string]attestationmaterial.Request{
-		"empty":         {},
-		"missing quote": {Repo: "repo", Platform: attestation.PlatformTDX},
-		"missing repo":  {Platform: attestation.PlatformTDX, QuoteBase64: "cXVvdGU="},
+		"empty":            {},
+		"missing document": {Version: attestationmaterial.RequestVersionDocument, Repo: "repo"},
+		"missing repo":     {Version: attestationmaterial.RequestVersionDocument, Document: json.RawMessage(`{}`)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadCollateralRequest(writeCollateralRequestArtifact(t, request)); err == nil {

@@ -80,7 +80,7 @@ func tunnelServer(t *testing.T, port int, validator key.Validator) *httptest.Ser
 		t.Fatalf("creating identity: %v", err)
 	}
 	att := &legacy.Document{Format: "https://tinfoil.sh/predicate/dummy/v2", Body: "deadbeef"}
-	shim := NewShimServer(validator, nil, att, tinfoilattestation.BodyV2{}, 0, id, nil, nil,
+	shim := NewShimServer(validator, nil, att, tinfoilattestation.Identity{}, 0, id, nil, nil,
 		&config.Config{UpstreamPort: 9999}, &config.ExternalConfig{}, "127.0.0.1:9999", targets)
 
 	server := httptest.NewUnstartedServer(shim)

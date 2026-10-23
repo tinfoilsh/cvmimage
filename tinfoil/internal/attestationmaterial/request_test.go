@@ -5,17 +5,16 @@ import (
 	"testing"
 )
 
-func TestRequestVersionsRejectAmbiguousEvidence(t *testing.T) {
+func TestRequestRequiresDocument(t *testing.T) {
 	for _, request := range []Request{
-		{Version: RequestVersionDocument},
-		{Version: RequestVersionDocument, Document: json.RawMessage(`null`)},
-		{Version: RequestVersionDocument, Document: json.RawMessage(`{}`), Platform: "tdx"},
-		{Version: RequestVersionDocument, Document: json.RawMessage(`{}`), QuoteBase64: "quote"},
-		{Version: RequestVersionLegacy, Document: json.RawMessage(`{}`), Platform: "tdx", QuoteBase64: "quote"},
-		{Version: RequestVersionDocument + 1, Document: json.RawMessage(`{}`)},
+		{Version: RequestVersionDocument, Repo: "repo"},
+		{Version: RequestVersionDocument, Repo: "repo", Document: json.RawMessage(` null `)},
+		{Version: RequestVersionDocument, Document: json.RawMessage(`{}`)},
+		{Repo: "repo", Document: json.RawMessage(`{}`)},
+		{Version: RequestVersionDocument + 1, Repo: "repo", Document: json.RawMessage(`{}`)},
 	} {
 		if err := request.Validate(); err == nil {
-			t.Fatalf("accepted ambiguous request: %#v", request)
+			t.Fatalf("accepted incomplete request: %#v", request)
 		}
 	}
 }

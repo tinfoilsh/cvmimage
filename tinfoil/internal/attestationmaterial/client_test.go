@@ -62,7 +62,7 @@ func TestClientRejectsExpiredResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if _, err := client.Fetch(context.Background(), Request{Repo: "repo", Platform: "tdx", QuoteBase64: "cXVvdGU="}); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Repo: "repo", Document: json.RawMessage(`{}`)}); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expected expired response error, got %v", err)
 	}
 }

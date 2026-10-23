@@ -31,16 +31,6 @@ func (d *Document) Hash() string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(all)))
 }
 
-// Bundle is the v2 single-request attestation bundle.
-type Bundle struct {
-	Domain                   string          `json:"domain"`
-	EnclaveAttestationReport *Document       `json:"enclaveAttestationReport"`
-	Digest                   string          `json:"digest"`
-	SigstoreBundle           json.RawMessage `json:"sigstoreBundle"`
-	VCEK                     string          `json:"vcek"`
-	EnclaveCert              string          `json:"enclaveCert"`
-}
-
 // FromFile loads a v2 document from disk.
 func FromFile(path string) (*Document, error) {
 	f, err := os.Open(path)

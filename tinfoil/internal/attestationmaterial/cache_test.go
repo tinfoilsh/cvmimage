@@ -20,7 +20,7 @@ func (f fetchFunc) Fetch(ctx context.Context, request Request) (wire.Response, e
 func TestCacheFetchesLazily(t *testing.T) {
 	now := time.Now()
 	calls := 0
-	cache := NewCache(Request{Repo: "repo", Platform: "sev-snp"}, fetchFunc(func(_ context.Context, _ Request) (wire.Response, error) {
+	cache := NewCache(Request{Repo: "repo"}, fetchFunc(func(_ context.Context, _ Request) (wire.Response, error) {
 		calls++
 		return response(now.Add(48*time.Hour), "first"), nil
 	}))
@@ -51,7 +51,7 @@ func TestCacheRefreshesOnceWhenDue(t *testing.T) {
 	completed := make(chan struct{})
 	var mu sync.Mutex
 	calls := 0
-	cache := NewCache(Request{Repo: "repo", Platform: "tdx"}, fetchFunc(func(_ context.Context, _ Request) (wire.Response, error) {
+	cache := NewCache(Request{Repo: "repo"}, fetchFunc(func(_ context.Context, _ Request) (wire.Response, error) {
 		mu.Lock()
 		calls++
 		call := calls
@@ -87,7 +87,7 @@ func TestCacheRefreshesOnceWhenDue(t *testing.T) {
 func TestCacheFailsClosedAfterExpiry(t *testing.T) {
 	now := time.Now()
 	calls := 0
-	cache := NewCache(Request{Repo: "repo", Platform: "sev-snp"}, fetchFunc(func(_ context.Context, _ Request) (wire.Response, error) {
+	cache := NewCache(Request{Repo: "repo"}, fetchFunc(func(_ context.Context, _ Request) (wire.Response, error) {
 		calls++
 		if calls > 1 {
 			return wire.Response{}, errors.New("ATC unavailable")

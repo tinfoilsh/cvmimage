@@ -128,7 +128,7 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&collateralRequest); err != nil {
 			t.Fatal(err)
 		}
-		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Version != attestationmaterial.RequestVersionDocument || collateralRequest.Platform != "" || collateralRequest.QuoteBase64 != "" {
+		if collateralRequest.Repo != "tinfoilsh/workload" || collateralRequest.Tag != "v1.2.3" || collateralRequest.Version != attestationmaterial.RequestVersionDocument {
 			t.Fatalf("request = %#v", collateralRequest)
 		}
 		parsed, err := envelope.Parse(collateralRequest.Document, make([]byte, envelope.NonceSize))
@@ -159,9 +159,8 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cpu := &CPUAttestation{Document: empty, RawReport: []byte("raw quote"), Platform: "sev-snp"}
 	path := t.TempDir() + "/collateral-request.json"
-	collateralRequest, err := writeCollateralRequest(path, cpu, external)
+	collateralRequest, err := writeCollateralRequest(path, empty, external.Metadata)
 	if err != nil {
 		t.Fatal(err)
 	}

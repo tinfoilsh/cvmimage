@@ -113,8 +113,8 @@ func prefetchKeyserverCollateral(
 	config *Config,
 	request attestationmaterial.Request,
 ) ([]collateral.Entry, error) {
-	if request.Repo == "" || request.Platform == attestation.PlatformDummy || request.Validate() != nil {
-		return nil, fmt.Errorf("keyserver secret fetch requires raw CPU attestation")
+	if request.Validate() != nil {
+		return nil, fmt.Errorf("keyserver secret fetch requires an attestation document")
 	}
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)
 	if err != nil {

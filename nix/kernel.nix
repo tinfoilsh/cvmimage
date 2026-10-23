@@ -1,5 +1,6 @@
 {
   pkgs,
+  gpuSupport,
   debugConsole ? false,
 }:
 
@@ -11,6 +12,7 @@ let
   buildTimestamp = "Tue Jan  1 00:00:00 UTC 1980";
   policyConfigs = [
     ../kernel/config.d/10-tinfoil-cvm-policy.config
+    (if gpuSupport then ../kernel/config.d/15-gpu.config else ../kernel/config.d/15-cpu.config)
     ../kernel/config.d/20-console-common.config
   ] ++ [
     (if debugConsole then
@@ -92,7 +94,7 @@ let
     src = patchedSource;
     configfile = configFile;
     config = {
-      CONFIG_MODULES = "y";
+      CONFIG_MODULES = if gpuSupport then "y" else "n";
       CONFIG_RUST = "n";
     };
     modDirVersion = release;
@@ -124,7 +126,7 @@ let
       export KCFLAGS="''${KCFLAGS:-} -ffile-prefix-map=$buildRoot=/build -fmacro-prefix-map=$buildRoot=/build -fdebug-prefix-map=$buildRoot=/build"
       export KAFLAGS="''${KAFLAGS:-} -Wa,--debug-prefix-map=$buildRoot=/build"
     '';
-    postInstall = (old.postInstall or "") + ''
+    postInstall = (old.postInstall or "") + lib.optionalString gpuSupport ''
       find "$dev/lib/modules/${release}/build" -type f -name '*.cmd' \
         -exec sed -i "s|$buildRoot|/build|g" {} +
     '';
@@ -143,12 +145,14 @@ let
       ''
         mkdir "$out"
         install -m0644 ${kernel}/bzImage "$out/tinfoil-custom.vmlinuz"
-        install -m0644 ${kernel.dev}/lib/modules/${release}/build/.config "$out/config"
+        install -m0644 ${configFile} "$out/config"
+        ${lib.optionalString gpuSupport ''
         install -m0644 ${kernel.dev}/lib/modules/${release}/build/Module.symvers "$out/Module.symvers"
         install -m0644 ${kernel.modules}/lib/modules/${release}/modules.builtin "$out/modules.builtin"
+        ''}
         printf '%s\n' '${release}' > "$out/kernel.release"
         (cd "$out" && sha256sum \
-          tinfoil-custom.vmlinuz config Module.symvers modules.builtin kernel.release \
+          tinfoil-custom.vmlinuz config ${lib.optionalString gpuSupport "Module.symvers modules.builtin"} kernel.release \
           > checksums.sha256)
       '';
 in

@@ -21,6 +21,9 @@ way back to public source code, not to our word or our build machines.
 
 ## Graph
 
+The GPU build includes the NVIDIA producers below. The CPU build omits them
+and disables kernel modules.
+
 ```mermaid
 flowchart TD
     S["Pinned repository sources"] --> N["Pinned Nix build graph"]
@@ -53,6 +56,13 @@ This is intentionally kept simple: everything is built end-to-end in isolation, 
 The top-level `default.nix` pins one Nixpkgs source and exposes the complete set
 of image inputs:
 
+`default.nix` instantiates that graph with `gpuSupport = false` for
+`variants.cpu` and `true` for `variants.gpu`. Top-level image outputs select
+CPU. GPU Go code uses the `tinfoil_gpu` build tag; the CPU kernel disables
+modules, and its root filesystem omits NVIDIA payloads and GPU-only libraries.
+The package closures are locked separately. Run `nix-build -I . -A checks`
+to check both Go builds.
+
 
 | Output                             | Owner                                                  | Declaration                                                                                          |
 | ---------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
@@ -61,7 +71,7 @@ of image inputs:
 | Custom kernel                      | Nixpkgs `linuxManualConfig`                            | `nix/kernel.nix`, `kernel/tinfoil-cvm-7.0.defconfig`, `kernel/config.d/10-tinfoil-cvm-policy.config` |
 | Three NVIDIA modules               | Nixpkgs kernel-module build                            | `nix/nvidia-modules.nix`                                                                             |
 | nvattest and libnvat               | Nixpkgs CMake and Rust builders                        | `nix/nvattest.nix`, `nix/locks/regorus.Cargo.lock`                                                   |
-| Ubuntu package payloads            | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix`                                          |
+| Ubuntu package payloads            | Nixpkgs `debClosureGenerator` and fixed-output fetches | `nix/runtime-packages.nix`, `nix/runtime-packages-lock.nix`, `nix/runtime-packages-gpu-lock.nix`                                          |
 | NVIDIA, Docker, and debug payloads | Fixed-output archive fetches                           | `nix/runtime-sources.nix`                                                                            |
 | Repository configuration           | Direct additive copy                                   | `image/rootfs/`                                                                                      |
 | Rootfs and debug layer archives    | Fixed tar materializer                                 | `nix/rootfs.nix`                                                                                     |
@@ -105,7 +115,8 @@ measured rootfs contains only its declared runtime payload. NVIDIA graphics,
 video, OpenCL, host diagnostics, CUDA debugger and MPS tools, distro boot
 integration, systemd units, Turing-only firmware, and legacy NVIDIA
 runtime-hook compatibility are likewise excluded. The CUDA compute, CDI
-container, attestation, firmware, and NVSwitch payloads remain.
+container, attestation, firmware, and NVSwitch payloads remain in the GPU
+variant only.
 
 The Nix expressions also reject store references in runtime binaries and use
 fixed ownership, modes, archive ordering, and timestamps. Reproducibility is a
@@ -141,21 +152,25 @@ The supported interface is the named Nix outputs:
 nix-build -I . -A rootfs-archive -o result-rootfs
 nix-build -I . -A shipping-image -o result
 nix-build -I . -A debug-image -o result-debug
+nix-build -I . -A variants.gpu.shipping-image -o result-gpu
+nix-build -I . -A variants.gpu.debug-image -o result-gpu-debug
 nix-build -I . -A checks
 nix-build -I . -A cvm-compiler -o result-cvmc
 ```
 
 Focused producer outputs such as `runtime-go`, `kernel-artifacts`,
-`nvidia-modules`, `nvattest`, and `initrd` remain directly buildable. There is
-no task-runner layer and deleting result symlinks or collecting the Nix store
-is a separate host operation.
+`variants.gpu.nvidia-modules`, `variants.gpu.nvattest`, and `initrd` remain
+directly buildable. There is no task-runner layer and deleting result symlinks
+or collecting the Nix store is a separate host operation.
 
-Regenerate the reviewed Ubuntu package lock only when changing package inputs
+Regenerate the reviewed Ubuntu package locks only when changing package inputs
 or snapshot indexes:
 
 ```sh
 nix-build --option sandbox true -I . -A runtime-package-lock -o result-package-lock
 cp --no-preserve=mode result-package-lock nix/runtime-packages-lock.nix
+nix-build --option sandbox true -I . -A variants.gpu.runtime-package-lock -o result-package-lock
+cp --no-preserve=mode result-package-lock nix/runtime-packages-gpu-lock.nix
 rm result-package-lock
 ```
 
@@ -237,15 +252,15 @@ the rejection of Nix-store references in runtime binaries.
 ## Continuous integration
 
 Pull-request CI always checks the pinned Nix installation and isolated Nixpkgs
-evaluation. It compares the `checks`, `runtime-go`, `debug-pid1`, `initrd` and
-`cvm-compiler` derivation paths with the pull request's base and builds only
-the changed outputs. Changes to the Nix installer or this workflow build all
-five. The `initrd` output builds the initrd command and constructs the fixed
+evaluation. It compares the `checks`, both variants' `runtime-go` and
+`debug-pid1`, `initrd`, and `cvm-compiler` derivation paths with the pull
+request's base and builds only the changed outputs. Changes to the Nix
+installer or this workflow build all seven. The `initrd` output builds the initrd command and constructs the fixed
 archive with the pinned GNU cpio implementation.
 
-Pushes to `main`, and explicit manual runs, build `checks`, `shipping-image`,
-`debug-image` and `cvm-compiler` on one runner. The two image outputs
-transitively build the kernel, NVIDIA modules, nvattest, initrd, runtime
-binaries, and rootfs without a second producer list. These workflows neither
+Pushes to `main`, and explicit manual runs, build `checks`, both variants'
+`shipping-image` and `debug-image`, and `cvm-compiler` on one runner. The image
+outputs transitively build the kernel, initrd, runtime binaries, and rootfs;
+GPU outputs also build NVIDIA modules and nvattest. These workflows neither
 publish artifacts nor qualify a release. Derivation comparison only schedules
 CI work; it is not an integrity check or a release policy.

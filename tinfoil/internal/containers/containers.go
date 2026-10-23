@@ -581,8 +581,8 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	}
 
 	// GPU configuration
-	if req := parseGPUs(c.GPUs); req != nil {
-		hostConfig.DeviceRequests = []container.DeviceRequest{*req}
+	if err := configureGPUs(c.GPUs, hostConfig); err != nil {
+		return nil, nil, nil, nil, err
 	}
 
 	// Pin the egress-capable network's GwPriority so Docker installs the
@@ -793,39 +793,6 @@ func buildEnv(envItems []interface{}, secrets []string, extConfig *shimconfig.Ex
 	}
 
 	return env
-}
-
-// parseGPUs parses gpus: "all", "0,1,2,3", true, or count
-func parseGPUs(gpus interface{}) *container.DeviceRequest {
-	if gpus == nil {
-		return nil
-	}
-
-	req := &container.DeviceRequest{
-		Driver:       "nvidia",
-		Capabilities: [][]string{{"gpu"}},
-	}
-
-	switch v := gpus.(type) {
-	case bool:
-		if !v {
-			return nil
-		}
-		req.Count = -1
-	case string:
-		if v == "all" {
-			req.Count = -1
-		} else {
-			req.DeviceIDs = strings.Split(v, ",")
-		}
-	case int:
-		req.Count = v
-	case float64:
-		req.Count = int(v)
-	default:
-		return nil
-	}
-	return req
 }
 
 func parseDuration(s string) time.Duration {

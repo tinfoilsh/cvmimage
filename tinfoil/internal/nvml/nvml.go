@@ -1,3 +1,5 @@
+//go:build tinfoil_gpu
+
 // Package nvml is a minimal NVML binding covering exactly the calls this
 // repository makes. The NVIDIA library is opened from its fixed measured path
 // with dlopen and every entry point is resolved with dlsym at Init, so the

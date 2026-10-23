@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs, gpuSupport }:
 
 let
   commonEnv.GOTOOLCHAIN = "local";
@@ -30,17 +30,18 @@ let
   }
   // commonEnv;
   cgoBase = {
-    env = cgoEnv;
+    env = if gpuSupport then cgoEnv else commonEnv // { CGO_ENABLED = "0"; };
   };
 
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-x8/L+jimwCqJhgQST47aRdGI0m58uBT7QAOcbhkSJ6E=";
+    vendorHash = "sha256-UwnBkkaGL6/y2kzzhZv+le7UpdPJR60ioGW5CxECyWA=";
     ldflags = [
       "-s"
       "-w"
     ];
+    tags = pkgs.lib.optional gpuSupport "tinfoil_gpu";
     allowedReferences = [ ];
     doCheck = false;
   };
@@ -51,7 +52,7 @@ let
       common
       // cgoBase
       // {
-        ldflags = common.ldflags ++ [
+        ldflags = common.ldflags ++ pkgs.lib.optionals gpuSupport [
           "-linkmode=external"
           "-extldflags=-Wl,--build-id=none,--dynamic-linker=/lib64/ld-linux-x86-64.so.2"
         ];
@@ -80,7 +81,7 @@ let
   debugPID1 = buildCgoCommand {
     pname = "tinfoil-debug-pid1";
     subPackages = [ "cmd/pid1" ];
-    tags = [ "tinfoil_debug_image" ];
+    tags = common.tags ++ [ "tinfoil_debug_image" ];
     postInstall = ''
       mv "$out/bin/pid1" "$out/bin/tinfoil-pid1"
     '';
@@ -91,6 +92,7 @@ let
     // {
       pname = "tinfoil-initrd";
       subPackages = [ "cmd/initrd" ];
+      tags = [ ];
       env = commonEnv // {
         CGO_ENABLED = "0";
       };
@@ -115,15 +117,22 @@ let
     src = checkSource;
     sourceRoot = "source/tinfoil";
     inherit (common) vendorHash;
-    inherit (cgoBase) env;
+    env = cgoEnv;
     doCheck = true;
     buildPhase = "true";
     checkPhase = ''
       runHook preCheck
-      go test ./...
-      go test -race ./cmd/pid1 ./internal/boot/... ./internal/nvml
-      go test -tags=tinfoil_debug_image ./cmd/pid1
-      go vet ./...
+      for tags in "" tinfoil_gpu; do
+        go test -tags="$tags" ./...
+        go test -race -tags="$tags" ./cmd/pid1 ./internal/boot/...
+        go test -tags="tinfoil_debug_image,$tags" ./cmd/pid1
+        go vet -tags="$tags" ./...
+      done
+      go test -race -tags=tinfoil_gpu ./internal/nvml
+      if go list -deps ./cmd/... | grep -E '/(nvml|nvidia)$'; then
+        echo "CPU runtime includes GPU dependencies" >&2
+        exit 1
+      fi
       runHook postCheck
     '';
     installPhase = "touch $out";

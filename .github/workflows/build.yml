@@ -37,4 +37,6 @@ jobs:
             -A checks \
             -A shipping-image \
             -A debug-image \
+            -A variants.gpu.shipping-image \
+            -A variants.gpu.debug-image \
             -A cvm-compiler

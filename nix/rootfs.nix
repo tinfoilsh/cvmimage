@@ -1,5 +1,6 @@
 {
   pkgs,
+  gpuSupport,
   ubuntuDebs,
   runtimeGo,
   debugPID1,
@@ -26,11 +27,11 @@ let
   # Keep library directories whole for NSS, provider, and other dlopen-only edges.
   ubuntuPayloadPaths = [
     "etc/bindresvport.blacklist"
+    "etc/netconfig"
     "etc/gai.conf"
     "etc/ld.so.conf"
     "etc/ld.so.conf.d"
     "etc/mke2fs.conf"
-    "etc/netconfig"
     "etc/ssl/openssl.cnf"
     "usr/bin/ip"
     "usr/lib/ssl/cert.pem"
@@ -81,25 +82,35 @@ let
     "usr/share/nvidia/nvswitch"
   ];
 
+  accountFile = path: if gpuSupport then path else pkgs.writeText (builtins.baseNameOf path)
+    (pkgs.lib.concatStringsSep "\n" (builtins.filter
+      (line: !(pkgs.lib.hasPrefix "nvidia-persistenced:" line))
+      (pkgs.lib.splitString "\n" (builtins.readFile path))));
+  dockerConfig = if gpuSupport then ../image/rootfs/etc/docker/daemon.json else
+    pkgs.writeText "docker-daemon.json" (builtins.toJSON (builtins.removeAttrs
+      (builtins.fromJSON (builtins.readFile ../image/rootfs/etc/docker/daemon.json)) [ "runtimes" ]));
+
   repositoryFiles = [
     { source = ../image/rootfs/etc/.pwd.lock; target = "etc/.pwd.lock"; mode = "0600"; }
     { source = ../image/rootfs/etc/containerd/config.toml; target = "etc/containerd/config.toml"; mode = "0644"; }
-    { source = ../image/rootfs/etc/docker/daemon.json; target = "etc/docker/daemon.json"; mode = "0644"; }
-    { source = ../image/rootfs/etc/group; target = "etc/group"; mode = "0644"; }
-    { source = ../image/rootfs/etc/gshadow; target = "etc/gshadow"; mode = "0640"; }
+    { source = dockerConfig; target = "etc/docker/daemon.json"; mode = "0644"; }
+    { source = accountFile ../image/rootfs/etc/group; target = "etc/group"; mode = "0644"; }
+    { source = accountFile ../image/rootfs/etc/gshadow; target = "etc/gshadow"; mode = "0640"; }
     { source = ../image/rootfs/etc/hostname; target = "etc/hostname"; mode = "0644"; }
     { source = ../image/rootfs/etc/hosts; target = "etc/hosts"; mode = "0644"; }
     { source = ../image/rootfs/etc/nsswitch.conf; target = "etc/nsswitch.conf"; mode = "0644"; }
-    { source = ../image/rootfs/etc/nvidia-container-runtime/config.toml; target = "etc/nvidia-container-runtime/config.toml"; mode = "0644"; }
-    { source = ../image/rootfs/etc/passwd; target = "etc/passwd"; mode = "0644"; }
+    { source = accountFile ../image/rootfs/etc/passwd; target = "etc/passwd"; mode = "0644"; }
     { source = ../image/rootfs/etc/resolv.conf; target = "etc/resolv.conf"; mode = "0644"; }
-    { source = ../image/rootfs/etc/shadow; target = "etc/shadow"; mode = "0640"; }
+    { source = accountFile ../image/rootfs/etc/shadow; target = "etc/shadow"; mode = "0640"; }
     { source = ../image/rootfs/usr/lib/clock-epoch; target = "usr/lib/clock-epoch"; mode = "0644"; }
     { source = ../image/rootfs/usr/lib/os-release; target = "usr/lib/os-release"; mode = "0644"; }
+  ] ++ pkgs.lib.optionals gpuSupport [
+    { source = ../image/rootfs/etc/nvidia-container-runtime/config.toml; target = "etc/nvidia-container-runtime/config.toml"; mode = "0644"; }
   ];
 
   repositoryReplacements = [
     { source = ../image/rootfs/etc/nftables.conf; target = "etc/nftables.conf"; mode = "0644"; }
+  ] ++ pkgs.lib.optionals gpuSupport [
     { source = ../image/rootfs/usr/share/nvidia/nvswitch/fabricmanager.cfg; target = "usr/share/nvidia/nvswitch/fabricmanager.cfg"; mode = "0644"; }
   ];
 
@@ -174,9 +185,9 @@ let
     ${shellInstallHelpers}
 
     ${stageDebs ubuntuDebs "$ubuntu"}
-    ${stageDebs nvidiaDebs "$nvidia"}
+    ${pkgs.lib.optionalString gpuSupport (stageDebs nvidiaDebs "$nvidia")}
     ${copyPayload "$ubuntu" ubuntuPayloadPaths}
-    ${copyPayload "$nvidia" nvidiaPayloadPaths}
+    ${pkgs.lib.optionalString gpuSupport (copyPayload "$nvidia" nvidiaPayloadPaths)}
     chmod 0755 "$root"
 
     docker="$TMPDIR/docker"
@@ -192,6 +203,7 @@ let
         "$root/usr/bin/tinfoil-$command"
     done
 
+    ${pkgs.lib.optionalString gpuSupport ''
     install_new 0755 ${nvattest}/usr/bin/nvattest "$root/usr/bin/nvattest" -D
     install_new 0644 ${nvattest}/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2 \
       "$root/usr/lib/x86_64-linux-gnu/libnvat.so.1.2.2" -D
@@ -200,6 +212,7 @@ let
 
     mkdir -p "$root/usr/lib/tinfoil/kernel-modules"
     ${moduleInstalls}
+    ''}
 
     ${repositoryInstalls}
     ${repositoryReplacementInstalls}
@@ -232,6 +245,12 @@ let
     install_new 0644 "$ca_output/ca-certificates.crt" \
       "$root/etc/ssl/certs/ca-certificates.crt"
 
+    ${pkgs.lib.optionalString (!gpuSupport) ''
+      if test -n "$(find "$root" \( -iname '*nvidia*' -o -iname '*cuda*' -o -iname '*nvattest*' -o -iname '*libnvat*' -o -iname '*libnvfm*' -o -name '*.ko' \) -print -quit)"; then
+        echo "CPU root filesystem contains GPU payload" >&2
+        exit 1
+      fi
+    ''}
     ${deterministicTar "$root" "$out"}
   '';
 

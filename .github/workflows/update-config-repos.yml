@@ -17,8 +17,11 @@ jobs:
     if: github.event_name != 'release' || (!github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v'))
     permissions:
       contents: read
+      attestations: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      cpu-digest: ${{ steps.version.outputs.cpu-digest }}
+      gpu-digest: ${{ steps.version.outputs.gpu-digest }}
       repos: ${{ steps.repos.outputs.repos }}
     steps:
       - name: Get version
@@ -27,7 +30,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
           TAG_NAME: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -Eeuo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
           else
@@ -35,6 +40,20 @@ jobs:
             VERSION="${TAG_NAME#v}"
           fi
 
+          VERSION="${VERSION#v}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]
+          for variant in cpu gpu; do
+            artifact_version="$VERSION"
+            if [ "$variant" = gpu ]; then
+              artifact_version="${VERSION}+gpu"
+            fi
+            manifest="tinfoil-inference-v${artifact_version}-manifest.json"
+            gh release download "v${VERSION}" --repo tinfoilsh/cvmimage \
+              --pattern "$manifest" --dir "$RUNNER_TEMP"
+            gh attestation verify "$RUNNER_TEMP/$manifest" --repo tinfoilsh/cvmimage
+            digest="$(sha256sum "$RUNNER_TEMP/$manifest" | cut -d' ' -f1)"
+            echo "${variant}-digest=$digest" >> "$GITHUB_OUTPUT"
+          done
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Find repos with tinfoil-functions topic
@@ -90,9 +109,15 @@ jobs:
       - name: Update cvm-version
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          CPU_DIGEST: ${{ needs.prepare.outputs.cpu-digest }}
+          GPU_DIGEST: ${{ needs.prepare.outputs.gpu-digest }}
         run: |
+          set -Eeuo pipefail
           if [ -f tinfoil-config.yml ]; then
-            sed -i "s|^cvm-version:.*|cvm-version: ${VERSION}|" tinfoil-config.yml
+            sed -Ei \
+              -e "s|^cvm-version: *[\"']?v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?@sha256:[0-9a-f]{64}[\"']? *$|cvm-version: \"${VERSION}@sha256:${CPU_DIGEST}\"|" \
+              -e "s|^cvm-version: *[\"']?v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?\+gpu@sha256:[0-9a-f]{64}[\"']? *$|cvm-version: \"${VERSION}+gpu@sha256:${GPU_DIGEST}\"|" \
+              tinfoil-config.yml
           fi
 
       - uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c  # v6.1.0

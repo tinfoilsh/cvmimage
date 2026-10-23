@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs, gpuSupport }:
 
 let
   packageUrlPrefix = "https://snapshot.ubuntu.com/ubuntu/20261021T000000Z";
@@ -57,13 +57,14 @@ let
     "libc6"
     "libc-bin"
     "libcap2"
-    "libxml2-16"
-    "libstdc++6"
     "libgcc-s1"
     "zlib1g"
+    "libseccomp2"
+  ] ++ pkgs.lib.optionals gpuSupport [
+    "libxml2-16"
+    "libstdc++6"
     "libtirpc3t64"
     "libtirpc-common"
-    "libseccomp2"
   ];
 in
 {
@@ -74,5 +75,5 @@ in
     packages = packageNames;
   };
 
-  packages = pkgs.lib.flatten (import ./runtime-packages-lock.nix { inherit (pkgs) fetchurl; });
+  packages = pkgs.lib.flatten (import (if gpuSupport then ./runtime-packages-gpu-lock.nix else ./runtime-packages-lock.nix) { inherit (pkgs) fetchurl; });
 }

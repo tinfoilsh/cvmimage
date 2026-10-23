@@ -1,3 +1,5 @@
+//go:build tinfoil_gpu
+
 // Package nvidia owns the fixed policy and mechanisms needed to initialize
 // NVIDIA hardware in a Tinfoil CVM.
 package nvidia

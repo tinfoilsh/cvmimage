@@ -1,3 +1,5 @@
+//go:build tinfoil_gpu
+
 package nvml
 
 import (

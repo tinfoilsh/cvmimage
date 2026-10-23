@@ -14,7 +14,7 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/attestationmaterial"
 )

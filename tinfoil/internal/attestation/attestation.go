@@ -17,7 +17,7 @@ import (
 	sevclient "github.com/google/go-sev-guest/client"
 	tdxclient "github.com/google/go-tdx-guest/client"
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/legacy"

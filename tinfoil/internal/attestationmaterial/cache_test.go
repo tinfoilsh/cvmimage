@@ -8,7 +8,7 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 )
 
 type fetchFunc func(context.Context, wire.Request) (wire.Response, error)

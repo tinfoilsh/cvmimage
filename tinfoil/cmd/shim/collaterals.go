@@ -8,7 +8,7 @@ import (
 	"os"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"

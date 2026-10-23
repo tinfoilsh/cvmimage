@@ -7,7 +7,7 @@ import (
 
 	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/mod/semver"
 
 	"tinfoil/internal/legacy"

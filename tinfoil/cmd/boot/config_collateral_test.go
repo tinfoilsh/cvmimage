@@ -22,6 +22,13 @@ import (
 )
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
+	for _, format := range []string{collateral.ConfigEndorsementV1Format, collateral.ConfigEndorsementV2Format} {
+		t.Run(format, func(t *testing.T) { testConfigCollateralRequest(t, format) })
+	}
+}
+
+func testConfigCollateralRequest(t *testing.T, format string) {
+	t.Helper()
 	digest := strings.Repeat("a", 64)
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
 metadata:
@@ -43,8 +50,12 @@ network:
 		t.Fatal(err)
 	}
 	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Document: empty, Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest}
-	collateral := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
-		Format: collateral.ConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
+	proof := []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","config_base64":"Y29uZmln","sigstore_bundle":{}}`, digest))
+	if format == collateral.ConfigEndorsementV2Format {
+		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{},"scope":{"certificate_der":"bGVhZg==","issuer_der":"cm9vdA==","issuance_bundle":{"proof":"issuance"}}}`, digest))
+	}
+	entries := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
+		Format: format, Data: proof}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request attestationmaterial.Request
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -55,11 +66,15 @@ network:
 		if r.URL.Path != "/attestation-collaterals" || !reflect.DeepEqual(request, expected) {
 			t.Errorf("unexpected ATC request: %s %#v", r.URL.Path, request)
 		}
-		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour), Collateral: collateral})
+		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour), Collateral: entries})
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "collateral-request.json")
-	request, err := writeCollateralRequest(path, empty, external.Metadata, "")
+	configPath := filepath.Join(t.TempDir(), "private.yaml")
+	if err := os.WriteFile(configPath, []byte("# private audit bytes\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	request, err := writeCollateralRequest(path, empty, external.Metadata, configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,13 +86,37 @@ network:
 	if err := json.Unmarshal(data, &persisted); err != nil || !reflect.DeepEqual(persisted, request) {
 		t.Fatalf("persisted request = %#v, error = %v", persisted, err)
 	}
+	if len(persisted.Config) != 0 || strings.Contains(string(data), "config_base64") {
+		t.Fatal("registry collateral request disclosed config bytes")
+	}
 	client, err := attestationmaterial.NewClient(server.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := client.Fetch(context.Background(), persisted)
-	if err != nil || !reflect.DeepEqual(got.Collateral, collateral) {
+	if err != nil || !reflect.DeepEqual(got.Collateral, entries) {
 		t.Fatalf("collateral = %#v, error = %v", got.Collateral, err)
+	}
+	nonce := make([]byte, document.NonceSize)
+	assembled, err := document.Build(document.BuildInput{Nonce: nonce, CollateralFormat: got.Format, Collateral: got.Collateral}, func([64]byte) (string, []byte, error) {
+		return document.SEVSNPReportV1Format, []byte("quote"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := document.Parse(assembled, nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endorsement, err := parsed.ConfigEndorsement()
+	if err != nil || endorsement.Reference != "sha256:"+digest {
+		t.Fatalf("assembled endorsement = %#v, error = %v", endorsement, err)
+	}
+	if format == collateral.ConfigEndorsementV1Format && string(endorsement.Config) != "config" {
+		t.Fatalf("assembled public endorsement lost its config bytes: %#v", endorsement)
+	}
+	if format == collateral.ConfigEndorsementV2Format && (len(endorsement.Config) != 0 || endorsement.Scope == nil) {
+		t.Fatalf("assembled private endorsement lost its scope or exposed config bytes: %#v", endorsement)
 	}
 }
 

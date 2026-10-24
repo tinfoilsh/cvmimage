@@ -112,6 +112,9 @@ network:
 	if err != nil || endorsement.Reference != "sha256:"+digest {
 		t.Fatalf("assembled endorsement = %#v, error = %v", endorsement, err)
 	}
+	if format == collateral.ConfigEndorsementV1Format && string(endorsement.Config) != "config" {
+		t.Fatalf("assembled public endorsement lost its config bytes: %#v", endorsement)
+	}
 	if format == collateral.ConfigEndorsementV2Format && (len(endorsement.Config) != 0 || endorsement.Scope == nil) {
 		t.Fatalf("assembled private endorsement lost its scope or exposed config bytes: %#v", endorsement)
 	}

@@ -45,7 +45,6 @@ func NewShimServer(
 	collateralSource collateralSource,
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
-	tunnelTargets map[string]bool,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
@@ -82,7 +81,7 @@ func NewShimServer(
 
 	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 
-	return wrapShimMux(att, tunnels(tunnelTargets, mux))
+	return wrapShimMux(att, mux)
 }
 
 func NewObservabilityServer(
@@ -107,6 +106,10 @@ func wrapShimMux(att *legacy.Document, mux http.Handler) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(attestationFormatHeader, string(att.Format))
+			if r.Method == http.MethodConnect {
+				http.Error(w, "CONNECT tunnels are not supported", http.StatusMethodNotAllowed)
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

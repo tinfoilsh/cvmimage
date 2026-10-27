@@ -88,7 +88,6 @@ cpus: 8
 memory: 16384
 gpus: 8
 shim:
-  application-policy: workload
   upstream-port: 8080
   dummy-attestation: true
 containers:

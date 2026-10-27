@@ -45,7 +45,7 @@ func testFullServer(t *testing.T, upstreamPort int) http.Handler {
 		Body:   "deadbeef",
 	}
 	upstreamAddr := fmt.Sprintf("127.0.0.1:%d", upstreamPort)
-	return NewShimServer(att, tinfoilattestation.Identity{}, 0, id, nil, staticCollateralSource{}, extCfg, upstreamAddr, nil)
+	return NewShimServer(att, tinfoilattestation.Identity{}, 0, id, nil, staticCollateralSource{}, extCfg, upstreamAddr)
 }
 
 func testObservabilityServer(t *testing.T) http.Handler {

@@ -29,9 +29,9 @@ func AdminSSH(config *Config, debug bool) (*sharedconfig.AdminSSHMapping, error)
 
 func options(debug bool) sharedconfig.Options {
 	if debug {
-		return sharedconfig.Options{Mode: sharedconfig.HostDebugMode, WorkloadPolicy: true}
+		return sharedconfig.Options{Mode: sharedconfig.HostDebugMode}
 	}
-	return sharedconfig.Options{WorkloadPolicy: true}
+	return sharedconfig.Options{}
 }
 
 func Decode(data []byte, debug bool) (*Config, error) {

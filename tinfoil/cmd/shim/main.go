@@ -263,12 +263,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
 
-		targets, err := publishedPorts(boot.RuntimeConfigPath)
-		if err != nil {
-			return fmt.Errorf("loading published ports: %w", err)
-		}
-
-		fullHandler := NewShimServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, externalConfig, upstreamAddr, targets)
+		fullHandler := NewShimServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, externalConfig, upstreamAddr)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

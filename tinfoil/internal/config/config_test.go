@@ -8,7 +8,7 @@ import (
 
 func TestDecodeServiceURLDefaults(t *testing.T) {
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte("upstream-port: 8080\n"), &node); err != nil {
+	if err := yaml.Unmarshal([]byte("application-policy: workload\nupstream-port: 8080\n"), &node); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Decode(node.Content[0])
@@ -22,7 +22,7 @@ func TestDecodeServiceURLDefaults(t *testing.T) {
 		t.Errorf("ATC default = %q", cfg.ATC)
 	}
 
-	if err := yaml.Unmarshal([]byte("upstream-port: 8080\natc: http://100.64.0.1:8085\n"), &node); err != nil {
+	if err := yaml.Unmarshal([]byte("application-policy: workload\nupstream-port: 8080\natc: http://100.64.0.1:8085\n"), &node); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err = Decode(node.Content[0])

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,11 @@ func publishedPorts(path string) (map[string]bool, error) {
 			return nil, fmt.Errorf("container %s: %v", container.Name, err)
 		}
 		for _, mapping := range mappings {
+			// Published ports are private by default. Only endpoints declaring their
+			// own authentication (such as SSH) may be reached through CONNECT.
+			if !slices.Contains(container.TunnelPorts, mapping.Host) {
+				continue
+			}
 			port := strconv.Itoa(mapping.Host)
 			targets[port] = true
 			log.Printf("Tunnel: CONNECT :%s → %s:%s (%s)", port, containernet.PublishedHostIP, port, container.Name)
@@ -47,7 +53,7 @@ func publishedPorts(path string) (map[string]bool, error) {
 	return targets, nil
 }
 
-func tunnels(targets map[string]bool, authorize func(http.ResponseWriter, *http.Request) bool, next http.Handler) http.Handler {
+func tunnels(targets map[string]bool, next http.Handler) http.Handler {
 	var open atomic.Int64
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
@@ -56,11 +62,6 @@ func tunnels(targets map[string]bool, authorize func(http.ResponseWriter, *http.
 		}
 		if r.ProtoMajor != 2 {
 			http.Error(w, "tunnels require HTTP/2", http.StatusMethodNotAllowed)
-			return
-		}
-		// Authorizing before the target lookup keeps the published set from
-		// leaking: an unkeyed CONNECT gets 401 whether or not a port exists.
-		if !authorize(w, r) {
 			return
 		}
 		_, port, _ := net.SplitHostPort(r.Host)

@@ -6,21 +6,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/boot"
 	"tinfoil/internal/config"
-	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
 	"tinfoil/internal/metrics"
 
@@ -40,144 +36,13 @@ type collateralSource interface {
 	Current(context.Context) ([]collateral.Entry, error)
 }
 
-// pathMatchesPattern checks if a request path matches a pattern.
-// Patterns can be exact matches or use a trailing * for segment-boundary prefix matching.
-// Examples:
-//   - "/v1/models" matches only "/v1/models"
-//   - "/v1/user/*" matches "/v1/user/123", "/v1/user/abc/settings", etc.
-func pathMatchesPattern(pattern, path string) bool {
-	prefix, wildcard := strings.CutSuffix(pattern, "*")
-	if !wildcard {
-		return pattern == path
-	}
-	if strings.HasSuffix(prefix, "/") {
-		return strings.HasPrefix(path, prefix)
-	}
-	return path == prefix || strings.HasPrefix(path, prefix+"/")
-}
-
-// pathAllowed checks if the request path matches any of the allowed patterns.
-func pathAllowed(allowedPaths []string, path string) bool {
-	for _, pattern := range allowedPaths {
-		if pathMatchesPattern(pattern, path) {
-			return true
-		}
-	}
-	return false
-}
-
-func requestedHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.Host)
-	if err != nil {
-		host = r.Host
-	}
-	return strings.ToLower(host)
-}
-
-// requiresAuth reports whether path requires API key authentication.
-// If authenticatedEndpoints is nil (not configured), it defaults to only
-// requiring auth for /v1/chat/completions for backwards compatibility.
-// If authenticatedEndpoints is an empty slice, no paths require auth.
-func requiresAuth(authenticatedEndpoints *[]string, path string) bool {
-	if authenticatedEndpoints == nil {
-		return path == "/v1/chat/completions"
-	}
-	return pathAllowed(*authenticatedEndpoints, path)
-}
-
-// metricsValidator validates /metrics online-only: the local JWT leg accepts
-// any inference-scoped token without consulting the control plane, which would
-// bypass its admin-key requirement for /metrics. All other paths use the full
-// chain.
-type metricsValidator struct {
-	online key.Validator
-	chain  key.Validator
-}
-
-func (v *metricsValidator) Validate(req key.Request) error {
-	if req.Path == "/metrics" {
-		return v.online.Validate(req)
-	}
-	return v.chain.Validate(req)
-}
-
-// extractBearerToken returns the token portion of an Authorization header,
-// accepting any capitalization of the "Bearer" scheme.
-func extractBearerToken(header string) string {
-	const scheme = "bearer "
-	if len(header) < len(scheme) || !strings.EqualFold(header[:len(scheme)], scheme) {
-		return ""
-	}
-	return strings.TrimSpace(header[len(scheme):])
-}
-
-// writeValidationFailure returns the refusal the validator wrote. Its status
-// passes through unchanged so relays that cannot decrypt an EHBP error body
-// can still tell exhausted credit (402) from rate limiting (429).
-func writeValidationFailure(w http.ResponseWriter, err error) {
-	var refusal *key.ValidationError
-	if !errors.As(err, &refusal) || refusal.StatusCode < http.StatusBadRequest || refusal.StatusCode > maxHTTPErrorStatus {
-		writeAPIError(w, errServer)
-		return
-	}
-	if refusal.RetryAfter != "" {
-		w.Header().Set("Retry-After", refusal.RetryAfter)
-	}
-	writeAPIError(w, apiError{
-		status:  refusal.StatusCode,
-		errType: refusal.Type,
-		code:    refusal.Code,
-		message: refusal.Message,
-	})
-}
-
-func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			// Allow only configured origins
-			if len(config.OriginDomains) > 0 && !slices.Contains(config.OriginDomains, origin) {
-				// CORS origin not allowed
-				writeAPIError(w, errOriginNotAllowed)
-				return
-			}
-
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin") // cache
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, HEAD, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt, Retry-After")
-
-			// Echo requested headers or use a safe default
-			reqHdr := r.Header.Get("Access-Control-Request-Headers")
-			if reqHdr == "" {
-				reqHdr = "Authorization, Content-Type, Ehbp-Encapsulated-Key"
-			}
-			w.Header().Set("Access-Control-Allow-Headers", reqHdr)
-
-			if r.Method == http.MethodOptions {
-				// CORS preflight
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-
-			// CORS allowed
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
 func NewShimServer(
-	validator key.Validator,
-	rateLimiter *RateLimiter,
 	att *legacy.Document,
 	identityBody tinfoilattestation.Identity,
 	expectedGPUs int,
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
-	config *config.Config,
 	externalConfig *config.ExternalConfig,
 	upstreamAddr string,
 	tunnelTargets map[string]bool,
@@ -191,8 +56,8 @@ func NewShimServer(
 
 			req.URL.Scheme = "http"
 			req.URL.Host = upstreamAddr
-			req.Header.Set("Host", "localhost")
-			req.Host = "localhost"
+			// Preserve the caller's Host for workload authorization.
+			req.Host = originalHost
 			req.Header.Del(ehbpProtocol.EncapsulatedKeyHeader)
 
 			// Forward original host and protocol to the upstream
@@ -204,7 +69,6 @@ func NewShimServer(
 			// proxied
 		},
 		ModifyResponse: func(res *http.Response) error {
-			res.Header.Del("Access-Control-Allow-Origin")
 			res.Header.Del(ehbpProtocol.ResponseNonceHeader)
 			return nil
 		},
@@ -214,70 +78,11 @@ func NewShimServer(
 		},
 	}
 
-	// A CONNECT carries no path for requiresAuth to match, so it always needs a key.
-	authorize := func(w http.ResponseWriter, r *http.Request) bool {
-		apiKey := extractBearerToken(r.Header.Get("Authorization"))
-		if validator != nil && (r.Method == http.MethodConnect || requiresAuth(config.AuthenticatedEndpoints, r.URL.Path)) {
-			if len(apiKey) == 0 {
-				writeAPIError(w, errAPIKeyRequired)
-				return false
-			}
-
-			validationReq := key.Request{
-				APIKey:        apiKey,
-				Domain:        strings.ToLower(externalConfig.Env["DOMAIN"]),
-				RequestedHost: requestedHost(r),
-				Path:          r.URL.Path,
-			}
-
-			if err := validator.Validate(validationReq); err != nil {
-				log.Printf("Warning: failed to validate API key: %v", err)
-				writeValidationFailure(w, err)
-				return false
-			}
-		}
-
-		if rateLimiter != nil {
-			if apiKey == "" {
-				writeAPIError(w, errAPIKeyRequired)
-				return false
-			}
-			limiter := rateLimiter.Limit(apiKey)
-			if reservation := limiter.Reserve(); !reservation.OK() || reservation.Delay() > 0 {
-				// Reserve reports how long until a token frees up; cancel so
-				// the rejected request does not consume it.
-				delay := reservation.Delay()
-				reservation.Cancel()
-				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(delay)))
-				writeAPIError(w, errRateLimited)
-				return false
-			}
-		}
-		return true
-	}
-
-	proxyHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !authorize(w, r) {
-			return
-		}
-		proxy.ServeHTTP(w, r)
-	}))
-
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(config.Paths) > 0 && !pathAllowed(config.Paths, r.URL.Path) {
-			writeAPIError(w, errNotFound)
-			return
-		}
-		proxyHandler.ServeHTTP(w, r)
-	}))
+	mux.Handle("/", ehbpMiddleware(&proxy))
 
 	registerObservabilityHandlers(mux, ehbpMiddleware, att, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 
-	// Fail closed: an authenticated deployment with no validator must not tunnel.
-	if config.Authenticated && validator == nil {
-		tunnelTargets = nil
-	}
-	return wrapShimMux(config, att, tunnels(tunnelTargets, authorize, mux))
+	return wrapShimMux(att, tunnels(tunnelTargets, mux))
 }
 
 func NewObservabilityServer(
@@ -287,7 +92,6 @@ func NewObservabilityServer(
 	ehbpIdentity *identity.Identity,
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
-	config *config.Config,
 	externalConfig *config.ExternalConfig,
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
@@ -296,17 +100,17 @@ func NewObservabilityServer(
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
-	return wrapShimMux(config, att, mux)
+	return wrapShimMux(att, mux)
 }
 
-func wrapShimMux(config *config.Config, att *legacy.Document, mux http.Handler) http.Handler {
+func wrapShimMux(att *legacy.Document, mux http.Handler) http.Handler {
 	globalMiddleware := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(attestationFormatHeader, string(att.Format))
 			next.ServeHTTP(w, r)
 		})
 	}
-	return corsMiddleware(config, globalMiddleware(mux))
+	return transportCORS(globalMiddleware(mux))
 }
 
 func registerObservabilityHandlers(
@@ -442,4 +246,31 @@ func writeWorkloadUnavailable(w http.ResponseWriter) {
 	}
 	w.WriteHeader(apiErr.status)
 	json.NewEncoder(w).Encode(body)
+}
+
+func transportCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		transport := r.URL.Path == ehbpProtocol.KeysPath || r.URL.Path == attestationPath || strings.HasPrefix(r.URL.Path, attestationPath+"/")
+		switch r.URL.Path {
+		case "/.well-known/tinfoil-certificate", "/.well-known/tinfoil-boot-stages", "/.well-known/tinfoil-metrics", "/.well-known/metrics", "/.well-known/tinfoil-containers":
+			transport = true
+		}
+		if origin := r.Header.Get("Origin"); transport && origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Expose-Headers", "Ehbp-Encapsulated-Key, Ehbp-Response-Nonce, Content-Type, Tinfoil-Pt, Retry-After")
+			headers := r.Header.Get("Access-Control-Request-Headers")
+			if headers == "" {
+				headers = "Authorization, Content-Type, Ehbp-Encapsulated-Key"
+			}
+			w.Header().Set("Access-Control-Allow-Headers", headers)
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }

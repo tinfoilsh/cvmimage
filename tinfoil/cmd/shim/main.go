@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -25,7 +24,6 @@ import (
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	envelope "github.com/tinfoilsh/tinfoil-go/document"
-	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 
 	tinfoilattestation "tinfoil/internal/attestation"
@@ -33,9 +31,6 @@ import (
 	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/key"
-	localjwt "tinfoil/internal/key/jwt"
-	"tinfoil/internal/key/online"
 	tlsutil "tinfoil/internal/tls"
 )
 
@@ -179,8 +174,8 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 		config, externalConfig := cfgPair.config, cfgPair.external
-		log.Printf("Shim config loaded: upstream-container=%s upstream-port=%d tls-mode=%s paths=%d",
-			config.UpstreamContainer, config.UpstreamPort, config.TLSMode, len(config.Paths))
+		log.Printf("Shim config loaded: upstream-container=%s upstream-port=%d tls-mode=%s",
+			config.UpstreamContainer, config.UpstreamPort, config.TLSMode)
 
 		realCert, err := waitForArtifact("TLS certificate", func() (tls.Certificate, error) {
 			return tls.LoadX509KeyPair(boot.TLSCertPath, boot.TLSKeyPath)
@@ -239,7 +234,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 		expectedGPUs := config.ExpectedGPUs
 		log.Printf("Expected %d GPU(s) for attestation", expectedGPUs)
 
-		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig)
+		observabilityHandler := NewObservabilityServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, externalConfig)
 		handler.Store(http.HandlerFunc(observabilityHandler.ServeHTTP))
 
 		log.Println("Shim observability ready")
@@ -264,44 +259,6 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return fmt.Errorf("boot stage failed, not enabling proxy")
 		}
 
-		// API key validator
-		var validator key.Validator
-		if config.ControlPlane != "" {
-			controlPlaneURL, err := url.Parse(config.ControlPlane)
-			if err != nil {
-				return fmt.Errorf("parsing control plane URL: %w", err)
-			}
-
-			if config.Authenticated {
-				onlineValidator, err := online.NewValidator(controlPlaneURL.JoinPath("api", "shim", "validate-key").String())
-				if err != nil {
-					return fmt.Errorf("initializing API key verifier: %w", err)
-				}
-
-				// Verify OAuth JWT access tokens locally against the control
-				// plane's JWKS so they need no per-request round trip; opaque
-				// keys still fall through to the online validator. The JWKS
-				// loads best-effort and self-heals via refresh, so a
-				// control-plane blip at boot never disables local verification.
-				jwksURL := controlPlaneURL.JoinPath(".well-known", "jwks.json").String()
-				jwtValidator := localjwt.NewValidator(jwksURL, config.ControlPlane, localjwt.AccessTokenAudience, localjwt.RequiredScope)
-				log.Println("Local JWT validation enabled (OAuth access tokens verified in-enclave)")
-				validator = &metricsValidator{
-					online: onlineValidator,
-					chain:  key.NewChain(jwtValidator, onlineValidator),
-				}
-			} else {
-				log.Println("Warning: API key verification disabled (unauthenticated endpoint)")
-			}
-		} else {
-			log.Println("Warning: API key verification disabled (no control plane)")
-		}
-
-		var rateLimiter *RateLimiter
-		if config.RateLimit > 0 {
-			rateLimiter = NewRateLimiter(rate.Limit(config.RateLimit), config.RateBurst)
-		}
-
 		upstreamHost := resolveUpstreamHost(config.UpstreamContainer)
 		upstreamAddr := fmt.Sprintf("%s:%d", upstreamHost, config.UpstreamPort)
 		log.Printf("Shim upstream resolved: %s → %s", config.UpstreamContainer, upstreamAddr)
@@ -311,7 +268,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return fmt.Errorf("loading published ports: %w", err)
 		}
 
-		fullHandler := NewShimServer(validator, rateLimiter, att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, config, externalConfig, upstreamAddr, targets)
+		fullHandler := NewShimServer(att, identityBody, expectedGPUs, serverIdentity, realCertParsed, collateralCache, externalConfig, upstreamAddr, targets)
 		handler.Store(http.HandlerFunc(fullHandler.ServeHTTP))
 
 		log.Println("Shim fully operational")

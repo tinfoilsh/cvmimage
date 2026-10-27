@@ -190,7 +190,7 @@ func TestLocalAttestationFollowsReadinessAndPreservesSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	ready := NewObservabilityServer(&legacy.Document{Format: legacy.DummyV2}, tinfoilattestation.Identity{}, 0,
-		id, nil, errorCollateralSource{}, &config.Config{}, &config.ExternalConfig{})
+		id, nil, errorCollateralSource{}, &config.ExternalConfig{})
 	current.Store(http.HandlerFunc(ready.ServeHTTP))
 	response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery, "")
 	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, errMsgCollateralUnavailable) {

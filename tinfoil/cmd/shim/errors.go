@@ -3,27 +3,20 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"time"
-
-	"tinfoil/internal/key"
 )
 
 // Error type strings returned in API error responses, following OpenAI's
 // taxonomy so client SDKs classify shim errors the same way they classify
-// upstream ones and credential refusals.
+// upstream ones. See https://platform.openai.com/docs/guides/error-codes
 const (
-	errTypeInvalidRequest     = key.ErrTypeInvalidRequest
-	errTypeRateLimit          = key.ErrTypeRateLimit
-	errTypeServiceUnavailable = key.ErrTypeServiceUnavailable
-	errTypeServer             = key.ErrTypeServer
+	errTypeInvalidRequest     = "invalid_request_error"
+	errTypeServiceUnavailable = "service_unavailable_error"
+	errTypeServer             = "server_error"
 )
 
 // Machine-readable error codes carried in the `code` field. Codes shared
 // with OpenAI keep OpenAI's spelling.
 const (
-	errCodeMissingAPIKey          = "missing_api_key"
-	errCodeRateLimitExceeded      = "rate_limit_exceeded"
-	errCodeOriginNotAllowed       = "origin_not_allowed"
 	errCodeNotFound               = "not_found"
 	errCodeUpstreamUnreachable    = "upstream_unreachable"
 	errCodeServiceStarting        = "service_starting"
@@ -35,11 +28,8 @@ const (
 // Client-facing error messages, aligned with OpenAI's standard error messages
 // where applicable.
 const (
-	errMsgAPIKeyRequired         = "You didn't provide an API key."
-	errMsgRateLimited            = "Rate limit reached for requests."
 	errMsgServerError            = "The server had an error while processing your request."
-	errMsgUpstreamUnreachable    = "The inference service is temporarily unreachable. Please try again."
-	errMsgOriginNotAllowed       = "CORS origin not allowed."
+	errMsgUpstreamUnreachable    = "The workload service is temporarily unreachable. Please try again."
 	errMsgNotFound               = "Not found."
 	errMsgServiceStarting        = "The service is starting. Please try again shortly."
 	errMsgServiceFailed          = "The service failed to start."
@@ -53,23 +43,6 @@ const (
 // is still in progress.
 const serviceStartingRetryAfterSeconds = 5
 
-const maxHTTPErrorStatus = 599
-
-// retryAfterSeconds converts a rate limiter delay into a Retry-After value,
-// rounding up so the client never retries inside the window it was just
-// rejected in. Dividing before rounding keeps rate.InfDuration (MaxInt64)
-// from overflowing into a misleadingly short hint.
-func retryAfterSeconds(delay time.Duration) int {
-	secs := int(delay / time.Second)
-	if delay%time.Second != 0 {
-		secs++
-	}
-	if secs < 1 {
-		secs = 1
-	}
-	return secs
-}
-
 // apiError is an error response in OpenAI's format. param and code are
 // emitted as JSON null when empty, matching OpenAI's envelope.
 type apiError struct {
@@ -80,18 +53,6 @@ type apiError struct {
 }
 
 var (
-	errAPIKeyRequired = apiError{
-		status:  http.StatusUnauthorized,
-		errType: errTypeInvalidRequest,
-		code:    errCodeMissingAPIKey,
-		message: errMsgAPIKeyRequired,
-	}
-	errRateLimited = apiError{
-		status:  http.StatusTooManyRequests,
-		errType: errTypeRateLimit,
-		code:    errCodeRateLimitExceeded,
-		message: errMsgRateLimited,
-	}
 	errServer = apiError{
 		status:  http.StatusInternalServerError,
 		errType: errTypeServer,
@@ -102,12 +63,6 @@ var (
 		errType: errTypeServer,
 		code:    errCodeUpstreamUnreachable,
 		message: errMsgUpstreamUnreachable,
-	}
-	errOriginNotAllowed = apiError{
-		status:  http.StatusForbidden,
-		errType: errTypeInvalidRequest,
-		code:    errCodeOriginNotAllowed,
-		message: errMsgOriginNotAllowed,
 	}
 	errNotFound = apiError{
 		status:  http.StatusNotFound,

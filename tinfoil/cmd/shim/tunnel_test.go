@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,7 +18,6 @@ import (
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
-	"tinfoil/internal/key"
 	"tinfoil/internal/legacy"
 )
 
@@ -35,11 +33,11 @@ func writeRuntimeConfig(t *testing.T, body string) string {
 }
 
 func TestPublishedPorts(t *testing.T) {
-	targets, err := publishedPorts(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['2300:25565', '2301:8080']\n  - name: quiet\n"))
+	targets, err := publishedPorts(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['2300:25565', '2301:8080']\n    tunnel-ports: [2300]\n  - name: quiet\n"))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if len(targets) != 2 || !targets["2300"] || !targets["2301"] {
+	if len(targets) != 1 || !targets["2300"] || targets["2301"] {
 		t.Fatalf("targets = %v", targets)
 	}
 	if _, err := publishedPorts(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['25565']\n")); err == nil {
@@ -69,9 +67,13 @@ func echoListener(t *testing.T) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
-func tunnelServer(t *testing.T, port int, validator key.Validator) *httptest.Server {
+func tunnelServer(t *testing.T, port int, enabled bool) *httptest.Server {
 	t.Helper()
-	targets, err := publishedPorts(writeRuntimeConfig(t, fmt.Sprintf("containers:\n  - name: echo\n    ports: ['%d:9']\n", port)))
+	configuration := fmt.Sprintf("containers:\n  - name: echo\n    ports: ['%d:9']\n", port)
+	if enabled {
+		configuration += fmt.Sprintf("    tunnel-ports: [%d]\n", port)
+	}
+	targets, err := publishedPorts(writeRuntimeConfig(t, configuration))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -80,8 +82,8 @@ func tunnelServer(t *testing.T, port int, validator key.Validator) *httptest.Ser
 		t.Fatalf("creating identity: %v", err)
 	}
 	att := &legacy.Document{Format: "https://tinfoil.sh/predicate/dummy/v2", Body: "deadbeef"}
-	shim := NewShimServer(validator, nil, att, tinfoilattestation.Identity{}, 0, id, nil, nil,
-		&config.Config{UpstreamPort: 9999}, &config.ExternalConfig{}, "127.0.0.1:9999", targets)
+	shim := NewShimServer(att, tinfoilattestation.Identity{}, 0, id, nil, nil,
+		&config.ExternalConfig{}, "127.0.0.1:9999", targets)
 
 	server := httptest.NewUnstartedServer(shim)
 	server.EnableHTTP2 = true
@@ -133,7 +135,7 @@ func echoThrough(t *testing.T, resp *http.Response, writer io.WriteCloser) {
 
 func TestTunnelReachesPublishedPortOnly(t *testing.T) {
 	port := echoListener(t)
-	server := tunnelServer(t, port, nil)
+	server := tunnelServer(t, port, true)
 
 	for _, host := range []string{tunnelTestDomain, "attacker.example.com"} {
 		resp, writer := connectTo(t, server, fmt.Sprintf("%s:%d", host, port), http.Header{})
@@ -149,45 +151,26 @@ func TestTunnelReachesPublishedPortOnly(t *testing.T) {
 	}
 }
 
-func TestTunnelRequiresAPIKey(t *testing.T) {
+func TestTunnelRequiresWorkloadOptIn(t *testing.T) {
 	port := echoListener(t)
-	validator := &fakeValidator{}
-	server := tunnelServer(t, port, validator)
-	authority := fmt.Sprintf("%s:%d", tunnelTestDomain, port)
-
-	for _, target := range []string{authority, fmt.Sprintf("%s:%d", tunnelTestDomain, port+1)} {
-		resp, _ := connectTo(t, server, target, http.Header{})
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("keyless CONNECT %s status = %d, want 401", target, resp.StatusCode)
-		}
+	server := tunnelServer(t, port, false)
+	resp, _ := connectTo(t, server, fmt.Sprintf("%s:%d", tunnelTestDomain, port), http.Header{})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("port without workload authentication opt-in status = %d, want 404", resp.StatusCode)
 	}
-
-	validator.err = errors.New("nope")
-	resp, _ := connectTo(t, server, authority, http.Header{"Authorization": []string{"Bearer bad"}})
-	if resp.StatusCode == http.StatusOK {
-		t.Errorf("rejected key still opened a tunnel")
-	}
-
-	validator.err = nil
-	resp, writer := connectTo(t, server, authority, http.Header{"Authorization": []string{"Bearer good"}})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("accepted key status = %d, want 200", resp.StatusCode)
-	}
-	echoThrough(t, resp, writer)
 }
 
 func TestTunnelOnlyHandlesHTTP2Connect(t *testing.T) {
-	allowAll := func(http.ResponseWriter, *http.Request) bool { return true }
 	shim := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "shim") })
 
 	recorder := httptest.NewRecorder()
-	tunnels(nil, allowAll, shim).ServeHTTP(recorder, httptest.NewRequest(http.MethodConnect, "https://"+tunnelTestDomain+":2300", nil))
+	tunnels(nil, shim).ServeHTTP(recorder, httptest.NewRequest(http.MethodConnect, "https://"+tunnelTestDomain+":2300", nil))
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("HTTP/1 CONNECT status = %d, want 405", recorder.Code)
 	}
 
 	recorder = httptest.NewRecorder()
-	tunnels(nil, allowAll, shim).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	tunnels(nil, shim).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 	if recorder.Body.String() != "shim" {
 		t.Fatalf("body = %q, want the shim handler's", recorder.Body)
 	}

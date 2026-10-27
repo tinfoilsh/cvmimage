@@ -7,7 +7,7 @@ let
   inherit (pkgs) lib;
 
   version = "7.0.0";
-  release = "7.0.0-28-generic";
+  release = "7.0.0-38-generic";
   buildTimestamp = "Tue Jan  1 00:00:00 UTC 1980";
   policyConfigs = [
     ../kernel/config.d/10-tinfoil-cvm-policy.config
@@ -21,12 +21,12 @@ let
   policyConfigArgs = lib.concatMapStringsSep " " (path: "${path}") policyConfigs;
 
   sourceDeb = pkgs.fetchurl {
-    url = "https://snapshot.ubuntu.com/ubuntu/20261021T000000Z/pool/main/l/linux/linux-source-7.0.0_7.0.0-28.28_all.deb";
-    hash = "sha256-3VmUsZmhywax8za7CGxcI6klj9z9y7fcyNOvqaXZLhM=";
+    url = "https://snapshot.ubuntu.com/ubuntu/20261027T000000Z/pool/main/l/linux/linux-source-7.0.0_7.0.0-38.38_all.deb";
+    hash = "sha256-mXoToMf9AXKpOwwa6aT/x9PLv5HS/dkdhTNBk1gGh94=";
   };
 
   source =
-    pkgs.runCommand "linux-source-7.0.0-28.28"
+    pkgs.runCommand "linux-source-7.0.0-38.38"
       {
         nativeBuildInputs = [
           pkgs.dpkg
@@ -50,6 +50,8 @@ let
     patches = [
       ./patches/kernel-disable-virtio-pci-admin-legacy.patch
       ./patches/kernel-tdx-fast-quote-polling.patch
+      # CVE-2026-98432 is not yet fixed in Ubuntu 7.0.0-38.38.
+      ./patches/kernel-ipv4-options-rcu.patch
     ];
   };
 

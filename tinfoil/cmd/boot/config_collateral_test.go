@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -23,11 +25,14 @@ import (
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
 	for _, format := range []string{collateral.ConfigEndorsementV1Format, collateral.ConfigEndorsementV2Format} {
-		t.Run(format, func(t *testing.T) { testConfigCollateralRequest(t, format) })
+		t.Run(format+" public", func(t *testing.T) { testConfigCollateralRequest(t, format, false) })
+		if format == collateral.ConfigEndorsementV2Format {
+			t.Run(format+" private", func(t *testing.T) { testConfigCollateralRequest(t, format, true) })
+		}
 	}
 }
 
-func testConfigCollateralRequest(t *testing.T, format string) {
+func testConfigCollateralRequest(t *testing.T, format string, private bool) {
 	t.Helper()
 	digest := strings.Repeat("a", 64)
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
@@ -51,7 +56,7 @@ network:
 	}
 	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Document: empty, Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest}
 	proof := []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","config_base64":"Y29uZmln","sigstore_bundle":{}}`, digest))
-	if format == collateral.ConfigEndorsementV2Format {
+	if private {
 		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{},"scope":{"certificate_der":"bGVhZg==","issuer_der":"cm9vdA==","issuance_bundle":{"proof":"issuance"}}}`, digest))
 	}
 	entries := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
@@ -86,7 +91,7 @@ network:
 	if err := json.Unmarshal(data, &persisted); err != nil || !reflect.DeepEqual(persisted, request) {
 		t.Fatalf("persisted request = %#v, error = %v", persisted, err)
 	}
-	if len(persisted.Config) != 0 || strings.Contains(string(data), "config_base64") {
+	if strings.Contains(string(data), "config_base64") {
 		t.Fatal("registry collateral request disclosed config bytes")
 	}
 	client, err := attestationmaterial.NewClient(server.URL, nil)
@@ -112,15 +117,15 @@ network:
 	if err != nil || endorsement.Reference != "sha256:"+digest {
 		t.Fatalf("assembled endorsement = %#v, error = %v", endorsement, err)
 	}
-	if format == collateral.ConfigEndorsementV1Format && string(endorsement.Config) != "config" {
+	if !private && string(endorsement.Config) != "config" {
 		t.Fatalf("assembled public endorsement lost its config bytes: %#v", endorsement)
 	}
-	if format == collateral.ConfigEndorsementV2Format && (len(endorsement.Config) != 0 || endorsement.Scope == nil) {
+	if private && (len(endorsement.Config) != 0 || endorsement.Scope == nil) {
 		t.Fatalf("assembled private endorsement lost its scope or exposed config bytes: %#v", endorsement)
 	}
 }
 
-func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
+func TestLocalCollateralRequestExcludesConfigBytes(t *testing.T) {
 	const runtimeVersion = "0.15.1-rc.1@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	config := []byte("# Exact bytes\r\ncvm-version: " + runtimeVersion + "\r\n")
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -139,12 +144,13 @@ func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: empty, Config: config}
+	digest := sha256.Sum256(config)
+	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: empty, Runtime: "v" + runtimeVersion, Digest: hex.EncodeToString(digest[:])}
 	if !reflect.DeepEqual(request, expected) {
 		t.Fatalf("request = %#v, want %#v", request, expected)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || strings.Contains(string(data), "private") || strings.Contains(string(data), "quote_base64") {
+	if err != nil || strings.Contains(string(data), "private") || strings.Contains(string(data), "quote_base64") || strings.Contains(string(data), "config_base64") {
 		t.Fatalf("unexpected collateral request: %s; error: %v", data, err)
 	}
 	var persisted attestationmaterial.Request

@@ -39,7 +39,6 @@ type Cache struct {
 
 func NewCache(request Request, fetcher Fetcher) *Cache {
 	request.Document = bytes.Clone(request.Document)
-	request.Config = bytes.Clone(request.Config)
 	return &Cache{
 		request:      request,
 		fetcher:      fetcher,

@@ -16,7 +16,7 @@ type Request struct {
 	Tag      string          `json:"tag,omitempty"`
 	Profile  string          `json:"profile"`
 	Digest   string          `json:"digest,omitempty"`
-	Config   []byte          `json:"config_base64,omitempty"`
+	Runtime  string          `json:"runtime,omitempty"`
 	Document json.RawMessage `json:"document"`
 }
 
@@ -30,9 +30,9 @@ func (r Request) Validate() error {
 	if r.Profile != wire.FormatV3 {
 		return fmt.Errorf("unsupported collateral request profile %q", r.Profile)
 	}
-	if len(r.Config) != 0 {
-		if r.Repo != "" || r.Tag != "" || r.Digest != "" {
-			return fmt.Errorf("local config and registry references are mutually exclusive")
+	if r.Runtime != "" {
+		if r.Repo != "" || r.Tag != "" || r.Digest == "" {
+			return fmt.Errorf("local collateral request requires a config digest and excludes registry references")
 		}
 	} else if r.Repo == "" || r.Tag == "" || r.Digest == "" {
 		return fmt.Errorf("registry collateral request requires a project, revision, and config digest")

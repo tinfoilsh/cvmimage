@@ -23,7 +23,7 @@ require (
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.4.1
 	github.com/tinfoilsh/modelwrap v0.2.1
 	github.com/tinfoilsh/tinfoil-config v0.1.19
-	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.4.0.20261023232754-4fe39340eee3
+	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.4.0.20261028054218-e624fa24fea6
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.60.0

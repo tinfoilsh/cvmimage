@@ -346,6 +346,7 @@ func (config *ExternalConfig) validateBounds() error {
 		"metadata.digest": config.Metadata.Digest,
 		"network.address": networkValue(config.Network, true),
 		"network.gateway": networkValue(config.Network, false),
+		"shutdown_token":  config.ShutdownToken,
 	} {
 		if len(value) > maxMetadataFieldBytes || strings.IndexByte(value, 0) >= 0 {
 			return fmt.Errorf("%s exceeds safe value limits", field)

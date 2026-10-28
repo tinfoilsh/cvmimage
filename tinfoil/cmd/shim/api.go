@@ -431,6 +431,7 @@ func registerObservabilityHandlers(
 	mux.HandleFunc("/.well-known/tinfoil-metrics", metrics.HandleMetrics(externalConfig))
 	mux.HandleFunc("/.well-known/metrics", metrics.HandlePrometheusMetrics(&externalConfig.Metadata, externalConfig.MetricsAPIKey))
 	mux.HandleFunc("/.well-known/tinfoil-containers", containersHandler())
+	mux.HandleFunc(shutdownPath, shutdownHandler(externalConfig.ShutdownToken, signalInit))
 	mux.HandleFunc(ehbpProtocol.KeysPath, ehbpIdentity.ConfigHandler)
 }
 

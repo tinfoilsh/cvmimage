@@ -77,9 +77,12 @@ func runPID1() {
 	defer stop()
 	err := run(parent)
 	if err == nil {
-		initLogf("shutdown complete; powering off")
-		if powerErr := unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF); powerErr != nil {
-			initLogf("power off failed: %v; parking", powerErr)
+		// Images without ACPI S5 cannot power off; a reset reaches the host
+		// on every image, and tinfoild runs QEMU with -no-reboot so it exits.
+		initLogf("shutdown complete; resetting")
+		unix.Sync()
+		if resetErr := unix.Reboot(unix.LINUX_REBOOT_CMD_RESTART); resetErr != nil {
+			initLogf("reset failed: %v; parking", resetErr)
 		}
 	} else {
 		initLogf("fatal after cleanup: %v; parking", err)

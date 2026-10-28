@@ -120,8 +120,16 @@ network:
 	if !private && string(endorsement.Config) != "config" {
 		t.Fatalf("assembled public endorsement lost its config bytes: %#v", endorsement)
 	}
-	if private && (len(endorsement.Config) != 0 || endorsement.Scope == nil) {
-		t.Fatalf("assembled private endorsement lost its scope or exposed config bytes: %#v", endorsement)
+	if private {
+		var expected struct {
+			Scope *collateral.ScopeCertificate `json:"scope"`
+		}
+		if err := json.Unmarshal(proof, &expected); err != nil {
+			t.Fatal(err)
+		}
+		if len(endorsement.Config) != 0 || !reflect.DeepEqual(expected.Scope, endorsement.Scope) {
+			t.Fatalf("assembled private endorsement lost its scope or exposed config bytes: %#v", endorsement)
+		}
 	}
 }
 

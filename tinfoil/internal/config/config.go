@@ -43,6 +43,9 @@ type ExternalConfig struct {
 	Secrets       map[string]string      `yaml:"secrets"`
 	Metadata      Metadata               `yaml:"metadata"`
 	Network       *ExternalNetworkConfig `yaml:"network"`
+	// ShutdownToken authorizes the host's shutdown request. tinfoild generates
+	// it per launch; an empty token disables the endpoint.
+	ShutdownToken string `yaml:"shutdown_token"`
 
 	// tinfoild preserves operator-owned top-level external data. Keep accepting
 	// those unrelated keys while KnownFields rejects unknown network fields.

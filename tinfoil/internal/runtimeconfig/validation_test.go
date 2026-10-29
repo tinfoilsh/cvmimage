@@ -24,6 +24,7 @@ containers:
 const validConfig = `
 cvm-version: 0.11.0
 shim:
+  application-policy: workload
   upstream-port: 8080
 networks:
   app:

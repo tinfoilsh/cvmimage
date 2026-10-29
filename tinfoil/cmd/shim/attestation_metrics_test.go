@@ -27,9 +27,9 @@ func TestAttestationMetricsThroughShim(t *testing.T) {
 			ext.Metadata.ID = "test-enclave"
 			var handler http.Handler
 			if ready {
-				handler = NewShimServer(nil, nil, tinfoilattestation.Identity{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext, "127.0.0.1:9999", nil)
+				handler = NewShimServer(tinfoilattestation.Identity{}, 0, id, nil, errorCollateralSource{}, ext, "127.0.0.1:9999", nil)
 			} else {
-				handler = NewObservabilityServer(tinfoilattestation.Identity{}, 0, id, nil, errorCollateralSource{}, &config.Config{}, ext)
+				handler = NewObservabilityServer(tinfoilattestation.Identity{}, 0, id, nil, errorCollateralSource{}, ext)
 			}
 			unauthorized := httptest.NewRecorder()
 			handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, metricsPath, nil))

@@ -97,6 +97,9 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 // applies defaults, and validates. Used by boot, which has already parsed
 // the parent config and needs to type the `shim:` subsection.
 func Decode(n *yaml.Node) (*Config, error) {
+	if err := sharedconfig.ValidateWorkloadShim(n); err != nil {
+		return nil, err
+	}
 	return sharedconfig.DecodeShim(n)
 }
 

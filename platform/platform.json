@@ -1,4 +1,15 @@
 {
+  "32cpu_768gb_4gpu_4disk": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 4,
+    "memory": "786432M",
+    "pci_hole64_end": "0x50000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x10000000000",
+    "profile": "quad",
+    "qemu_source": "qemu:10.1.0"
+  },
   "b200_32cpu_512gb_4gpu_4disk": {
     "acpi_memory": "65536M",
     "cpus": 32,

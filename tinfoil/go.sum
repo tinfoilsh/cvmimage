@@ -127,6 +127,8 @@ github.com/tinfoilsh/modelwrap v0.2.1 h1:2Up98rhP+BtEtQowjHm+DpZtZiWORa3p0XWVzgX
 github.com/tinfoilsh/modelwrap v0.2.1/go.mod h1:y3ov37f4WkQVA0jwJ/Rg7yQtKZuZloaQC+U7GgSoa8w=
 github.com/tinfoilsh/tinfoil-config v0.1.19 h1:lFhGzPTmXmz0X0QlR4y0GPJfdt2ABJqP6CqmDumASvc=
 github.com/tinfoilsh/tinfoil-config v0.1.19/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
+github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261030222807-53e1230dbe5e h1:uuC5kJfeEnzQGsitHzaokfz0csSjOI+nC6dw3OdGGmE=
+github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261030222807-53e1230dbe5e/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261028215040-91741552ee11 h1:cJXAvJ15GHurCYp4hemCqT8Vldf9xPEMjMvPEC142Vw=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261028215040-91741552ee11/go.mod h1:V4ZWsOcc1GMkdBBzbIGbz0XO7oJ+L/4A5TCv0leUyAQ=
 github.com/transparency-dev/formats v0.1.1 h1:4bVHJc+KdBgpA1OJD1yjI+g0i5Z1graCppTMH8lWKJI=

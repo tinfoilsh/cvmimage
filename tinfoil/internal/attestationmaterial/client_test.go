@@ -74,7 +74,7 @@ func TestClientRejectsExpiredResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if _, err := client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Runtime: "v0.15.0@sha256:" + strings.Repeat("a", 64), Digest: strings.Repeat("b", 64)}); err == nil || !strings.Contains(err.Error(), "expired") {
+	if _, err := client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Config: []byte("config")}); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expected expired response error, got %v", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestClientDoesNotDowngradeRejectedDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Runtime: "v0.15.0@sha256:" + strings.Repeat("a", 64), Digest: strings.Repeat("b", 64), Document: json.RawMessage(`{}`)})
+	_, err = client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Config: []byte("config"), Document: json.RawMessage(`{}`)})
 	if err == nil || !strings.Contains(err.Error(), "unsupported version") || requests != 1 {
 		t.Fatalf("requests=%d, error=%v", requests, err)
 	}

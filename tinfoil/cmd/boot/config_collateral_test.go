@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -133,7 +131,7 @@ network:
 	}
 }
 
-func TestLocalCollateralRequestExcludesConfigBytes(t *testing.T) {
+func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
 	const runtimeVersion = "0.15.1-rc.1@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	config := []byte("# Exact bytes\r\ncvm-version: " + runtimeVersion + "\r\n")
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -152,13 +150,12 @@ func TestLocalCollateralRequestExcludesConfigBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(config)
-	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: empty, Runtime: "v" + runtimeVersion, Digest: hex.EncodeToString(digest[:])}
+	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: empty, Config: config}
 	if !reflect.DeepEqual(request, expected) {
 		t.Fatalf("request = %#v, want %#v", request, expected)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || strings.Contains(string(data), "private") || strings.Contains(string(data), "quote_base64") || strings.Contains(string(data), "config_base64") {
+	if err != nil || strings.Contains(string(data), "private") || strings.Contains(string(data), "quote_base64") {
 		t.Fatalf("unexpected collateral request: %s; error: %v", data, err)
 	}
 	var persisted attestationmaterial.Request

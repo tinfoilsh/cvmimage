@@ -14,7 +14,7 @@ import (
 func TestLoadCollateralRequest(t *testing.T) {
 	for _, want := range []attestationmaterial.Request{
 		{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/project", Tag: "v1", Digest: strings.Repeat("a", 64)},
-		{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Runtime: "v0.15.0@sha256:" + strings.Repeat("b", 64), Digest: strings.Repeat("a", 64)},
+		{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Config: []byte("config\r\n")},
 	} {
 		data, err := json.Marshal(want)
 		if err != nil {

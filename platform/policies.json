@@ -268,6 +268,7 @@
         "medium_0d_new",
         "medium_1d_cpu_new",
         "medium_2d_new",
+        "32cpu_768gb_4gpu_4disk",
         "extra_large_1d_b300_new",
         "extra_large_2d_b300_new"
       ]

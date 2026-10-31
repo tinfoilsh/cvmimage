@@ -131,6 +131,8 @@ github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261030222807-53e1230dbe5e h1:uuC
 github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261030222807-53e1230dbe5e/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
 github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261030223908-c5d4ea445c96 h1:DwBuRH76dezXBB7daIxQ+QyiN7qTSA0D0NCTiH8kc8U=
 github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261030223908-c5d4ea445c96/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
+github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261031005302-3dd1f8a0d79f h1:vnOfBgdlTq28oNbf5ZP4C9ervq02ynWuiyQ7w8kkUtk=
+github.com/tinfoilsh/tinfoil-config v0.1.20-0.20261031005302-3dd1f8a0d79f/go.mod h1:seJevFL+nvKq2fRClgGN7OJsvRvusz2lQYKI2XlqOOM=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261028215040-91741552ee11 h1:cJXAvJ15GHurCYp4hemCqT8Vldf9xPEMjMvPEC142Vw=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261028215040-91741552ee11/go.mod h1:V4ZWsOcc1GMkdBBzbIGbz0XO7oJ+L/4A5TCv0leUyAQ=
 github.com/transparency-dev/formats v0.1.1 h1:4bVHJc+KdBgpA1OJD1yjI+g0i5Z1graCppTMH8lWKJI=

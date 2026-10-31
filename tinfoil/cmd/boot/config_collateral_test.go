@@ -146,7 +146,7 @@ func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
 			t.Run(version+"/"+visibility, func(t *testing.T) {
 				config := []byte("cvm-version: " + version + "@sha256:" + runtimeDigest + "\n")
 				if visibility != "" {
-					config = append(config, []byte("visibility: "+visibility+"\n")...)
+					config = append(config, []byte("security:\n  config-visibility: "+visibility+"\n")...)
 				}
 				configPath := filepath.Join(t.TempDir(), "config.yaml")
 				if err := os.WriteFile(configPath, config, 0600); err != nil {

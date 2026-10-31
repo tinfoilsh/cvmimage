@@ -2,11 +2,14 @@ package main
 
 import (
 	"crypto/ecdsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"tinfoil/internal/attestation"
@@ -48,10 +51,21 @@ func writeCollateralRequest(path string, document json.RawMessage, metadata shim
 	case "":
 	case shimconfig.SourceLocal:
 		request.Repo, request.Tag, request.Digest = "", "", ""
-		var err error
-		request.Config, err = os.ReadFile(configPath)
+		config, err := os.ReadFile(configPath)
 		if err != nil {
 			return attestationmaterial.Request{}, fmt.Errorf("reading local config: %w", err)
+		}
+		runtime, err := configendorsement.RuntimeFromConfig(config)
+		if err != nil {
+			return attestationmaterial.Request{}, err
+		}
+		policy := Config{CVMVersion: runtime.Tag}
+		if policy.DigestOnlyAttestation() {
+			digest := sha256.Sum256(config)
+			request.Digest = hex.EncodeToString(digest[:])
+			request.Runtime = runtime.Tag + "@sha256:" + runtime.Digest
+		} else {
+			request.Config = config
 		}
 	default:
 		return attestationmaterial.Request{}, fmt.Errorf("unsupported config source %q", metadata.ConfigSource)

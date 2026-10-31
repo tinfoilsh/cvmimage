@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,6 +24,16 @@ import (
 )
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
+	for _, format := range []string{collateral.ConfigEndorsementV1Format, collateral.ConfigEndorsementV2Format} {
+		t.Run(format+" public", func(t *testing.T) { testConfigCollateralRequest(t, format, false) })
+		if format == collateral.ConfigEndorsementV2Format {
+			t.Run(format+" private", func(t *testing.T) { testConfigCollateralRequest(t, format, true) })
+		}
+	}
+}
+
+func testConfigCollateralRequest(t *testing.T, format string, private bool) {
+	t.Helper()
 	digest := strings.Repeat("a", 64)
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
 metadata:
@@ -43,8 +55,15 @@ network:
 		t.Fatal(err)
 	}
 	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Document: empty, Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest}
-	collateral := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
-		Format: collateral.ConfigEndorsementV1Format, Data: []byte(`{"endorsement_ref":"test-reference"}`)}}
+	proof := []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","config_base64":"Y29uZmln","sigstore_bundle":{}}`, digest))
+	if format == collateral.ConfigEndorsementV2Format {
+		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{}}`, digest))
+	}
+	if private {
+		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{},"scope":{"certificate_der":"bGVhZg==","issuer_der":"cm9vdA==","issuance_bundle":{"proof":"issuance"}}}`, digest))
+	}
+	entries := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
+		Format: format, Data: proof}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request attestationmaterial.Request
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -55,11 +74,15 @@ network:
 		if r.URL.Path != "/attestation-collaterals" || !reflect.DeepEqual(request, expected) {
 			t.Errorf("unexpected ATC request: %s %#v", r.URL.Path, request)
 		}
-		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour), Collateral: collateral})
+		_ = json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour), Collateral: entries})
 	}))
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "collateral-request.json")
-	request, err := writeCollateralRequest(path, empty, external.Metadata, "")
+	configPath := filepath.Join(t.TempDir(), "private.yaml")
+	if err := os.WriteFile(configPath, []byte("# private audit bytes\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	request, err := writeCollateralRequest(path, empty, external.Metadata, configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,13 +94,80 @@ network:
 	if err := json.Unmarshal(data, &persisted); err != nil || !reflect.DeepEqual(persisted, request) {
 		t.Fatalf("persisted request = %#v, error = %v", persisted, err)
 	}
+	if strings.Contains(string(data), "config_base64") {
+		t.Fatal("registry collateral request disclosed config bytes")
+	}
 	client, err := attestationmaterial.NewClient(server.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := client.Fetch(context.Background(), persisted)
-	if err != nil || !reflect.DeepEqual(got.Collateral, collateral) {
+	if err != nil || !reflect.DeepEqual(got.Collateral, entries) {
 		t.Fatalf("collateral = %#v, error = %v", got.Collateral, err)
+	}
+	nonce := make([]byte, document.NonceSize)
+	assembled, err := document.Build(document.BuildInput{Nonce: nonce, CollateralFormat: got.Format, Collateral: got.Collateral}, func([64]byte) (string, []byte, error) {
+		return document.SEVSNPReportV1Format, []byte("quote"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := document.Parse(assembled, nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endorsement, err := parsed.ConfigEndorsement()
+	if err != nil || endorsement.Reference != "sha256:"+digest {
+		t.Fatalf("assembled endorsement = %#v, error = %v", endorsement, err)
+	}
+	if format == collateral.ConfigEndorsementV1Format && string(endorsement.Config) != "config" {
+		t.Fatalf("assembled public endorsement lost its config bytes: %#v", endorsement)
+	}
+	if format == collateral.ConfigEndorsementV2Format && len(endorsement.Config) != 0 {
+		t.Fatal("v2 collateral disclosed config bytes")
+	}
+	if private {
+		var expected struct {
+			Scope *collateral.ScopeCertificate `json:"scope"`
+		}
+		if err := json.Unmarshal(proof, &expected); err != nil {
+			t.Fatal(err)
+		}
+		if len(endorsement.Config) != 0 || !reflect.DeepEqual(expected.Scope, endorsement.Scope) {
+			t.Fatalf("assembled private endorsement lost its scope or exposed config bytes: %#v", endorsement)
+		}
+	}
+}
+
+func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
+	const runtimeDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for _, version := range []string{"0.15.3-rc.1", "0.15.3-rc.2", "0.15.3-rc.10", "0.15.3", "0.15.4-rc.1"} {
+		for _, visibility := range []string{"", "public", "private"} {
+			t.Run(version+"/"+visibility, func(t *testing.T) {
+				config := []byte("cvm-version: " + version + "@sha256:" + runtimeDigest + "\n")
+				if visibility != "" {
+					config = append(config, []byte("security:\n  config-visibility: "+visibility+"\n")...)
+				}
+				configPath := filepath.Join(t.TempDir(), "config.yaml")
+				if err := os.WriteFile(configPath, config, 0600); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(t.TempDir(), "request.json")
+				metadata := shimconfig.Metadata{ConfigSource: shimconfig.SourceLocal, Repo: "org/project", Tag: "revision", Digest: "untrusted"}
+				request, err := writeCollateralRequest(path, json.RawMessage(`{}`), metadata, configPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				digest := sha256.Sum256(config)
+				if len(request.Config) != 0 || request.Repo != "" || request.Tag != "" || request.Digest != hex.EncodeToString(digest[:]) || request.Runtime != "v"+version+"@sha256:"+runtimeDigest {
+					t.Fatalf("unexpected local request: %#v", request)
+				}
+				data, err := os.ReadFile(path)
+				if err != nil || strings.Contains(string(data), "config_base64") {
+					t.Fatalf("local request exposed config: %s, %v", data, err)
+				}
+			})
+		}
 	}
 }
 

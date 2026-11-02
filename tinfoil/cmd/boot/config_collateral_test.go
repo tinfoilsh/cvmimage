@@ -25,14 +25,11 @@ import (
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
 	for _, format := range []string{collateral.ConfigEndorsementV1Format, collateral.ConfigEndorsementV2Format} {
-		t.Run(format+" public", func(t *testing.T) { testConfigCollateralRequest(t, format, false) })
-		if format == collateral.ConfigEndorsementV2Format {
-			t.Run(format+" private", func(t *testing.T) { testConfigCollateralRequest(t, format, true) })
-		}
+		t.Run(format, func(t *testing.T) { testConfigCollateralRequest(t, format) })
 	}
 }
 
-func testConfigCollateralRequest(t *testing.T, format string, private bool) {
+func testConfigCollateralRequest(t *testing.T, format string) {
 	t.Helper()
 	digest := strings.Repeat("a", 64)
 	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
@@ -57,10 +54,7 @@ network:
 	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Document: empty, Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest}
 	proof := []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","config_base64":"Y29uZmln","sigstore_bundle":{}}`, digest))
 	if format == collateral.ConfigEndorsementV2Format {
-		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{}}`, digest))
-	}
-	if private {
-		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{},"scope":{"certificate_der":"bGVhZg==","issuer_der":"cm9vdA==","issuance_bundle":{"proof":"issuance"}}}`, digest))
+		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{},"signing_certificate":{"certificate_der":"bGVhZg==","issuer_der":"cm9vdA=="}}`, digest))
 	}
 	entries := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
 		Format: format, Data: proof}}
@@ -126,15 +120,15 @@ network:
 	if format == collateral.ConfigEndorsementV2Format && len(endorsement.Config) != 0 {
 		t.Fatal("v2 collateral disclosed config bytes")
 	}
-	if private {
+	if format == collateral.ConfigEndorsementV2Format {
 		var expected struct {
-			Scope *collateral.ScopeCertificate `json:"scope"`
+			Certificate *collateral.SigningCertificate `json:"signing_certificate"`
 		}
 		if err := json.Unmarshal(proof, &expected); err != nil {
 			t.Fatal(err)
 		}
-		if len(endorsement.Config) != 0 || !reflect.DeepEqual(expected.Scope, endorsement.Scope) {
-			t.Fatalf("assembled private endorsement lost its scope or exposed config bytes: %#v", endorsement)
+		if len(endorsement.Config) != 0 || !reflect.DeepEqual(expected.Certificate, endorsement.Certificate) {
+			t.Fatalf("assembled endorsement lost its certificate or exposed config bytes: %#v", endorsement)
 		}
 	}
 }

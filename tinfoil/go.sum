@@ -206,3 +206,5 @@ pgregory.net/rapid v1.2.0 h1:keKAYRcjm+e1F0oAuU5F5+YPAWcyxNNRK2wud503Gnk=
 pgregory.net/rapid v1.2.0/go.mod h1:PY5XlDGj0+V1FCq0o192FdRhpKHGTRIWBgqjDBTrq04=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103045128-ea474efb3476 h1:kJPkxOPh9NTRkf8YMav6mJLzkrL4bIcixaS37nVN21k=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103045128-ea474efb3476/go.mod h1:CB50jkrWL3nhjc06Thg4CXsvo9feLVyDYIZwkfBCM+Y=
+github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103050407-8a723990f666 h1:EcQSqcefIk+t496H/3aSipqDy2jkRk2bcy7COoeRi30=
+github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103050407-8a723990f666/go.mod h1:CB50jkrWL3nhjc06Thg4CXsvo9feLVyDYIZwkfBCM+Y=

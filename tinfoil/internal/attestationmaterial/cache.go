@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	refreshBefore  = 24 * time.Hour
-	retryAfter     = time.Minute
-	refreshTimeout = 35 * time.Second
+	refreshBefore       = 24 * time.Hour
+	retryAfter          = time.Minute
+	refreshTimeout      = 35 * time.Second
+	maintenanceInterval = time.Hour
 )
 
 var ErrUnavailable = errors.New("attestation collateral unavailable")
@@ -46,6 +47,22 @@ func NewCache(request Request, fetcher Fetcher) *Cache {
 		now:          time.Now,
 		refreshAfter: refreshBefore,
 		retryAfter:   retryAfter,
+	}
+}
+
+// Maintain refreshes idle private deployments before their credentials expire.
+func (c *Cache) Maintain(ctx context.Context) {
+	ticker := time.NewTicker(maintenanceInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := c.Current(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("Private registry evidence refresh unavailable: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

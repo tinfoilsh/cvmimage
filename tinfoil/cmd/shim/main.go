@@ -94,7 +94,7 @@ func main() {
 	}
 
 	// Wait for boot to provision artifacts, then upgrade to the full handler.
-	go upgradeWhenReady(&handler, &cert)
+	go upgradeWhenReady(ctx, &handler, &cert)
 
 	log.Printf("Starting tinfoil shim (waiting for boot)")
 	if err := serveWithAttestation(ctx, srv, localListener); err != nil {
@@ -156,7 +156,7 @@ const artifactPollInterval = 1 * time.Second
 
 // upgradeWhenReady advances the public handler through three explicit phases:
 // boot stages only, observability only, and finally workload proxying.
-func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) {
+func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) {
 	start := time.Now()
 
 	err := func() error {
@@ -198,7 +198,11 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			if err := client.UseRegistryCredential(externalConfig.GetSecret(attestationmaterial.RegistryTokenSecret), boot.RegistryTokenPath); err != nil {
 				return err
 			}
-			collateralCache = attestationmaterial.NewCache(request, client)
+			cache := attestationmaterial.NewCache(request, client)
+			collateralCache = cache
+			if externalConfig.GetSecret(attestationmaterial.RegistryTokenSecret) != "" {
+				go cache.Maintain(ctx)
+			}
 		}
 
 		serverIdentity, err := waitForArtifact("HPKE identity", func() (*identity.Identity, error) {

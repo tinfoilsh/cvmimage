@@ -195,6 +195,9 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			if err != nil {
 				return err
 			}
+			if err := client.UseRegistryCredential(externalConfig.GetSecret(attestationmaterial.RegistryTokenSecret), boot.RegistryTokenPath); err != nil {
+				return err
+			}
 			collateralCache = attestationmaterial.NewCache(request, client)
 		}
 

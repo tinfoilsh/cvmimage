@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +14,83 @@ import (
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
+
+func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	request := Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)}
+	expected := "boot-token"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+expected {
+			t.Error("wrong registry credential")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if _, exists := body["registry_token"]; exists {
+			t.Error("credential must not enter collateral JSON")
+		}
+		w.Header().Set(RegistryTokenHeader, "refreshed-token")
+		json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour).UTC()})
+	}))
+	defer server.Close()
+	for range 2 {
+		client, err := NewClient(server.URL, server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.UseRegistryCredential("boot-token", path); err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.Fetch(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "token") {
+			t.Fatal("credential exposed in response")
+		}
+		persisted, err := os.ReadFile(path)
+		if err != nil || string(persisted) != "refreshed-token" {
+			t.Fatalf("persisted credential: %v", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatal("credential file must be private")
+		}
+		expected = "refreshed-token"
+	}
+}
+
+func TestRegistryCredentialRejectsRedirectsAndPlaintextRemoteOrigins(t *testing.T) {
+	client, err := NewClient("http://atc.example", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err == nil {
+		t.Fatal("accepted plaintext credential delivery")
+	}
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "/other", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	client, err = NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Fetch(t.Context(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)})
+	if err == nil || calls != 1 {
+		t.Fatalf("redirect followed: calls=%d error=%v", calls, err)
+	}
+}
 
 func TestClientFetch(t *testing.T) {
 	for _, tc := range []struct {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
+
+var privateATCNetwork = netip.MustParsePrefix("100.64.0.0/10")
 
 const (
 	maxResponseSize       = 20 << 20
@@ -32,6 +35,8 @@ type Client struct {
 }
 
 func (c *Client) UseRegistryCredential(token, path string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if token == "" {
 		return nil
 	}
@@ -39,8 +44,10 @@ func (c *Client) UseRegistryCredential(token, path string) error {
 	if err != nil {
 		return err
 	}
-	if endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && (endpoint.Hostname() == "localhost" || endpoint.Hostname() == "127.0.0.1" || endpoint.Hostname() == "::1")) {
-		return fmt.Errorf("private registry credentials require HTTPS")
+	address, _ := netip.ParseAddr(endpoint.Hostname())
+	privateHTTP := endpoint.Scheme == "http" && (endpoint.Hostname() == "localhost" || address.IsLoopback() || address.IsPrivate() || privateATCNetwork.Contains(address))
+	if endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "https" && !privateHTTP) {
+		return fmt.Errorf("registry credentials require HTTPS or a private HTTP ATC URL without userinfo, query, or fragment")
 	}
 	if persisted, err := os.ReadFile(path); err == nil {
 		token = string(persisted)

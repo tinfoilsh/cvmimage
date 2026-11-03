@@ -66,6 +66,24 @@ func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
 }
 
 func TestRegistryCredentialRejectsRedirectsAndPlaintextRemoteOrigins(t *testing.T) {
+	for _, base := range []string{"https://user:password@atc.example", "https://atc.example?", "https://atc.example?token=value", "https://atc.example#fragment", "http://8.8.8.8"} {
+		client, err := NewClient(base, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err == nil {
+			t.Fatalf("accepted unsafe credential origin %s", base)
+		}
+	}
+	for _, base := range []string{"https://atc.example", "http://100.64.0.1:8085", "http://10.0.0.1:8085", "http://[::1]:8085"} {
+		client, err := NewClient(base, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err != nil {
+			t.Fatalf("rejected supported credential origin %s: %v", base, err)
+		}
+	}
 	client, err := NewClient("http://atc.example", nil)
 	if err != nil {
 		t.Fatal(err)

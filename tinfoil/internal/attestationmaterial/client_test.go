@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,45 @@ import (
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
+
+func TestPrivateHTTPCredentialBypassesProxies(t *testing.T) {
+	proxyCalls := 0
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyCalls++
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer proxy.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer scoped-token" {
+			t.Error("missing scoped credential")
+		}
+		w.Header().Set(RegistryTokenHeader, "renewed-token")
+		json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour).UTC()})
+	}))
+	defer origin.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(proxyURL)
+	defer transport.CloseIdleConnections()
+	client, err := NewClient(origin.URL, &http.Client{Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UseRegistryCredential("scoped-token", filepath.Join(t.TempDir(), "token")); err != nil {
+		t.Fatal(err)
+	}
+	defer client.http.CloseIdleConnections()
+	_, err = client.Fetch(t.Context(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyCalls != 0 {
+		t.Fatal("registry credential was sent through the proxy")
+	}
+}
 
 func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")

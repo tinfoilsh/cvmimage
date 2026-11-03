@@ -49,6 +49,21 @@ func (c *Client) UseRegistryCredential(token, path string) error {
 	if endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "https" && !privateHTTP) {
 		return fmt.Errorf("registry credentials require HTTPS or a private HTTP ATC URL without userinfo, query, or fragment")
 	}
+	if privateHTTP {
+		transport := c.http.Transport
+		if transport == nil {
+			transport = http.DefaultTransport
+		}
+		configured, ok := transport.(*http.Transport)
+		if !ok {
+			return fmt.Errorf("private HTTP credential delivery requires a direct HTTP transport")
+		}
+		direct := configured.Clone()
+		direct.Proxy = nil
+		httpClient := *c.http
+		httpClient.Transport = direct
+		c.http = &httpClient
+	}
 	if persisted, err := os.ReadFile(path); err == nil {
 		token = string(persisted)
 	} else if !os.IsNotExist(err) {

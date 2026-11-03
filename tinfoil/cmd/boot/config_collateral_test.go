@@ -54,7 +54,7 @@ network:
 	expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Document: empty, Profile: wire.FormatV3, Repo: "org/project", Tag: "v1", Digest: digest}
 	proof := []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","config_base64":"Y29uZmln","sigstore_bundle":{}}`, digest))
 	if format == collateral.ConfigEndorsementV2Format {
-		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{},"signing_certificate":{"certificate_der":"bGVhZg==","issuer_der":"cm9vdA=="}}`, digest))
+		proof = []byte(fmt.Sprintf(`{"endorsement_ref":"sha256:%s","sigstore_bundle":{},"issuer_certificate_der":"cm9vdA=="}`, digest))
 	}
 	entries := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues,
 		Format: format, Data: proof}}
@@ -122,13 +122,13 @@ network:
 	}
 	if format == collateral.ConfigEndorsementV2Format {
 		var expected struct {
-			Certificate *collateral.SigningCertificate `json:"signing_certificate"`
+			Issuer []byte `json:"issuer_certificate_der"`
 		}
 		if err := json.Unmarshal(proof, &expected); err != nil {
 			t.Fatal(err)
 		}
-		if len(endorsement.Config) != 0 || !reflect.DeepEqual(expected.Certificate, endorsement.Certificate) {
-			t.Fatalf("assembled endorsement lost its certificate or exposed config bytes: %#v", endorsement)
+		if len(endorsement.Config) != 0 || !reflect.DeepEqual(expected.Issuer, endorsement.Issuer) {
+			t.Fatalf("assembled endorsement lost its issuer certificate or exposed config bytes: %#v", endorsement)
 		}
 	}
 }

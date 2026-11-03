@@ -208,3 +208,5 @@ github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103045128-ea474efb3476 h1:kJ
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103045128-ea474efb3476/go.mod h1:CB50jkrWL3nhjc06Thg4CXsvo9feLVyDYIZwkfBCM+Y=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103050407-8a723990f666 h1:EcQSqcefIk+t496H/3aSipqDy2jkRk2bcy7COoeRi30=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103050407-8a723990f666/go.mod h1:CB50jkrWL3nhjc06Thg4CXsvo9feLVyDYIZwkfBCM+Y=
+github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103063249-45df63640cfd h1:0v5qCiyxRGZcE9BvKzMzF9XbimZJBzaZ1O5VvqH3aFo=
+github.com/tinfoilsh/tinfoil-go v0.17.0-rc.5.0.20261103063249-45df63640cfd/go.mod h1:CB50jkrWL3nhjc06Thg4CXsvo9feLVyDYIZwkfBCM+Y=

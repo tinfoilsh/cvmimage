@@ -2,56 +2,39 @@ package attestationmaterial
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
 
-func TestPrivateHTTPCredentialBypassesProxies(t *testing.T) {
-	proxyCalls := 0
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyCalls++
-		w.WriteHeader(http.StatusForbidden)
+func TestRegistryCredentialRequiresTrustedTLS(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 	}))
-	defer proxy.Close()
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer scoped-token" {
-			t.Error("missing scoped credential")
-		}
-		w.Header().Set(RegistryTokenHeader, "renewed-token")
-		json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour).UTC()})
-	}))
-	defer origin.Close()
-	proxyURL, err := url.Parse(proxy.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = http.ProxyURL(proxyURL)
-	defer transport.CloseIdleConnections()
-	client, err := NewClient(origin.URL, &http.Client{Transport: transport})
+	defer server.Close()
+	client, err := NewClient(server.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := client.UseRegistryCredential("scoped-token", filepath.Join(t.TempDir(), "token")); err != nil {
 		t.Fatal(err)
 	}
-	defer client.http.CloseIdleConnections()
 	_, err = client.Fetch(t.Context(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proxyCalls != 0 {
-		t.Fatal("registry credential was sent through the proxy")
+	var untrusted x509.UnknownAuthorityError
+	if !errors.As(err, &untrusted) || requests.Load() != 0 {
+		t.Fatalf("credential reached an untrusted TLS peer: requests=%d error=%v", requests.Load(), err)
 	}
 }
 
@@ -59,7 +42,7 @@ func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "token")
 	request := Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)}
 	expected := "boot-token"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+expected {
 			t.Error("wrong registry credential")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -105,17 +88,21 @@ func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
 	}
 }
 
-func TestRegistryCredentialRejectsRedirectsAndPlaintextRemoteOrigins(t *testing.T) {
-	for _, base := range []string{"https://user:password@atc.example", "https://atc.example?", "https://atc.example?token=value", "https://atc.example#fragment", "http://8.8.8.8"} {
+func TestRegistryCredentialRejectsRedirectsAndPlaintextOrigins(t *testing.T) {
+	for _, base := range []string{
+		"https://user:password@atc.example", "https://atc.example?", "https://atc.example?token=value", "https://atc.example#fragment",
+		"http://8.8.8.8", "http://100.64.0.1:8085", "http://10.0.0.1:8085", "http://[fc00::1]:8085",
+		"http://localhost:8085", "http://127.0.0.1:8085", "http://[::1]:8085", "http://atc.example",
+	} {
 		client, err := NewClient(base, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err == nil {
-			t.Fatalf("accepted unsafe credential origin %s", base)
+		if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err == nil || client.registryToken != "" {
+			t.Errorf("accepted unsafe credential origin %s", base)
 		}
 	}
-	for _, base := range []string{"https://atc.example", "http://100.64.0.1:8085", "http://10.0.0.1:8085", "http://[::1]:8085"} {
+	for _, base := range []string{"https://atc.example", "https://100.64.0.1:8085", "https://10.0.0.1:8085", "https://[::1]:8085"} {
 		client, err := NewClient(base, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -124,20 +111,13 @@ func TestRegistryCredentialRejectsRedirectsAndPlaintextRemoteOrigins(t *testing.
 			t.Fatalf("rejected supported credential origin %s: %v", base, err)
 		}
 	}
-	client, err := NewClient("http://atc.example", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err == nil {
-		t.Fatal("accepted plaintext credential delivery")
-	}
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		http.Redirect(w, r, "/other", http.StatusTemporaryRedirect)
 	}))
 	defer server.Close()
-	client, err = NewClient(server.URL, server.Client())
+	client, err := NewClient(server.URL, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}

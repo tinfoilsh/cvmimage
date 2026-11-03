@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,8 +15,6 @@ import (
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
-
-var privateATCNetwork = netip.MustParsePrefix("100.64.0.0/10")
 
 const (
 	maxResponseSize       = 20 << 20
@@ -44,25 +41,8 @@ func (c *Client) UseRegistryCredential(token, path string) error {
 	if err != nil {
 		return err
 	}
-	address, _ := netip.ParseAddr(endpoint.Hostname())
-	privateHTTP := endpoint.Scheme == "http" && (endpoint.Hostname() == "localhost" || address.IsLoopback() || address.IsPrivate() || privateATCNetwork.Contains(address))
-	if endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Scheme != "https" && !privateHTTP) {
-		return fmt.Errorf("registry credentials require HTTPS or a private HTTP ATC URL without userinfo, query, or fragment")
-	}
-	if privateHTTP {
-		transport := c.http.Transport
-		if transport == nil {
-			transport = http.DefaultTransport
-		}
-		configured, ok := transport.(*http.Transport)
-		if !ok {
-			return fmt.Errorf("private HTTP credential delivery requires a direct HTTP transport")
-		}
-		direct := configured.Clone()
-		direct.Proxy = nil
-		httpClient := *c.http
-		httpClient.Transport = direct
-		c.http = &httpClient
+	if endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Scheme != "https" {
+		return fmt.Errorf("registry credentials require HTTPS without userinfo, query, or fragment")
 	}
 	if persisted, err := os.ReadFile(path); err == nil {
 		token = string(persisted)

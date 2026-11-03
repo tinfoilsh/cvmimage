@@ -19,18 +19,25 @@ func TestMaintenanceRefreshesWithoutAttestationTraffic(t *testing.T) {
 		defer cancel()
 		var calls atomic.Int32
 		cache := NewCache(Request{}, fetchFunc(func(context.Context, Request) (wire.Response, error) {
-			calls.Add(1)
-			return response(time.Now().Add(2*maintenanceInterval), "entry"), nil
+			if calls.Add(1) == 2 {
+				return wire.Response{}, errors.New("temporary outage")
+			}
+			return response(time.Now().Add(time.Hour), "entry"), nil
 		}))
 		go cache.Maintain(ctx)
 		synctest.Wait()
 		if calls.Load() != 1 {
 			t.Fatal("private maintenance did not fetch initial evidence")
 		}
-		time.Sleep(3 * maintenanceInterval)
+		time.Sleep(time.Hour / 2)
 		synctest.Wait()
-		if calls.Load() < 2 {
-			t.Fatal("idle deployment did not refresh its evidence and credential")
+		if calls.Load() != 2 {
+			t.Fatal("idle deployment did not refresh before expiry")
+		}
+		time.Sleep(retryAfter)
+		synctest.Wait()
+		if calls.Load() != 3 {
+			t.Fatal("idle deployment did not retry the failed refresh")
 		}
 		cancel()
 		synctest.Wait()

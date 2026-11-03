@@ -158,6 +158,7 @@ const artifactPollInterval = 1 * time.Second
 // boot stages only, observability only, and finally workload proxying.
 func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.Pointer[tls.Certificate]) {
 	start := time.Now()
+	var privateMaintenance *attestationmaterial.Cache
 
 	err := func() error {
 		type configPair struct {
@@ -201,7 +202,7 @@ func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.P
 			cache := attestationmaterial.NewCache(request, client)
 			collateralCache = cache
 			if externalConfig.GetSecret(attestationmaterial.RegistryTokenSecret) != "" {
-				go cache.Maintain(ctx)
+				privateMaintenance = cache
 			}
 		}
 
@@ -316,6 +317,9 @@ func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.P
 		log.Printf("Shim upgrade failed: %v", err)
 		boot.RecordStage(boot.StageShim, boot.StatusFailed, time.Since(start), err.Error())
 	} else {
+		if privateMaintenance != nil {
+			go privateMaintenance.Maintain(ctx)
+		}
 		boot.RecordStage(boot.StageShim, boot.StatusOK, time.Since(start), "")
 	}
 	boot.Complete()

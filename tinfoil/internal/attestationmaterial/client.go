@@ -8,9 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
@@ -19,21 +16,16 @@ import (
 const (
 	maxResponseSize       = 20 << 20
 	RegistryTokenSecret   = "CONFIG_REGISTRY_TOKEN"
-	RegistryTokenHeader   = "X-Tinfoil-Registry-Token"
 	maxRegistryTokenBytes = 8 << 10
 )
 
 type Client struct {
 	endpoint      string
 	http          *http.Client
-	mu            sync.Mutex
 	registryToken string
-	tokenPath     string
 }
 
-func (c *Client) UseRegistryCredential(token, path string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Client) UseRegistryCredential(token string) error {
 	if token == "" {
 		return nil
 	}
@@ -44,36 +36,8 @@ func (c *Client) UseRegistryCredential(token, path string) error {
 	if endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Scheme != "https" {
 		return fmt.Errorf("registry credentials require HTTPS without userinfo, query, or fragment")
 	}
-	if persisted, err := os.ReadFile(path); err == nil {
-		token = string(persisted)
-	} else if !os.IsNotExist(err) {
-		return err
-	}
 	if token == "" || len(token) > maxRegistryTokenBytes {
 		return fmt.Errorf("invalid registry credential size")
-	}
-	c.registryToken, c.tokenPath = token, path
-	return nil
-}
-
-func (c *Client) saveRegistryCredential(token string) error {
-	if token == "" || len(token) > maxRegistryTokenBytes {
-		return fmt.Errorf("missing or oversized renewed registry credential")
-	}
-	file, err := os.CreateTemp(filepath.Dir(c.tokenPath), ".registry-token-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := file.WriteString(token); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(file.Name(), c.tokenPath); err != nil {
-		return err
 	}
 	c.registryToken = token
 	return nil
@@ -100,8 +64,6 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 }
 
 func (c *Client) Fetch(ctx context.Context, request Request) (wire.Response, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if err := request.Validate(); err != nil {
 		return wire.Response{}, err
 	}
@@ -145,11 +107,6 @@ func (c *Client) Fetch(ctx context.Context, request Request) (wire.Response, err
 	}
 	if !time.Now().Before(response.ExpiresAt) {
 		return wire.Response{}, fmt.Errorf("collaterals response is already expired at %s", response.ExpiresAt.Format(time.RFC3339))
-	}
-	if c.registryToken != "" {
-		if err := c.saveRegistryCredential(resp.Header.Get(RegistryTokenHeader)); err != nil {
-			return wire.Response{}, err
-		}
 	}
 	return response, nil
 }

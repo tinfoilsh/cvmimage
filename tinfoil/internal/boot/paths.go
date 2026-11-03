@@ -25,7 +25,6 @@ const (
 	TLSKeyPath            = TLSDir + "/key.pem"
 	HPKEKeyPath           = PrivateDir + "/hpke_key.json"
 	CollateralRequestPath = PrivateDir + "/collateral-request.json"
-	RegistryTokenPath     = PrivateDir + "/registry-token"
 	ShimConfigPath        = PrivateDir + "/shim.yml"
 	EgressConfigPath      = PrivateDir + "/egress.yml"
 	ExternalConfigPath    = PrivateDir + "/external-config.yml"

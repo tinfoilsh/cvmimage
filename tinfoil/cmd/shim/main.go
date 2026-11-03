@@ -196,7 +196,7 @@ func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.P
 			if err != nil {
 				return err
 			}
-			if err := client.UseRegistryCredential(externalConfig.GetSecret(attestationmaterial.RegistryTokenSecret), boot.RegistryTokenPath); err != nil {
+			if err := client.UseRegistryCredential(externalConfig.GetSecret(attestationmaterial.RegistryTokenSecret)); err != nil {
 				return err
 			}
 			cache := attestationmaterial.NewCache(request, client)

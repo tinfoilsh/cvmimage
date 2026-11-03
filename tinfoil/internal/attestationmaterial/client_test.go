@@ -7,8 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -28,7 +26,7 @@ func TestRegistryCredentialRequiresTrustedTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.UseRegistryCredential("scoped-token", filepath.Join(t.TempDir(), "token")); err != nil {
+	if err := client.UseRegistryCredential("scoped-token"); err != nil {
 		t.Fatal(err)
 	}
 	_, err = client.Fetch(t.Context(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)})
@@ -38,12 +36,10 @@ func TestRegistryCredentialRequiresTrustedTLS(t *testing.T) {
 	}
 }
 
-func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "token")
+func TestRegistryCredentialIsReusedAcrossFetches(t *testing.T) {
 	request := Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)}
-	expected := "boot-token"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+expected {
+		if r.Header.Get("Authorization") != "Bearer boot-token" {
 			t.Error("wrong registry credential")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -53,18 +49,17 @@ func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
 		if _, exists := body["registry_token"]; exists {
 			t.Error("credential must not enter collateral JSON")
 		}
-		w.Header().Set(RegistryTokenHeader, "refreshed-token")
 		json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour).UTC()})
 	}))
 	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UseRegistryCredential("boot-token"); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
-		client, err := NewClient(server.URL, server.Client())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := client.UseRegistryCredential("boot-token", path); err != nil {
-			t.Fatal(err)
-		}
 		response, err := client.Fetch(t.Context(), request)
 		if err != nil {
 			t.Fatal(err)
@@ -76,15 +71,7 @@ func TestRegistryCredentialRefreshSurvivesClientRestart(t *testing.T) {
 		if strings.Contains(string(encoded), "token") {
 			t.Fatal("credential exposed in response")
 		}
-		persisted, err := os.ReadFile(path)
-		if err != nil || string(persisted) != "refreshed-token" {
-			t.Fatalf("persisted credential: %v", err)
-		}
-		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != 0600 {
-			t.Fatal("credential file must be private")
-		}
-		expected = "refreshed-token"
+
 	}
 }
 
@@ -98,7 +85,7 @@ func TestRegistryCredentialRejectsRedirectsAndPlaintextOrigins(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err == nil || client.registryToken != "" {
+		if err := client.UseRegistryCredential("token"); err == nil || client.registryToken != "" {
 			t.Errorf("accepted unsafe credential origin %s", base)
 		}
 	}
@@ -107,7 +94,7 @@ func TestRegistryCredentialRejectsRedirectsAndPlaintextOrigins(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err != nil {
+		if err := client.UseRegistryCredential("token"); err != nil {
 			t.Fatalf("rejected supported credential origin %s: %v", base, err)
 		}
 	}
@@ -121,7 +108,7 @@ func TestRegistryCredentialRejectsRedirectsAndPlaintextOrigins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.UseRegistryCredential("token", filepath.Join(t.TempDir(), "token")); err != nil {
+	if err := client.UseRegistryCredential("token"); err != nil {
 		t.Fatal(err)
 	}
 	_, err = client.Fetch(t.Context(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)})

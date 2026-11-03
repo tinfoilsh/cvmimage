@@ -49,7 +49,7 @@ func NewCache(request Request, fetcher Fetcher) *Cache {
 	}
 }
 
-// Maintain refreshes idle private deployments before their credentials expire.
+// Maintain refreshes idle private deployments before their collateral expires.
 func (c *Cache) Maintain(ctx context.Context) {
 	for ctx.Err() == nil {
 		if _, err := c.Current(ctx); err != nil && ctx.Err() == nil {

@@ -121,7 +121,7 @@ func prefetchKeyserverCollateral(
 	if err != nil {
 		return wire.Response{}, fmt.Errorf("creating ATC client: %w", err)
 	}
-	if err := client.UseRegistryCredential(registryToken, boot.RegistryTokenPath); err != nil {
+	if err := client.UseRegistryCredential(registryToken); err != nil {
 		return wire.Response{}, err
 	}
 	response, err := client.Fetch(ctx, request)

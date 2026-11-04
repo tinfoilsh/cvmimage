@@ -14,6 +14,7 @@ import (
 
 func startDrainServer(t *testing.T, handler http.Handler) (string, context.CancelFunc, <-chan error) {
 	t.Helper()
+	drainConnections.Store(true)
 	cert, err := generateEphemeralCert()
 	if err != nil {
 		t.Fatal(err)

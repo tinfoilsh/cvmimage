@@ -102,6 +102,8 @@ func main() {
 	}
 }
 
+var drainConnections atomic.Bool
+
 func serveUntilShutdown(ctx context.Context, srv *http.Server) error {
 	var active sync.WaitGroup
 	handler := srv.Handler
@@ -116,6 +118,10 @@ func serveUntilShutdown(ctx context.Context, srv *http.Server) error {
 	case err := <-served:
 		return err
 	case <-ctx.Done():
+	}
+	if !drainConnections.Load() {
+		log.Print("Closing TLS connections without draining")
+		return srv.Close()
 	}
 	log.Print("Draining TLS connections; waiting for in-flight requests")
 	// Shutdown closes idle HTTP/1 connections and sends HTTP/2 GOAWAY.
@@ -172,6 +178,7 @@ func upgradeWhenReady(handler *atomic.Value, cert *atomic.Pointer[tls.Certificat
 			return err
 		}
 		config, externalConfig := cfgPair.config, cfgPair.external
+		drainConnections.Store(config.DrainConnections)
 		log.Printf("Shim config loaded: upstream-container=%s upstream-port=%d tls-mode=%s paths=%d",
 			config.UpstreamContainer, config.UpstreamPort, config.TLSMode, len(config.Paths))
 

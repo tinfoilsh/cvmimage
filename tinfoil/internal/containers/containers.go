@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	healthPollInterval         = 5 * time.Second
+	healthPollInterval         = time.Second
 	defaultPidsLimit     int64 = 65536
 	openEgressGwPriority       = 100
 )
@@ -464,6 +464,8 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 			Timeout:     parseDuration(c.Healthcheck.Timeout),
 			Retries:     c.Healthcheck.Retries,
 			StartPeriod: parseDuration(c.Healthcheck.StartPeriod),
+			// Without it Docker's first probe waits a full interval, which gates boot.
+			StartInterval: healthPollInterval,
 		}
 	}
 

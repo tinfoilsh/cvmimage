@@ -124,6 +124,11 @@ func prefetchKeyserverCollateral(
 	if err := client.UseRegistryCredential(registryToken); err != nil {
 		return wire.Response{}, err
 	}
+	if config.Security.IncludeConfigInAttestation {
+		if err := client.UseConfigFile(boot.ConfigPath); err != nil {
+			return wire.Response{}, err
+		}
+	}
 	response, err := client.Fetch(ctx, request)
 	if err != nil {
 		return wire.Response{}, fmt.Errorf("prefetching keyserver collateral: %w", err)

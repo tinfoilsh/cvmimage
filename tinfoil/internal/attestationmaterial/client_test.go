@@ -1,12 +1,19 @@
 package attestationmaterial
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -212,5 +219,78 @@ func TestClientDoesNotDowngradeRejectedDocument(t *testing.T) {
 	_, err = client.Fetch(context.Background(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Config: []byte("config"), Document: json.RawMessage(`{}`)})
 	if err == nil || !strings.Contains(err.Error(), "unsupported version") || requests != 1 {
 		t.Fatalf("requests=%d, error=%v", requests, err)
+	}
+}
+
+func TestConfigAttachmentFollowsMeasuredDisclosurePolicy(t *testing.T) {
+	for _, include := range []bool{false, true} {
+		for _, local := range []bool{false, true} {
+			t.Run(fmt.Sprintf("include=%t/local=%t", include, local), func(t *testing.T) {
+				runtime := "v0.15.3-rc.1@sha256:" + strings.Repeat("a", 64)
+				config := []byte("cvm-version: " + runtime + "\nsecurity:\n  include-config-in-attestation: " + fmt.Sprint(include) + "\n")
+				digest := sha256.Sum256(config)
+				request := Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: hex.EncodeToString(digest[:])}
+				if local {
+					request.Repo, request.Tag, request.Runtime = "", "", runtime
+				}
+				original, err := json.Marshal(map[string]any{"endorsement_ref": "sha256:" + strings.Repeat("b", 64), "sigstore_bundle": map[string]string{"mediaType": "fixture"}, "issuer_certificate_der": []byte("issuer"), "config_base64": []byte("unsolicited config")})
+				if err != nil {
+					t.Fatal(err)
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var got map[string]json.RawMessage
+					if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					if _, ok := got["config_base64"]; ok {
+						t.Error("disclosure attachment was sent to ATC")
+					}
+					response := wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour)}
+					if !local {
+						response.Collateral = []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues, Format: collateral.ConfigEndorsementV2Format, Data: original}}
+					}
+					if err := json.NewEncoder(w).Encode(response); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				client, err := NewClient(server.URL, server.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(t.TempDir(), "config.yml")
+				if err := os.WriteFile(path, config, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := client.UseConfigFile(path); err != nil {
+					t.Fatal(err)
+				}
+				response, err := client.Fetch(t.Context(), request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if local && !include {
+					if len(response.Collateral) != 0 {
+						t.Fatal("unexpected local config attachment")
+					}
+					return
+				}
+				set, err := collateral.Decode(response.Collateral)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if include && !bytes.Equal(set.Config.Config, config) {
+					t.Fatal("config attachment lost exact bytes")
+				}
+				if !include && len(set.Config.Config) != 0 {
+					t.Fatal("config disclosed despite omission policy")
+				}
+				if !local && (set.Config.Reference != "sha256:"+strings.Repeat("b", 64) || !bytes.Equal(set.Config.Issuer, []byte("issuer")) || len(set.Config.Bundle) == 0) {
+					t.Fatal("attachment changed endorsement evidence")
+				}
+			})
+		}
 	}
 }

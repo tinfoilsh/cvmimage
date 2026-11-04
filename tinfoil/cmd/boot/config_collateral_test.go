@@ -136,11 +136,11 @@ network:
 func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
 	const runtimeDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for _, version := range []string{"0.15.3-rc.1", "0.15.3-rc.2", "0.15.3-rc.10", "0.15.3", "0.15.4-rc.1"} {
-		for _, visibility := range []string{"", "public", "private"} {
+		for _, visibility := range []string{"", "true", "false"} {
 			t.Run(version+"/"+visibility, func(t *testing.T) {
 				config := []byte("cvm-version: " + version + "@sha256:" + runtimeDigest + "\n")
 				if visibility != "" {
-					config = append(config, []byte("security:\n  config-visibility: "+visibility+"\n")...)
+					config = append(config, []byte("security:\n  include-config-in-attestation: "+visibility+"\n")...)
 				}
 				configPath := filepath.Join(t.TempDir(), "config.yaml")
 				if err := os.WriteFile(configPath, config, 0600); err != nil {

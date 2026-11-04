@@ -8,9 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
+	sharedconfig "github.com/tinfoilsh/tinfoil-config"
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -23,6 +27,7 @@ type Client struct {
 	endpoint      string
 	http          *http.Client
 	registryToken string
+	config        []byte
 }
 
 func (c *Client) UseRegistryCredential(token string) error {
@@ -40,6 +45,25 @@ func (c *Client) UseRegistryCredential(token string) error {
 		return fmt.Errorf("invalid registry credential size")
 	}
 	c.registryToken = token
+	return nil
+}
+
+func (c *Client) UseConfigFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	// Boot validates the full measured config; this client reads its disclosure policy.
+	var config struct {
+		Security sharedconfig.SecurityConfig `yaml:"security"`
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return err
+	}
+	c.config = nil
+	if config.Security.IncludeConfigInAttestation {
+		c.config = data
+	}
 	return nil
 }
 
@@ -107,6 +131,46 @@ func (c *Client) Fetch(ctx context.Context, request Request) (wire.Response, err
 	}
 	if !time.Now().Before(response.ExpiresAt) {
 		return wire.Response{}, fmt.Errorf("collaterals response is already expired at %s", response.ExpiresAt.Format(time.RFC3339))
+	}
+	found := false
+	for i := range response.Collateral {
+		entry := &response.Collateral[i]
+		if entry.ID != collateral.ConfigID {
+			continue
+		}
+		found = true
+		if entry.Format != collateral.ConfigEndorsementV2Format {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(entry.Data, &fields); err != nil {
+			return wire.Response{}, err
+		}
+		if fields == nil {
+			return wire.Response{}, fmt.Errorf("config endorsement must be an object")
+		}
+		_, attached := fields["config_base64"]
+		if len(c.config) == 0 && !attached {
+			continue
+		}
+		delete(fields, "config_base64")
+		if len(c.config) != 0 {
+			fields["config_base64"], err = json.Marshal(c.config)
+			if err != nil {
+				return wire.Response{}, err
+			}
+		}
+		entry.Data, err = json.Marshal(fields)
+		if err != nil {
+			return wire.Response{}, err
+		}
+	}
+	if !found && request.Runtime != "" && len(c.config) != 0 {
+		data, err := json.Marshal(map[string][]byte{"config_base64": c.config})
+		if err != nil {
+			return wire.Response{}, err
+		}
+		response.Collateral = append(response.Collateral, collateral.Entry{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues, Format: collateral.ConfigV1Format, Data: data})
 	}
 	return response, nil
 }

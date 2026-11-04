@@ -175,7 +175,7 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 	if !reflect.DeepEqual(persisted, collateralRequest) {
 		t.Fatalf("persisted request = %#v, want %#v", persisted, collateralRequest)
 	}
-	collateral, err := prefetchKeyserverCollateral(context.Background(), config, collateralRequest)
+	collateral, err := prefetchKeyserverCollateral(context.Background(), config, collateralRequest, "")
 	if err != nil {
 		t.Fatal(err)
 	}

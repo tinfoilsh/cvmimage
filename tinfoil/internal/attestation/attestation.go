@@ -10,14 +10,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	sevabi "github.com/google/go-sev-guest/abi"
 	sevclient "github.com/google/go-sev-guest/client"
 	tdxclient "github.com/google/go-tdx-guest/client"
+	sharedconfig "github.com/tinfoilsh/tinfoil-config"
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
+	"gopkg.in/yaml.v3"
 
+	"tinfoil/internal/boot"
 	"tinfoil/internal/kernelcmdline"
 )
 
@@ -144,8 +149,12 @@ func BuildAttestation(
 	deviceEvidence []envelope.DeviceEvidenceItem,
 	collateral wire.Response,
 ) (json.RawMessage, error) {
+	entries, err := withConfigAttachment(collateral.Collateral, boot.ConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("preparing config attachment: %w", err)
+	}
 	return envelope.Build(envelope.BuildInput{
-		Nonce: nonce, CryptoMaterial: material, DeviceEvidence: deviceEvidence, Collateral: collateral.Collateral, CollateralFormat: collateral.Format,
+		Nonce: nonce, CryptoMaterial: material, DeviceEvidence: deviceEvidence, Collateral: entries, CollateralFormat: collateral.Format,
 	}, func(reportData [64]byte) (string, []byte, error) {
 		rawQuote, platform, err := reportWithRetry(reportData)
 		if err != nil {
@@ -154,4 +163,62 @@ func BuildAttestation(
 		format, err := evidenceFormat(platform)
 		return format, rawQuote, err
 	})
+}
+
+func withConfigAttachment(entries []collateral.Entry, path string) ([]collateral.Entry, error) {
+	// Preflight documents must not contain collateral.
+	if len(entries) == 0 {
+		return entries, nil
+	}
+	configIndex := -1
+	for i, entry := range entries {
+		if entry.ID == collateral.ConfigID {
+			if entry.Format != collateral.ConfigEndorsementV2Format {
+				return entries, nil
+			}
+			configIndex = i
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var config struct {
+		Security sharedconfig.SecurityConfig `yaml:"security"`
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+	if !config.Security.IncludeConfigInAttestation {
+		data = nil
+	}
+	fields := make(map[string]json.RawMessage)
+	if configIndex >= 0 {
+		if err := json.Unmarshal(entries[configIndex].Data, &fields); err != nil {
+			return nil, err
+		}
+		if fields == nil {
+			return nil, fmt.Errorf("config endorsement must be an object")
+		}
+	} else if len(data) == 0 {
+		return entries, nil
+	}
+	delete(fields, "config_base64")
+	if len(data) != 0 {
+		fields["config_base64"], err = json.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	entries = slices.Clone(entries)
+	if configIndex >= 0 {
+		entries[configIndex].Data = encoded
+	} else {
+		entries = append(entries, collateral.Entry{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues, Format: collateral.ConfigV1Format, Data: encoded})
+	}
+	return entries, nil
 }

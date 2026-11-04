@@ -68,7 +68,7 @@ func fetchKeyserverSecrets(
 
 	// Fetch collateral before obtaining the short-lived challenge nonce. The
 	// final document carries this untrusted transport for offline verification.
-	collateral, err := prefetchKeyserverCollateral(ctx, config, collateralRequest)
+	collateral, err := prefetchKeyserverCollateral(ctx, config, collateralRequest, ext.GetSecret(attestationmaterial.RegistryTokenSecret))
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +112,7 @@ func prefetchKeyserverCollateral(
 	ctx context.Context,
 	config *Config,
 	request attestationmaterial.Request,
+	registryToken string,
 ) (wire.Response, error) {
 	if request.Validate() != nil {
 		return wire.Response{}, fmt.Errorf("keyserver secret fetch requires an attestation document")
@@ -119,6 +120,9 @@ func prefetchKeyserverCollateral(
 	client, err := attestationmaterial.NewClient(config.ShimCfg.ATC, nil)
 	if err != nil {
 		return wire.Response{}, fmt.Errorf("creating ATC client: %w", err)
+	}
+	if err := client.UseRegistryCredential(registryToken); err != nil {
+		return wire.Response{}, err
 	}
 	response, err := client.Fetch(ctx, request)
 	if err != nil {

@@ -2,16 +2,120 @@ package attestationmaterial
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
+
+func TestRegistryCredentialRequiresTrustedTLS(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UseRegistryCredential("scoped-token"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Fetch(t.Context(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)})
+	var untrusted x509.UnknownAuthorityError
+	if !errors.As(err, &untrusted) || requests.Load() != 0 {
+		t.Fatalf("credential reached an untrusted TLS peer: requests=%d error=%v", requests.Load(), err)
+	}
+}
+
+func TestRegistryCredentialIsReusedAcrossFetches(t *testing.T) {
+	request := Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer boot-token" {
+			t.Error("wrong registry credential")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if _, exists := body["registry_token"]; exists {
+			t.Error("credential must not enter collateral JSON")
+		}
+		json.NewEncoder(w).Encode(wire.Response{Format: wire.FormatV3, ExpiresAt: time.Now().Add(time.Hour).UTC()})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UseRegistryCredential("boot-token"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		response, err := client.Fetch(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "token") {
+			t.Fatal("credential exposed in response")
+		}
+
+	}
+}
+
+func TestRegistryCredentialRejectsRedirectsAndPlaintextOrigins(t *testing.T) {
+	for _, base := range []string{
+		"https://user:password@atc.example", "https://atc.example?", "https://atc.example?token=value", "https://atc.example#fragment",
+		"http://8.8.8.8", "http://100.64.0.1:8085", "http://10.0.0.1:8085", "http://[fc00::1]:8085",
+		"http://localhost:8085", "http://127.0.0.1:8085", "http://[::1]:8085", "http://atc.example",
+	} {
+		client, err := NewClient(base, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.UseRegistryCredential("token"); err == nil || client.registryToken != "" {
+			t.Errorf("accepted unsafe credential origin %s", base)
+		}
+	}
+	for _, base := range []string{"https://atc.example", "https://100.64.0.1:8085", "https://10.0.0.1:8085", "https://[::1]:8085"} {
+		client, err := NewClient(base, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.UseRegistryCredential("token"); err != nil {
+			t.Fatalf("rejected supported credential origin %s: %v", base, err)
+		}
+	}
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "/other", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UseRegistryCredential("token"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Fetch(t.Context(), Request{Version: RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Repo: "org/app", Tag: "v1", Digest: strings.Repeat("a", 64)})
+	if err == nil || calls != 1 {
+		t.Fatalf("redirect followed: calls=%d error=%v", calls, err)
+	}
+}
 
 func TestClientFetch(t *testing.T) {
 	for _, tc := range []struct {

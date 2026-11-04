@@ -5,6 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,5 +49,60 @@ func TestBuildRuntimeVersions(t *testing.T) {
 			require.Equal(t, digest, runtime.Digest)
 			require.Equal(t, manifest, runtime.Manifest)
 		})
+	}
+}
+
+func TestConfigAttachmentFollowsMeasuredDisclosurePolicy(t *testing.T) {
+	for _, include := range []string{"", "false", "true"} {
+		for _, local := range []bool{false, true} {
+			t.Run(fmt.Sprintf("include=%s/local=%t", include, local), func(t *testing.T) {
+				config := []byte("cvm-version: v0.15.3-rc.1@sha256:" + strings.Repeat("a", 64) + "\n")
+				if include != "" {
+					config = append(config, []byte("security:\n  include-config-in-attestation: "+include+"\n")...)
+				}
+				path := filepath.Join(t.TempDir(), "config.yml")
+				require.NoError(t, os.WriteFile(path, config, 0600))
+				entries := []collateral.Entry{{ID: collateral.RuntimeID, Role: collateral.RoleReferenceValues, Format: collateral.RuntimeV1Format, Data: json.RawMessage(`{}`)}}
+				if !local {
+					data, err := json.Marshal(map[string]any{"endorsement_ref": "sha256:" + strings.Repeat("b", 64), "sigstore_bundle": map[string]string{"mediaType": "fixture"}, "issuer_certificate_der": []byte("issuer"), "config_base64": []byte("unsolicited config")})
+					require.NoError(t, err)
+					entries = append(entries, collateral.Entry{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues, Format: collateral.ConfigEndorsementV2Format, Data: data})
+				}
+				original := slices.Clone(entries)
+				attached, err := withConfigAttachment(entries, path)
+				require.NoError(t, err)
+				require.Equal(t, original, entries, "attachment must not mutate cached collateral")
+				require.Equal(t, entries[0], attached[0], "runtime evidence must be preserved")
+				if local && include != "true" {
+					require.Len(t, attached, 1)
+					return
+				}
+				set, err := collateral.Decode(attached[1:])
+				require.NoError(t, err)
+				if include == "true" {
+					require.Equal(t, config, set.Config.Config)
+				} else {
+					require.Empty(t, set.Config.Config)
+				}
+				if !local {
+					require.Equal(t, "sha256:"+strings.Repeat("b", 64), set.Config.Reference)
+					require.Equal(t, []byte("issuer"), set.Config.Issuer)
+					require.JSONEq(t, `{"mediaType":"fixture"}`, string(set.Config.Bundle))
+				}
+			})
+		}
+	}
+}
+
+func TestConfigAttachmentPreservesPreflightAndLegacyCollateral(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing.yml")
+	entries, err := withConfigAttachment(nil, missingPath)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	for _, format := range []string{collateral.ConfigV1Format, collateral.ConfigEndorsementV1Format} {
+		legacy := []collateral.Entry{{ID: collateral.ConfigID, Role: collateral.RoleReferenceValues, Format: format, Data: json.RawMessage(`{"config_base64":"Y29uZmln"}`)}}
+		entries, err := withConfigAttachment(legacy, missingPath)
+		require.NoError(t, err)
+		require.Equal(t, legacy, entries)
 	}
 }

@@ -84,6 +84,16 @@ func TestServiceSocketDomains(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.allowed && test.domain == unix.AF_INET6 {
+				fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+				if errors.Is(err, syscall.EAFNOSUPPORT) {
+					t.Skip("host kernel does not support IPv6 sockets")
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				unix.Close(fd)
+			}
 			command := exec.Command(os.Args[0], "-test.run=^TestServiceSocketDomains$")
 			command.Env = append(os.Environ(),
 				"TINFOIL_SOCKET_DOMAIN_CHILD=1",

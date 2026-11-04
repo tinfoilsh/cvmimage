@@ -13,11 +13,34 @@ import (
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 )
 
-const maxResponseSize = 20 << 20
+const (
+	maxResponseSize       = 20 << 20
+	RegistryTokenSecret   = "CONFIG_REGISTRY_TOKEN"
+	maxRegistryTokenBytes = 8 << 10
+)
 
 type Client struct {
-	endpoint string
-	http     *http.Client
+	endpoint      string
+	http          *http.Client
+	registryToken string
+}
+
+func (c *Client) UseRegistryCredential(token string) error {
+	if token == "" {
+		return nil
+	}
+	endpoint, err := url.Parse(c.endpoint)
+	if err != nil {
+		return err
+	}
+	if endpoint.User != nil || endpoint.ForceQuery || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Scheme != "https" {
+		return fmt.Errorf("registry credentials require HTTPS without userinfo, query, or fragment")
+	}
+	if token == "" || len(token) > maxRegistryTokenBytes {
+		return fmt.Errorf("invalid registry credential size")
+	}
+	c.registryToken = token
+	return nil
 }
 
 func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
@@ -53,8 +76,13 @@ func (c *Client) Fetch(ctx context.Context, request Request) (wire.Response, err
 		return wire.Response{}, fmt.Errorf("building collaterals request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.registryToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.registryToken)
+	}
 
-	resp, err := c.http.Do(req)
+	httpClient := *c.http
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return wire.Response{}, fmt.Errorf("POST %s: %w", c.endpoint, err)
 	}

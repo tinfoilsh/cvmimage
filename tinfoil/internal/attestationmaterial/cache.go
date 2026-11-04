@@ -49,6 +49,34 @@ func NewCache(request Request, fetcher Fetcher) *Cache {
 	}
 }
 
+// Maintain refreshes idle private deployments before their collateral expires.
+func (c *Cache) Maintain(ctx context.Context) {
+	for ctx.Err() == nil {
+		if _, err := c.Current(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("Private registry evidence refresh unavailable: %v", err)
+		}
+		c.mu.Lock()
+		refreshing := c.refreshing
+		delay := c.nextAttempt.Sub(c.now())
+		c.mu.Unlock()
+		if refreshing != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-refreshing:
+			}
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
 func (c *Cache) Current(ctx context.Context) (wire.Response, error) {
 	for {
 		c.mu.Lock()

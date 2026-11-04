@@ -4,12 +4,45 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 )
+
+func TestMaintenanceRefreshesWithoutAttestationTraffic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var calls atomic.Int32
+		cache := NewCache(Request{}, fetchFunc(func(context.Context, Request) (wire.Response, error) {
+			if calls.Add(1) == 2 {
+				return wire.Response{}, errors.New("temporary outage")
+			}
+			return response(time.Now().Add(time.Hour), "entry"), nil
+		}))
+		go cache.Maintain(ctx)
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatal("private maintenance did not fetch initial evidence")
+		}
+		time.Sleep(time.Hour / 2)
+		synctest.Wait()
+		if calls.Load() != 2 {
+			t.Fatal("idle deployment did not refresh before expiry")
+		}
+		time.Sleep(retryAfter)
+		synctest.Wait()
+		if calls.Load() != 3 {
+			t.Fatal("idle deployment did not retry the failed refresh")
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
 
 type fetchFunc func(context.Context, Request) (wire.Response, error)
 

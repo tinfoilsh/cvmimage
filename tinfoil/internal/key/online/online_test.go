@@ -106,12 +106,14 @@ func TestValidationRelaysOpenAIErrors(t *testing.T) {
 		{"trailing JSON", refusal + `{}`, statusOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusPaymentRequired)
 				io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
-			v := &Validator{server: server.URL, client: server.Client()}
+			v, err := NewValidator(server.URL)
+			assert.NoError(t, err)
+			v.client = server.Client()
 			var validationErr *key.ValidationError
 			if err := v.Validate(key.Request{APIKey: "test-key"}); !errors.As(err, &validationErr) {
 				t.Fatalf("expected validation error, got %v", err)
@@ -134,12 +136,14 @@ func TestValidationTypesUnreadableRefusalsByStatus(t *testing.T) {
 		{520, key.ErrTypeServer, unknownStatusMessage},
 	} {
 		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tc.status)
 				io.WriteString(w, "<html>proxy error page</html>")
 			}))
 			defer server.Close()
-			v := &Validator{server: server.URL, client: server.Client()}
+			v, err := NewValidator(server.URL)
+			assert.NoError(t, err)
+			v.client = server.Client()
 			var validationErr *key.ValidationError
 			if err := v.Validate(key.Request{APIKey: "test-key"}); !errors.As(err, &validationErr) {
 				t.Fatalf("expected validation error, got %v", err)

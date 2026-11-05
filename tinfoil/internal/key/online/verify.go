@@ -2,6 +2,7 @@ package online
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,11 +11,17 @@ import (
 	"strings"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru/v2"
+
 	"tinfoil/internal/key"
 )
 
 const (
 	validationTimeout           = 10 * time.Second
+	validationCacheTTLHeader    = "X-Tinfoil-Auth-Cache-Ttl-Ms"
+	maxValidationCacheTTL       = 30 * time.Second
+	maxValidationCacheEntries   = 10000
+	metricsValidationPath       = "/metrics"
 	maxValidationErrorBodyBytes = 64 << 10
 	// maxRefusalMessageBytes bounds the message relayed to the client.
 	maxRefusalMessageBytes = 1 << 10
@@ -26,14 +33,22 @@ const (
 type Validator struct {
 	server string
 	client *http.Client
+	cache  *lru.Cache[[sha256.Size]byte, time.Time]
+	now    func() time.Time
 }
 
 func NewValidator(server string) (*Validator, error) {
 	if !strings.HasPrefix(server, "https://") {
 		return nil, fmt.Errorf("validation server must use HTTPS: %s", server)
 	}
+	cache, err := lru.New[[sha256.Size]byte, time.Time](maxValidationCacheEntries)
+	if err != nil {
+		return nil, err
+	}
 	return &Validator{
 		server: server,
+		cache:  cache,
+		now:    time.Now,
 		client: &http.Client{Timeout: validationTimeout},
 	}, nil
 }
@@ -44,6 +59,13 @@ func (v *Validator) Validate(req key.Request) error {
 		return fmt.Errorf("marshalling validation request: %w", err)
 	}
 
+	cacheKey := sha256.Sum256(body)
+	if req.Path != metricsValidationPath {
+		if deadline, ok := v.cache.Get(cacheKey); ok && v.now().Before(deadline) {
+			return nil
+		}
+	}
+	started := v.now()
 	resp, err := v.client.Post(v.server, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("validation request failed: %w", err)
@@ -51,12 +73,33 @@ func (v *Validator) Validate(req key.Request) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
+		if req.Path != metricsValidationPath {
+			if ttl := validationCacheTTL(resp.Header); ttl > 0 {
+				// Transit time consumes validity; cache hits never extend it.
+				deadline := started.Add(ttl)
+				if v.now().Before(deadline) {
+					v.cache.Add(cacheKey, deadline)
+				}
+			}
+		}
 		return nil
 	}
 
 	refusal := refusalFromBody(resp.StatusCode, resp.Body)
 	refusal.RetryAfter = retryAfter(resp.Header)
 	return refusal
+}
+
+func validationCacheTTL(header http.Header) time.Duration {
+	values := header.Values(validationCacheTTLHeader)
+	if len(values) != 1 {
+		return 0
+	}
+	milliseconds, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil || milliseconds <= 0 || milliseconds > maxValidationCacheTTL.Milliseconds() {
+		return 0
+	}
+	return time.Duration(milliseconds) * time.Millisecond
 }
 
 // refusalFromBody relays the control plane's OpenAI-style error, which is

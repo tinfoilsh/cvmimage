@@ -538,3 +538,19 @@ func TestNonAdminSSHServiceGetsOnlyDeclaredExposure(t *testing.T) {
 		t.Fatalf("wrong exposure: direct=%+v private=%+v", direct, private)
 	}
 }
+
+func TestInboundPortBindsOnGuestInterface(t *testing.T) {
+	c := Container{Name: "mta", Image: "app", Networks: []string{"mail"}, Ports: []string{"25:2525", "3000:3000"}}
+	cfg := &Config{Containers: []Container{c}, CVMNetwork: runtimeconfig.CVMNetworkConfig{InboundPorts: []int{25}}, Networks: map[string]*runtimeconfig.NetworkSpec{"mail": {Egress: "open"}}}
+	for _, debug := range []bool{false, true} {
+		_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, debug)
+		if err != nil {
+			t.Fatal(err)
+		}
+		smtp := host.PortBindings[dockernetwork.MustParsePort("2525/tcp")][0]
+		private := host.PortBindings[dockernetwork.MustParsePort("3000/tcp")][0]
+		if smtp.HostIP.IsValid() != debug || smtp.HostPort != "25" || private.HostIP.String() != containernet.PublishedHostIP {
+			t.Fatalf("debug=%v: wrong exposure: smtp=%+v private=%+v", debug, smtp, private)
+		}
+	}
+}

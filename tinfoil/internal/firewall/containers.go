@@ -34,7 +34,7 @@ func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool) error {
 }
 
 func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (string, error) {
-	adminSSH, err := runtimeconfig.AdminSSH(config, debug)
+	inbound, err := runtimeconfig.InboundMappings(config, debug)
 	if err != nil {
 		return "", err
 	}
@@ -49,9 +49,9 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (str
 	if debug && runtimeconfig.HasReservedDebugContainer(config) {
 		writeReservedDebugForwardRules(&script)
 	}
-	if adminSSH != nil {
+	for _, mapping := range inbound {
 		for _, container := range config.Containers {
-			if container.Name != adminSSH.Container {
+			if container.Name != mapping.Container {
 				continue
 			}
 			bridges := container.Networks
@@ -59,8 +59,8 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool) (str
 				bridges = slices.Concat(bridges, []string{containernet.ShimNetName})
 			}
 			for _, bridge := range bridges {
-				fmt.Fprintf(&script, "add rule inet tinfoil container_forward oifname %q ct status dnat ct original proto-dst %d tcp dport %d accept\n", bridge, adminSSH.GuestPort, adminSSH.ContainerPort)
-				fmt.Fprintf(&script, "add rule inet tinfoil container_forward iifname %q ct status dnat ct direction reply ct original proto-dst %d ct state established,related accept\n", bridge, adminSSH.GuestPort)
+				fmt.Fprintf(&script, "add rule inet tinfoil container_forward oifname %q ct status dnat ct original proto-dst %d tcp dport %d accept\n", bridge, mapping.GuestPort, mapping.ContainerPort)
+				fmt.Fprintf(&script, "add rule inet tinfoil container_forward iifname %q ct status dnat ct direction reply ct original proto-dst %d ct state established,related accept\n", bridge, mapping.GuestPort)
 			}
 		}
 	}

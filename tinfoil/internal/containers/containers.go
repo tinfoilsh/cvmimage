@@ -436,7 +436,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	if c.Image == "" {
 		return nil, nil, nil, nil, fmt.Errorf("no image specified for container %s", c.Name)
 	}
-	adminSSH, err := runtimeconfig.AdminSSH(cfg, debug)
+	inbound, err := runtimeconfig.InboundMappings(cfg, debug)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -569,7 +569,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	hostConfig.PortBindings = dockernetwork.PortMap{}
 	for _, mapping := range ports {
 		bindingIP := hostIP
-		if adminSSH != nil && c.Name == adminSSH.Container && mapping.Host == adminSSH.GuestPort {
+		if slices.Contains(inbound, runtimeconfig.InboundMapping{Container: c.Name, GuestPort: mapping.Host, ContainerPort: mapping.Container}) {
 			bindingIP = netip.Addr{}
 		}
 		port := dockernetwork.MustParsePort(fmt.Sprintf("%d/tcp", mapping.Container))

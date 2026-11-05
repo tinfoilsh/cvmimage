@@ -52,6 +52,24 @@ func TestAdminSSHForwardPrecedesDNATDrop(t *testing.T) {
 	}
 }
 
+func TestInboundPortForwardPrecedesDNATDrop(t *testing.T) {
+	cfg := &runtimeconfig.Config{
+		CVMNetwork: runtimeconfig.CVMNetworkConfig{InboundPorts: []int{25}},
+		Networks:   map[string]*runtimeconfig.NetworkSpec{"mail": {Egress: "open"}},
+		Containers: []runtimeconfig.Container{{Name: "mta", Networks: []string{"mail"}, Ports: []string{"25:2525", "3000:3000"}}},
+	}
+	script := mustContainerScript(t, cfg, false)
+	accept := strings.Index(script, `oifname "mail" ct status dnat ct original proto-dst 25 tcp dport 2525 accept`)
+	reply := strings.Index(script, `iifname "mail" ct status dnat ct direction reply ct original proto-dst 25 ct state established,related accept`)
+	drop := strings.Index(script, dnatDrop)
+	if accept < 0 || reply < 0 || accept > drop || reply > drop || strings.Contains(script, "dport 3000") {
+		t.Fatalf("an inbound port must admit only its mapping before the DNAT drop:\n%s", script)
+	}
+	if strings.Contains(mustContainerScript(t, cfg, true), "proto-dst 25") {
+		t.Fatal("debug mode exposed an inbound port mapping")
+	}
+}
+
 func TestContainerNetworkPolicyModes(t *testing.T) {
 	config := &runtimeconfig.Config{Networks: map[string]*runtimeconfig.NetworkSpec{
 		"closed":  {Egress: "closed"},

@@ -152,6 +152,7 @@
         "medium_3d_new",
         "medium_4d_new",
         "medium_5d_new",
+        "medium_6d_new",
         "large_1d_new",
         "extra_large_1d_new",
         "extra_large_2d_new"
@@ -182,6 +183,7 @@
         "medium_3d_new",
         "medium_4d_new",
         "medium_5d_new",
+        "medium_6d_new",
         "large_1d_new",
         "extra_large_1d_new",
         "extra_large_2d_new"
@@ -212,6 +214,7 @@
         "medium_3d_new",
         "medium_4d_new",
         "medium_5d_new",
+        "medium_6d_new",
         "extra_large_1d_b200_new",
         "extra_large_2d_b200_new"
       ]
@@ -243,6 +246,7 @@
         "medium_3d_new",
         "medium_4d_new",
         "medium_5d_new",
+        "medium_6d_new",
         "extra_large_1d_b200_new",
         "extra_large_2d_b200_new"
       ]

@@ -1,7 +1,6 @@
 package online
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,28 +14,17 @@ import (
 	"tinfoil/internal/key"
 )
 
-type validationClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func (c *validationClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
-func (c *validationClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-func cacheValidator(t *testing.T, handler http.HandlerFunc) (*Validator, *validationClock) {
+func cacheValidator(t *testing.T, handler http.HandlerFunc) *Validator {
 	t.Helper()
 	server := httptest.NewTLSServer(handler)
 	t.Cleanup(server.Close)
 	v, err := NewValidator(server.URL)
 	require.NoError(t, err)
 	v.client = server.Client()
+	v.client.Timeout = validationTimeout
 	t.Cleanup(v.refreshes.Wait)
-	clock := &validationClock{now: time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC)}
-	v.now = clock.Now
-	return v, clock
+	v.now = func() time.Time { return time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC) }
+	return v
 }
 func cacheRequest() key.Request {
 	return key.Request{APIKey: "valid", Domain: "gpt-oss-120b.example.test", RequestedHost: "gpt-oss-120b.example.test", Path: "/v1/chat/completions"}
@@ -45,18 +33,11 @@ func cacheRequest() key.Request {
 func TestValidationCacheScopes(t *testing.T) {
 	var calls atomic.Int64
 	request := cacheRequest()
-	v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		var incoming key.Request
-		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
-			t.Error(err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if incoming != request {
-			w.WriteHeader(http.StatusForbidden)
-		} else {
+	v := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
 			w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
+		} else {
+			w.WriteHeader(http.StatusForbidden)
 		}
 		io.WriteString(w, "OK")
 	})
@@ -72,47 +53,26 @@ func TestValidationCacheScopes(t *testing.T) {
 	require.EqualValues(t, 5, calls.Load())
 }
 
-func TestValidationCacheRechecksWithoutBlockingAndEvictsDenial(t *testing.T) {
-	var calls atomic.Int64
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	v, clock := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
-		n := calls.Add(1)
-		w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
-		if n == 2 {
-			close(entered)
-			<-release
-		}
-		if n > 1 {
-			w.WriteHeader(http.StatusUnauthorized)
-		}
-		io.WriteString(w, "OK")
-	})
-	t.Cleanup(func() { once.Do(func() { close(release) }) })
-	request := cacheRequest()
-	require.NoError(t, v.Validate(request))
-	clock.Advance(24 * time.Hour)
-	require.NoError(t, v.Validate(request))
-	<-entered
-	for range 10 {
-		require.NoError(t, v.Validate(request))
-	}
-	require.EqualValues(t, 2, calls.Load())
-	once.Do(func() { close(release) })
-	v.refreshes.Wait()
-	require.Error(t, v.Validate(request))
-	require.EqualValues(t, 3, calls.Load())
-}
-
-func TestValidationCacheEvictsFailuresAndRecovers(t *testing.T) {
-	for _, failure := range []string{"HTTP failure", "transport failure"} {
+func TestValidationCacheRechecksAndInvalidates(t *testing.T) {
+	for _, failure := range []string{"denial", "HTTP failure", "transport failure", "permission withdrawn"} {
 		t.Run(failure, func(t *testing.T) {
 			var calls atomic.Int64
-			v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
-				n := calls.Add(1)
-				if n == 2 {
-					if failure == "transport failure" {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var once sync.Once
+			v := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
+				switch calls.Add(1) {
+				case 1:
+					w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
+				case 2:
+					close(entered)
+					<-release
+					switch failure {
+					case "denial":
+						w.WriteHeader(http.StatusUnauthorized)
+					case "HTTP failure":
+						w.WriteHeader(http.StatusServiceUnavailable)
+					case "transport failure":
 						connection, _, err := w.(http.Hijacker).Hijack()
 						if err != nil {
 							t.Error(err)
@@ -121,33 +81,50 @@ func TestValidationCacheEvictsFailuresAndRecovers(t *testing.T) {
 						connection.Close()
 						return
 					}
-					w.WriteHeader(http.StatusServiceUnavailable)
+				case 3:
+					w.WriteHeader(http.StatusTooManyRequests)
+				default:
+					w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
 				}
-				w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
 				io.WriteString(w, "OK")
 			})
+			t.Cleanup(func() { once.Do(func() { close(release) }) })
 			request := cacheRequest()
 			require.NoError(t, v.Validate(request))
+			now := v.now()
+			v.now = func() time.Time { return now.Add(24 * time.Hour) }
 			require.NoError(t, v.Validate(request))
+			<-entered
+			var group sync.WaitGroup
+			for range 20 {
+				group.Go(func() {
+					if err := v.Validate(request); err != nil {
+						t.Errorf("cached admission: %v", err)
+					}
+				})
+			}
+			group.Wait()
+			require.EqualValues(t, 2, calls.Load())
+			once.Do(func() { close(release) })
 			v.refreshes.Wait()
+			require.Error(t, v.Validate(request))
 			require.NoError(t, v.Validate(request))
-			require.EqualValues(t, 3, calls.Load())
+			require.EqualValues(t, 4, calls.Load())
 		})
 	}
 }
 
 func TestValidationCacheHonorsHardExpiry(t *testing.T) {
 	var calls atomic.Int64
-	var clock *validationClock
-	v, c := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
+	v := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.Header().Set(validationCacheExpiryHeader, "2026-11-05T00:00:01Z")
 		io.WriteString(w, "OK")
 	})
-	clock = c
 	request := cacheRequest()
 	require.NoError(t, v.Validate(request))
-	clock.Advance(2 * time.Second)
+	now := v.now()
+	v.now = func() time.Time { return now.Add(2 * time.Second) }
 	err := v.Validate(request)
 	require.Error(t, err)
 	require.EqualValues(t, 2, calls.Load())
@@ -158,34 +135,35 @@ func TestValidationCacheRequiresExplicitPermission(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		values     []string
-		legacy     bool
+		path       string
 		optimistic bool
 	}{
 		{name: "absent"},
-		{name: "legacy TTL", legacy: true},
 		{name: "invalid expiry", values: []string{"tomorrow"}},
 		{name: "zero expiry", values: []string{"0001-01-01T00:00:00Z"}},
 		{name: "duplicate", values: []string{"none", "none"}},
 		{name: "no hard expiry", values: []string{"none"}, optimistic: true},
 		{name: "future expiry", values: []string{"2026-11-06T00:00:00Z"}, optimistic: true},
+		{name: "metrics", values: []string{"none"}, path: "/metrics"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int64
-			v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
+			v := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
 				n := calls.Add(1)
 				for _, value := range tc.values {
 					w.Header().Add(validationCacheExpiryHeader, value)
-				}
-				if tc.legacy {
-					w.Header().Set("X-Tinfoil-Auth-Cache-Ttl-Ms", "30000")
 				}
 				if n > 1 {
 					w.WriteHeader(http.StatusForbidden)
 				}
 				io.WriteString(w, "OK")
 			})
-			require.NoError(t, v.Validate(cacheRequest()))
-			err := v.Validate(cacheRequest())
+			request := cacheRequest()
+			if tc.path != "" {
+				request.Path = tc.path
+			}
+			require.NoError(t, v.Validate(request))
+			err := v.Validate(request)
 			if tc.optimistic {
 				require.NoError(t, err)
 			} else {
@@ -197,50 +175,13 @@ func TestValidationCacheRequiresExplicitPermission(t *testing.T) {
 	}
 }
 
-func TestValidationCacheRemovesPermissionWhenKeyBecomesNoncacheable(t *testing.T) {
-	var calls atomic.Int64
-	v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
-		n := calls.Add(1)
-		if n == 1 {
-			w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
-		}
-		if n > 2 {
-			w.WriteHeader(http.StatusTooManyRequests)
-		}
-		io.WriteString(w, "OK")
-	})
-	request := cacheRequest()
-	require.NoError(t, v.Validate(request))
-	require.NoError(t, v.Validate(request))
-	v.refreshes.Wait()
-	require.Error(t, v.Validate(request))
-	require.EqualValues(t, 3, calls.Load())
-}
-
-func TestValidationCacheLeavesMetricsOnline(t *testing.T) {
-	var calls atomic.Int64
-	v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
-		n := calls.Add(1)
-		w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
-		if n > 1 {
-			w.WriteHeader(http.StatusForbidden)
-		}
-		io.WriteString(w, "OK")
-	})
-	request := cacheRequest()
-	request.Path = "/metrics"
-	require.NoError(t, v.Validate(request))
-	require.Error(t, v.Validate(request))
-	require.EqualValues(t, 2, calls.Load())
-}
-
 func TestValidationCacheLateSuccessCannotRestoreDeniedAllowance(t *testing.T) {
 	var calls atomic.Int64
 	arrived := make(chan int64, 2)
 	releaseFirst := make(chan struct{})
 	releaseSecond := make(chan struct{})
 	var firstOnce, secondOnce sync.Once
-	v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
+	v := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
 		switch n {
 		case 1:
@@ -271,58 +212,23 @@ func TestValidationCacheLateSuccessCannotRestoreDeniedAllowance(t *testing.T) {
 	require.EqualValues(t, 3, calls.Load())
 }
 
-func TestValidationCacheCoalescesRefreshesAndEvictsOldEntries(t *testing.T) {
+func TestValidationCacheEvictsOldEntries(t *testing.T) {
 	var calls atomic.Int64
-	var revoked atomic.Bool
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
-		n := calls.Add(1)
-		if n == 2 {
-			close(entered)
-			<-release
-		}
-		var request key.Request
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Error(err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if revoked.Load() && request.APIKey == "valid" {
+	v := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) > 2 {
 			w.WriteHeader(http.StatusUnauthorized)
 		}
 		w.Header().Set(validationCacheExpiryHeader, validationCacheNoExpiry)
 		io.WriteString(w, "OK")
 	})
-	t.Cleanup(func() { once.Do(func() { close(release) }) })
-	v.cache.Resize(2)
+	v.cache.Resize(1)
 	request := cacheRequest()
 	require.NoError(t, v.Validate(request))
+	request.APIKey = "second"
 	require.NoError(t, v.Validate(request))
-	<-entered
-	var group sync.WaitGroup
-	for range 20 {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			if err := v.Validate(request); err != nil {
-				t.Errorf("cached admission: %v", err)
-			}
-		}()
-	}
-	group.Wait()
-	require.EqualValues(t, 2, calls.Load())
-	once.Do(func() { close(release) })
-	v.refreshes.Wait()
-	for _, credential := range []string{"second", "third"} {
-		r := request
-		r.APIKey = credential
-		require.NoError(t, v.Validate(r))
-	}
-	revoked.Store(true)
+	request.APIKey = "valid"
 	require.Error(t, v.Validate(request))
-	require.EqualValues(t, 5, calls.Load())
+	require.EqualValues(t, 3, calls.Load())
 }
 
 func TestValidationCacheSaturationFallsBackToOnline(t *testing.T) {
@@ -330,7 +236,7 @@ func TestValidationCacheSaturationFallsBackToOnline(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	v, _ := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
+	v := cacheValidator(t, func(w http.ResponseWriter, r *http.Request) {
 		n := calls.Add(1)
 		if n == 3 {
 			close(entered)

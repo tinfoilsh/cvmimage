@@ -36,6 +36,12 @@ const (
 	attestationV3Path       = attestationPath + "/v3"
 )
 
+// corsPreflightMaxAgeSeconds is how long a browser may reuse a preflight's
+// answer. Without it a browser asks again after five seconds, so nearly every
+// cross-origin request costs a second round trip. Chromium honors at most two
+// hours. The origin is still checked on every request itself.
+const corsPreflightMaxAgeSeconds = 2 * 60 * 60
+
 type collateralSource interface {
 	Current(context.Context) ([]collateral.Entry, error)
 }
@@ -157,6 +163,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 
 			if r.Method == http.MethodOptions {
 				// CORS preflight
+				w.Header().Set("Access-Control-Max-Age", strconv.Itoa(corsPreflightMaxAgeSeconds))
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}

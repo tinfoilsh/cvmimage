@@ -602,6 +602,41 @@ func TestLocalRateLimitSendsRetryAfter(t *testing.T) {
 	}
 }
 
+// TestPreflightAnswerIsReusable pins that a browser may keep an allowed
+// origin's preflight answer, and that a refused origin's is never cacheable.
+func TestPreflightAnswerIsReusable(t *testing.T) {
+	const allowed = "https://app.example"
+	id, err := identity.NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{UpstreamPort: 9999, OriginDomains: []string{allowed}}
+	handler := NewShimServer(nil, nil, &legacy.Document{}, tinfoilattestation.Identity{}, 0, id, nil, nil, cfg, &config.ExternalConfig{}, "127.0.0.1:9999", nil)
+
+	cases := []struct {
+		origin string
+		status int
+		maxAge string
+	}{
+		{allowed, http.StatusNoContent, fmt.Sprint(corsPreflightMaxAgeSeconds)},
+		{"https://other.example", http.StatusForbidden, ""},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodOptions, "/v1/chat/completions", nil)
+		req.Header.Set("Origin", tc.origin)
+		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != tc.status {
+			t.Errorf("%s: status = %d, want %d", tc.origin, rec.Code, tc.status)
+		}
+		if got := rec.Header().Get("Access-Control-Max-Age"); got != tc.maxAge {
+			t.Errorf("%s: Access-Control-Max-Age = %q, want %q", tc.origin, got, tc.maxAge)
+		}
+	}
+}
+
 func TestRetryAfterSecondsRoundsUp(t *testing.T) {
 	cases := map[time.Duration]int{
 		0:                       1,

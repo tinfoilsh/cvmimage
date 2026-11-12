@@ -22,7 +22,6 @@ import (
 	"tinfoil/internal/config"
 	"tinfoil/internal/key"
 	"tinfoil/internal/metrics"
-	"tinfoil/internal/trustedtime"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	ehbpProtocol "github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
@@ -300,7 +299,7 @@ func NewShimServer(
 		proxyHandler.ServeHTTP(w, r)
 	}))
 
-	registerObservabilityHandlers(mux, ehbpMiddleware, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, trustedtime.Read)
+	registerObservabilityHandlers(mux, ehbpMiddleware, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 
 	// Fail closed: an authenticated deployment with no validator must not tunnel.
 	if config.Authenticated && validator == nil {
@@ -320,7 +319,7 @@ func NewObservabilityServer(
 ) http.Handler {
 	ehbpMiddleware := ehbpIdentity.Middleware()
 	mux := http.NewServeMux()
-	registerObservabilityHandlers(mux, ehbpMiddleware, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig, trustedtime.Read)
+	registerObservabilityHandlers(mux, ehbpMiddleware, identityBody, expectedGPUs, ehbpIdentity, tlsCert, collateralSource, externalConfig)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeWorkloadUnavailable(w)
 	})
@@ -346,7 +345,6 @@ func registerObservabilityHandlers(
 	tlsCert *tls.Certificate,
 	collateralSource collateralSource,
 	externalConfig *config.ExternalConfig,
-	readTime func() (trustedtime.Sample, error),
 ) {
 	attestationHandler := ehbpMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -393,17 +391,13 @@ func registerObservabilityHandlers(
 
 		var fresh json.RawMessage
 		if withTime {
-			fresh, err = tinfoilattestation.BuildTimedAttestation(identityBody.CryptoMaterial(), nonce, deviceEvidence, collateral, readTime)
+			fresh, err = tinfoilattestation.BuildTimedAttestation(identityBody.CryptoMaterial(), nonce, deviceEvidence, collateral)
 		} else {
 			fresh, err = tinfoilattestation.BuildAttestation(identityBody.CryptoMaterial(), nonce, deviceEvidence, collateral)
 		}
 		if err != nil {
 			log.Printf("Fresh attestation failed: %v", err)
-			if errors.Is(err, tinfoilattestation.ErrClockUnavailable) {
-				writeAPIError(w, errClockUnavailable)
-			} else {
-				writeAPIError(w, errAttestationBuildFailed)
-			}
+			writeAPIError(w, errAttestationBuildFailed)
 			return
 		}
 

@@ -4,22 +4,16 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	"encoding/json/jsontext"
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
-
-	"tinfoil/internal/trustedtime"
 )
 
-func testClockSample() trustedtime.Sample {
-	return trustedtime.Sample{
-		Time:        time.Date(2026, time.October, 1, 12, 0, 0, 123456789, time.UTC),
-		Uncertainty: 25 * time.Millisecond,
-	}
+func testClockTime() time.Time {
+	return time.Date(2026, time.October, 1, 12, 0, 0, 123456789, time.UTC)
 }
 
 type clockTestDocument struct {
@@ -74,13 +68,13 @@ func TestTimedAttestationBindsClockNonceAndChannelKeys(t *testing.T) {
 		ID: "gpu-0", Kind: "gpu", Vendor: "nvidia", Format: envelope.NvidiaGPUEvidenceV1Format,
 		Evidence: jsontext.Value(`{"nonce":"preserved"}`),
 	}
-	sample := testClockSample()
+	sample := testClockTime()
 	clockReads := 0
 	var quoted [64]byte
 	doc, err := buildTimedAttestation(body.CryptoMaterial(), nonce, []envelope.DeviceEvidenceItem{device}, wire.Response{},
-		func() (trustedtime.Sample, error) {
+		func() time.Time {
 			clockReads++
-			return sample, nil
+			return sample
 		},
 		func(data [64]byte) ([]byte, string, error) {
 			if clockReads != 1 {
@@ -114,11 +108,18 @@ func TestTimedAttestationBindsClockNonceAndChannelKeys(t *testing.T) {
 	if items[0].ID != device.ID || items[0].Format != device.Format || !bytes.Equal(items[0].Evidence, device.Evidence) {
 		t.Fatal("existing GPU evidence was not preserved")
 	}
+	var clockFields map[string]json.RawMessage
+	if err := json.Unmarshal(items[1].Evidence, &clockFields); err != nil {
+		t.Fatal(err)
+	}
+	if len(clockFields) != 1 || clockFields["utc"] == nil {
+		t.Fatalf("unexpected clock fields: %v", clockFields)
+	}
 	var clock GuestClockEvidence
 	if err := json.Unmarshal(items[1].Evidence, &clock); err != nil {
 		t.Fatal(err)
 	}
-	if !clock.UTC.Equal(sample.Time) || clock.Status != clockSynchronized || clock.UncertaintyNanoseconds != int64(sample.Uncertainty) {
+	if !clock.UTC.Equal(sample) {
 		t.Fatalf("clock claim = %+v, sample = %+v", clock, sample)
 	}
 	raw, err := json.Marshal(doc)
@@ -129,45 +130,43 @@ func TestTimedAttestationBindsClockNonceAndChannelKeys(t *testing.T) {
 		t.Fatal("a v3-only verifier accepted the v4 document")
 	}
 
-	for _, field := range []string{"utc", "status", "uncertainty_ns"} {
-		t.Run("tampered "+field, func(t *testing.T) {
-			var section struct {
-				Format string                        `json:"format"`
-				Items  []envelope.DeviceEvidenceItem `json:"items"`
-			}
-			encoded, err := base64.StdEncoding.DecodeString(wireDoc.DeviceEvidence)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal(encoded, &section); err != nil {
-				t.Fatal(err)
-			}
-			var claim map[string]any
-			if err := json.Unmarshal(section.Items[1].Evidence, &claim); err != nil {
-				t.Fatal(err)
-			}
-			claim[field] = "tampered"
-			claimBytes, err := json.Marshal(claim)
-			section.Items[1].Evidence = jsontext.Value(claimBytes)
-			if err != nil {
-				t.Fatal(err)
-			}
-			encoded, err = json.Marshal(section)
-			if err != nil {
-				t.Fatal(err)
-			}
-			tampered := *wireDoc
-			tampered.Format = envelope.AttestationV3Format
-			tampered.DeviceEvidence = base64.StdEncoding.EncodeToString(encoded)
-			raw, err := json.Marshal(tampered)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, _, err := checkedDocument(raw, nonce); err == nil {
-				t.Fatal("the pinned verifier accepted altered clock bytes")
-			}
-		})
-	}
+	t.Run("tampered UTC", func(t *testing.T) {
+		var section struct {
+			Format string                        `json:"format"`
+			Items  []envelope.DeviceEvidenceItem `json:"items"`
+		}
+		encoded, err := base64.StdEncoding.DecodeString(wireDoc.DeviceEvidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(encoded, &section); err != nil {
+			t.Fatal(err)
+		}
+		var claim map[string]any
+		if err := json.Unmarshal(section.Items[1].Evidence, &claim); err != nil {
+			t.Fatal(err)
+		}
+		claim["utc"] = "tampered"
+		claimBytes, err := json.Marshal(claim)
+		section.Items[1].Evidence = jsontext.Value(claimBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err = json.Marshal(section)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tampered := *wireDoc
+		tampered.Format = envelope.AttestationV3Format
+		tampered.DeviceEvidence = base64.StdEncoding.EncodeToString(encoded)
+		raw, err := json.Marshal(tampered)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := checkedDocument(raw, nonce); err == nil {
+			t.Fatal("the pinned verifier accepted altered clock bytes")
+		}
+	})
 	for _, key := range []string{envelope.CryptoMaterialIDTLS, envelope.CryptoMaterialIDHPKE} {
 		t.Run("different "+key+" key", func(t *testing.T) {
 			changed := body
@@ -237,39 +236,24 @@ func TestV3AttestationRetainsPinnedWireFormat(t *testing.T) {
 	}
 }
 
-func TestTimedAttestationRejectsUnavailableClockBeforeQuoting(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		sample trustedtime.Sample
-		err    error
-	}{
-		{name: "missing", err: errors.New("missing status")},
-		{name: "stale", err: errors.New("stale status")},
-		{name: "unsynchronized", err: errors.New("unsynchronized clock")},
-		{name: "zero time"},
-		{name: "negative uncertainty", sample: trustedtime.Sample{Time: testClockSample().Time, Uncertainty: -time.Nanosecond}},
-		{name: "excess uncertainty", sample: trustedtime.Sample{Time: testClockSample().Time, Uncertainty: trustedtime.MaxUncertainty + time.Nanosecond}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			doc, err := buildTimedAttestation(Identity{}.CryptoMaterial(), make([]byte, envelope.NonceSize), nil, wire.Response{},
-				func() (trustedtime.Sample, error) { return test.sample, test.err },
-				func([64]byte) ([]byte, string, error) {
-					t.Fatal("unavailable clock reached hardware quote generation")
-					return nil, "", nil
-				},
-			)
-			if doc != nil || !errors.Is(err, ErrClockUnavailable) {
-				t.Fatalf("document = %v, error = %v", doc, err)
-			}
-		})
+func TestTimedAttestationRejectsZeroTimestampBeforeQuoting(t *testing.T) {
+	doc, err := buildTimedAttestation(Identity{}.CryptoMaterial(), make([]byte, envelope.NonceSize), nil, wire.Response{},
+		func() time.Time { return time.Time{} },
+		func([64]byte) ([]byte, string, error) {
+			t.Fatal("zero timestamp reached hardware quote generation")
+			return nil, "", nil
+		},
+	)
+	if doc != nil || err == nil {
+		t.Fatalf("document = %v, error = %v", doc, err)
 	}
 }
 
 func TestTimedAttestationValidatesChallengeBeforeReadingClock(t *testing.T) {
 	doc, err := buildTimedAttestation(nil, nil, nil, wire.Response{},
-		func() (trustedtime.Sample, error) {
+		func() time.Time {
 			t.Fatal("clock read before accepting a valid challenge")
-			return trustedtime.Sample{}, nil
+			return time.Time{}
 		},
 		func([64]byte) ([]byte, string, error) {
 			t.Fatal("invalid challenge reached hardware quote generation")
@@ -284,7 +268,7 @@ func TestTimedAttestationValidatesChallengeBeforeReadingClock(t *testing.T) {
 func TestTimedAttestationRejectsDuplicateClockClaim(t *testing.T) {
 	doc, err := buildTimedAttestation(Identity{}.CryptoMaterial(), make([]byte, envelope.NonceSize),
 		[]envelope.DeviceEvidenceItem{{ID: GuestClockID, Evidence: jsontext.Value(`{}`)}}, wire.Response{},
-		func() (trustedtime.Sample, error) { return testClockSample(), nil },
+		func() time.Time { return testClockTime() },
 		func([64]byte) ([]byte, string, error) {
 			t.Fatal("duplicate clock claim reached hardware quote generation")
 			return nil, "", nil

@@ -25,7 +25,6 @@ import (
 	"tinfoil/internal/pid1/supervisor"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
-	"tinfoil/internal/trustedtime"
 )
 
 const (
@@ -53,8 +52,6 @@ const (
 )
 
 var consoleMu sync.Mutex
-
-var errTrustedTime = errors.New("authenticated UTC unavailable")
 
 func main() {
 	log.SetFlags(0)
@@ -99,7 +96,6 @@ func runPID1() {
 type serviceControl interface {
 	Start(context.Context, supervisor.Service) error
 	Drain([][]string, time.Duration, time.Duration) error
-	Abort([][]string, time.Duration) error
 }
 
 type consoleControl interface {
@@ -107,7 +103,6 @@ type consoleControl interface {
 }
 
 type lifecycleDeps struct {
-	clock            func(context.Context) error
 	services         serviceControl
 	startConsole     func(context.Context) (consoleControl, error)
 	oneShot          func(context.Context, supervisor.Command) error
@@ -136,13 +131,6 @@ func run(parent context.Context) (result error) {
 	manager := supervisor.NewManager(initLogf)
 	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
 	deps := lifecycleDeps{
-		clock: func(ctx context.Context) error {
-			return trustedtime.Monitor(ctx, func(ctx context.Context) ([]byte, error) {
-				return queryTime(ctx, func(ctx context.Context, command supervisor.Command) error {
-					return runOneShot(ctx, manager, command, oneShotStopGrace)
-				})
-			})
-		},
 		services: services,
 		startConsole: func(ctx context.Context) (consoleControl, error) {
 			return startDebugConsole(ctx, manager)
@@ -172,7 +160,6 @@ func run(parent context.Context) (result error) {
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
 	var console consoleControl
-	var clockDone chan error
 	var localAttestationSocket *os.File
 	defer func() {
 		if localAttestationSocket != nil {
@@ -182,32 +169,21 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 			result = errors.Join(result, console.stop(deps.term, deps.kill))
 		}
 	}()
-	bootCtx, cancelBoot := context.WithCancelCause(parent)
-	defer cancelBoot(nil)
+	bootCtx := parent
 	runtimeCtx, cancelRuntime := context.WithCancel(parent)
-	defer cancelRuntime()
 	defer func() {
 		readiness.FailClosed()
-		cancelBoot(nil)
-		clockCause := context.Cause(bootCtx)
-		if clockDone != nil {
-			clockCause = errors.Join(clockCause, <-clockDone)
-		}
-		var drainErr error
-		if errors.Is(clockCause, errTrustedTime) {
-			drainErr = deps.services.Abort(shutdownGroups(), deps.kill)
-			result = errors.Join(result, clockCause, drainErr)
-		} else if parent.Err() != nil {
-			drainErr = deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
+		cancelRuntime()
+		drainErr := deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
+		if parent.Err() != nil {
 			result = drainErr
 		} else {
-			drainErr = deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
 			result = errors.Join(result, drainErr)
 		}
 	}()
 	defer func() {
-		if result != nil && console != nil && deps.debugFailure != nil && !errors.Is(context.Cause(bootCtx), errTrustedTime) {
-			deps.debugFailure(bootCtx, result)
+		if result != nil && console != nil && deps.debugFailure != nil {
+			deps.debugFailure(parent, result)
 		}
 	}()
 
@@ -255,15 +231,6 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
-	clockDone = make(chan error, 1)
-	go func() {
-		err := deps.clock(bootCtx)
-		if bootCtx.Err() == nil || (err != nil && !errors.Is(err, context.Canceled)) {
-			err = errors.Join(errTrustedTime, err)
-			cancelBoot(err)
-		}
-		clockDone <- err
-	}()
 
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containerdName, Required: true, Restart: true,
@@ -338,10 +305,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
 	initLogf("boot complete")
-	<-bootCtx.Done()
-	if errors.Is(context.Cause(bootCtx), errTrustedTime) {
-		return context.Cause(bootCtx)
-	}
+	<-parent.Done()
 	initLogf("shutdown requested")
 	return nil
 }

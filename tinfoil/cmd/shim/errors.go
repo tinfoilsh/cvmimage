@@ -30,7 +30,6 @@ const (
 	errCodeUpstreamUnreachable     = "upstream_unreachable"
 	errCodeServiceStarting         = "service_starting"
 	errCodeServiceFailed           = "service_failed"
-	errCodeTrustedTimeUnavailable  = "trusted_time_unavailable"
 	errCodeInvalidNonce            = "invalid_nonce"
 	errCodeAttestationUnavailable  = "attestation_unavailable"
 )
@@ -51,7 +50,6 @@ const (
 	errMsgNotFound                = "Not found."
 	errMsgServiceStarting         = "The service is starting. Please try again shortly."
 	errMsgServiceFailed           = "The service failed to start."
-	errMsgTrustedTimeUnavailable  = "Authenticated time is temporarily unavailable."
 	errMsgInvalidNonce            = "Invalid nonce: must be exactly 32 bytes (64 hex chars)."
 	errMsgCollateralUnavailable   = "Attestation collateral is temporarily unavailable."
 	errMsgGPUEvidenceUnavailable  = "GPU attestation evidence is unavailable."
@@ -89,12 +87,6 @@ type apiError struct {
 }
 
 var (
-	errTrustedTimeUnavailable = apiError{
-		status:  http.StatusServiceUnavailable,
-		errType: errTypeServiceUnavailable,
-		code:    errCodeTrustedTimeUnavailable,
-		message: errMsgTrustedTimeUnavailable,
-	}
 	errAPIKeyRequired = apiError{
 		status:  http.StatusUnauthorized,
 		errType: errTypeInvalidRequest,

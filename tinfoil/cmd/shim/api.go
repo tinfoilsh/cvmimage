@@ -33,10 +33,6 @@ const (
 	attestationFormatHeader = "Tinfoil-Pt"
 	attestationPath         = "/.well-known/tinfoil-attestation"
 	attestationV3Path       = attestationPath + "/v3"
-	bootStagesPath          = "/.well-known/tinfoil-boot-stages"
-	metricsPath             = "/.well-known/metrics"
-	tinfoilMetricsPath      = "/.well-known/tinfoil-metrics"
-	containersPath          = "/.well-known/tinfoil-containers"
 )
 
 type collateralSource interface {
@@ -422,7 +418,7 @@ func registerObservabilityHandlers(
 		})
 	})
 
-	mux.HandleFunc(bootStagesPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/.well-known/tinfoil-boot-stages", func(w http.ResponseWriter, r *http.Request) {
 		state, err := boot.Load()
 		if err != nil {
 			http.Error(w, "boot state not available", http.StatusServiceUnavailable)
@@ -432,9 +428,9 @@ func registerObservabilityHandlers(
 		json.NewEncoder(w).Encode(state)
 	})
 
-	mux.HandleFunc(tinfoilMetricsPath, metrics.HandleMetrics(externalConfig))
-	mux.HandleFunc(metricsPath, metrics.HandlePrometheusMetrics(&externalConfig.Metadata, externalConfig.MetricsAPIKey))
-	mux.HandleFunc(containersPath, containersHandler())
+	mux.HandleFunc("/.well-known/tinfoil-metrics", metrics.HandleMetrics(externalConfig))
+	mux.HandleFunc("/.well-known/metrics", metrics.HandlePrometheusMetrics(&externalConfig.Metadata, externalConfig.MetricsAPIKey))
+	mux.HandleFunc("/.well-known/tinfoil-containers", containersHandler())
 	mux.HandleFunc(shutdownPath, shutdownHandler(externalConfig.ShutdownToken, signalInit))
 	mux.HandleFunc(ehbpProtocol.KeysPath, ehbpIdentity.ConfigHandler)
 }

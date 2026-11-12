@@ -13,7 +13,6 @@ import (
 
 	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
-	"tinfoil/internal/trustedtime"
 	"tinfoil/internal/volume"
 )
 
@@ -112,11 +111,11 @@ func run(ctx context.Context, invocation invocation) error {
 
 	start = time.Now()
 	log.Println("Waiting for authenticated UTC")
-	if err := trustedtime.Wait(ctx); err != nil {
+	if err := waitForClock(ctx, boot.ChronyClientBinary); err != nil {
 		tracker.Record(boot.StageTime, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	tracker.Record(boot.StageTime, boot.StatusOK, time.Since(start), "authenticated UTC established")
+	tracker.Record(boot.StageTime, boot.StatusOK, time.Since(start), "authenticated UTC synchronized at startup")
 
 	// 3. Identity
 	start = time.Now()

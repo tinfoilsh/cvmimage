@@ -35,16 +35,7 @@ type Command struct {
 	Args       []string
 	Env        []string
 	Dir        string
-	Stdout     *os.File
 	ExtraFiles []*os.File
-}
-
-func (c Command) files() []*os.File {
-	standardFiles := [childStandardFileCount]*os.File{os.Stdin, os.Stdout, os.Stderr}
-	if c.Stdout != nil {
-		standardFiles[syscall.Stdout] = c.Stdout
-	}
-	return append(standardFiles[:], c.ExtraFiles...)
 }
 
 func (c *Command) AddExtraFile(file *os.File) int {
@@ -285,7 +276,8 @@ func (b *osBackend) start(command Command, scope string, options startOptions) (
 	defer cgroupFD.Close()
 	files := options.files
 	if files == nil {
-		files = command.files()
+		standardFiles := [childStandardFileCount]*os.File{os.Stdin, os.Stdout, os.Stderr}
+		files = append(standardFiles[:], command.ExtraFiles...)
 	}
 	system := &syscall.SysProcAttr{
 		UseCgroupFD: true,
@@ -810,15 +802,6 @@ func (s *Supervisor) emit(state State) {
 // Drain prevents new starts, then stops each dependency group with TERM.
 // Groups containing a DrainUntilExit service wait without escalating to KILL.
 func (s *Supervisor) Drain(groups [][]string, termGrace, killGrace time.Duration) error {
-	return s.drain(groups, termGrace, killGrace, true)
-}
-
-// Abort stops services without waiting for ingress to finish its requests.
-func (s *Supervisor) Abort(groups [][]string, killGrace time.Duration) error {
-	return s.drain(groups, 0, max(killGrace, 0), false)
-}
-
-func (s *Supervisor) drain(groups [][]string, termGrace, killGrace time.Duration, graceful bool) error {
 	s.mu.Lock()
 	s.draining = true
 	s.cancel()
@@ -830,7 +813,7 @@ func (s *Supervisor) drain(groups [][]string, termGrace, killGrace time.Duration
 		for _, name := range group {
 			seen[name] = true
 		}
-		errs = append(errs, s.drainGroup(group, termGrace, killGrace, graceful))
+		errs = append(errs, s.drainGroup(group, termGrace, killGrace))
 	}
 	s.mu.Lock()
 	var remaining []string
@@ -841,17 +824,17 @@ func (s *Supervisor) drain(groups [][]string, termGrace, killGrace time.Duration
 	}
 	s.mu.Unlock()
 	sort.Strings(remaining)
-	errs = append(errs, s.drainGroup(remaining, termGrace, killGrace, graceful))
+	errs = append(errs, s.drainGroup(remaining, termGrace, killGrace))
 	return errors.Join(errs...)
 }
 
-func (s *Supervisor) drainGroup(names []string, termGrace, killGrace time.Duration, graceful bool) error {
+func (s *Supervisor) drainGroup(names []string, termGrace, killGrace time.Duration) error {
 	s.mu.Lock()
 	processes := make([]*Process, 0, len(names))
 	for _, name := range names {
 		if record := s.services[name]; record != nil && record.process != nil {
 			processes = append(processes, record.process)
-			if graceful && record.spec.DrainUntilExit {
+			if record.spec.DrainUntilExit {
 				termGrace = waitUntilExit
 			}
 		}

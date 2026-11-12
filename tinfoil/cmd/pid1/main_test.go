@@ -25,19 +25,15 @@ type fakeServices struct {
 	started   []supervisor.Service
 	startedCh chan string
 	drained   chan [][]string
-	aborted   chan [][]string
 	fail      map[string]error
 	observe   func(supervisor.State)
 	onStart   func(string)
-	onAbort   func()
-	onDrain   func()
 }
 
 func newFakeServices() *fakeServices {
 	return &fakeServices{
 		startedCh: make(chan string, 16),
 		drained:   make(chan [][]string, 1),
-		aborted:   make(chan [][]string, 1),
 		fail:      map[string]error{},
 	}
 }
@@ -60,18 +56,7 @@ func (f *fakeServices) Start(_ context.Context, service supervisor.Service) erro
 }
 
 func (f *fakeServices) Drain(groups [][]string, _, _ time.Duration) error {
-	if f.onDrain != nil {
-		f.onDrain()
-	}
 	f.drained <- groups
-	return nil
-}
-
-func (f *fakeServices) Abort(groups [][]string, _ time.Duration) error {
-	if f.onAbort != nil {
-		f.onAbort()
-	}
-	f.aborted <- groups
 	return nil
 }
 
@@ -109,7 +94,6 @@ func newLifecycleHarness() *lifecycleHarness {
 		startConsole: func(context.Context) (consoleControl, error) {
 			return &fakeConsole{}, nil
 		},
-		clock:            func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
 		oneShot:          func(context.Context, supervisor.Command) error { return nil },
 		nvidia:           func(context.Context) error { return nil },
 		lockModules:      func() error { return nil },
@@ -344,33 +328,6 @@ func receiveTest[T any](t *testing.T, channel <-chan T) T {
 func TestStartupFailureDrainsStartedServices(t *testing.T) {
 	harness := newLifecycleHarness()
 	harness.services.fail[dockerName] = errors.New("dockerd start failed")
-	var clockCtx, syslogCtx context.Context
-	clockStarted := make(chan context.Context, 1)
-	harness.deps.clock = func(ctx context.Context) error {
-		clockStarted <- ctx
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	harness.deps.syslog = func(ctx context.Context) { syslogCtx = ctx }
-	harness.services.onStart = func(name string) {
-		if name == dockerName {
-			const clockStartWait = time.Second
-			clockCtx = context.Background()
-			select {
-			case clockCtx = <-clockStarted:
-			case <-time.After(clockStartWait):
-				t.Error("time monitor did not start before dockerd")
-			}
-		}
-	}
-	harness.services.onDrain = func() {
-		if clockCtx.Err() == nil {
-			t.Error("time monitor remained running during service drain")
-		}
-		if syslogCtx.Err() != nil {
-			t.Error("syslog stopped before services drained")
-		}
-	}
 	result := make(chan error, 1)
 	go func() {
 		result <- runLifecycle(context.Background(), harness.deps, harness.readiness)
@@ -391,120 +348,6 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 	}
 	if err := receiveTest(t, result); err == nil || !errors.Is(err, harness.services.fail[dockerName]) {
 		t.Fatalf("runLifecycle error = %v", err)
-	}
-}
-
-func TestClockLossAbortsServicesAndClearsReadiness(t *testing.T) {
-	harness := newLifecycleHarness()
-	var syslogCtx context.Context
-	harness.deps.syslog = func(ctx context.Context) { syslogCtx = ctx }
-	harness.services.onAbort = func() {
-		if syslogCtx.Err() != nil {
-			t.Error("syslog stopped before services aborted")
-		}
-	}
-	clockFailure := errors.New("authenticated source expired")
-	failClock := make(chan struct{})
-	harness.deps.clock = func(ctx context.Context) error {
-		select {
-		case <-failClock:
-			return clockFailure
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	harness.deps.debugFailure = func(context.Context, error) {
-		t.Error("clock loss must not park before stopping services")
-	}
-	result := make(chan error, 1)
-	go func() { result <- runLifecycle(context.Background(), harness.deps, harness.readiness) }()
-	if !receiveTest(t, harness.ready) {
-		t.Fatal("lifecycle never became ready")
-	}
-	close(failClock)
-	if receiveTest(t, harness.ready) {
-		t.Fatal("readiness remained set after clock loss")
-	}
-	if groups := receiveTest(t, harness.services.aborted); fmt.Sprint(groups) != fmt.Sprint(shutdownGroups()) {
-		t.Fatalf("abort groups = %v", groups)
-	}
-	if err := receiveTest(t, result); !errors.Is(err, clockFailure) || !errors.Is(err, errTrustedTime) {
-		t.Fatalf("lifecycle lost clock failure: %v", err)
-	}
-	if syslogCtx.Err() == nil {
-		t.Error("syslog remained running after services aborted")
-	}
-	select {
-	case <-harness.services.drained:
-		t.Fatal("clock failure used unbounded graceful drain")
-	default:
-	}
-	for _, service := range harness.services.started {
-		if service.Name == timeName && (!service.Required || service.Restart) {
-			t.Fatalf("clock service can reopen bootstrap: %+v", service)
-		}
-	}
-}
-
-func TestClockLossInterruptsExistingDebugPark(t *testing.T) {
-	harness := newLifecycleHarness()
-	startupFailure := errors.New("dockerd start failed")
-	harness.services.fail[dockerName] = startupFailure
-	clockFailure := errors.New("authenticated source expired")
-	failClock := make(chan struct{})
-	harness.deps.clock = func(ctx context.Context) error {
-		select {
-		case <-failClock:
-			return clockFailure
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	parked := make(chan error, 1)
-	harness.deps.debugFailure = func(ctx context.Context, err error) {
-		parked <- err
-		<-ctx.Done()
-	}
-	parent, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	result := make(chan error, 1)
-	go func() { result <- runLifecycle(parent, harness.deps, harness.readiness) }()
-	if err := receiveTest(t, parked); !errors.Is(err, startupFailure) {
-		t.Fatalf("parked error = %v", err)
-	}
-	close(failClock)
-	if groups := receiveTest(t, harness.services.aborted); fmt.Sprint(groups) != fmt.Sprint(shutdownGroups()) {
-		t.Fatalf("abort groups = %v", groups)
-	}
-	if err := receiveTest(t, result); !errors.Is(err, startupFailure) || !errors.Is(err, clockFailure) || !errors.Is(err, errTrustedTime) {
-		t.Fatalf("lifecycle lost failure causes: %v", err)
-	}
-}
-
-func TestClockLossCancelsProvisioning(t *testing.T) {
-	harness := newLifecycleHarness()
-	provisioning := make(chan struct{})
-	harness.deps.oneShot = func(ctx context.Context, command supervisor.Command) error {
-		if command.Name != string(hardening.ServiceBoot) {
-			return nil
-		}
-		close(provisioning)
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	harness.deps.clock = func(context.Context) error {
-		<-provisioning
-		return errors.New("UTC uncertainty exceeded limit")
-	}
-	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
-	if !errors.Is(err, errTrustedTime) {
-		t.Fatalf("lifecycle error = %v", err)
-	}
-	receiveTest(t, harness.services.aborted)
-	for _, service := range harness.services.started {
-		if service.Name == containersName {
-			t.Fatal("workloads started after provisioning lost trusted time")
-		}
 	}
 }
 
@@ -726,25 +569,5 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 		if fmt.Sprint(service.Command.Args) != fmt.Sprint(args) {
 			t.Fatalf("service %d args = %v, want %v", index, service.Command.Args, args)
 		}
-	}
-}
-
-func TestStartupCancellationPreservesClockFailure(t *testing.T) {
-	harness := newLifecycleHarness()
-	harness.services.fail[dockerName] = errors.New("dockerd start failed")
-	clockFailure := errors.New("authenticated source expired")
-	harness.deps.clock = func(ctx context.Context) error {
-		<-ctx.Done()
-		return clockFailure
-	}
-	result := make(chan error, 1)
-	go func() { result <- runLifecycle(context.Background(), harness.deps, harness.readiness) }()
-	if err := receiveTest(t, result); !errors.Is(err, clockFailure) || !errors.Is(err, errTrustedTime) {
-		t.Fatalf("clock failure lost during startup cleanup: %v", err)
-	}
-	select {
-	case <-harness.services.aborted:
-	default:
-		t.Fatal("clock loss used graceful drain instead of abort")
 	}
 }

@@ -46,12 +46,9 @@ func TestStartConsoleRejectsExtraFiles(t *testing.T) {
 	}
 	defer console.Close()
 
-	for _, command := range []Command{
-		{Name: "debug-console", Path: "/bin/sh", ExtraFiles: []*os.File{console}},
-		{Name: "debug-console", Path: "/bin/sh", Stdout: console},
-	} {
-		if _, err := manager.StartConsole(command, console); err == nil {
-			t.Fatal("StartConsole accepted redirected files")
-		}
+	command := Command{Name: "debug-console", Path: "/bin/sh"}
+	command.AddExtraFile(console)
+	if _, err := manager.StartConsole(command, console); err == nil {
+		t.Fatal("StartConsole accepted an extra file")
 	}
 }

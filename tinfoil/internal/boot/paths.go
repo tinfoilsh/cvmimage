@@ -46,7 +46,6 @@ const (
 	VolumeSocketName          = "control.sock"
 	SealRegisterPath          = "/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384"
 	ContainersReadyPath       = "/run/tinfoil/containers.ready"
-	TrustedTimeStatusPath     = "/run/tinfoil/trusted-time.json"
 	ChronySocketPath          = "/run/chrony/chronyd.sock"
 	ChronyBinary              = "/usr/sbin/chronyd"
 	ChronyClientBinary        = "/usr/bin/chronyc"

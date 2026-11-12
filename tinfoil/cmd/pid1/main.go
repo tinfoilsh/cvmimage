@@ -172,6 +172,7 @@ func run(parent context.Context) (result error) {
 
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
 	var console consoleControl
+	var clockDone chan error
 	var localAttestationSocket *os.File
 	defer func() {
 		if localAttestationSocket != nil {
@@ -188,10 +189,14 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	defer func() {
 		readiness.FailClosed()
 		cancelBoot(nil)
+		clockCause := context.Cause(bootCtx)
+		if clockDone != nil {
+			clockCause = errors.Join(clockCause, <-clockDone)
+		}
 		var drainErr error
-		if errors.Is(context.Cause(bootCtx), errTrustedTime) {
+		if errors.Is(clockCause, errTrustedTime) {
 			drainErr = deps.services.Abort(shutdownGroups(), deps.kill)
-			result = errors.Join(result, context.Cause(bootCtx), drainErr)
+			result = errors.Join(result, clockCause, drainErr)
 		} else if parent.Err() != nil {
 			drainErr = deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
 			result = drainErr
@@ -250,10 +255,14 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
+	clockDone = make(chan error, 1)
 	go func() {
-		if err := deps.clock(bootCtx); bootCtx.Err() == nil {
-			cancelBoot(errors.Join(errTrustedTime, err))
+		err := deps.clock(bootCtx)
+		if bootCtx.Err() == nil || (err != nil && !errors.Is(err, context.Canceled)) {
+			err = errors.Join(errTrustedTime, err)
+			cancelBoot(err)
 		}
+		clockDone <- err
 	}()
 
 	if err := deps.services.Start(bootCtx, supervisor.Service{

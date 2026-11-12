@@ -354,7 +354,13 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 	harness.deps.syslog = func(ctx context.Context) { syslogCtx = ctx }
 	harness.services.onStart = func(name string) {
 		if name == dockerName {
-			clockCtx = receiveTest(t, clockStarted)
+			const clockStartWait = time.Second
+			clockCtx = context.Background()
+			select {
+			case clockCtx = <-clockStarted:
+			case <-time.After(clockStartWait):
+				t.Error("time monitor did not start before dockerd")
+			}
 		}
 	}
 	harness.services.onDrain = func() {
@@ -720,5 +726,25 @@ func TestVolumeWorkersStartOnlyForRuntimeUnlocks(t *testing.T) {
 		if fmt.Sprint(service.Command.Args) != fmt.Sprint(args) {
 			t.Fatalf("service %d args = %v, want %v", index, service.Command.Args, args)
 		}
+	}
+}
+
+func TestStartupCancellationPreservesClockFailure(t *testing.T) {
+	harness := newLifecycleHarness()
+	harness.services.fail[dockerName] = errors.New("dockerd start failed")
+	clockFailure := errors.New("authenticated source expired")
+	harness.deps.clock = func(ctx context.Context) error {
+		<-ctx.Done()
+		return clockFailure
+	}
+	result := make(chan error, 1)
+	go func() { result <- runLifecycle(context.Background(), harness.deps, harness.readiness) }()
+	if err := receiveTest(t, result); !errors.Is(err, clockFailure) || !errors.Is(err, errTrustedTime) {
+		t.Fatalf("clock failure lost during startup cleanup: %v", err)
+	}
+	select {
+	case <-harness.services.aborted:
+	default:
+		t.Fatal("clock loss used graceful drain instead of abort")
 	}
 }

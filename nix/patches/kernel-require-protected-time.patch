@@ -79,7 +79,7 @@
  }
  
  EXPORT_SYMBOL_GPL(mark_tsc_unstable);
-@@ -1518,16 +1508,33 @@
+@@ -1518,16 +1508,35 @@
  
  void __init tsc_early_init(void)
  {
@@ -94,11 +94,15 @@
 +	    !(cc_platform_has(CC_ATTR_GUEST_SEV_SNP) &&
 +	      cc_platform_has(CC_ATTR_GUEST_SNP_SECURE_TSC)))
 +		panic("Protected time requires TDX or SNP Secure TSC");
-+
+ 
+ 	snp_secure_tsc_init();
+ 
+-	if (!determine_cpu_tsc_frequencies(true))
+-		return;
 +	if (!boot_cpu_has(X86_FEATURE_TSC) ||
 +	    !boot_cpu_has(X86_FEATURE_CONSTANT_TSC) ||
 +	    !boot_cpu_has(X86_FEATURE_NONSTOP_TSC) ||
-+	    !boot_cpu_has(X86_FEATURE_TSC_RELIABLE) || is_early_uv_system())
++	    is_early_uv_system())
 +		panic("Protected time requires a reliable invariant TSC");
 +
 +	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST)) {
@@ -109,14 +113,12 @@
 +		x86_platform.calibrate_cpu = native_calibrate_tsc;
 +		x86_platform.calibrate_tsc = native_calibrate_tsc;
 +	}
- 
- 	snp_secure_tsc_init();
- 
--	if (!determine_cpu_tsc_frequencies(true))
--		return;
++
++
 +	if (!determine_cpu_tsc_frequencies(true) ||
 +	    !boot_cpu_has(X86_FEATURE_TSC_KNOWN_FREQ))
 +		panic("Protected time requires a protected TSC frequency");
++	setup_force_cpu_cap(X86_FEATURE_TSC_RELIABLE);
  	tsc_enable_sched_clock();
  }
  
@@ -145,10 +147,11 @@
  	if (curr_clocksource != best && !timekeeping_notify(best)) {
  		pr_info("Switched to clocksource %s\n", best->name);
  		curr_clocksource = best;
-@@ -1112,6 +1116,17 @@
+@@ -1111,6 +1115,17 @@
+ 	return 0;
  }
  fs_initcall(clocksource_done_booting);
- 
++
 +static int __init clocksource_require_protected_tsc(void)
 +{
 +	mutex_lock(&clocksource_mutex);
@@ -159,7 +162,6 @@
 +	return 0;
 +}
 +late_initcall(clocksource_require_protected_tsc);
-+
+ 
  /*
   * Enqueue the clocksource sorted by rating
-  */

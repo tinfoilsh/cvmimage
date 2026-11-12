@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -62,5 +63,45 @@ func TestTrustedTimeFailurePreservesCORSPolicy(t *testing.T) {
 		if response.Code != test.status || response.Header().Get("Access-Control-Allow-Origin") != test.allow {
 			t.Errorf("%s %s: status=%d allow-origin=%q", test.method, test.origin, response.Code, response.Header().Get("Access-Control-Allow-Origin"))
 		}
+	}
+}
+
+func TestTrustedTimeGatePreservesDiagnosticsAndRejectsOtherRequests(t *testing.T) {
+	forwarded := 0
+	handler := checkTrustedTime(&config.Config{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded++
+		w.WriteHeader(http.StatusNoContent)
+	}), func() (trustedtime.Sample, error) {
+		return trustedtime.Sample{}, errors.New("checkpoint expired")
+	})
+	diagnosticPaths := []string{bootStagesPath, metricsPath, tinfoilMetricsPath, containersPath}
+	for _, path := range diagnosticPaths {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("diagnostics %s = %d", path, response.Code)
+		}
+	}
+	if forwarded != len(diagnosticPaths) {
+		t.Fatalf("forwarded diagnostics = %d", forwarded)
+	}
+	for _, test := range []struct{ method, path string }{
+		{http.MethodGet, attestationPath},
+		{http.MethodPost, "/v1/chat/completions"},
+		{http.MethodPost, bootStagesPath},
+		{http.MethodGet, "/.well-known/%74infoil-boot-stages"},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+		var body errorEnvelope
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != http.StatusServiceUnavailable || body.Error.Type != errTypeServiceUnavailable || body.Error.Code == nil || *body.Error.Code != errCodeTrustedTimeUnavailable {
+			t.Fatalf("%s %s = %d %s", test.method, test.path, response.Code, response.Body.String())
+		}
+	}
+	if forwarded != len(diagnosticPaths) {
+		t.Fatal("forwarded a request requiring trusted time")
 	}
 }

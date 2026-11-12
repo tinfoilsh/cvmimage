@@ -13,8 +13,15 @@ func requireTrustedTime(config *config.Config, next http.Handler) http.Handler {
 
 func checkTrustedTime(config *config.Config, next http.Handler, read func() (trustedtime.Sample, error)) http.Handler {
 	return corsMiddleware(config, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			switch r.URL.EscapedPath() {
+			case bootStagesPath, metricsPath, tinfoilMetricsPath, containersPath:
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
 		if _, err := read(); err != nil {
-			http.Error(w, "authenticated time unavailable", http.StatusServiceUnavailable)
+			writeAPIError(w, errTrustedTimeUnavailable)
 			return
 		}
 		next.ServeHTTP(w, r)

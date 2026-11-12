@@ -25,6 +25,14 @@ func TestServicePoliciesAreExact(t *testing.T) {
 			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
 		},
+		ServiceTime: {
+			noNewPrivileges:      true,
+			boundCapabilities:    []int{unix.CAP_SYS_TIME},
+			restrictFilesystems:  true,
+			deniedSyscalls:       restrictedServiceSyscalls,
+			restrictNamespaceOps: true,
+			allowedSocketDomains: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.AF_NETLINK},
+		},
 		ServiceEgress: {
 			noNewPrivileges:      true,
 			boundCapabilities:    []int{unix.CAP_NET_ADMIN},

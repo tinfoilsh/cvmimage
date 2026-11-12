@@ -44,6 +44,7 @@ type fakeProcess struct {
 	options       startOptions
 	exited        bool
 	cgroupRunning bool
+	unkillable    bool
 }
 
 func newFakeBackend(sigchld chan os.Signal) *fakeBackend {
@@ -132,7 +133,7 @@ func (p *fakeProcess) killCgroup() error {
 	p.backend.mu.Lock()
 	exited := p.exited
 	killErr := p.backend.cgroupKillErrs[p.name]
-	p.cgroupRunning = false
+	p.cgroupRunning = p.unkillable
 	orphans := append([]int(nil), p.backend.orphanPIDs[p.name]...)
 	p.backend.orphanPIDs[p.name] = nil
 	p.backend.mu.Unlock()
@@ -158,6 +159,56 @@ func TestCommandAddExtraFileUsesChildPosition(t *testing.T) {
 	}
 	if len(command.ExtraFiles) != 2 || command.ExtraFiles[0] != first || command.ExtraFiles[1] != second {
 		t.Fatalf("extra files = %v", command.ExtraFiles)
+	}
+}
+
+func TestCommandStdoutPreservesOtherDescriptors(t *testing.T) {
+	const childMode = "TINFOIL_TEST_CAPTURE_STDOUT"
+	if os.Getenv(childMode) == "1" {
+		extra := os.NewFile(childStandardFileCount, "extra")
+		if _, err := os.Stdout.WriteString("captured stdout"); err != nil {
+			os.Exit(1)
+		}
+		if _, err := extra.WriteString("extra output"); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	directory := t.TempDir()
+	captured, err := os.Create(filepath.Join(directory, "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer captured.Close()
+	extra, err := os.Create(filepath.Join(directory, "extra"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	command := Command{ExtraFiles: []*os.File{extra}}
+	defaults := command.files()
+	if len(defaults) != childStandardFileCount+1 || defaults[syscall.Stdout] != os.Stdout {
+		t.Fatalf("default descriptors = %v", defaults)
+	}
+	command.Stdout = captured
+	files := command.files()
+	if len(files) != len(defaults) || files[syscall.Stdin] != os.Stdin || files[syscall.Stderr] != os.Stderr || files[childStandardFileCount] != extra {
+		t.Fatalf("stdout capture changed unrelated descriptors: %v", files)
+	}
+	process, err := os.StartProcess(os.Args[0], []string{os.Args[0], "-test.run=^TestCommandStdoutPreservesOtherDescriptors$"}, &os.ProcAttr{
+		Env: append(os.Environ(), childMode+"=1"), Files: files,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := process.Wait()
+	if err != nil || !state.Success() {
+		t.Fatalf("capture child = (%v, %v)", state, err)
+	}
+	for path, want := range map[string]string{captured.Name(): "captured stdout", extra.Name(): "extra output"} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Fatalf("captured %s = (%q, %v), want %q", path, data, err, want)
+		}
 	}
 }
 
@@ -681,6 +732,87 @@ func TestDrainWaitsForIngressBeforeDependencies(t *testing.T) {
 	}
 	if err := receive(t, done); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAbortIgnoresIngressDrainAndStopsRemainingServices(t *testing.T) {
+	sigchld := make(chan os.Signal, 16)
+	backend := newFakeBackend(sigchld)
+	backend.exitOnTERM["shim"] = true
+	backend.cgroupSurvives["shim"] = true
+	backend.exitOnTERM["remaining"] = true
+	s := New(context.Background(), newManager(backend, sigchld, nil), Config{})
+	for _, name := range []string{"shim", "upstream", "remaining"} {
+		if err := s.Start(context.Background(), Service{
+			Name: name, Restart: true, Command: Command{Name: name, Path: "/" + name}, DrainUntilExit: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_ = receive(t, backend.started)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Abort([][]string{{"shim"}, {"upstream"}}, time.Second) }()
+	for _, want := range []string{
+		"shim:terminated", "shim:cgroup.kill",
+		"upstream:terminated", "upstream:cgroup.kill", "remaining:terminated",
+	} {
+		if got := receive(t, backend.signaled); got != want {
+			t.Fatalf("abort signal = %q, want %q", got, want)
+		}
+	}
+	if err := receive(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background(), Service{
+		Name: "new", Command: Command{Name: "new", Path: "/new"},
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("start after abort = %v, want cancellation", err)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	for _, process := range backend.children {
+		if process.cgroupRunning {
+			t.Fatalf("%s cgroup survived abort", process.name)
+		}
+	}
+	select {
+	case pid := <-backend.started:
+		t.Fatalf("service restarted during abort as pid %d", pid)
+	default:
+	}
+}
+
+func TestAbortBoundsWaitForSurvivingCgroup(t *testing.T) {
+	for _, grace := range []time.Duration{time.Second, 0, waitUntilExit} {
+		t.Run(grace.String(), func(t *testing.T) {
+			sigchld := make(chan os.Signal, 4)
+			backend := newFakeBackend(sigchld)
+			backend.cgroupSurvives["shim"] = true
+			clock := newFakeClock()
+			s := New(context.Background(), newManager(backend, sigchld, nil), Config{Clock: clock})
+			if err := s.Start(context.Background(), Service{
+				Name: "shim", Command: Command{Name: "shim", Path: "/shim"}, DrainUntilExit: true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			pid := receive(t, backend.started)
+			backend.mu.Lock()
+			backend.children[pid].unkillable = true
+			backend.mu.Unlock()
+			done := make(chan error, 1)
+			go func() { done <- s.Abort([][]string{{"shim"}}, grace) }()
+			for _, want := range []string{"shim:terminated", "shim:cgroup.kill"} {
+				if got := receive(t, backend.signaled); got != want {
+					t.Fatalf("abort signal = %q, want %q", got, want)
+				}
+			}
+			if grace > 0 {
+				clock.fire(t, grace)
+			}
+			if err := receive(t, done); err == nil || !strings.Contains(err.Error(), "cgroup remained populated") {
+				t.Fatalf("abort surviving cgroup = %v", err)
+			}
+		})
 	}
 }
 

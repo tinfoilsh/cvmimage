@@ -25,6 +25,7 @@ import (
 	"tinfoil/internal/pid1/supervisor"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/trustedtime"
 )
 
 const (
@@ -35,6 +36,7 @@ const (
 	serviceTermGrace     = 10 * time.Second
 	serviceKillGrace     = 5 * time.Second
 
+	timeName         = string(hardening.ServiceTime)
 	containerdName   = "containerd"
 	dockerName       = "dockerd"
 	containersName   = "tinfoil-containers"
@@ -51,6 +53,8 @@ const (
 )
 
 var consoleMu sync.Mutex
+
+var errTrustedTime = errors.New("authenticated UTC unavailable")
 
 func main() {
 	log.SetFlags(0)
@@ -95,6 +99,7 @@ func runPID1() {
 type serviceControl interface {
 	Start(context.Context, supervisor.Service) error
 	Drain([][]string, time.Duration, time.Duration) error
+	Abort([][]string, time.Duration) error
 }
 
 type consoleControl interface {
@@ -102,6 +107,7 @@ type consoleControl interface {
 }
 
 type lifecycleDeps struct {
+	clock            func(context.Context) error
 	services         serviceControl
 	startConsole     func(context.Context) (consoleControl, error)
 	oneShot          func(context.Context, supervisor.Command) error
@@ -130,6 +136,13 @@ func run(parent context.Context) (result error) {
 	manager := supervisor.NewManager(initLogf)
 	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
 	deps := lifecycleDeps{
+		clock: func(ctx context.Context) error {
+			return trustedtime.Monitor(ctx, func(ctx context.Context) ([]byte, error) {
+				return queryTime(ctx, func(ctx context.Context, command supervisor.Command) error {
+					return runOneShot(ctx, manager, command, oneShotStopGrace)
+				})
+			})
+		},
 		services: services,
 		startConsole: func(ctx context.Context) (consoleControl, error) {
 			return startDebugConsole(ctx, manager)
@@ -168,21 +181,28 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 			result = errors.Join(result, console.stop(deps.term, deps.kill))
 		}
 	}()
-	bootCtx := parent
+	bootCtx, cancelBoot := context.WithCancelCause(parent)
+	defer cancelBoot(nil)
 	runtimeCtx, cancelRuntime := context.WithCancel(parent)
+	defer cancelRuntime()
 	defer func() {
 		readiness.FailClosed()
-		cancelRuntime()
-		drainErr := deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
-		if parent.Err() != nil {
+		cancelBoot(nil)
+		var drainErr error
+		if errors.Is(context.Cause(bootCtx), errTrustedTime) {
+			drainErr = deps.services.Abort(shutdownGroups(), deps.kill)
+			result = errors.Join(result, context.Cause(bootCtx), drainErr)
+		} else if parent.Err() != nil {
+			drainErr = deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
 			result = drainErr
 		} else {
+			drainErr = deps.services.Drain(shutdownGroups(), deps.term, deps.kill)
 			result = errors.Join(result, drainErr)
 		}
 	}()
 	defer func() {
-		if result != nil && console != nil && deps.debugFailure != nil {
-			deps.debugFailure(parent, result)
+		if result != nil && console != nil && deps.debugFailure != nil && !errors.Is(context.Cause(bootCtx), errTrustedTime) {
+			deps.debugFailure(bootCtx, result)
 		}
 	}()
 
@@ -222,6 +242,19 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 	deps.syslog(runtimeCtx)
+
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: timeName, Required: true,
+		Command: hardenedCommand(hardening.ServiceTime, boot.ChronyBinary,
+			"-n", "-u", "root", "-f", boot.ChronyConfigPath),
+	}); err != nil {
+		return err
+	}
+	go func() {
+		if err := deps.clock(bootCtx); bootCtx.Err() == nil {
+			cancelBoot(errors.Join(errTrustedTime, err))
+		}
+	}()
 
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containerdName, Required: true, Restart: true,
@@ -296,7 +329,10 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
 	initLogf("boot complete")
-	<-parent.Done()
+	<-bootCtx.Done()
+	if errors.Is(context.Cause(bootCtx), errTrustedTime) {
+		return context.Cause(bootCtx)
+	}
 	initLogf("shutdown requested")
 	return nil
 }
@@ -360,7 +396,7 @@ func ownSealRegister(config *runtimeconfig.Config) error {
 }
 
 func requiredServiceNames() []string {
-	return []string{containerdName, dockerName, containersName, shimName}
+	return []string{containerdName, dockerName, containersName, shimName, timeName}
 }
 
 func shutdownGroups() [][]string {
@@ -371,6 +407,7 @@ func shutdownGroups() [][]string {
 		gpuServiceNames(),
 		{dockerName},
 		{containerdName},
+		{timeName},
 	}
 }
 

@@ -304,3 +304,30 @@ func TestMonitorReportsInvalidationFailure(t *testing.T) {
 		t.Fatalf("monitor = %v, invalidations=%d", err, invalidations)
 	}
 }
+
+func TestMonitorBootstrapTimeoutPreservesLastObservationError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	first := errors.New("not synchronized")
+	last := errors.New("frequency correction reached its limit")
+	observations := 0
+	err := monitor(ctx, func(context.Context) (checkpoint, error) {
+		observations++
+		if observations == 1 {
+			return checkpoint{}, first
+		}
+		return checkpoint{}, last
+	}, func() (clocks, error) {
+		raw := time.Second
+		if observations == 2 {
+			raw += BootstrapLimit + time.Nanosecond
+		}
+		return clocks{time.Unix(1770000010, 0), raw, 0}, nil
+	}, func(checkpoint) error {
+		t.Fatal("published a checkpoint during failed bootstrap")
+		return nil
+	}, func() error { return nil }, time.Nanosecond)
+	if !errors.Is(err, last) || errors.Is(err, first) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("bootstrap error lost its latest cause: %v", err)
+	}
+}

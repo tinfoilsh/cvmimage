@@ -164,6 +164,7 @@ func monitor(ctx context.Context, observe func(context.Context) (checkpoint, err
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var previous *checkpoint
+	var lastObservationError error
 	for {
 		at, err := now()
 		if err != nil {
@@ -174,9 +175,10 @@ func monitor(ctx context.Context, observe func(context.Context) (checkpoint, err
 				return err
 			}
 		} else if at.Raw < initial.Raw || at.Raw-initial.Raw > BootstrapLimit {
-			return errors.New("authenticated UTC bootstrap timed out")
+			return errors.Join(errors.New("authenticated UTC bootstrap timed out"), lastObservationError)
 		}
 		state, err := observe(ctx)
+		lastObservationError = err
 		if err == nil {
 			if err := publish(state); err != nil {
 				return err

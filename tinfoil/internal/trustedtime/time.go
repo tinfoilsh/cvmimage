@@ -276,9 +276,10 @@ func trackingBound(data []byte, now time.Time) (time.Duration, error) {
 		values[field] = value
 	}
 	age := float64(now.Unix()) + float64(now.Nanosecond())/float64(time.Second) - values[refTimeField]
+	// A correction at maxdrift may hide a larger rate error.
 	if values[refTimeField] <= 0 || age < -MaxUncertainty.Seconds() || age > maxReferenceAge.Seconds() ||
 		values[rootDelayField] < 0 || values[rootDispersionField] < 0 || values[skewField] < 0 ||
-		values[skewField] > clockErrorPPM || math.Abs(values[frequencyField]) > clockErrorPPM {
+		values[skewField] > clockErrorPPM || math.Abs(values[frequencyField]) >= clockErrorPPM {
 		return 0, fmt.Errorf("time source is stale or outside clock limits: age=%.6fs frequency=%.6fppm skew=%.6fppm delay=%.6fs dispersion=%.6fs", age, values[frequencyField], values[skewField], values[rootDelayField], values[rootDispersionField])
 	}
 	seconds := math.Abs(values[correctionField]) + values[rootDispersionField] + values[rootDelayField]/2 + math.Max(age, 0)*clockErrorPPM/partsPerMillion

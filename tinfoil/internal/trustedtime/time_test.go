@@ -39,7 +39,7 @@ func TestTrackingBoundUsesChronyCSVMeasurements(t *testing.T) {
 	}{
 		{name: "IPv4 and negative correction", want: 38345678 * time.Nanosecond},
 		{name: "IPv6 and positive correction", replacements: map[string]string{"address": "2001:db8::123", "correction": "0.012345678"}, want: 38345678 * time.Nanosecond},
-		{name: "frequency and skew limits", replacements: map[string]string{"frequency": "-100", "skew": "100"}, want: 38345678 * time.Nanosecond},
+		{name: "unsaturated frequency and skew limit", replacements: map[string]string{"frequency": "-99.999", "skew": "100"}, want: 38345678 * time.Nanosecond},
 		{name: "future reference within uncertainty", replacements: map[string]string{"reference_time": "1770000011"}, want: 37345678 * time.Nanosecond},
 		{name: "reference freshness boundary", replacements: map[string]string{"reference_time": "1769999710"}, want: 67345678 * time.Nanosecond},
 		{name: "fractional nanosecond rounds up", replacements: map[string]string{"reference_time": "1770000010", "correction": "0.0000000001", "root_delay": "0", "root_dispersion": "0"}, want: time.Nanosecond},
@@ -86,6 +86,8 @@ func TestTrackingBoundRejectsUntrustedReports(t *testing.T) {
 		{name: "negative dispersion", data: trackingReport(t, map[string]string{"root_dispersion": "-0.001"})},
 		{name: "negative skew", data: trackingReport(t, map[string]string{"skew": "-1"})},
 		{name: "excess skew", data: trackingReport(t, map[string]string{"skew": "100.001"})},
+		{name: "saturated positive frequency", data: trackingReport(t, map[string]string{"frequency": "100"})},
+		{name: "saturated negative frequency", data: trackingReport(t, map[string]string{"frequency": "-100"})},
 		{name: "excess positive frequency", data: trackingReport(t, map[string]string{"frequency": "100.001"})},
 		{name: "excess negative frequency", data: trackingReport(t, map[string]string{"frequency": "-100.001"})},
 		{name: "uncertainty from remaining correction", data: trackingReport(t, map[string]string{"correction": "-1"})},

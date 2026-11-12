@@ -149,6 +149,18 @@ func BuildAttestation(
 	deviceEvidence []envelope.DeviceEvidenceItem,
 	collateral wire.Response,
 ) (json.RawMessage, error) {
+	return buildAttestation(material, nonce, deviceEvidence, collateral, reportWithRetry)
+}
+
+type quoteReader func([64]byte) ([]byte, string, error)
+
+func buildAttestation(
+	material []envelope.CryptoMaterialItem,
+	nonce []byte,
+	deviceEvidence []envelope.DeviceEvidenceItem,
+	collateral wire.Response,
+	readQuote quoteReader,
+) (json.RawMessage, error) {
 	entries, err := withConfigAttachment(collateral.Collateral, boot.ConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("preparing config attachment: %w", err)
@@ -156,7 +168,7 @@ func BuildAttestation(
 	return envelope.Build(envelope.BuildInput{
 		Nonce: nonce, CryptoMaterial: material, DeviceEvidence: deviceEvidence, Collateral: entries, CollateralFormat: collateral.Format,
 	}, func(reportData [64]byte) (string, []byte, error) {
-		rawQuote, platform, err := reportWithRetry(reportData)
+		rawQuote, platform, err := readQuote(reportData)
 		if err != nil {
 			return "", nil, fmt.Errorf("obtaining hardware quote: %w", err)
 		}

@@ -20,6 +20,7 @@ func TestAttestationRequestMetrics(t *testing.T) {
 		endpoint, format, sdk, version, userAgent string
 		status                                    int
 	}{
+		{AttestationEndpointUnversioned, "https://tinfoil.sh/predicate/attestation/v4", "tinfoil-go", "0.15.7", "Go-http-client/2.0", http.StatusOK},
 		{AttestationEndpointUnversioned, envelope.AttestationV3Format, "", "", "Go-http-client/1.1", http.StatusOK},
 		{AttestationEndpointUnversioned, envelope.AttestationV3Format, "tinfoil-go", "v0.15.7", "Go-http-client/2.0", http.StatusOK},
 		{AttestationEndpointV3, envelope.AttestationV3Format, "tinfoil-go", "0.15.7", "python-requests/2.32.5", http.StatusOK},
@@ -47,6 +48,7 @@ func TestAttestationRequestMetrics(t *testing.T) {
 	require.NoError(t, testutil.CollectAndCompare(m.requests, strings.NewReader(`
 # HELP tfshim_attestation_requests_total Attestation HTTP requests by endpoint, served format, self-reported SDK, coarse User-Agent family, and response result; does not indicate client verification success.
 # TYPE tfshim_attestation_requests_total counter
+tfshim_attestation_requests_total{attestation_version="v4",client_family="go",endpoint="unversioned",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
 tfshim_attestation_requests_total{attestation_version="v3",client_family="go",endpoint="unversioned",result="served",sdk="unknown",sdk_version="unknown"} 1
 tfshim_attestation_requests_total{attestation_version="v3",client_family="go",endpoint="unversioned",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1
 tfshim_attestation_requests_total{attestation_version="v3",client_family="python",endpoint="v3",result="served",sdk="tinfoil-go",sdk_version="0.15.7"} 1

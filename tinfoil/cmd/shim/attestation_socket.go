@@ -58,8 +58,16 @@ func newLocalAttestationHandler(next http.Handler) http.Handler {
 			return
 		}
 		query, err := url.ParseQuery(r.URL.RawQuery)
+		queryFields := 1
+		if formats, withTime := query["format"]; withTime {
+			if len(formats) != 1 || formats[0] != attestationTimeVersion || r.URL.Path != localAttestationPath {
+				writeAPIError(w, errInvalidAttestationFormat)
+				return
+			}
+			queryFields++
+		}
 		nonces := query["nonce"]
-		if err != nil || len(query) != 1 || len(nonces) != 1 || len(nonces[0]) != hex.EncodedLen(envelope.NonceSize) || r.ContentLength != 0 {
+		if err != nil || len(query) != queryFields || len(nonces) != 1 || len(nonces[0]) != hex.EncodedLen(envelope.NonceSize) || r.ContentLength != 0 {
 			writeAPIError(w, errInvalidNonce)
 			return
 		}

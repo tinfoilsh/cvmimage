@@ -26,6 +26,8 @@ const (
 	overflowSDKLabel        = "other"
 	noAttestationVersion    = "none"
 	attestationVersionV3    = "v3"
+	attestationVersionV4    = "v4"
+	attestationV4Format     = "https://tinfoil.sh/predicate/attestation/v4"
 	attestationServed       = "served"
 	attestationClientError  = "client_error"
 	attestationServerError  = "server_error"
@@ -147,6 +149,8 @@ func (m *attestationMetrics) observe(endpoint string, next http.Handler) http.Ha
 			switch w.Header().Get(attestationFormatHeader) {
 			case envelope.AttestationV3Format:
 				version = attestationVersionV3
+			case attestationV4Format:
+				version = attestationVersionV4
 			}
 		case response.Code >= http.StatusInternalServerError:
 			result = attestationServerError

@@ -111,6 +111,10 @@ func TestLocalAttestationRejectsOtherRequests(t *testing.T) {
 		{name: "long nonce", method: http.MethodGet, target: localAttestationTestQuery + "ab", status: http.StatusBadRequest},
 		{name: "invalid hex", method: http.MethodGet, target: localAttestationPath + "?nonce=" + strings.Repeat("zz", envelope.NonceSize), status: http.StatusBadRequest},
 		{name: "duplicate nonce", method: http.MethodGet, target: localAttestationTestQuery + "&nonce=ab", status: http.StatusBadRequest},
+		{name: "unknown format", method: http.MethodGet, target: localAttestationTestQuery + "&format=v5", status: http.StatusBadRequest},
+		{name: "duplicate format", method: http.MethodGet, target: localAttestationTestQuery + "&format=v4&format=v4", status: http.StatusBadRequest},
+		{name: "v4 extra query", method: http.MethodGet, target: localAttestationTestQuery + "&format=v4&key=ab", status: http.StatusBadRequest},
+		{name: "v4 on v3 endpoint", method: http.MethodGet, target: attestationV3Path + "?nonce=" + strings.Repeat("ab", envelope.NonceSize) + "&format=v4", status: http.StatusBadRequest},
 		{name: "extra query", method: http.MethodGet, target: localAttestationTestQuery + "&key=ab", status: http.StatusBadRequest},
 		{name: "v3 extra query", method: http.MethodGet, target: attestationV3Path + "?nonce=" + strings.Repeat("ab", envelope.NonceSize) + "&cache=1", status: http.StatusBadRequest},
 		{name: "v3 trailing slash extra query", method: http.MethodGet, target: attestationV3Path + "/?nonce=" + strings.Repeat("ab", envelope.NonceSize) + "&cache=1", status: http.StatusBadRequest},
@@ -139,6 +143,11 @@ func TestLocalAttestationRejectsOtherRequests(t *testing.T) {
 			t.Fatalf("valid request to %s = %d %q", path, response.StatusCode, body)
 		}
 	}
+	response, body := localAttestationTestRequest(t, client, http.MethodGet, localAttestationTestQuery+"&format=v4", "")
+	if response.StatusCode != http.StatusOK || body != strings.Repeat("ab", envelope.NonceSize) {
+		t.Fatalf("valid v4 request = %d %q", response.StatusCode, body)
+	}
+
 }
 
 func TestLocalAttestationAllowsConcurrentRequests(t *testing.T) {

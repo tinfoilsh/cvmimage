@@ -101,6 +101,7 @@ func newLifecycleHarness() *lifecycleHarness {
 		lockModules:      func() error { return nil },
 		debugFailure:     func(context.Context, error) {},
 		setupFS:          noSetup,
+		cpuFeatures:      noSetup,
 		sysctls:          noSetup,
 		ramdisk:          noSetup,
 		localAttestation: func() (*os.File, error) { return os.Open(os.DevNull) },
@@ -614,6 +615,25 @@ func TestFilesystemSetupFailureDoesNotStartConsole(t *testing.T) {
 	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
 	if !errors.Is(err, setupErr) {
 		t.Fatalf("runLifecycle error = %v, want %v", err, setupErr)
+	}
+}
+
+func TestMissingCPUFeaturesStopStartupBeforeAnyService(t *testing.T) {
+	harness := newLifecycleHarness()
+	featureErr := errors.New("processor 0 does not report required CPU features: smep")
+	harness.deps.cpuFeatures = func(pidruntime.LogFunc) error { return featureErr }
+	harness.deps.startConsole = func(context.Context) (consoleControl, error) {
+		t.Fatal("console started without the required CPU features")
+		return nil, nil
+	}
+	harness.deps.sysctls = func(pidruntime.LogFunc) error {
+		t.Fatal("startup continued without the required CPU features")
+		return nil
+	}
+
+	err := runLifecycle(context.Background(), harness.deps, harness.readiness)
+	if !errors.Is(err, featureErr) {
+		t.Fatalf("runLifecycle error = %v, want %v", err, featureErr)
 	}
 }
 

@@ -3,6 +3,8 @@ package timequorum
 import (
 	"testing"
 	"time"
+
+	"github.com/beevik/ntp"
 )
 
 func TestAgreementRequiresThreeOperators(t *testing.T) {
@@ -12,7 +14,7 @@ func TestAgreementRequiresThreeOperators(t *testing.T) {
 		var samples []Sample
 		for i, operator := range operators {
 			if lost&(1<<i) == 0 {
-				samples = append(samples, Sample{operator, now.UTC(), now, time.Millisecond})
+				samples = append(samples, Sample{operator, now.UTC(), now, time.Millisecond, ntp.LeapNoWarning})
 			}
 		}
 		agreement, err := Agree(samples, now)
@@ -27,17 +29,17 @@ func TestAgreementRequiresThreeOperators(t *testing.T) {
 
 func TestAgreementFiltersUnusableSamples(t *testing.T) {
 	now := time.Now()
-	base := []Sample{{Canonical, now.UTC(), now, time.Millisecond}, {Cloudflare, now.UTC(), now, time.Millisecond}}
+	base := []Sample{{Canonical, now.UTC(), now, time.Millisecond, ntp.LeapNoWarning}, {Cloudflare, now.UTC(), now, time.Millisecond, ntp.LeapNoWarning}}
 	for _, test := range []struct {
 		name  string
 		third Sample
 	}{
 		{"duplicate operator", base[0]},
-		{"unknown operator", Sample{"unknown", now.UTC(), now, time.Millisecond}},
-		{"stale", Sample{Netnod, now.UTC(), now.Add(-MaxSampleAge - time.Nanosecond), time.Millisecond}},
-		{"future sample", Sample{Netnod, now.UTC(), now.Add(time.Nanosecond), time.Millisecond}},
-		{"unbounded", Sample{Netnod, now.UTC(), now, MaxSampleRadius + time.Nanosecond}},
-		{"negative radius", Sample{Netnod, now.UTC(), now, -time.Nanosecond}},
+		{"unknown operator", Sample{"unknown", now.UTC(), now, time.Millisecond, ntp.LeapNoWarning}},
+		{"stale", Sample{Netnod, now.UTC(), now.Add(-MaxSampleAge - time.Nanosecond), time.Millisecond, ntp.LeapNoWarning}},
+		{"future sample", Sample{Netnod, now.UTC(), now.Add(time.Nanosecond), time.Millisecond, ntp.LeapNoWarning}},
+		{"unbounded", Sample{Netnod, now.UTC(), now, MaxSampleRadius + time.Nanosecond, ntp.LeapNoWarning}},
+		{"negative radius", Sample{Netnod, now.UTC(), now, -time.Nanosecond, ntp.LeapNoWarning}},
 		{"zero timestamp", Sample{Operator: Netnod, Received: now}},
 		{"zero receipt", Sample{Operator: Netnod, UTC: now.UTC()}},
 	} {
@@ -52,9 +54,9 @@ func TestAgreementFiltersUnusableSamples(t *testing.T) {
 func TestPairwiseOverlapDoesNotEstablishAgreement(t *testing.T) {
 	now := time.Now()
 	samples := []Sample{
-		{Canonical, now.UTC(), now, 200 * time.Millisecond},
-		{Cloudflare, now.UTC().Add(-100 * time.Millisecond), now, 2 * time.Millisecond},
-		{Netnod, now.UTC().Add(100 * time.Millisecond), now, 2 * time.Millisecond},
+		{Canonical, now.UTC(), now, 200 * time.Millisecond, ntp.LeapNoWarning},
+		{Cloudflare, now.UTC().Add(-100 * time.Millisecond), now, 2 * time.Millisecond, ntp.LeapNoWarning},
+		{Netnod, now.UTC().Add(100 * time.Millisecond), now, 2 * time.Millisecond, ntp.LeapNoWarning},
 	}
 	if agreement, err := Agree(samples, now); err == nil {
 		t.Fatalf("disjoint intervals admitted: %+v", agreement)
@@ -63,8 +65,8 @@ func TestPairwiseOverlapDoesNotEstablishAgreement(t *testing.T) {
 
 func TestAgreementRejectsOutliersAndPrefersFullOverlap(t *testing.T) {
 	now := time.Now()
-	good := []Sample{{Canonical, now.UTC(), now, 10 * time.Millisecond}, {Cloudflare, now.UTC(), now, 20 * time.Millisecond}, {Netnod, now.UTC(), now, 30 * time.Millisecond}}
-	bad := []Sample{{PTB, now.UTC().Add(time.Second), now, time.Millisecond}, {SIDN, now.UTC().Add(-time.Second), now, time.Millisecond}}
+	good := []Sample{{Canonical, now.UTC(), now, 10 * time.Millisecond, ntp.LeapNoWarning}, {Cloudflare, now.UTC(), now, 20 * time.Millisecond, ntp.LeapNoWarning}, {Netnod, now.UTC(), now, 30 * time.Millisecond, ntp.LeapNoWarning}}
+	bad := []Sample{{PTB, now.UTC().Add(time.Second), now, time.Millisecond, ntp.LeapNoWarning}, {SIDN, now.UTC().Add(-time.Second), now, time.Millisecond, ntp.LeapNoWarning}}
 	agreement, err := Agree(append(good, bad...), now)
 	if err != nil || len(agreement.Operators) != RequiredOperators || !agreement.UTC.Equal(now.UTC()) {
 		t.Fatalf("agreement=%+v error=%v", agreement, err)
@@ -82,13 +84,31 @@ func TestAgreementProjectsFromReceiptAndCountsProviderOnce(t *testing.T) {
 	now := time.Now()
 	const age = time.Second
 	samples := []Sample{
-		{Canonical, now.UTC().Add(-age), now.Add(-age), time.Millisecond},
-		{Canonical, now.UTC().Add(time.Hour), now.Add(-age - time.Second), time.Millisecond},
-		{Cloudflare, now.UTC(), now, time.Millisecond},
-		{Netnod, now.UTC(), now, time.Millisecond},
+		{Canonical, now.UTC().Add(-age), now.Add(-age), time.Millisecond, ntp.LeapNoWarning},
+		{Canonical, now.UTC().Add(time.Hour), now.Add(-age - time.Second), time.Millisecond, ntp.LeapNoWarning},
+		{Cloudflare, now.UTC(), now, time.Millisecond, ntp.LeapNoWarning},
+		{Netnod, now.UTC(), now, time.Millisecond, ntp.LeapNoWarning},
 	}
 	agreement, err := Agree(samples, now)
 	if err != nil || len(agreement.Operators) != RequiredOperators || !agreement.UTC.Equal(now.UTC()) {
 		t.Fatalf("agreement=%+v error=%v", agreement, err)
+	}
+}
+
+func TestAgreementRequiresMatchingLeapIndications(t *testing.T) {
+	now := time.Now()
+	var samples []Sample
+	for _, operator := range []Operator{Canonical, Cloudflare, Netnod, PTB, SIDN} {
+		samples = append(samples, Sample{Operator: operator, UTC: now.UTC(), Received: now, Radius: time.Millisecond, Leap: ntp.LeapAddSecond})
+	}
+	samples[0].Leap = ntp.LeapNoWarning
+	samples[1].Leap = ntp.LeapNoWarning
+	agreement, err := Agree(samples, now)
+	if err != nil || agreement.Leap != ntp.LeapAddSecond || len(agreement.Operators) != RequiredOperators {
+		t.Fatalf("agreement=%+v error=%v", agreement, err)
+	}
+	samples[2].Leap = ntp.LeapDelSecond
+	if agreement, err := Agree(samples, now); err == nil {
+		t.Fatalf("conflicting leap indications admitted: %+v", agreement)
 	}
 }

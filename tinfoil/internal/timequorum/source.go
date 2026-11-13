@@ -189,7 +189,7 @@ func (worker *sourceWorker) attempt(ctx context.Context, relay *ntsrelay.Client,
 		return Sample{}, err
 	}
 	return Sample{Operator: worker.source.Operator, UTC: response.Timestamps.ServerXmit.Add(response.RTT / 2).UTC(),
-		Received: response.Timestamps.ClientRecv, Radius: response.RootDistance}, nil
+		Received: response.Timestamps.ClientRecv, Radius: response.RootDistance, Leap: response.Leap}, nil
 }
 
 func (worker *sourceWorker) tlsConfig(hostname string) *tls.Config {

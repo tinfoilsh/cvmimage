@@ -5,6 +5,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/beevik/ntp"
+
 	"tinfoil/internal/ntsrelay"
 )
 
@@ -39,17 +41,20 @@ type Sample struct {
 	UTC      time.Time
 	Received time.Time
 	Radius   time.Duration
+	Leap     ntp.LeapIndicator
 }
 
 type Agreement struct {
 	UTC       time.Time
 	Observed  time.Time
 	Operators []Operator
+	Leap      ntp.LeapIndicator
 }
 
 type interval struct {
 	operator     Operator
 	lower, upper time.Time
+	leap         ntp.LeapIndicator
 }
 
 // Agree counts operators, not addresses. A common intersection is necessary:
@@ -58,7 +63,7 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 	fresh := make(map[Operator]Sample)
 	for _, sample := range samples {
 		age := now.Sub(sample.Received)
-		if !sample.Operator.valid() || sample.UTC.IsZero() || sample.Received.IsZero() || age < 0 || age > MaxSampleAge || sample.Radius < 0 || sample.Radius > MaxSampleRadius {
+		if !sample.Operator.valid() || sample.UTC.IsZero() || sample.Received.IsZero() || age < 0 || age > MaxSampleAge || sample.Radius < 0 || sample.Radius > MaxSampleRadius || sample.Leap >= ntp.LeapNotInSync {
 			continue
 		}
 		previous, exists := fresh[sample.Operator]
@@ -69,7 +74,7 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 	intervals := make([]interval, 0, len(fresh))
 	for operator, sample := range fresh {
 		center := sample.UTC.Add(now.Sub(sample.Received))
-		intervals = append(intervals, interval{operator, center.Add(-sample.Radius), center.Add(sample.Radius)})
+		intervals = append(intervals, interval{operator, center.Add(-sample.Radius), center.Add(sample.Radius), sample.Leap})
 	}
 	sort.Slice(intervals, func(i, j int) bool { return intervals[i].operator < intervals[j].operator })
 	var best Agreement
@@ -79,7 +84,7 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 		lower, upper := point, candidate.upper
 		var operators []Operator
 		for _, other := range intervals {
-			if point.Before(other.lower) || point.After(other.upper) {
+			if other.leap != candidate.leap || point.Before(other.lower) || point.After(other.upper) {
 				continue
 			}
 			operators = append(operators, other.operator)
@@ -95,7 +100,7 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 		}
 		width := upper.Sub(lower)
 		if len(operators) > len(best.Operators) || len(operators) == len(best.Operators) && width < bestWidth {
-			best = Agreement{UTC: lower.Add(width / 2).UTC(), Observed: now, Operators: operators}
+			best = Agreement{UTC: lower.Add(width / 2).UTC(), Observed: now, Operators: operators, Leap: candidate.leap}
 			bestWidth = width
 		}
 	}

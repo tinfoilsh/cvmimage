@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"embed"
+	"encoding/asn1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,8 +211,14 @@ func (query query) verify(reply []byte, authorities []Authority) (string, time.T
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	if len(signed.Certificates) == 0 {
+	if signed.GetOnlySigner() == nil {
 		return "", time.Time{}, errors.New("timestamp carries no signer certificate")
+	}
+	if err := checkSigner(signed.GetOnlySigner()); err != nil {
+		return "", time.Time{}, err
+	}
+	if err := checkToken(token.RawToken, signed); err != nil {
+		return "", time.Time{}, err
 	}
 	intermediates := x509.NewCertPool()
 	for _, certificate := range signed.Certificates {
@@ -226,6 +233,22 @@ func (query query) verify(reply []byte, authorities []Authority) (string, time.T
 		}
 	}
 	return "", time.Time{}, errors.New("timestamp is not signed by a pinned authority")
+}
+
+var extendedKeyUsageOID = asn1.ObjectIdentifier{2, 5, 29, 37}
+
+func checkSigner(signer *x509.Certificate) error {
+	if signer.IsCA {
+		return errors.New("timestamp signer must be an end entity")
+	}
+	for _, extension := range signer.Extensions {
+		if extension.Id.Equal(extendedKeyUsageOID) && extension.Critical &&
+			len(signer.ExtKeyUsage) == 1 && signer.ExtKeyUsage[0] == x509.ExtKeyUsageTimeStamping &&
+			len(signer.UnknownExtKeyUsage) == 0 {
+			return nil
+		}
+	}
+	return errors.New("timestamp signer requires a critical extended key usage of timestamping only")
 }
 
 // agree returns the median authority time once enough authorities fall

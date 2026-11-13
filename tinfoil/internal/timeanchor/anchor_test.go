@@ -102,14 +102,16 @@ func TestVerifyRequiresTimestampingOnlySigner(t *testing.T) {
 		purposes []asn1.ObjectIdentifier
 		critical bool
 		valid    bool
+		isCA     bool
 	}{
-		{"timestamping only", []asn1.ObjectIdentifier{timestamping}, true, true},
-		{"noncritical", []asn1.ObjectIdentifier{timestamping}, false, false},
-		{"multiple purposes", []asn1.ObjectIdentifier{timestamping, codeSigning}, true, false},
-		{"missing", nil, false, false},
+		{"timestamping only", []asn1.ObjectIdentifier{timestamping}, true, true, false},
+		{"noncritical", []asn1.ObjectIdentifier{timestamping}, false, false, false},
+		{"multiple purposes", []asn1.ObjectIdentifier{timestamping, codeSigning}, true, false, false},
+		{"missing", nil, false, false, false},
+		{"certificate authority", []asn1.ObjectIdentifier{timestamping}, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newTestAuthorityWithUsage(t, "test", tc.purposes, tc.critical)
+			a := newTestAuthorityWithUsage(t, "test", tc.purposes, tc.critical, tc.isCA)
 			q, err := newQuery()
 			if err != nil {
 				t.Fatal(err)
@@ -119,6 +121,9 @@ func TestVerifyRequiresTimestampingOnlySigner(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, _, err = q.verify(a.sign(t, request, time.Now()), []Authority{a.Authority})
+			if tc.isCA && (err == nil || err.Error() != "timestamp signer must be an end entity") {
+				t.Fatalf("CA signer: %v", err)
+			}
 			if (err == nil) != tc.valid {
 				t.Fatalf("accepted = %t, want %t: %v", err == nil, tc.valid, err)
 			}
@@ -169,10 +174,10 @@ type testAuthority struct {
 
 func newTestAuthority(t *testing.T, name string) testAuthority {
 	t.Helper()
-	return newTestAuthorityWithUsage(t, name, []asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 8}}, true)
+	return newTestAuthorityWithUsage(t, name, []asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 8}}, true, false)
 }
 
-func newTestAuthorityWithUsage(t *testing.T, name string, purposes []asn1.ObjectIdentifier, critical bool) testAuthority {
+func newTestAuthorityWithUsage(t *testing.T, name string, purposes []asn1.ObjectIdentifier, critical, isCA bool) testAuthority {
 	t.Helper()
 	issue := func(template, parent *x509.Certificate, public *ecdsa.PublicKey, signer *ecdsa.PrivateKey) *x509.Certificate {
 		der, err := x509.CreateCertificate(rand.Reader, template, parent, public, signer)
@@ -209,7 +214,7 @@ func newTestAuthorityWithUsage(t *testing.T, name string, purposes []asn1.Object
 		extensions = []pkix.Extension{{Id: extendedKeyUsageOID, Critical: critical, Value: eku}}
 	}
 	signer := issue(valid(&x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: name + " signer"},
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtraExtensions: extensions}),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtraExtensions: extensions, IsCA: isCA, BasicConstraintsValid: true}),
 		root, &signerKey.PublicKey, rootKey)
 	roots := x509.NewCertPool()
 	roots.AddCert(root)

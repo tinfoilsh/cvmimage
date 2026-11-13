@@ -1,13 +1,15 @@
 package timeanchor
 
 import (
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/asn1"
+	"math/big"
 	"testing"
+	"time"
 
 	"github.com/digitorus/pkcs7"
 	"github.com/digitorus/timestamp"
-	"time"
 )
 
 func TestVerifyRequiresSignedCertificateBinding(t *testing.T) {
@@ -30,18 +32,37 @@ func TestVerifyRequiresSignedCertificateBinding(t *testing.T) {
 	}
 	tstInfoOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 1, 4}
 	bindingOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 47}
-	binding := func(digest []byte) pkcs7.Attribute {
-		value, err := asn1.Marshal(struct{ Certs []struct{ Hash []byte } }{
-			Certs: []struct{ Hash []byte }{{digest}},
-		})
+	binding := func(digest, issuer []byte, serial *big.Int) pkcs7.Attribute {
+		var issuerSerial asn1.RawValue
+		if serial != nil {
+			encoded, err := asn1.Marshal(struct {
+				Issuer []asn1.RawValue
+				Serial *big.Int
+			}{[]asn1.RawValue{{Class: asn1.ClassContextSpecific, Tag: directoryNameTag, IsCompound: true, Bytes: issuer}}, serial})
+			if err != nil {
+				t.Fatal(err)
+			}
+			issuerSerial.FullBytes = encoded
+		}
+		type certID struct {
+			Hash         []byte
+			IssuerSerial asn1.RawValue `asn1:"optional"`
+		}
+		value, err := asn1.Marshal(struct{ Certs []certID }{[]certID{{digest, issuerSerial}}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return pkcs7.Attribute{Type: bindingOID, Value: asn1.RawValue{FullBytes: value}}
 	}
 	hash := sha256.Sum256(a.signer.Raw)
-	validBinding := binding(hash[:])
-	wrongBinding := binding(make([]byte, sha256.Size))
+	validBinding := binding(hash[:], nil, nil)
+	wrongBinding := binding(make([]byte, sha256.Size), nil, nil)
+	legacyHash := sha1.Sum(a.signer.Raw)
+	legacyBinding := binding(legacyHash[:], nil, nil)
+	legacyBinding.Type = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 12}
+	wrongLegacyBinding := binding(make([]byte, sha1.Size), nil, nil)
+	wrongLegacyBinding.Type = legacyBinding.Type
+
 	for _, tc := range []struct {
 		name        string
 		attributes  []pkcs7.Attribute
@@ -49,6 +70,13 @@ func TestVerifyRequiresSignedCertificateBinding(t *testing.T) {
 		valid       bool
 	}{
 		{name: "valid", attributes: []pkcs7.Attribute{validBinding}, contentType: tstInfoOID, valid: true},
+		{name: "valid issuer and serial", attributes: []pkcs7.Attribute{binding(hash[:], a.signer.RawIssuer, a.signer.SerialNumber)}, contentType: tstInfoOID, valid: true},
+		{name: "wrong issuer", attributes: []pkcs7.Attribute{binding(hash[:], a.signer.RawSubject, a.signer.SerialNumber)}, contentType: tstInfoOID},
+		{name: "wrong serial", attributes: []pkcs7.Attribute{binding(hash[:], a.signer.RawIssuer, big.NewInt(3))}, contentType: tstInfoOID},
+		{name: "valid legacy", attributes: []pkcs7.Attribute{legacyBinding}, contentType: tstInfoOID, valid: true},
+		{name: "wrong legacy hash", attributes: []pkcs7.Attribute{wrongLegacyBinding}, contentType: tstInfoOID},
+		{name: "both bindings", attributes: []pkcs7.Attribute{legacyBinding, validBinding}, contentType: tstInfoOID, valid: true},
+		{name: "one binding wrong", attributes: []pkcs7.Attribute{wrongLegacyBinding, validBinding}, contentType: tstInfoOID},
 		{name: "missing binding", contentType: tstInfoOID},
 		{name: "wrong hash", attributes: []pkcs7.Attribute{wrongBinding}, contentType: tstInfoOID},
 		{name: "duplicate binding", attributes: []pkcs7.Attribute{validBinding, wrongBinding}, contentType: tstInfoOID},

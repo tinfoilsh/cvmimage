@@ -46,7 +46,7 @@ func TestInheritedFeedEncodesNativeChronySample(t *testing.T) {
 	if err := feed.Send(context.Background(), agreement); err != nil {
 		t.Fatal(err)
 	}
-	if err := listener.SetReadDeadline(time.Now().Add(chronyFeedLimit)); err != nil {
+	if err := listener.SetReadDeadline(time.Now().Add(FeedLimit)); err != nil {
 		t.Fatal(err)
 	}
 	packet := make([]byte, 128)

@@ -36,7 +36,7 @@ func TestAgreementFiltersUnusableSamples(t *testing.T) {
 	}{
 		{"duplicate operator", base[0]},
 		{"unknown operator", Sample{"unknown", now.UTC(), now, time.Millisecond, ntp.LeapNoWarning}},
-		{"stale", Sample{Netnod, now.UTC(), now.Add(-MaxSampleAge - time.Nanosecond), time.Millisecond, ntp.LeapNoWarning}},
+		{"stale", Sample{Netnod, now.Add(-MaxSampleAge - time.Nanosecond).UTC(), now.Add(-MaxSampleAge - time.Nanosecond), time.Millisecond, ntp.LeapNoWarning}},
 		{"future sample", Sample{Netnod, now.UTC(), now.Add(time.Nanosecond), time.Millisecond, ntp.LeapNoWarning}},
 		{"unbounded", Sample{Netnod, now.UTC(), now, MaxSampleRadius + time.Nanosecond, ntp.LeapNoWarning}},
 		{"negative radius", Sample{Netnod, now.UTC(), now, -time.Nanosecond, ntp.LeapNoWarning}},
@@ -60,6 +60,20 @@ func TestPairwiseOverlapDoesNotEstablishAgreement(t *testing.T) {
 	}
 	if agreement, err := Agree(samples, now); err == nil {
 		t.Fatalf("disjoint intervals admitted: %+v", agreement)
+	}
+}
+
+func TestCompetingQuorumsFailClosed(t *testing.T) {
+	now := time.Now()
+	samples := []Sample{
+		{Canonical, now.UTC(), now, 200 * time.Millisecond, ntp.LeapNoWarning},
+		{Cloudflare, now.UTC().Add(-100 * time.Millisecond), now, 2 * time.Millisecond, ntp.LeapNoWarning},
+		{Netnod, now.UTC().Add(-100 * time.Millisecond), now, 2 * time.Millisecond, ntp.LeapNoWarning},
+		{PTB, now.UTC().Add(100 * time.Millisecond), now, 2 * time.Millisecond, ntp.LeapNoWarning},
+		{SIDN, now.UTC().Add(100 * time.Millisecond), now, 2 * time.Millisecond, ntp.LeapNoWarning},
+	}
+	if agreement, err := Agree(samples, now); err == nil {
+		t.Fatalf("competing quorums admitted: %+v", agreement)
 	}
 }
 

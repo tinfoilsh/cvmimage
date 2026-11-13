@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -28,6 +29,28 @@ func TestTimeReadinessRequiresExplicitQuorumAcknowledgment(t *testing.T) {
 	cancel()
 	if err := armTimeQuorum(ctx, http.DefaultClient); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled readiness returned %v", err)
+	}
+}
+
+func TestTimeReadinessRetriesUnavailableQuorum(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Transport = &readinessTransport{target: server.URL, base: client.Transport}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*clockWaitInterval)
+	defer cancel()
+	if err := armTimeQuorum(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("readiness attempts=%d, want 2", attempts.Load())
 	}
 }
 

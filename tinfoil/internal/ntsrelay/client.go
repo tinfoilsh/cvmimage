@@ -139,6 +139,7 @@ type relayConnection struct {
 func (connection *relayConnection) RemoteAddr() net.Addr { return connection.peer }
 func (connection *relayConnection) Close() error {
 	var err error
+	// Abortive teardown avoids a peer-controlled WebSocket close-handshake wait.
 	connection.once.Do(func() { connection.cancel(); connection.socket.CloseNow(); err = connection.Conn.Close() })
 	return err
 }

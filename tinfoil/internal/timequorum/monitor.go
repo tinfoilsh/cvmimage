@@ -12,7 +12,8 @@ import (
 
 const (
 	PollInterval          = 64 * time.Second
-	QuorumLifetime        = PollInterval + ntsrelay.ExchangeLimit
+	FeedLimit             = 2 * time.Second
+	QuorumLifetime        = PollInterval + ntsrelay.ExchangeLimit + FeedLimit
 	startupSampleInterval = 2 * time.Second
 	startupRetryInterval  = 8 * time.Second
 )

@@ -81,6 +81,7 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 	sort.Slice(intervals, func(i, j int) bool { return intervals[i].operator < intervals[j].operator })
 	var best Agreement
 	var bestWidth time.Duration
+	var commonLower, commonUpper time.Time
 	for _, candidate := range intervals {
 		point := candidate.lower
 		lower, upper := point, candidate.upper
@@ -103,6 +104,19 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 		}
 		if len(operators) < RequiredOperators {
 			continue
+		}
+		if commonLower.IsZero() {
+			commonLower, commonUpper = lower, upper
+		} else {
+			if lower.After(commonLower) {
+				commonLower = lower
+			}
+			if upper.Before(commonUpper) {
+				commonUpper = upper
+			}
+			if commonLower.After(commonUpper) {
+				return Agreement{}, errors.New("conflicting time quorums have disjoint intervals")
+			}
 		}
 		width := upper.Sub(lower)
 		if len(operators) > len(best.Operators) || len(operators) == len(best.Operators) && width < bestWidth {

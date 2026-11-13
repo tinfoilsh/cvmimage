@@ -12,7 +12,6 @@ import (
 
 const (
 	chronySampleMagic = 0x534f434b
-	chronyFeedLimit   = 2 * time.Second
 )
 
 // ChronyFeed writes to a connected socket supplied by PID 1, without granting
@@ -67,7 +66,7 @@ func (feed *ChronyFeed) Send(ctx context.Context, agreement Agreement) error {
 	if err := binary.Write(&data, binary.NativeEndian, packet); err != nil {
 		return err
 	}
-	deadline := now.Add(chronyFeedLimit)
+	deadline := now.Add(FeedLimit)
 	if parent, ok := ctx.Deadline(); ok && parent.Before(deadline) {
 		deadline = parent
 	}

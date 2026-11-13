@@ -95,9 +95,6 @@ func (sampler *Sampler) Poll(parent context.Context) (Agreement, error) {
 				failures = append(failures, result.err)
 			} else {
 				samples = append(samples, result.sample)
-				if agreement, err := Agree(samples, time.Now()); err == nil {
-					return agreement, nil
-				}
 			}
 		case <-ctx.Done():
 			failures = append(failures, ctx.Err())

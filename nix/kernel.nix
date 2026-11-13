@@ -48,6 +48,7 @@ let
     name = "linux-source-${version}-tinfoil";
     src = source;
     patches = [
+      ./patches/kernel-ignore-host-paravirtual-features.patch
       ./patches/kernel-disable-virtio-pci-admin-legacy.patch
       ./patches/kernel-tdx-fast-quote-polling.patch
       # CVE-2026-98432 is not yet fixed in Ubuntu 7.0.0-38.38.

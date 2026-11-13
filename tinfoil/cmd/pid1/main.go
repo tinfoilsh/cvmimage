@@ -114,6 +114,7 @@ type lifecycleDeps struct {
 	debugFailure     func(context.Context, error)
 	reportFailure    func(context.Context, error) error
 	setupFS          func(pidruntime.LogFunc) error
+	cpuFeatures      func(pidruntime.LogFunc) error
 	sysctls          func(pidruntime.LogFunc) error
 	ramdisk          func(pidruntime.LogFunc) error
 	localAttestation func() (*os.File, error)
@@ -162,6 +163,7 @@ func run(parent context.Context) (result error) {
 		},
 		lockModules:      hardening.LockKernelModules,
 		setupFS:          pidruntime.SetupFilesystems,
+		cpuFeatures:      pidruntime.RequireCPUFeatures,
 		sysctls:          pidruntime.ApplySysctls,
 		ramdisk:          pidruntime.SetupRamdisk,
 		localAttestation: func() (*os.File, error) { return newLocalAttestationSocket(boot.AttestationSocket) },
@@ -258,6 +260,9 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	initLogf("starting CPU lifecycle")
 	if err := deps.setupFS(initLogf); err != nil {
 		return fmt.Errorf("runtime filesystems: %w", err)
+	}
+	if err := deps.cpuFeatures(initLogf); err != nil {
+		return fmt.Errorf("CPU features: %w", err)
 	}
 	var err error
 	console, err = deps.startConsole(parent)

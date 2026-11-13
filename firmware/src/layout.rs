@@ -277,7 +277,66 @@ pub const DEFAULT_CMDLINE: &str = "panic=-1";
 pub const DEFAULT_CBIT: u8 = 51;
 
 // The measured page tables are four-level, so this is appended to every command line.
-const REQUIRED_CMDLINE: &str = "no5lvl";
+const REQUIRED_CMDLINE: [&str; 2] = ["no5lvl", "no-kvmclock"];
+const CLOCK_OVERRIDES: [&str; 6] = [
+    "clock",
+    "clocksource",
+    "tsc",
+    "tsc-early-khz",
+    "notsc",
+    "initcall-blacklist",
+];
+
+fn measured_cmdline(cmdline: &str) -> Result<String, String> {
+    if cmdline.bytes().any(|b| !b.is_ascii_graphic() && b != b' ') {
+        return Err("--cmdline must be printable ASCII".into());
+    }
+    let cmdline = match cmdline.trim() {
+        "" => DEFAULT_CMDLINE,
+        cmdline => cmdline,
+    };
+    let mut required = [false; REQUIRED_CMDLINE.len()];
+    let mut quoted = false;
+    // Linux next_arg() groups spaces with double quotes and aliases '-' with '_'.
+    for arg in cmdline.split(|ch| {
+        if ch == '"' {
+            quoted = !quoted;
+        }
+        ch == ' ' && !quoted
+    }) {
+        let arg = if let Some(arg) = arg.strip_prefix('"') {
+            arg.strip_suffix('"').unwrap_or(arg)
+        } else {
+            arg
+        };
+        let (name, value) = arg
+            .split_once('=')
+            .map_or((arg, None), |(name, value)| (name, Some(value)));
+        let name = name.replace('_', "-");
+        if name == "--" || CLOCK_OVERRIDES.contains(&name.as_str()) {
+            return Err(format!(
+                "--cmdline cannot override protected time with {name}"
+            ));
+        }
+        if let Some(index) = REQUIRED_CMDLINE.iter().position(|&flag| flag == name) {
+            if value.is_some() {
+                return Err(format!("--cmdline {name} does not take a value"));
+            }
+            required[index] = true;
+        }
+    }
+    if quoted {
+        return Err("--cmdline has an unterminated double quote".into());
+    }
+    let mut result = cmdline.to_string();
+    for (flag, present) in REQUIRED_CMDLINE.iter().zip(required) {
+        if !present {
+            result.push(' ');
+            result.push_str(flag);
+        }
+    }
+    Ok(result)
+}
 
 /// What a build is asked for. None of it is the guest's size or processor
 /// count: the shim takes the end of RAM from the loader's map, within the
@@ -302,14 +361,7 @@ impl Params {
         if !(32..=51).contains(&cbit) {
             return Err("--cbit must name a bit in the physical address width".into());
         }
-        let cmdline = match cmdline.trim() {
-            "" => format!("{DEFAULT_CMDLINE} {REQUIRED_CMDLINE}"),
-            c if c.split_whitespace().any(|w| w == REQUIRED_CMDLINE) => c.to_string(),
-            c => format!("{c} {REQUIRED_CMDLINE}"),
-        };
-        if cmdline.bytes().any(|b| !b.is_ascii_graphic() && b != b' ') {
-            return Err("--cmdline must be printable ASCII".into());
-        }
+        let cmdline = measured_cmdline(cmdline)?;
         // The EFI tables the image hands Linux have no runtime services: a
         // kernel told to use them anyway calls through a null table.
         if cmdline
@@ -324,4 +376,56 @@ impl Params {
 
 pub fn align_up(value: u64, alignment: u64) -> u64 {
     value.div_ceil(alignment) * alignment
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_images_require_the_protected_clock_arguments() {
+        for params in [Params::tdx(""), Params::snp(DEFAULT_CBIT, "")] {
+            assert_eq!(params.unwrap().cmdline, "panic=-1 no5lvl no-kvmclock");
+        }
+    }
+
+    #[test]
+    fn command_line_distinguishes_flags_from_quoted_values() {
+        assert_eq!(
+            measured_cmdline("console=ttyS0 label=\"no5lvl no-kvmclock\"").unwrap(),
+            "console=ttyS0 label=\"no5lvl no-kvmclock\" no5lvl no-kvmclock"
+        );
+        assert_eq!(
+            measured_cmdline("\"no5lvl\" no_kvmclock label=\"tsc=unstable --\"").unwrap(),
+            "\"no5lvl\" no_kvmclock label=\"tsc=unstable --\""
+        );
+        assert_eq!(
+            measured_cmdline("no5lvl no-kvmclock").unwrap(),
+            "no5lvl no-kvmclock"
+        );
+    }
+
+    #[test]
+    fn command_line_rejects_overrides_and_hidden_mandatory_flags() {
+        for cmdline in [
+            "clocksource=kvm-clock",
+            "clock=acpi_pm",
+            "tsc=recalibrate",
+            "\"tsc=unstable\"",
+            "tsc_early_khz=1000",
+            "tsc-early-khz=1000",
+            "notsc",
+            "initcall_blacklist=clocksource_require_protected_tsc",
+            "-- no-kvmclock",
+            "\"--\" no-kvmclock",
+            "no-kvmclock=0",
+            "no5lvl=0",
+            "label=\"unterminated",
+            "no-kvmclock\0",
+            "console=ttyS0\nno-kvmclock",
+            "console=\u{00a0}",
+        ] {
+            assert!(Params::tdx(cmdline).is_err(), "accepted {cmdline:?}");
+        }
+    }
 }

@@ -54,6 +54,7 @@ let
       ./patches/kernel-tdx-fast-quote-polling.patch
       # CVE-2026-98432 is not yet fixed in Ubuntu 7.0.0-38.38.
       ./patches/kernel-ipv4-options-rcu.patch
+      ./patches/kernel-require-protected-time.patch
     ];
   };
 

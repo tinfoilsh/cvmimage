@@ -1,0 +1,35 @@
+Ignore the host's KVM paravirtual feature bits in confidential guests, except
+for batched IPIs and extended interrupt destination IDs.
+
+The host supplies these bits, and most of them make the guest trust state the
+host can write. With PV TLB flush, an SEV guest skips flushing any vCPU that
+the shared steal-time page marks as preempted and relies on the host to flush
+it, so a malicious host can leave stale translations in the guest. Steal time,
+PV EOI, and async page faults read the same kind of host-written state.
+
+--- a/arch/x86/kernel/kvm.c
++++ b/arch/x86/kernel/kvm.c
+@@ -916,9 +916,22 @@
+ }
+ EXPORT_SYMBOL_GPL(kvm_para_available);
+ 
++/*
++ * The host chooses the feature bits. A confidential guest keeps only those
++ * that do not make it act on state the host can write: batched IPIs and
++ * extended interrupt destination IDs.
++ */
++#define KVM_CONFIDENTIAL_GUEST_FEATURES \
++	(BIT(KVM_FEATURE_PV_SEND_IPI) | BIT(KVM_FEATURE_MSI_EXT_DEST_ID))
++
+ unsigned int kvm_arch_para_features(void)
+ {
+-	return cpuid_eax(kvm_cpuid_base() | KVM_CPUID_FEATURES);
++	unsigned int features = cpuid_eax(kvm_cpuid_base() | KVM_CPUID_FEATURES);
++
++	if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT))
++		features &= KVM_CONFIDENTIAL_GUEST_FEATURES;
++
++	return features;
+ }
+ 
+ unsigned int kvm_arch_para_hints(void)

@@ -12,6 +12,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/go-sev-guest v0.15.0
 	github.com/google/go-tdx-guest v0.3.1
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jarcoal/httpmock v1.4.2
 	github.com/mackerelio/go-osstat v0.2.8
 	github.com/moby/moby/api v1.55.0

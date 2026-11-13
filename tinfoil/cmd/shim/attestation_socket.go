@@ -94,5 +94,5 @@ func serveWithAttestation(ctx context.Context, public *http.Server, listener net
 }
 
 func serveLocalAttestation(ctx context.Context, server *http.Server, listener net.Listener) error {
-	return serveHTTPUntilShutdown(ctx, server, func() error { return server.Serve(listener) })
+	return serveHTTPUntilShutdown(ctx, server, func() error { return server.Serve(listener) }, attestationDrain)
 }

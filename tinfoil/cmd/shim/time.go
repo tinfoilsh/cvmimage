@@ -56,14 +56,23 @@ func newTimeMonitor(fd int) (*timequorum.Monitor, *timequorum.ChronyFeed, error)
 		return nil, nil, stateErr
 	}
 	if stateErr == nil {
-		for _, stage := range state.Stages {
-			if stage.Name == boot.StageTime && stage.Status == boot.StatusOK {
-				monitor.Resume()
-				break
-			}
+		if timeEnforcementRequired(state) {
+			monitor.Resume()
 		}
 	}
 	return monitor, feed, nil
+}
+
+func timeEnforcementRequired(state *boot.State) bool {
+	if state.TimeQuorumRequired {
+		return true
+	}
+	for _, stage := range state.Stages {
+		if stage.Name == boot.StageTime && stage.Status == boot.StatusOK {
+			return true
+		}
+	}
+	return false
 }
 
 func timeAdmission(monitor *timequorum.Monitor, next http.Handler) http.Handler {

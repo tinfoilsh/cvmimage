@@ -23,6 +23,21 @@ import (
 const quorumExitChildEnv = "TINFOIL_TEST_QUORUM_EXIT_CHILD"
 const quorumExitTestLimit = 5 * time.Second
 
+func TestTimeEnforcementSurvivesArmingStageWindow(t *testing.T) {
+	for _, test := range []struct {
+		state    boot.State
+		required bool
+	}{
+		{boot.State{}, false},
+		{boot.State{TimeQuorumRequired: true, Stages: []boot.Stage{{Name: boot.StageTime, Status: boot.StatusPending}}}, true},
+		{boot.State{Stages: []boot.Stage{{Name: boot.StageTime, Status: boot.StatusOK}}}, true},
+	} {
+		if got := timeEnforcementRequired(&test.state); got != test.required {
+			t.Fatalf("state=%+v required=%t, want %t", test.state, got, test.required)
+		}
+	}
+}
+
 type failedTimeMonitor struct{ fail <-chan struct{} }
 
 func (monitor failedTimeMonitor) Run(ctx context.Context) error {

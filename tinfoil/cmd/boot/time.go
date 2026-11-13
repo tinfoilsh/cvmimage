@@ -14,7 +14,7 @@ import (
 	"tinfoil/internal/boot"
 )
 
-func synchronizeClock(parent context.Context, client string) error {
+func synchronizeClock(parent context.Context, client string, tracker *boot.Tracker) error {
 	ctx, cancel := context.WithTimeout(parent, clockBootstrapLimit)
 	defer cancel()
 	if err := waitForClock(ctx, client); err != nil {
@@ -24,6 +24,9 @@ func synchronizeClock(parent context.Context, client string) error {
 		return (&net.Dialer{}).DialContext(ctx, "unix", boot.AttestationSocket)
 	}}
 	defer transport.CloseIdleConnections()
+	if err := tracker.RequireTimeQuorum(); err != nil {
+		return fmt.Errorf("recording time enforcement: %w", err)
+	}
 	if err := armTimeQuorum(ctx, &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}); err != nil {
 		return err
 	}

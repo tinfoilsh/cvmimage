@@ -17,9 +17,17 @@ const (
 )
 
 type State struct {
-	Stages      []Stage   `json:"stages"`
-	StartedAt   time.Time `json:"started_at"`
-	CompletedAt time.Time `json:"completed_at"`
+	TimeQuorumRequired bool      `json:"time_quorum_required,omitempty"`
+	Stages             []Stage   `json:"stages"`
+	StartedAt          time.Time `json:"started_at"`
+	CompletedAt        time.Time `json:"completed_at"`
+}
+
+func (t *Tracker) RequireTimeQuorum() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.state.TimeQuorumRequired = true
+	return t.flushLocked()
 }
 
 type Stage struct {

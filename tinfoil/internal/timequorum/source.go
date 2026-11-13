@@ -95,6 +95,9 @@ func (sampler *Sampler) Poll(parent context.Context) (Agreement, error) {
 				failures = append(failures, result.err)
 			} else {
 				samples = append(samples, result.sample)
+				if agreement, err := Agree(samples, time.Now()); err == nil {
+					return agreement, nil
+				}
 			}
 		case <-ctx.Done():
 			failures = append(failures, ctx.Err())
@@ -107,6 +110,9 @@ func (sampler *Sampler) Poll(parent context.Context) (Agreement, error) {
 func sampledAgreement(samples []Sample, failures []error) (Agreement, error) {
 	agreement, err := Agree(samples, time.Now())
 	if err != nil {
+		for _, sample := range samples {
+			failures = append(failures, fmt.Errorf("%s: utc=%s radius=%s age=%s leap=%d", sample.Operator, sample.UTC.Format(time.RFC3339Nano), sample.Radius, time.Since(sample.Received), sample.Leap))
+		}
 		return Agreement{}, errors.Join(append([]error{err}, failures...)...)
 	}
 	return agreement, nil
@@ -142,6 +148,9 @@ func (worker *sourceWorker) query(parent context.Context) (Sample, error) {
 		cancel()
 		if err == nil {
 			return sample, nil
+		}
+		if errors.Is(parent.Err(), context.Canceled) {
+			return Sample{}, parent.Err()
 		}
 		worker.session = nil
 		worker.next = (worker.next + 1) % combinations

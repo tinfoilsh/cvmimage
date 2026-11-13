@@ -111,7 +111,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	start = time.Now()
 	log.Println("Waiting for authenticated UTC")
-	if err := waitForClock(ctx, boot.ChronyClientBinary); err != nil {
+	if err := synchronizeClock(ctx, boot.ChronyClientBinary); err != nil {
 		tracker.Record(boot.StageTime, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}

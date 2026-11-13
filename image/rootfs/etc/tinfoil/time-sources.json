@@ -1,0 +1,61 @@
+{
+  "relays": [
+    "https://atc.tinfoil.sh"
+  ],
+  "sources": [
+    {
+      "operator": "canonical",
+      "servers": [
+        "ntp-bootstrap.ubuntu.com"
+      ],
+      "spki_sha256": [
+        "56278fcf0df12a75fb91c8ed097a5e5b2ddd5ded63881d04b28d300e1ee89036"
+      ],
+      "assume_compliant_128gcm": false
+    },
+    {
+      "operator": "cloudflare",
+      "servers": [
+        "time.cloudflare.com"
+      ],
+      "spki_sha256": [
+        "48f93d4f1ecaf8e2323bc2e5be015b331d65cb8e40a1b28be50eb4ba9230e789"
+      ],
+      "assume_compliant_128gcm": true
+    },
+    {
+      "operator": "netnod",
+      "servers": [
+        "nts.netnod.se"
+      ],
+      "spki_sha256": [
+        "bd44c55cfd57e38da3a6aea80bf65f9c441b63fbd8667e057b0f112fc3211efa"
+      ],
+      "assume_compliant_128gcm": true
+    },
+    {
+      "operator": "ptb",
+      "servers": [
+        "ptbtime1.ptb.de",
+        "ptbtime4.ptb.de"
+      ],
+      "spki_sha256": [
+        "2acb438fa0617d9510e3b1a258f0bf5cbd0f4bd2a39f0819312d01968e49f7af",
+        "360036b8b4579aeadd2b3468f1a0659032b4b07a2165f8944e2971cf6ef67710"
+      ],
+      "assume_compliant_128gcm": true
+    },
+    {
+      "operator": "sidn",
+      "servers": [
+        "ntppool1.time.nl",
+        "ntppool2.time.nl"
+      ],
+      "spki_sha256": [
+        "6938a6400324139b254f4da8663d4abf84841674c73b48a7546df502919b1b18",
+        "a183e6c0a317a78654d0e05ddd42bf10d14dba2c0d6c53209949391fe20beb3b"
+      ],
+      "assume_compliant_128gcm": true
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import (
 	"os"
 
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
+	"tinfoil/internal/boot"
 )
 
 const (
@@ -70,7 +71,18 @@ func newLocalAttestationHandler(next http.Handler) http.Handler {
 	})
 }
 
-func serveWithAttestation(ctx context.Context, public *http.Server, listener net.Listener) error {
+func newLocalControlHandler(next http.Handler, timeReady http.Handler) http.Handler {
+	attestation := newLocalAttestationHandler(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() == boot.TimeReadyPath {
+			timeReady.ServeHTTP(w, r)
+			return
+		}
+		attestation.ServeHTTP(w, r)
+	})
+}
+
+func serveWithAttestation(ctx context.Context, public *http.Server, listener net.Listener, timeReady http.Handler) error {
 	if listener == nil {
 		return serveUntilShutdown(ctx, public)
 	}
@@ -81,7 +93,7 @@ func serveWithAttestation(ctx context.Context, public *http.Server, listener net
 		ReadHeaderTimeout: shimReadHeaderTimeout,
 		ReadTimeout:       shimReadHeaderTimeout,
 		IdleTimeout:       shimIdleTimeout,
-		Handler:           newLocalAttestationHandler(public.Handler),
+		Handler:           newLocalControlHandler(public.Handler, timeReady),
 	}
 	done := make(chan error, 1)
 	go func() {

@@ -49,12 +49,14 @@ type Agreement struct {
 	Observed  time.Time
 	Operators []Operator
 	Leap      ntp.LeapIndicator
+	oldest    time.Time
 }
 
 type interval struct {
 	operator     Operator
 	lower, upper time.Time
 	leap         ntp.LeapIndicator
+	received     time.Time
 }
 
 // Agree counts operators, not addresses. A common intersection is necessary:
@@ -74,7 +76,7 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 	intervals := make([]interval, 0, len(fresh))
 	for operator, sample := range fresh {
 		center := sample.UTC.Add(now.Sub(sample.Received))
-		intervals = append(intervals, interval{operator, center.Add(-sample.Radius), center.Add(sample.Radius), sample.Leap})
+		intervals = append(intervals, interval{operator, center.Add(-sample.Radius), center.Add(sample.Radius), sample.Leap, sample.Received})
 	}
 	sort.Slice(intervals, func(i, j int) bool { return intervals[i].operator < intervals[j].operator })
 	var best Agreement
@@ -82,12 +84,16 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 	for _, candidate := range intervals {
 		point := candidate.lower
 		lower, upper := point, candidate.upper
+		oldest := candidate.received
 		var operators []Operator
 		for _, other := range intervals {
 			if other.leap != candidate.leap || point.Before(other.lower) || point.After(other.upper) {
 				continue
 			}
 			operators = append(operators, other.operator)
+			if other.received.Before(oldest) {
+				oldest = other.received
+			}
 			if other.lower.After(lower) {
 				lower = other.lower
 			}
@@ -100,7 +106,7 @@ func Agree(samples []Sample, now time.Time) (Agreement, error) {
 		}
 		width := upper.Sub(lower)
 		if len(operators) > len(best.Operators) || len(operators) == len(best.Operators) && width < bestWidth {
-			best = Agreement{UTC: lower.Add(width / 2).UTC(), Observed: now, Operators: operators, Leap: candidate.leap}
+			best = Agreement{UTC: lower.Add(width / 2).UTC(), Observed: now, Operators: operators, Leap: candidate.leap, oldest: oldest}
 			bestWidth = width
 		}
 	}

@@ -267,7 +267,7 @@ func TestLocalAttestationFailureStopsPublicServer(t *testing.T) {
 	}
 	t.Cleanup(func() { server.Close() })
 	done := make(chan error, 1)
-	go func() { done <- serveWithAttestation(context.Background(), server, listener) }()
+	go func() { done <- serveWithAttestation(context.Background(), server, listener, http.NotFoundHandler()) }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, net.ErrClosed) {

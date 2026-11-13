@@ -113,6 +113,7 @@ type lifecycleDeps struct {
 	sysctls          func(pidruntime.LogFunc) error
 	ramdisk          func(pidruntime.LogFunc) error
 	localAttestation func() (*os.File, error)
+	timeFeed         func(context.Context) (*os.File, error)
 	limits           func() error
 	syslog           func(context.Context)
 	exists           func(string) (bool, error)
@@ -148,6 +149,7 @@ func run(parent context.Context) (result error) {
 		sysctls:          pidruntime.ApplySysctls,
 		ramdisk:          pidruntime.SetupRamdisk,
 		localAttestation: func() (*os.File, error) { return newLocalAttestationSocket(boot.AttestationSocket) },
+		timeFeed:         newTimeFeed,
 		limits:           hardening.ApplyRuntimeLimits,
 		syslog:           startOptionalSyslogSink,
 		exists:           pathExists,
@@ -161,7 +163,11 @@ func run(parent context.Context) (result error) {
 func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readinessState) (result error) {
 	var console consoleControl
 	var localAttestationSocket *os.File
+	var timeFeed *os.File
 	defer func() {
+		if timeFeed != nil {
+			timeFeed.Close()
+		}
 		if localAttestationSocket != nil {
 			localAttestationSocket.Close()
 		}
@@ -232,6 +238,11 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 		return err
 	}
 
+	timeFeed, err = deps.timeFeed(bootCtx)
+	if err != nil {
+		return fmt.Errorf("time feed: %w", err)
+	}
+
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containerdName, Required: true, Restart: true,
 		Command: command(containerdName, "/usr/bin/containerd"),
@@ -256,6 +267,8 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	shimCommand := hardenedCommand(hardening.ServiceShim, boot.ShimBinary)
 	shimFD := shimCommand.AddExtraFile(localAttestationSocket)
 	shimCommand.Args = append(shimCommand.Args, fmt.Sprintf("--attestation-fd=%d", shimFD))
+	timeFD := shimCommand.AddExtraFile(timeFeed)
+	shimCommand.Args = append(shimCommand.Args, fmt.Sprintf("--time-feed-fd=%d", timeFD))
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: shimName, Required: true, Restart: true,
 		DrainUntilExit: true,

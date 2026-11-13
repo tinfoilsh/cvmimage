@@ -41,6 +41,7 @@ var (
 	configFile         = flag.String("c", boot.ShimConfigPath, "Path to config file")
 	externalConfigFile = flag.String("e", boot.ExternalConfigPath, "Path to external config file")
 	attestationFD      = flag.Int("attestation-fd", noAttestationFD, "Inherited attestation Unix listener")
+	timeFeedFD         = flag.Int("time-feed-fd", noTimeFeedFD, "Inherited authenticated clock feed")
 )
 
 const (
@@ -53,6 +54,12 @@ func main() {
 	log.SetFlags(0)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	timeMonitor, timeFeed, err := newTimeMonitor(*timeFeedFD)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer timeFeed.Close()
+	go watchTimeQuorum(ctx, timeMonitor, signalInit)
 
 	var handler atomic.Value
 	var cert atomic.Pointer[tls.Certificate]
@@ -92,12 +99,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	srv.Handler = timeAdmission(timeMonitor, srv.Handler)
 
 	// Wait for boot to provision artifacts, then upgrade to the full handler.
 	go upgradeWhenReady(ctx, &handler, &cert)
 
 	log.Printf("Starting tinfoil shim (waiting for boot)")
-	if err := serveWithAttestation(ctx, srv, localListener); err != nil {
+	if err := serveWithAttestation(ctx, srv, localListener, timeReadyHandler(timeMonitor)); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -96,6 +96,7 @@ let
   repositoryFiles = [
     { source = ../image/rootfs/etc/.pwd.lock; target = "etc/.pwd.lock"; mode = "0600"; }
     { source = ../image/rootfs/etc/chrony/chrony.conf; target = "etc/chrony/chrony.conf"; mode = "0644"; }
+    { source = ../image/rootfs/etc/tinfoil/time-sources.json; target = "etc/tinfoil/time-sources.json"; mode = "0644"; }
     { source = ../image/rootfs/etc/containerd/config.toml; target = "etc/containerd/config.toml"; mode = "0644"; }
     { source = dockerConfig; target = "etc/docker/daemon.json"; mode = "0644"; }
     { source = accountFile ../image/rootfs/etc/group; target = "etc/group"; mode = "0644"; }

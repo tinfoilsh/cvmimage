@@ -36,6 +36,7 @@ type Monitor struct {
 	mu        sync.Mutex
 	expires   time.Time
 	armed     bool
+	ready     bool
 	lastError error
 	changed   chan struct{}
 }
@@ -47,13 +48,24 @@ func NewMonitor(sampler timeSampler, feed timeFeed, log func(string, ...any)) *M
 func (monitor *Monitor) Healthy() bool {
 	monitor.mu.Lock()
 	defer monitor.mu.Unlock()
-	return time.Now().Before(monitor.expires)
+	return monitor.ready && time.Now().Before(monitor.expires)
+}
+
+// Resume requires fresh quorum after a service restart while preserving the
+// runtime failure policy. Admission stays closed during reacquisition.
+func (monitor *Monitor) Resume() {
+	monitor.mu.Lock()
+	defer monitor.mu.Unlock()
+	monitor.armed = true
+	monitor.ready = false
+	monitor.expires = time.Now().Add(ntsrelay.ExchangeLimit + FeedLimit)
+	monitor.notify()
 }
 
 func (monitor *Monitor) Arm() error {
 	monitor.mu.Lock()
 	defer monitor.mu.Unlock()
-	if !time.Now().Before(monitor.expires) {
+	if !monitor.ready || !time.Now().Before(monitor.expires) {
 		return errors.Join(ErrQuorumUnavailable, monitor.lastError)
 	}
 	monitor.armed = true
@@ -119,12 +131,14 @@ func (monitor *Monitor) poll(ctx context.Context) error {
 		monitor.mu.Lock()
 		if err == nil && !agreement.oldest.IsZero() {
 			monitor.expires = agreement.oldest.Add(QuorumLifetime)
+			monitor.ready = true
 			monitor.lastError = nil
 		} else {
 			if err == nil {
 				err = errors.New("time agreement has no authenticated receipt time")
 			}
 			monitor.expires = time.Time{}
+			monitor.ready = false
 			monitor.lastError = err
 		}
 		armed := monitor.armed

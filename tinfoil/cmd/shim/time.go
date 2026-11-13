@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -48,7 +49,21 @@ func newTimeMonitor(fd int) (*timequorum.Monitor, *timequorum.ChronyFeed, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	return timequorum.NewMonitor(sampler, feed, log.Printf), feed, nil
+	monitor := timequorum.NewMonitor(sampler, feed, log.Printf)
+	state, stateErr := boot.Load()
+	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		feed.Close()
+		return nil, nil, stateErr
+	}
+	if stateErr == nil {
+		for _, stage := range state.Stages {
+			if stage.Name == boot.StageTime && stage.Status == boot.StatusOK {
+				monitor.Resume()
+				break
+			}
+		}
+	}
+	return monitor, feed, nil
 }
 
 func timeAdmission(monitor *timequorum.Monitor, next http.Handler) http.Handler {

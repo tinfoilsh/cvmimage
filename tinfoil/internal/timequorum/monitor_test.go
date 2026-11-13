@@ -101,3 +101,56 @@ func TestMonitorExpiryClosesAdmissionWithoutPollCompletion(t *testing.T) {
 		t.Fatal("expired quorum remained admissible")
 	}
 }
+
+func TestResumedMonitorRequiresFreshQuorumAndRetainsFailurePolicy(t *testing.T) {
+	sampler := &controlledSampler{requested: make(chan struct{}, 1), results: make(chan monitorResult, 1)}
+	monitor := NewMonitor(sampler, testFeed{}, t.Logf)
+	monitor.Resume()
+	if monitor.Healthy() || monitor.Arm() == nil {
+		t.Fatal("restart admitted traffic before reacquisition")
+	}
+	lost := errors.New("runtime quorum unavailable after restart")
+	sampler.results <- monitorResult{err: lost}
+	ctx, cancel := context.WithTimeout(context.Background(), monitorTestLimit)
+	defer cancel()
+	if err := monitor.Run(ctx); !errors.Is(err, lost) && !errors.Is(err, ErrQuorumUnavailable) {
+		t.Fatalf("restart did not fail closed: %v", err)
+	}
+}
+
+func TestResumedMonitorPublishesFreshAgreement(t *testing.T) {
+	sampler := &controlledSampler{requested: make(chan struct{}, 1), results: make(chan monitorResult, 1)}
+	monitor := NewMonitor(sampler, testFeed{}, t.Logf)
+	monitor.Resume()
+	<-monitor.changed
+	now := time.Now()
+	var samples []Sample
+	for _, operator := range []Operator{Canonical, Cloudflare, Netnod} {
+		samples = append(samples, Sample{Operator: operator, UTC: now.UTC(), Received: now, Radius: time.Millisecond})
+	}
+	agreement, err := Agree(samples, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sampler.results <- monitorResult{agreement: agreement}
+	ctx, cancel := context.WithTimeout(context.Background(), monitorTestLimit)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- monitor.poll(ctx) }()
+	select {
+	case <-monitor.changed:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if !monitor.Healthy() {
+		t.Fatal("fresh restart quorum was not published")
+	}
+	monitor.mu.Lock()
+	armed := monitor.armed
+	monitor.mu.Unlock()
+	if !armed {
+		t.Fatal("restart lost runtime enforcement")
+	}
+	cancel()
+	<-done
+}

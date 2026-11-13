@@ -101,8 +101,6 @@ func checkCertificate(raw []byte, signer *x509.Certificate, v2 bool) error {
 				return fmt.Errorf("invalid timestamp certificate hash algorithm")
 			}
 			switch {
-			case algorithm.Algorithm.Equal(pkcs7.OIDDigestAlgorithmSHA1):
-				hash = crypto.SHA1
 			case algorithm.Algorithm.Equal(pkcs7.OIDDigestAlgorithmSHA256):
 				hash = crypto.SHA256
 			case algorithm.Algorithm.Equal(pkcs7.OIDDigestAlgorithmSHA384):
@@ -132,12 +130,13 @@ func checkCertificate(raw []byte, signer *x509.Certificate, v2 bool) error {
 		if decode(first[1].FullBytes, &issuerSerial) != nil || issuerSerial.Serial.Cmp(signer.SerialNumber) != 0 {
 			return fmt.Errorf("timestamp certificate serial does not match signer")
 		}
-		for _, name := range issuerSerial.Issuer {
-			if name.Class == asn1.ClassContextSpecific && name.Tag == directoryNameTag && bytes.Equal(name.Bytes, signer.RawIssuer) {
-				return nil
-			}
+		if len(issuerSerial.Issuer) != 1 {
+			return fmt.Errorf("timestamp certificate issuer must contain one directoryName")
 		}
-		return fmt.Errorf("timestamp certificate issuer does not match signer")
+		name := issuerSerial.Issuer[0]
+		if name.Class != asn1.ClassContextSpecific || name.Tag != directoryNameTag || !bytes.Equal(name.Bytes, signer.RawIssuer) {
+			return fmt.Errorf("timestamp certificate issuer does not match signer")
+		}
 	}
 	return nil
 }

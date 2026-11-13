@@ -3,6 +3,7 @@ package timeanchor
 import (
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/x509/pkix"
 	"encoding/asn1"
 	"math/big"
 	"testing"
@@ -32,13 +33,17 @@ func TestVerifyRequiresSignedCertificateBinding(t *testing.T) {
 	}
 	tstInfoOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 1, 4}
 	bindingOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 47}
-	binding := func(digest, issuer []byte, serial *big.Int) pkcs7.Attribute {
+	binding := func(digest []byte, issuers [][]byte, serial *big.Int) pkcs7.Attribute {
 		var issuerSerial asn1.RawValue
 		if serial != nil {
+			var names []asn1.RawValue
+			for _, issuer := range issuers {
+				names = append(names, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: directoryNameTag, IsCompound: true, Bytes: issuer})
+			}
 			encoded, err := asn1.Marshal(struct {
 				Issuer []asn1.RawValue
 				Serial *big.Int
-			}{[]asn1.RawValue{{Class: asn1.ClassContextSpecific, Tag: directoryNameTag, IsCompound: true, Bytes: issuer}}, serial})
+			}{names, serial})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -63,6 +68,15 @@ func TestVerifyRequiresSignedCertificateBinding(t *testing.T) {
 	wrongLegacyBinding := binding(make([]byte, sha1.Size), nil, nil)
 	wrongLegacyBinding.Type = legacyBinding.Type
 
+	type explicitCertID struct {
+		Algorithm pkix.AlgorithmIdentifier
+		Hash      []byte
+	}
+	sha1V2, err := asn1.Marshal(struct{ Certs []explicitCertID }{[]explicitCertID{{pkix.AlgorithmIdentifier{Algorithm: pkcs7.OIDDigestAlgorithmSHA1}, legacyHash[:]}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha1V2Binding := pkcs7.Attribute{Type: bindingOID, Value: asn1.RawValue{FullBytes: sha1V2}}
 	for _, tc := range []struct {
 		name        string
 		attributes  []pkcs7.Attribute
@@ -70,9 +84,11 @@ func TestVerifyRequiresSignedCertificateBinding(t *testing.T) {
 		valid       bool
 	}{
 		{name: "valid", attributes: []pkcs7.Attribute{validBinding}, contentType: tstInfoOID, valid: true},
-		{name: "valid issuer and serial", attributes: []pkcs7.Attribute{binding(hash[:], a.signer.RawIssuer, a.signer.SerialNumber)}, contentType: tstInfoOID, valid: true},
-		{name: "wrong issuer", attributes: []pkcs7.Attribute{binding(hash[:], a.signer.RawSubject, a.signer.SerialNumber)}, contentType: tstInfoOID},
-		{name: "wrong serial", attributes: []pkcs7.Attribute{binding(hash[:], a.signer.RawIssuer, big.NewInt(3))}, contentType: tstInfoOID},
+		{name: "valid issuer and serial", attributes: []pkcs7.Attribute{binding(hash[:], [][]byte{a.signer.RawIssuer}, a.signer.SerialNumber)}, contentType: tstInfoOID, valid: true},
+		{name: "wrong issuer", attributes: []pkcs7.Attribute{binding(hash[:], [][]byte{a.signer.RawSubject}, a.signer.SerialNumber)}, contentType: tstInfoOID},
+		{name: "wrong serial", attributes: []pkcs7.Attribute{binding(hash[:], [][]byte{a.signer.RawIssuer}, big.NewInt(3))}, contentType: tstInfoOID},
+		{name: "extra issuer", attributes: []pkcs7.Attribute{binding(hash[:], [][]byte{a.signer.RawIssuer, a.signer.RawSubject}, a.signer.SerialNumber)}, contentType: tstInfoOID},
+		{name: "SHA-1 in v2", attributes: []pkcs7.Attribute{sha1V2Binding}, contentType: tstInfoOID},
 		{name: "valid legacy", attributes: []pkcs7.Attribute{legacyBinding}, contentType: tstInfoOID, valid: true},
 		{name: "wrong legacy hash", attributes: []pkcs7.Attribute{wrongLegacyBinding}, contentType: tstInfoOID},
 		{name: "both bindings", attributes: []pkcs7.Attribute{legacyBinding, validBinding}, contentType: tstInfoOID, valid: true},

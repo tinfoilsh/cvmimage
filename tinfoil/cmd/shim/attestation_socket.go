@@ -94,18 +94,5 @@ func serveWithAttestation(ctx context.Context, public *http.Server, listener net
 }
 
 func serveLocalAttestation(ctx context.Context, server *http.Server, listener net.Listener) error {
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
-	select {
-	case err := <-served:
-		return err
-	case <-ctx.Done():
-	}
-	if err := server.Shutdown(context.Background()); err != nil {
-		return err
-	}
-	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	return serveHTTPUntilShutdown(ctx, server, func() error { return server.Serve(listener) })
 }

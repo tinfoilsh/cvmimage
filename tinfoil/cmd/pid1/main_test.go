@@ -142,6 +142,11 @@ func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	}
 	var containersCommand, shimCommand supervisor.Command
 	for _, service := range harness.services.started {
+		if service.Name == containerdName || service.Name == dockerName {
+			if got := service.Command.Args; len(got) < 2 || got[0] != "--exec-service" || got[1] != service.Name {
+				t.Fatalf("%s starts without its capability policy: %v", service.Name, got)
+			}
+		}
 		if service.Name == containersName {
 			containersCommand = service.Command
 		}

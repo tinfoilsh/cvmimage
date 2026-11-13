@@ -46,6 +46,7 @@ const (
 	VolumeSocketName          = "control.sock"
 	SealRegisterPath          = "/sys/devices/virtual/misc/tdx_guest/measurements/rtmr3:sha384"
 	ContainersReadyPath       = "/run/tinfoil/containers.ready"
+	TimeRelayURL              = "https://atc.tinfoil.sh"
 	ShimPIDPath               = "/run/tinfoil/pids/tinfoil-shim.pid"
 	EgressPIDPath             = "/run/tinfoil/pids/tinfoil-egress.pid"
 

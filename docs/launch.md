@@ -117,10 +117,9 @@ fields this image fixes.
 | `--id-key` | none | Key signing the SNP ID block |
 
 `no5lvl` is appended because the image uses four-level page tables, and
-`no-kvmclock` prevents the host's shared clock from supplying time. The compiler
-rejects clock and frequency overrides, initcall blacklisting, and `--`, which
-would hide the required flags from Linux. Command lines must use printable ASCII
-and balanced double quotes.
+`no-kvmclock` prevents the host's shared clock from supplying time. The kernel
+stops at boot when a command line overrides the clock or its frequency, or hides
+`no-kvmclock` from it.
 
 Both production and debug kernels require TDX or SNP Secure TSC, a protected TSC
 frequency, and the TSC clocksource before userspace starts. They stop on TSC

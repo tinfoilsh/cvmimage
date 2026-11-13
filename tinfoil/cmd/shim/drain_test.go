@@ -7,13 +7,22 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	shimconfig "tinfoil/internal/config"
 )
 
 func startDrainServer(t *testing.T, handler http.Handler) (string, context.CancelFunc, <-chan error) {
+	return startShutdownServer(t, handler, &shimconfig.Config{DrainConnections: true, DrainTimeout: 5 * time.Second})
+}
+
+func startShutdownServer(t *testing.T, handler http.Handler, policy *shimconfig.Config) (string, context.CancelFunc, <-chan error) {
 	t.Helper()
+	previous := connectionDrain.Swap(policy)
+	t.Cleanup(func() { connectionDrain.Store(previous) })
 	cert, err := generateEphemeralCert()
 	if err != nil {
 		t.Fatal(err)
@@ -187,5 +196,61 @@ func TestShutdownWaitsForHijackedStream(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("shutdown did not finish")
+	}
+}
+
+func TestShutdownClosesWithoutDrainOrAtConfiguredTimeout(t *testing.T) {
+	const drainTimeout = 20 * time.Millisecond
+	const shutdownWait = 3 * time.Second
+	for _, protocol := range []string{"http1", "http2", "hijacked"} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(protocol+"/"+strconv.FormatBool(enabled), func(t *testing.T) {
+				finish := make(chan struct{})
+				defer close(finish)
+				policy := &shimconfig.Config{DrainConnections: enabled, DrainTimeout: drainTimeout}
+				addr, cancel, done := startShutdownServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if protocol == "hijacked" {
+						conn, rw, err := w.(http.Hijacker).Hijack()
+						if err != nil {
+							return
+						}
+						defer conn.Close()
+						rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\nbegin\n")
+						rw.Flush()
+					} else {
+						io.WriteString(w, "begin\n")
+						w.(http.Flusher).Flush()
+					}
+					<-finish
+				}), policy)
+				transport := &http.Transport{ForceAttemptHTTP2: protocol == "http2", TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+				defer transport.CloseIdleConnections()
+				client := &http.Client{Transport: transport, Timeout: shutdownWait}
+				response, err := client.Get("https://" + addr)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				if protocol == "http2" && response.ProtoMajor != 2 || protocol == "hijacked" && response.StatusCode != http.StatusSwitchingProtocols {
+					t.Fatalf("unexpected response: %s %s", response.Proto, response.Status)
+				}
+				if line, err := bufio.NewReader(response.Body).ReadString('\n'); err != nil || line != "begin\n" {
+					t.Fatalf("stream start = %q, %v", line, err)
+				}
+				start := time.Now()
+				cancel()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+					if enabled && time.Since(start) < drainTimeout {
+						t.Fatal("shutdown ended before the configured drain interval")
+					}
+				case <-time.After(shutdownWait):
+					t.Fatal("shutdown waited beyond the configured drain policy")
+				}
+			})
+		}
 	}
 }

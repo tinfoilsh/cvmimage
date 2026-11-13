@@ -211,7 +211,7 @@ func TestLocalAttestationFollowsReadinessAndPreservesSocket(t *testing.T) {
 }
 
 func TestLocalAttestationShutdownWaitsForQuote(t *testing.T) {
-	previous := connectionDrain.Swap(&config.Config{DrainConnections: true, DrainTimeout: localAttestationTestTimeout})
+	previous := connectionDrain.Swap(&config.Config{DrainTimeout: localAttestationTestTimeout})
 	t.Cleanup(func() { connectionDrain.Store(previous) })
 	release := make(chan struct{})
 	releaseQuote := sync.OnceFunc(func() { close(release) })

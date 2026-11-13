@@ -5,6 +5,8 @@ go 1.27.3
 require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/creasty/defaults v1.8.0
+	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
+	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v29.6.2+incompatible
 	github.com/docker/go-units v0.5.0
@@ -39,8 +41,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c // indirect
-	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea // indirect
 	github.com/docker/docker-credential-helpers v0.9.8 // indirect
 	github.com/docker/go-connections v0.8.1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect

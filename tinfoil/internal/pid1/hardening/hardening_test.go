@@ -14,7 +14,7 @@ func TestServicePoliciesAreExact(t *testing.T) {
 	want := map[Service]servicePolicy{
 		ServiceBoot: {
 			noNewPrivileges:   true,
-			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER},
+			boundCapabilities: []int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER, unix.CAP_SYS_TIME},
 			deniedSyscalls:    kernelManagementSyscalls,
 		},
 		ServiceContainers: {
@@ -136,7 +136,7 @@ func TestApplyServiceBootUsesOnlyRequiredCapabilitiesAndKernelDenylist(t *testin
 	if err := applyService(kernel, ServiceBoot); err != nil {
 		t.Fatalf("applyService: %v", err)
 	}
-	wantData, err := packCapabilities([]int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER})
+	wantData, err := packCapabilities([]int{unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD, unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER, unix.CAP_SYS_TIME})
 	if err != nil {
 		t.Fatal(err)
 	}

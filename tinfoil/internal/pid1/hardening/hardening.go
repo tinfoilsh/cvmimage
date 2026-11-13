@@ -121,7 +121,8 @@ var volumeServiceSyscalls = append([]uint32{
 
 // A non-nil empty boundCapabilities list means that no capabilities are
 // permitted. Boot is a one-shot privileged helper: its fixed set covers
-// device-mapper/mount operations, nftables, and mapper-node creation.
+// device-mapper/mount operations, nftables, mapper-node creation, and setting
+// the clock.
 func policyFor(service Service) (servicePolicy, bool) {
 	switch service {
 	case ServiceBoot:
@@ -132,6 +133,7 @@ func policyFor(service Service) (servicePolicy, bool) {
 			boundCapabilities: []int{
 				unix.CAP_SYS_ADMIN, unix.CAP_NET_ADMIN, unix.CAP_MKNOD,
 				unix.CAP_CHOWN, unix.CAP_DAC_OVERRIDE, unix.CAP_FOWNER,
+				unix.CAP_SYS_TIME,
 			},
 			deniedSyscalls: kernelManagementSyscalls,
 		}, true

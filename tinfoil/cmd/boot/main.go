@@ -109,6 +109,15 @@ func run(ctx context.Context, invocation invocation) error {
 	}
 	tracker.Record(boot.StageNetwork, boot.StatusOK, time.Since(start), networkDetail)
 
+	start = time.Now()
+	log.Println("Waiting for authenticated UTC")
+	timeDetail, err := anchorGuestClock(ctx)
+	if err != nil {
+		tracker.Record(boot.StageTime, boot.StatusFailed, time.Since(start), err.Error())
+		return err
+	}
+	tracker.Record(boot.StageTime, boot.StatusOK, time.Since(start), timeDetail)
+
 	// 3. Identity
 	start = time.Now()
 	log.Println("Generating node identity")

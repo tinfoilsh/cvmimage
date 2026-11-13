@@ -25,11 +25,14 @@ const (
 	ServiceEgress     Service = "tinfoil-egress"
 	ServiceShim       Service = "tinfoil-shim"
 	ServiceVolumes    Service = "tinfoil-volume-worker"
+	ServiceContainerd Service = "containerd"
+	ServiceDocker     Service = "dockerd"
 )
 
 type servicePolicy struct {
 	noNewPrivileges          bool
 	boundCapabilities        []int
+	droppedCapabilities      []int
 	restrictFilesystems      bool
 	exposeAttestationDevices bool
 	deniedSyscalls           []uint32
@@ -167,6 +170,11 @@ func policyFor(service Service) (servicePolicy, bool) {
 			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX},
 		}, true
+	case ServiceContainerd, ServiceDocker:
+		// The container runtime keeps its other privileges. Exec recomputes
+		// its capabilities from the bounding set, so without this one no
+		// container, privileged or not, can change the clock set at boot.
+		return servicePolicy{droppedCapabilities: []int{unix.CAP_SYS_TIME}}, true
 	default:
 		return servicePolicy{}, false
 	}
@@ -231,6 +239,12 @@ func applyService(kernel serviceKernel, service Service) error {
 		}
 		if err := kernel.setCapabilities(data); err != nil {
 			return fmt.Errorf("set capabilities for %s: %w", service, err)
+		}
+	}
+
+	for _, capability := range policy.droppedCapabilities {
+		if err := kernel.dropBoundingCapability(capability); err != nil {
+			return fmt.Errorf("drop capability %d from %s bounding set: %w", capability, service, err)
 		}
 	}
 

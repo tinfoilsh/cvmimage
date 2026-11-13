@@ -52,6 +52,8 @@ func TestServicePoliciesAreExact(t *testing.T) {
 			restrictNamespaceOps: true,
 			allowedSocketDomains: []uint32{unix.AF_UNIX},
 		},
+		ServiceContainerd: {droppedCapabilities: []int{unix.CAP_SYS_TIME}},
+		ServiceDocker:     {droppedCapabilities: []int{unix.CAP_SYS_TIME}},
 	}
 	for service, wantPolicy := range want {
 		got, ok := policyFor(service)
@@ -131,6 +133,24 @@ func TestApplyServiceAppliesFilesystemsCapabilitiesAndSeccompInOrder(t *testing.
 	}
 }
 
+func TestContainerRuntimeLosesOnlyTheClockCapability(t *testing.T) {
+	clock := unix.CAP_SYS_TIME
+	for _, service := range []Service{ServiceContainerd, ServiceDocker} {
+		kernel := &fakeServiceKernel{last: 63}
+		if err := applyService(kernel, service); err != nil {
+			t.Fatalf("applyService(%s): %v", service, err)
+		}
+		if want := []string{fmt.Sprintf("drop:%d", clock)}; !reflect.DeepEqual(kernel.calls, want) {
+			t.Fatalf("%s policy made kernel calls %v, want %v", service, kernel.calls, want)
+		}
+		refused := errors.New("operation not permitted")
+		kernel = &fakeServiceKernel{last: 63, dropFailureAt: &clock, dropCapabilityErr: refused}
+		if err := applyService(kernel, service); !errors.Is(err, refused) {
+			t.Fatalf("%s would start with the clock capability: %v", service, err)
+		}
+	}
+}
+
 func TestApplyServiceBootUsesOnlyRequiredCapabilitiesAndKernelDenylist(t *testing.T) {
 	kernel := &fakeServiceKernel{last: 63}
 	if err := applyService(kernel, ServiceBoot); err != nil {
@@ -156,7 +176,7 @@ func TestApplyServiceBootUsesOnlyRequiredCapabilitiesAndKernelDenylist(t *testin
 
 func TestApplyServiceRejectsUnknownPolicyWithoutKernelChanges(t *testing.T) {
 	kernel := &fakeServiceKernel{last: 63}
-	err := applyService(kernel, Service("containerd"))
+	err := applyService(kernel, Service("unlisted"))
 	if err == nil || !strings.Contains(err.Error(), "unknown service hardening policy") {
 		t.Fatalf("applyService error = %v, want unknown-policy error", err)
 	}

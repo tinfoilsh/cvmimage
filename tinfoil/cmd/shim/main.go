@@ -8,14 +8,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
 	"os/signal"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -102,43 +100,6 @@ func main() {
 	}
 }
 
-var drainConnections atomic.Bool
-
-func serveUntilShutdown(ctx context.Context, srv *http.Server) error {
-	var active sync.WaitGroup
-	handler := srv.Handler
-	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		active.Add(1)
-		defer active.Done()
-		handler.ServeHTTP(w, r)
-	})
-	served := make(chan error, 1)
-	go func() { served <- srv.ListenAndServeTLS("", "") }()
-	select {
-	case err := <-served:
-		return err
-	case <-ctx.Done():
-	}
-	if !drainConnections.Load() {
-		log.Print("Closing TLS connections without draining")
-		return srv.Close()
-	}
-	log.Print("Draining TLS connections; waiting for in-flight requests")
-	// Shutdown closes idle HTTP/1 connections and sends HTTP/2 GOAWAY.
-	// Keep the process (and its upstream dependencies) alive until it finishes.
-	if err := srv.Shutdown(context.Background()); err != nil {
-		return err
-	}
-	// ReverseProxy keeps upgraded handlers alive, but Shutdown does not wait
-	// for hijacked connections. Preserve those streams until their peers finish.
-	active.Wait()
-	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	log.Print("TLS drain complete")
-	return nil
-}
-
 // bootStagesHandler returns a minimal handler that only serves the
 // boot-stages endpoint, returning 503 for everything else.
 func bootStagesHandler() http.Handler {
@@ -179,7 +140,7 @@ func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.P
 			return err
 		}
 		config, externalConfig := cfgPair.config, cfgPair.external
-		drainConnections.Store(config.DrainConnections)
+		connectionDrain.Store(config)
 		log.Printf("Shim config loaded: upstream-container=%s upstream-port=%d tls-mode=%s paths=%d",
 			config.UpstreamContainer, config.UpstreamPort, config.TLSMode, len(config.Paths))
 

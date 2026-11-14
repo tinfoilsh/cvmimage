@@ -217,9 +217,6 @@ func (query query) verify(reply []byte, authorities []Authority) (string, time.T
 	if err := checkSigner(signed.GetOnlySigner()); err != nil {
 		return "", time.Time{}, err
 	}
-	if err := checkToken(token.RawToken, signed); err != nil {
-		return "", time.Time{}, err
-	}
 	intermediates := x509.NewCertPool()
 	for _, certificate := range signed.Certificates {
 		intermediates.AddCert(certificate)

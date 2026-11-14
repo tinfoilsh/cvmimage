@@ -26,6 +26,14 @@ jobs:
       contents: write
       actions: write
     steps:
+      - name: Require the main branch
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$REF" != refs/heads/main ]]; then
+            echo "::error::Platform releases are tagged from main, not $REF"
+            exit 1
+          fi
       - name: Create the platform tag and start publication
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,6 +69,22 @@ jobs:
             echo "::error::Enter a version when running from a branch, or use a platform-vX.Y.Z tag"
             exit 1
           fi
+      - name: Require the tag to be on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          status="$(gh api "repos/$GH_REPO/compare/main...$SOURCE_SHA" --jq .status)"
+          case "$status" in
+            identical | behind) ;;
+            *)
+              echo "::error::$REF_NAME is not on main (compare says $status)"
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false

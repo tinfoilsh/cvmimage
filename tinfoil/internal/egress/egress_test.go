@@ -77,6 +77,12 @@ func ask(e *Engine, source, name string, kind uint16) *dns.Msg {
 	return w.answer
 }
 
+func askGuest(e *Engine, name string, kind uint16) *dns.Msg {
+	w := &responseWriter{source: "127.0.0.1:12345"}
+	e.serve(w, new(dns.Msg).SetQuestion(name, kind), guestPolicy)
+	return w.answer
+}
+
 func TestDNSInstallsRotatingAnswersBeforeReply(t *testing.T) {
 	e, scripts := testEngine(t)
 	now := e.now()
@@ -119,7 +125,8 @@ func TestDNSPolicyRejectsBeforeUpstream(t *testing.T) {
 		{"suffix", "10.42.0.2:12345", "storage.example.attacker.", dns.TypeA, dns.RcodeNameError},
 		{"txt", "10.42.0.2:12345", "storage.example.", dns.TypeTXT, dns.RcodeRefused},
 		{"ipv6", "10.42.0.2:12345", "storage.example.", dns.TypeAAAA, dns.RcodeSuccess},
-		{"zone transfer", "127.0.0.1:12345", "example.", dns.TypeAXFR, dns.RcodeRefused},
+		{"zone transfer", "10.45.0.2:12345", "example.", dns.TypeAXFR, dns.RcodeRefused},
+		{"loopback on the workload address", "127.0.0.1:12345", "example.", dns.TypeA, dns.RcodeRefused},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, scripts := testEngine(t)
@@ -241,10 +248,13 @@ func TestDNSFollowsSeparateAliasAnswersAndStripsClientOptions(t *testing.T) {
 }
 
 func TestDNSGuestAndOpenNetworksDoNotGrantFirewallAccess(t *testing.T) {
-	for _, source := range []string{"127.0.0.1:12345", "10.45.0.2:12345"} {
+	for _, guest := range []bool{true, false} {
 		for kind, record := range map[uint16]string{dns.TypeA: "other.example. 30 IN A 8.8.8.8", dns.TypeTXT: "other.example. 30 IN TXT hello"} {
 			e, scripts := testEngine(t, record)
-			answer := ask(e, source, "other.example.", kind)
+			answer := ask(e, "10.45.0.2:12345", "other.example.", kind)
+			if guest {
+				answer = askGuest(e, "other.example.", kind)
+			}
 			if answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 || len(*scripts) != 0 {
 				t.Fatalf("answer=%v scripts=%v", answer, *scripts)
 			}
@@ -318,9 +328,122 @@ func TestDNSTreatsNetworksWithoutSettingsAsClosed(t *testing.T) {
 
 func TestDNSAnswersFailureWhenQueryHandlingPanics(t *testing.T) {
 	e, _ := testEngine(t)
+	upstream := e.exchange
 	e.exchange = func(context.Context, *dns.Msg) (*dns.Msg, error) { panic("unexpected upstream state") }
-	answer := ask(e, "10.45.0.2:12345", "other.example.", dns.TypeA)
-	if answer == nil || answer.Rcode != dns.RcodeServerFailure {
-		t.Fatalf("answer=%v", answer)
+	for _, source := range []string{"10.45.0.2:12345", "10.43.0.2:12345"} {
+		for range maxConcurrentQueries + 1 {
+			answer := ask(e, source, "other.example.", dns.TypeA)
+			if answer == nil || answer.Rcode != dns.RcodeServerFailure {
+				t.Fatalf("answer=%v", answer)
+			}
+		}
+	}
+	e.exchange = upstream
+	for _, source := range []string{"10.45.0.2:12345", "10.43.0.2:12345"} {
+		if answer := ask(e, source, "other.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess {
+			t.Fatalf("failed lookups kept their capacity: %v", answer)
+		}
+	}
+}
+
+func TestDNSRequestsWaitingForOneNameLeaveCapacityForOthers(t *testing.T) {
+	e, _ := testEngine(t, "storage.example. 60 IN A 8.8.8.8", "second.example. 60 IN A 8.8.4.4")
+	e.policies[0].Allow = []string{"storage.example", "second.example"}
+	upstream := e.exchange
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	e.exchange = func(ctx context.Context, query *dns.Msg) (*dns.Msg, error) {
+		if query.Question[0].Name == "storage.example." {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		return upstream(ctx, query)
+	}
+	done := make(chan *dns.Msg, 2*maxConcurrentQueries)
+	for range 2 * maxConcurrentQueries {
+		go func() { done <- ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA) }()
+	}
+	<-started
+	if answer := ask(e, "10.42.0.3:12345", "second.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess {
+		t.Fatalf("requests for one name used the network's capacity: %v", answer)
+	}
+	close(release)
+	for range 2 * maxConcurrentQueries {
+		if answer := <-done; answer.Rcode != dns.RcodeSuccess {
+			t.Fatalf("waiting request failed: %v", answer)
+		}
+	}
+}
+
+func TestDNSLookupCapacityIsSeparatePerSource(t *testing.T) {
+	e, _ := testEngine(t, "storage.example. 60 IN A 8.8.8.8")
+	if answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess {
+		t.Fatal(answer)
+	}
+	upstream := e.exchange
+	started := make(chan struct{}, maxConcurrentQueries)
+	release := make(chan struct{})
+	e.exchange = func(ctx context.Context, query *dns.Msg) (*dns.Msg, error) {
+		if query.Question[0].Name == "slow.example." {
+			started <- struct{}{}
+			<-release
+		}
+		return upstream(ctx, query)
+	}
+	done := make(chan struct{}, maxConcurrentQueries)
+	for range maxConcurrentQueries {
+		go func() {
+			ask(e, "10.45.0.2:12345", "slow.example.", dns.TypeA)
+			done <- struct{}{}
+		}()
+	}
+	for range maxConcurrentQueries {
+		<-started
+	}
+	if answer := ask(e, "10.45.0.3:12345", "other.example.", dns.TypeA); answer.Rcode != dns.RcodeServerFailure {
+		t.Fatalf("network exceeded its lookup capacity: %v", answer)
+	}
+	if answer := askGuest(e, "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess {
+		t.Fatalf("guest lookup was starved: %v", answer)
+	}
+	if answer := ask(e, "10.43.0.2:12345", "other.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess {
+		t.Fatalf("other network lookup was starved: %v", answer)
+	}
+	if answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 {
+		t.Fatalf("cached answer was not served: %v", answer)
+	}
+	close(release)
+	for range maxConcurrentQueries {
+		<-done
+	}
+}
+
+func TestDNSDatagramRateIsSeparatePerNetwork(t *testing.T) {
+	e, _ := testEngine(t)
+	now := e.now()
+	e.now = func() time.Time { return now }
+	flooding := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("10.45.0.2:12345"))
+	for range maxDatagramRate {
+		if !e.admit(flooding) {
+			t.Fatal("datagram within the network's rate was dropped")
+		}
+	}
+	if e.admit(flooding) {
+		t.Fatal("datagram beyond the network's rate was admitted")
+	}
+	if e.admit(net.UDPAddrFromAddrPort(netip.MustParseAddrPort("10.45.0.3:12345"))) {
+		t.Fatal("another address in the flooding network had its own rate")
+	}
+	for _, source := range []string{"10.42.0.2:12345", "10.46.0.2:12345"} {
+		if !e.admit(net.UDPAddrFromAddrPort(netip.MustParseAddrPort(source))) {
+			t.Fatalf("flood from another network dropped a datagram from %s", source)
+		}
+	}
+	now = now.Add(time.Second)
+	if !e.admit(flooding) {
+		t.Fatal("network did not regain its rate")
 	}
 }

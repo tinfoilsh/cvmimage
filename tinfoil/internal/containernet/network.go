@@ -23,8 +23,8 @@ const (
 	// allowlist` network's resolved IPs: allow-<network-name>.
 	AllowSetPrefix = "allow-"
 
-	DNSAddress       = "169.254.0.53"
-	DNSListenAddress = "0.0.0.0:53"
-	DNSReadyAddress  = "127.0.0.1:53"
-	MaxDNSAddresses  = 4096
+	DNSAddress          = "169.254.0.53"
+	DNSContainerAddress = DNSAddress + ":53"
+	DNSReadyAddress     = "127.0.0.1:53"
+	MaxDNSAddresses     = 4096
 )

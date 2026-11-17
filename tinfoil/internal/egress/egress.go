@@ -48,8 +48,15 @@ type cacheKey struct {
 	name    string
 }
 
+type slotKey struct {
+	network string
+	tcp     bool
+}
+
+var guestPolicy = &policy{NetworkSpec: &runtimeconfig.NetworkSpec{Egress: "open"}}
+
 type cachedAnswer struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	answer  *dns.Msg
 	expires time.Time
 }
@@ -63,7 +70,7 @@ type Engine struct {
 	mu           sync.Mutex
 	policies     []policy
 	cache        map[cacheKey]*cachedAnswer
-	slots        chan struct{}
+	slots        sync.Map
 }
 
 func New() *Engine {
@@ -80,24 +87,38 @@ func New() *Engine {
 		loadPolicies: loadPolicies,
 		now:          time.Now,
 		cache:        make(map[cacheKey]*cachedAnswer),
-		slots:        make(chan struct{}, maxConcurrentQueries),
 	}
 }
 
 func (e *Engine) Run(ctx context.Context) error {
-	tcp, err := net.Listen("tcp4", containernet.DNSListenAddress)
-	if err != nil {
-		return err
-	}
-	defer tcp.Close()
-	udp, err := net.ListenPacket("udp4", containernet.DNSListenAddress)
-	if err != nil {
-		return err
-	}
-	defer udp.Close()
-	servers := []*dns.Server{
-		{Listener: netutil.LimitListener(tcp, maxConcurrentQueries), Handler: e, ReadTimeout: queryTimeout, WriteTimeout: queryTimeout, IdleTimeout: func() time.Duration { return idleTimeout }},
-		{PacketConn: udp, Handler: e, UDPSize: dns.MaxMsgSize, WriteTimeout: queryTimeout},
+	var servers []*dns.Server
+	// The readiness address is bound last, so it implies both are listening.
+	for _, listener := range []struct {
+		address string
+		handler dns.Handler
+	}{
+		{containernet.DNSContainerAddress, e},
+		{containernet.DNSReadyAddress, dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) { e.serve(w, request, guestPolicy) })},
+	} {
+		address, handler := listener.address, listener.handler
+		tcp, err := net.Listen("tcp4", address)
+		if err != nil {
+			return err
+		}
+		defer tcp.Close()
+		udp, err := net.ListenPacket("udp4", address)
+		if err != nil {
+			return err
+		}
+		defer udp.Close()
+		limited := netutil.LimitListener(tcp, maxConcurrentQueries)
+		if handler == e {
+			limited = &sourceListener{tcp, e}
+		}
+		servers = append(servers,
+			&dns.Server{Listener: limited, Handler: handler, ReadTimeout: queryTimeout, WriteTimeout: queryTimeout, IdleTimeout: func() time.Duration { return idleTimeout }},
+			&dns.Server{PacketConn: udp, Handler: handler, UDPSize: dns.MaxMsgSize, WriteTimeout: queryTimeout},
+		)
 	}
 	errors := make(chan error, len(servers))
 	for _, server := range servers {
@@ -112,7 +133,59 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
+// sourceListener bounds each network's connections so one workload cannot
+// occupy the listener for the others.
+type sourceListener struct {
+	net.Listener
+	engine *Engine
+}
+
+type sourceConn struct {
+	net.Conn
+	release func()
+}
+
+func (l *sourceListener) Accept() (net.Conn, error) {
+	for {
+		connection, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if remote, err := netip.ParseAddrPort(connection.RemoteAddr().String()); err == nil {
+			if p, err := l.engine.policyFor(remote.Addr().Unmap()); err == nil && p != nil {
+				if release, ok := l.engine.acquire(slotKey{p.name, true}); ok {
+					return &sourceConn{connection, sync.OnceFunc(release)}, nil
+				}
+			}
+		}
+		connection.Close()
+	}
+}
+
+func (c *sourceConn) Close() error {
+	c.release()
+	return c.Conn.Close()
+}
+
+func (e *Engine) acquire(key slotKey) (func(), bool) {
+	value, ok := e.slots.Load(key)
+	if !ok {
+		value, _ = e.slots.LoadOrStore(key, make(chan struct{}, maxConcurrentQueries))
+	}
+	slots := value.(chan struct{})
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, true
+	default:
+		return nil, false
+	}
+}
+
 func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
+	e.serve(w, request, nil)
+}
+
+func (e *Engine) serve(w dns.ResponseWriter, request *dns.Msg, p *policy) {
 	reply := new(dns.Msg).SetRcode(request, dns.RcodeServerFailure)
 	defer func() {
 		if failure := recover(); failure != nil {
@@ -128,12 +201,6 @@ func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 		}
 		_ = w.WriteMsg(reply)
 	}()
-	select {
-	case e.slots <- struct{}{}:
-		defer func() { <-e.slots }()
-	default:
-		return
-	}
 	if request.Opcode != dns.OpcodeQuery || len(request.Question) != 1 || request.Question[0].Qclass != dns.ClassINET {
 		reply.Rcode = dns.RcodeFormatError
 		return
@@ -143,18 +210,20 @@ func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 		reply.Rcode = dns.RcodeRefused
 		return
 	}
-	remote, err := netip.ParseAddrPort(w.RemoteAddr().String())
-	if err != nil {
-		return
-	}
-	p, err := e.policyFor(remote.Addr().Unmap())
-	if err != nil {
-		log.Printf("DNS policy unavailable: %v", err)
-		return
-	}
 	if p == nil {
-		reply.Rcode = dns.RcodeRefused
-		return
+		remote, err := netip.ParseAddrPort(w.RemoteAddr().String())
+		if err != nil {
+			return
+		}
+		p, err = e.policyFor(remote.Addr().Unmap())
+		if err != nil {
+			log.Printf("DNS policy unavailable: %v", err)
+			return
+		}
+		if p == nil {
+			reply.Rcode = dns.RcodeRefused
+			return
+		}
 	}
 	if p.Egress != "open" && (p.Egress != "allowlist" || !allowed(question.Name, p.Allow)) {
 		reply.Rcode = dns.RcodeNameError
@@ -174,10 +243,14 @@ func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 	// become upstream instructions or firewall input.
 	query := new(dns.Msg).SetQuestion(question.Name, question.Qtype)
 	var answer *dns.Msg
+	var err error
 	if p.Egress == "allowlist" {
 		answer, err = e.resolveAllowed(ctx, query, p.name)
-	} else {
+	} else if release, ok := e.acquire(slotKey{network: p.name}); ok {
 		answer, err = e.exchange(ctx, query)
+		release()
+	} else {
+		return
 	}
 	if err != nil {
 		return
@@ -199,9 +272,25 @@ func (e *Engine) resolveAllowed(ctx context.Context, query *dns.Msg, network str
 	}
 	e.mu.Unlock()
 
+	if entry.mu.TryRLock() {
+		var answer *dns.Msg
+		if now := e.now(); entry.fresh(now) {
+			answer = entry.remaining(now)
+		}
+		entry.mu.RUnlock()
+		if answer != nil {
+			return answer, nil
+		}
+	}
+	// Only lookups that need the upstream resolver count against the network.
+	release, ok := e.acquire(slotKey{network: network})
+	if !ok {
+		return nil, fmt.Errorf("too many DNS lookups for network %s", network)
+	}
+	defer release()
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if entry.answer == nil || !e.now().Before(entry.expires) {
+	if !entry.fresh(e.now()) {
 		answer, err := e.exchange(ctx, query)
 		if err != nil {
 			return nil, err
@@ -217,12 +306,20 @@ func (e *Engine) resolveAllowed(ctx context.Context, query *dns.Msg, network str
 		entry.answer = answer
 		entry.expires = received.Add(time.Duration(answer.Answer[0].Header().Ttl) * time.Second)
 	}
-	answer := entry.answer.Copy()
-	ttl := uint32(max(0, entry.expires.Sub(e.now())/time.Second))
+	return entry.remaining(e.now()), nil
+}
+
+func (c *cachedAnswer) fresh(now time.Time) bool {
+	return c.answer != nil && now.Before(c.expires)
+}
+
+func (c *cachedAnswer) remaining(now time.Time) *dns.Msg {
+	answer := c.answer.Copy()
+	ttl := uint32(max(0, c.expires.Sub(now)/time.Second))
 	for _, record := range answer.Answer {
 		record.Header().Ttl = ttl
 	}
-	return answer, nil
+	return answer
 }
 
 func allowed(name string, domains []string) bool {
@@ -235,9 +332,6 @@ func allowed(name string, domains []string) bool {
 }
 
 func (e *Engine) policyFor(source netip.Addr) (*policy, error) {
-	if source.IsLoopback() {
-		return &policy{NetworkSpec: &runtimeconfig.NetworkSpec{Egress: "open"}}, nil
-	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.policies == nil {

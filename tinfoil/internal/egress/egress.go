@@ -56,7 +56,7 @@ type slotKey struct {
 var guestPolicy = &policy{NetworkSpec: &runtimeconfig.NetworkSpec{Egress: "open"}}
 
 type cachedAnswer struct {
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	answer  *dns.Msg
 	expires time.Time
 }
@@ -247,8 +247,8 @@ func (e *Engine) serve(w dns.ResponseWriter, request *dns.Msg, p *policy) {
 	if p.Egress == "allowlist" {
 		answer, err = e.resolveAllowed(ctx, query, p.name)
 	} else if release, ok := e.acquire(slotKey{network: p.name}); ok {
+		defer release()
 		answer, err = e.exchange(ctx, query)
-		release()
 	} else {
 		return
 	}
@@ -272,25 +272,16 @@ func (e *Engine) resolveAllowed(ctx context.Context, query *dns.Msg, network str
 	}
 	e.mu.Unlock()
 
-	if entry.mu.TryRLock() {
-		var answer *dns.Msg
-		if now := e.now(); entry.fresh(now) {
-			answer = entry.remaining(now)
-		}
-		entry.mu.RUnlock()
-		if answer != nil {
-			return answer, nil
-		}
-	}
-	// Only lookups that need the upstream resolver count against the network.
-	release, ok := e.acquire(slotKey{network: network})
-	if !ok {
-		return nil, fmt.Errorf("too many DNS lookups for network %s", network)
-	}
-	defer release()
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if !entry.fresh(e.now()) {
+		// Only the lookup that reaches the upstream resolver counts against
+		// the network; requests waiting for its answer do not.
+		release, ok := e.acquire(slotKey{network: network})
+		if !ok {
+			return nil, fmt.Errorf("too many DNS lookups for network %s", network)
+		}
+		defer release()
 		answer, err := e.exchange(ctx, query)
 		if err != nil {
 			return nil, err

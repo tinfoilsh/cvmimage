@@ -241,7 +241,7 @@ func (m *manager) boot(override []byte) (result error) {
 	}
 	defer func() {
 		if frozenEgress != nil {
-			if err := restartFrozenFromPIDFile(context.Background(), boot.EgressPIDPath, frozenEgress); err != nil {
+			if err := restartEgress(context.Background(), frozenEgress); err != nil {
 				result = errors.Join(result, fmt.Errorf("restoring egress policy service: %w", err))
 			}
 		}
@@ -261,12 +261,17 @@ func (m *manager) boot(override []byte) (result error) {
 		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	if err := containers.PrepareNetworks(m.ctx, config, m.debug); err != nil {
+	generation, err := nextNetworkGeneration(boot.NetworkGenerationPath, uint32(len(config.Networks)))
+	if err != nil {
+		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
+		return fmt.Errorf("allocating network policy generation: %w", err)
+	}
+	if err := containers.PrepareNetworks(m.ctx, config, m.debug, generation); err != nil {
 		tracker.Record(boot.StageFirewall, boot.StatusFailed, time.Since(start), err.Error())
 		return fmt.Errorf("preparing container networks: %w", err)
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-	if err := restartFrozenFromPIDFile(m.ctx, boot.EgressPIDPath, frozenEgress); err != nil {
+	if err := restartEgress(m.ctx, frozenEgress); err != nil {
 		return fmt.Errorf("restarting egress policy: %w", err)
 	}
 	frozenEgress = nil

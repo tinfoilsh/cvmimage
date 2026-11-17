@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
+	"tinfoil/internal/containernet"
 	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/nvidia"
 	"tinfoil/internal/pid1/hardening"
@@ -32,6 +33,7 @@ const (
 	containerdReadyLimit = 30 * time.Second
 	dockerReadyLimit     = 60 * time.Second
 	shimReadyLimit       = 30 * time.Second
+	egressReadyLimit     = 30 * time.Second
 	oneShotStopGrace     = 2 * time.Second
 	serviceTermGrace     = 10 * time.Second
 	serviceKillGrace     = 5 * time.Second
@@ -329,6 +331,17 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err != nil {
 		return err
 	}
+	if err := deps.oneShot(bootCtx, command("dns-address", "/usr/sbin/ip", "address", "add", containernet.DNSAddress+"/32", "dev", "lo")); err != nil {
+		return err
+	}
+	if err := deps.services.Start(bootCtx, supervisor.Service{
+		Name: egressName, Required: true, Restart: true,
+		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
+		Ready:   endpointReady("tcp", containernet.DNSReadyAddress, egressReadyLimit),
+		PIDFile: boot.EgressPIDPath,
+	}); err != nil {
+		return err
+	}
 	if err := startVolumeWorkers(bootCtx, deps, config); err != nil {
 		return fmt.Errorf("storage volumes: %w", err)
 	}
@@ -345,14 +358,6 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	}); err != nil {
 		return err
 	}
-	if err := deps.services.Start(bootCtx, supervisor.Service{
-		Name: egressName, Restart: true,
-		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
-		PIDFile: boot.EgressPIDPath,
-	}); err != nil {
-		return err
-	}
-
 	if err := readiness.Publish(); err != nil {
 		return fmt.Errorf("publishing readiness: %w", err)
 	}
@@ -687,7 +692,7 @@ func ownSealRegister(config *runtimeconfig.Config) error {
 }
 
 func requiredServiceNames() []string {
-	return []string{containerdName, dockerName, containersName, shimName}
+	return []string{containerdName, dockerName, containersName, shimName, egressName}
 }
 
 func shutdownGroups() [][]string {

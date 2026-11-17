@@ -14,6 +14,7 @@ require (
 	github.com/google/go-tdx-guest v0.3.1
 	github.com/jarcoal/httpmock v1.4.2
 	github.com/mackerelio/go-osstat v0.2.8
+	github.com/miekg/dns v1.1.72
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.1
 	github.com/prometheus/client_golang v1.24.1
@@ -45,7 +46,6 @@ require (
 	github.com/google/logger v1.1.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/maxatome/go-testdeep v1.15.0 // indirect
-	github.com/miekg/dns v1.1.72 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect

@@ -298,10 +298,8 @@ func TestDNSOverTLSRejectsUntrustedResolver(t *testing.T) {
 	go server.ActivateAndServe()
 	<-ready
 	t.Cleanup(func() { _ = server.Shutdown() })
-	previous := upstreamAddresses
-	upstreamAddresses = []string{listener.Addr().String()}
-	t.Cleanup(func() { upstreamAddresses = previous })
-	if answer, err := exchangeTLS(context.Background(), new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)); err == nil || !strings.Contains(err.Error(), "x509") {
+	untrusted := newUpstream([]string{listener.Addr().String()}, &tls.Config{ServerName: upstreamName, MinVersion: tls.VersionTLS12})
+	if answer, err := untrusted.exchange(context.Background(), new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)); err == nil || !strings.Contains(err.Error(), "x509") {
 		t.Fatalf("untrusted resolver not rejected by certificate verification: answer=%v err=%v", answer, err)
 	}
 }

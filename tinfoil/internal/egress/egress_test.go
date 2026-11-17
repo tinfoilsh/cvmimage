@@ -420,3 +420,27 @@ func TestDNSLookupCapacityIsSeparatePerSource(t *testing.T) {
 		<-done
 	}
 }
+
+func TestDNSDatagramRateIsSeparatePerNetwork(t *testing.T) {
+	e, _ := testEngine(t)
+	now := e.now()
+	e.now = func() time.Time { return now }
+	flooding := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("10.45.0.2:12345"))
+	for range maxDatagramRate {
+		if !e.admit(flooding) {
+			t.Fatal("datagram within the network's rate was dropped")
+		}
+	}
+	if e.admit(flooding) {
+		t.Fatal("datagram beyond the network's rate was admitted")
+	}
+	for _, source := range []string{"10.42.0.2:12345", "10.46.0.2:12345"} {
+		if !e.admit(net.UDPAddrFromAddrPort(netip.MustParseAddrPort(source))) {
+			t.Fatalf("flood from another network dropped a datagram from %s", source)
+		}
+	}
+	now = now.Add(time.Second)
+	if !e.admit(flooding) {
+		t.Fatal("network did not regain its rate")
+	}
+}

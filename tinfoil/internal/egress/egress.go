@@ -17,6 +17,7 @@ import (
 
 	"github.com/miekg/dns"
 	"golang.org/x/net/netutil"
+	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
@@ -29,10 +30,12 @@ const (
 	upstreamTimeout      = 2 * time.Second
 	idleTimeout          = 10 * time.Second
 	maxConcurrentQueries = 64
-	maxAnswerTTL         = uint32(3600)
-	maxCNAMEs            = 16
-	replyGrace           = 5 * time.Second
-	upstreamName         = "one.one.one.one"
+	// Datagrams a network may send per second before the rest are dropped.
+	maxDatagramRate = 512
+	maxAnswerTTL    = uint32(3600)
+	maxCNAMEs       = 16
+	replyGrace      = 5 * time.Second
+	upstreamName    = "one.one.one.one"
 )
 
 var upstreamAddresses = []string{"1.1.1.1:853", "1.0.0.1:853"}
@@ -71,6 +74,7 @@ type Engine struct {
 	policies     []policy
 	cache        map[cacheKey]*cachedAnswer
 	slots        sync.Map
+	datagrams    sync.Map
 }
 
 func New() *Engine {
@@ -115,9 +119,13 @@ func (e *Engine) Run(ctx context.Context) error {
 		if handler == e {
 			limited = &sourceListener{tcp, e}
 		}
+		datagrams := &dns.Server{PacketConn: udp, Handler: handler, UDPSize: dns.MaxMsgSize, WriteTimeout: queryTimeout}
+		if handler == e {
+			datagrams.DecorateReader = func(reader dns.Reader) dns.Reader { return &sourceReader{reader, e} }
+		}
 		servers = append(servers,
 			&dns.Server{Listener: limited, Handler: handler, ReadTimeout: queryTimeout, WriteTimeout: queryTimeout, IdleTimeout: func() time.Duration { return idleTimeout }},
-			&dns.Server{PacketConn: udp, Handler: handler, UDPSize: dns.MaxMsgSize, WriteTimeout: queryTimeout},
+			datagrams,
 		)
 	}
 	errors := make(chan error, len(servers))
@@ -160,6 +168,38 @@ func (l *sourceListener) Accept() (net.Conn, error) {
 		}
 		connection.Close()
 	}
+}
+
+// sourceReader drops a network's datagrams beyond its rate before the server
+// starts any work for them.
+type sourceReader struct {
+	dns.Reader
+	engine *Engine
+}
+
+func (r *sourceReader) ReadUDP(connection *net.UDPConn, timeout time.Duration) ([]byte, *dns.SessionUDP, error) {
+	for {
+		message, session, err := r.Reader.ReadUDP(connection, timeout)
+		if err != nil || r.engine.admit(session.RemoteAddr()) {
+			return message, session, err
+		}
+	}
+}
+
+// admit counts sources without a readable policy together, so they are still
+// answered with the reason, at a bounded rate.
+func (e *Engine) admit(source net.Addr) bool {
+	network := ""
+	if remote, err := netip.ParseAddrPort(source.String()); err == nil {
+		if p, err := e.policyFor(remote.Addr().Unmap()); err == nil && p != nil {
+			network = p.name
+		}
+	}
+	value, ok := e.datagrams.Load(network)
+	if !ok {
+		value, _ = e.datagrams.LoadOrStore(network, rate.NewLimiter(maxDatagramRate, maxDatagramRate))
+	}
+	return value.(*rate.Limiter).AllowN(e.now(), 1)
 }
 
 func (c *sourceConn) Close() error {

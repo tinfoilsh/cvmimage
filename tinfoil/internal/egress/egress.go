@@ -67,17 +67,18 @@ type cachedAnswer struct {
 }
 
 type Engine struct {
-	exchange     func(context.Context, *dns.Msg) (*dns.Msg, error)
-	nft          func(context.Context, string) ([]byte, error)
-	listSet      func(context.Context, string) ([]byte, error)
-	loadPolicies func() ([]policy, error)
-	now          func() time.Time
-	mu           sync.Mutex
-	policies     []policy
-	generation   uint32
-	cache        map[cacheKey]*cachedAnswer
-	slots        sync.Map
-	datagrams    sync.Map
+	exchange            func(context.Context, *dns.Msg) (*dns.Msg, error)
+	nft                 func(context.Context, string) ([]byte, error)
+	listSet             func(context.Context, string) ([]byte, error)
+	loadPolicies        func(uint32) ([]policy, error)
+	allocatedGeneration func() (uint32, error)
+	now                 func() time.Time
+	mu                  sync.Mutex
+	policies            []policy
+	generation          uint32
+	cache               map[cacheKey]*cachedAnswer
+	slots               sync.Map
+	datagrams           sync.Map
 }
 
 func New() *Engine {
@@ -91,9 +92,10 @@ func New() *Engine {
 		listSet: func(ctx context.Context, name string) ([]byte, error) {
 			return exec.CommandContext(ctx, "nft", "-j", "list", "set", "inet", "tinfoil", name).Output()
 		},
-		loadPolicies: loadPolicies,
-		now:          time.Now,
-		cache:        make(map[cacheKey]*cachedAnswer),
+		loadPolicies:        loadPolicies,
+		allocatedGeneration: allocatedGeneration,
+		now:                 time.Now,
+		cache:               make(map[cacheKey]*cachedAnswer),
 	}
 }
 
@@ -222,13 +224,6 @@ func (e *Engine) acquire(key slotKey) (func(), bool) {
 	default:
 		return nil, false
 	}
-}
-
-// Reload makes the next query read the installed network policy again.
-func (e *Engine) Reload() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.policies = nil
 }
 
 func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
@@ -376,18 +371,20 @@ func allowed(name string, domains []string) bool {
 func (e *Engine) policyFor(source netip.Addr) (*policy, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.policies == nil {
-		policies, err := e.loadPolicies()
+	// A new generation is allocated before the firewall is replaced, so no
+	// query is answered from a policy older than the installed one.
+	generation, err := e.allocatedGeneration()
+	if err != nil {
+		return nil, err
+	}
+	if e.policies == nil || generation != e.generation {
+		policies, err := e.loadPolicies(generation)
 		if err != nil {
 			return nil, err
 		}
-		e.policies = policies
 		// Cached answers hold permissions in the sets of the policy they
 		// were resolved under.
-		if len(policies) > 0 && policies[0].generation != e.generation {
-			e.generation = policies[0].generation
-			e.cache = make(map[cacheKey]*cachedAnswer)
-		}
+		e.policies, e.generation, e.cache = policies, generation, make(map[cacheKey]*cachedAnswer)
 	}
 	var matched *policy
 	for i := range e.policies {
@@ -402,20 +399,21 @@ func (e *Engine) policyFor(source netip.Addr) (*policy, error) {
 	return matched, nil
 }
 
-func loadPolicies() ([]policy, error) {
+func allocatedGeneration() (uint32, error) {
+	data, err := os.ReadFile(boot.NetworkGenerationPath)
+	if err != nil {
+		return 0, err
+	}
+	generation, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+	return uint32(generation), err
+}
+
+func loadPolicies(generation uint32) ([]policy, error) {
 	data, err := os.ReadFile(boot.RuntimeConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	generation, err := os.ReadFile(boot.NetworkGenerationPath)
-	if err != nil {
-		return nil, err
-	}
-	installed, err := strconv.ParseUint(strings.TrimSpace(string(generation)), 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	return parsePolicies(data, uint32(installed))
+	return parsePolicies(data, generation)
 }
 
 func parsePolicies(data []byte, generation uint32) ([]policy, error) {
@@ -545,18 +543,12 @@ func (e *Engine) authorizedAnswer(ctx context.Context, query, answer *dns.Msg, p
 	return nil, fmt.Errorf("too many DNS aliases")
 }
 
-func (e *Engine) install(ctx context.Context, p *policy, leases map[string]uint32) (err error) {
+func (e *Engine) install(ctx context.Context, p *policy, leases map[string]uint32) error {
 	if len(leases) == 0 {
 		return nil
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	defer func() {
-		if err != nil {
-			// The installed policy may have been replaced; read it again.
-			e.policies = nil
-		}
-	}()
 	set := containernet.AllowSetPrefix + p.name
 	data, err := e.listSet(ctx, set)
 	if err != nil {

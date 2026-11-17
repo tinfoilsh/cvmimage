@@ -257,9 +257,6 @@ func (m *manager) boot(override []byte) (result error) {
 		return fmt.Errorf("preparing container networks: %w", err)
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-	if err := signalFromPIDFile(boot.EgressPIDPath, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("reloading egress policy: %w", err)
-	}
 	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, secretValues, m.debug, preserved); err != nil {
 		return err
 	}

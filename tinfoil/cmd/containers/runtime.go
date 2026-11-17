@@ -97,22 +97,6 @@ func restartRuntimeServices(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// signalFromPIDFile signals the service itself, leaving its children alone.
-func signalFromPIDFile(path string, signal syscall.Signal) error {
-	instance, err := openServiceInstance(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer instance.close()
-	if err := syscall.Kill(instance.pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("signaling pid %d: %w", instance.pid, err)
-	}
-	return nil
-}
-
 func openServiceInstance(path string) (*serviceInstance, error) {
 	file, err := os.Open(path)
 	if err != nil {

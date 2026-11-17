@@ -24,13 +24,5 @@ func main() {
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	engine := egress.New()
-	reload := make(chan os.Signal, 1)
-	signal.Notify(reload, syscall.SIGHUP)
-	go func() {
-		for range reload {
-			engine.Reload()
-		}
-	}()
-	return engine.Run(ctx)
+	return egress.New().Run(ctx)
 }

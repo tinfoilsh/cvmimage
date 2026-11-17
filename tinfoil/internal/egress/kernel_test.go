@@ -106,9 +106,10 @@ func TestIsolatedKernelDNS(t *testing.T) {
 	policies := func(generation uint32) []policy {
 		return []policy{{"alpha", netip.MustParsePrefix("10.42.0.0/24"), config.Networks["alpha"], generation}, {"beta", netip.MustParsePrefix("10.43.0.0/24"), config.Networks["beta"], generation}}
 	}
-	e.policies, e.generation = policies(2), 2
-	// The policy is replaced below, during the fourth lookup.
-	e.loadPolicies = func() ([]policy, error) { return policies(4), nil }
+	var allocated atomic.Uint32
+	allocated.Store(2)
+	e.allocatedGeneration = func() (uint32, error) { return allocated.Load(), nil }
+	e.loadPolicies = func(generation uint32) ([]policy, error) { return policies(generation), nil }
 	var queries atomic.Int32
 	var retained atomic.Bool
 	e.exchange = func(_ context.Context, q *dns.Msg) (*dns.Msg, error) {
@@ -125,6 +126,8 @@ func TestIsolatedKernelDNS(t *testing.T) {
 			}
 		}
 		if n == 4 {
+			// Replace the policy while a lookup authorized under it is pending.
+			allocated.Store(4)
 			if err := firewall.ApplyContainerNetworks(config, false, 3); err != nil {
 				return nil, err
 			}
@@ -165,7 +168,7 @@ func TestIsolatedKernelDNS(t *testing.T) {
 			t.Logf("%s", out)
 		}
 	}
-	if queries.Load() != 4 {
+	if queries.Load() != 5 {
 		t.Fatalf("closed query leaked upstream: %d", queries.Load())
 	}
 	output, err := e.listSet(ctx, "allow-alpha")
@@ -174,9 +177,6 @@ func TestIsolatedKernelDNS(t *testing.T) {
 	}
 	if !retained.Load() {
 		t.Fatalf("rotating addresses not retained: %s", output)
-	}
-	if strings.Contains(string(output), "8.8.") {
-		t.Fatalf("a lookup authorized before the replacement installed a permission: %s", output)
 	}
 	installed := policies(4)[0]
 	// A restarted engine must not shorten an earlier answer's lifetime.
@@ -291,8 +291,19 @@ func TestIsolatedDNSClient(t *testing.T) {
 			t.Fatalf("DNS expiry interrupted an authorized connection: %q, %v", got, err)
 		}
 		query = new(dns.Msg).SetQuestion("replace.example.", dns.TypeA)
-		if _, _, err := client.Exchange(query, containernet.DNSAddress+":53"); err != nil {
-			t.Fatal(err)
+		if pending, _, err := client.Exchange(query, containernet.DNSAddress+":53"); err != nil || pending.Rcode != dns.RcodeServerFailure {
+			t.Fatalf("a lookup authorized under the replaced policy was answered: %v, %v", pending, err)
+		}
+		if _, err := net.DialTimeout("tcp4", "8.8.4.4:8080", 200*time.Millisecond); err == nil {
+			t.Fatal("the replaced policy installed an address permission")
+		}
+		if current, _, err := client.Exchange(query, containernet.DNSAddress+":53"); err != nil || current.Rcode != dns.RcodeSuccess {
+			t.Fatalf("lookup under the current policy: %v, %v", current, err)
+		}
+		if connection, err := net.DialTimeout("tcp4", "8.8.4.4:8080", time.Second); err != nil {
+			t.Fatalf("the current policy did not install its address permission: %v", err)
+		} else {
+			connection.Close()
 		}
 		established.SetDeadline(time.Now().Add(200 * time.Millisecond))
 		established.Write([]byte("ping"))

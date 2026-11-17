@@ -115,7 +115,7 @@ func TestDNSCacheCoalescesConcurrentQueries(t *testing.T) {
 }
 
 func TestDNSCacheRetriesUncacheableAnswers(t *testing.T) {
-	for _, scenario := range []string{"upstream failure", "firewall failure", "negative", "empty", "zero TTL"} {
+	for _, scenario := range []string{"upstream failure", "firewall failure", "negative", "empty", "alias without address", "zero TTL"} {
 		t.Run(scenario, func(t *testing.T) {
 			e, _ := testEngine(t, "storage.example. 60 IN A 8.8.8.8")
 			upstream, nft := e.exchange, e.nft
@@ -131,6 +131,10 @@ func TestDNSCacheRetriesUncacheableAnswers(t *testing.T) {
 						answer.Rcode = dns.RcodeNameError
 					case "empty":
 						answer.Answer = nil
+					case "alias without address":
+						alias, _ := dns.NewRR("storage.example. 60 IN CNAME shard.example.")
+						text, _ := dns.NewRR("shard.example. 60 IN TXT pending")
+						answer.Answer = []dns.RR{alias, text}
 					case "zero TTL":
 						answer.Answer[0].Header().Ttl = 0
 					}

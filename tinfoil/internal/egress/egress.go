@@ -281,11 +281,9 @@ func (e *Engine) serve(w dns.ResponseWriter, request *dns.Msg, p *policy) {
 		reply.Rcode = dns.RcodeNameError
 		return
 	}
-	if p.Egress == "allowlist" && question.Qtype != dns.TypeA && question.Qtype != dns.TypeAAAA {
-		reply.Rcode = dns.RcodeRefused
-		return
-	}
-	if p.Egress == "allowlist" && question.Qtype == dns.TypeAAAA {
+	// Allowed names only have IPv4 addresses here; clients treat an empty
+	// answer for other record types as final instead of retrying.
+	if p.Egress == "allowlist" && question.Qtype != dns.TypeA {
 		reply.Rcode = dns.RcodeSuccess
 		return
 	}
@@ -344,7 +342,9 @@ func (e *Engine) resolveAllowed(ctx context.Context, query *dns.Msg, p *policy) 
 		if err != nil {
 			return nil, err
 		}
-		if answer.Rcode != dns.RcodeSuccess || len(answer.Answer) == 0 {
+		// An answer without an address is not cached, so the name recovers
+		// as soon as it has one again.
+		if !slices.ContainsFunc(answer.Answer, func(record dns.RR) bool { return record.Header().Rrtype == dns.TypeA }) {
 			return answer, nil
 		}
 		entry.answer = answer

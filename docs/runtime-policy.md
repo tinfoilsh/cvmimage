@@ -18,7 +18,8 @@ Allowed answers are cached per network and hostname until their TTL expires;
 cache hits return the remaining TTL without another lookup or firewall update.
 Address permissions expire with DNS TTLs plus a five-second delivery grace;
 previously authorized connections survive expiry. Connection marks are unique
-per network and policy installation, so policy replacement revokes old flows.
+per network and policy installation, so replacing a restricted network's policy
+revokes the flows authorized under the old one.
 Restricted networks reject
 external DNS queries outside their allowlist and direct DNS/DoT connections.
 This remains IP-based enforcement, including the limits of shared hosting IPs.

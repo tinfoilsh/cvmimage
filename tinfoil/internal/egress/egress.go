@@ -86,7 +86,7 @@ type Engine struct {
 
 func New() *Engine {
 	return &Engine{
-		exchange: exchangeTLS,
+		exchange: newUpstream(upstreamAddresses, &tls.Config{ServerName: upstreamName, MinVersion: tls.VersionTLS12}).exchange,
 		nft: func(ctx context.Context, script string) ([]byte, error) {
 			command := exec.CommandContext(ctx, "nft", "-f", "-")
 			command.Stdin = strings.NewReader(script)
@@ -459,21 +459,6 @@ func parsePolicies(data []byte, generation uint32) ([]policy, error) {
 		}
 	}
 	return policies, nil
-}
-
-func exchangeTLS(ctx context.Context, query *dns.Msg) (*dns.Msg, error) {
-	client := &dns.Client{Net: "tcp-tls", Timeout: upstreamTimeout, TLSConfig: &tls.Config{ServerName: upstreamName, MinVersion: tls.VersionTLS12}}
-	var lastErr error
-	for _, address := range upstreamAddresses {
-		answer, _, err := client.ExchangeContext(ctx, query, address)
-		if err == nil && len(answer.Question) == 1 &&
-			dns.CanonicalName(answer.Question[0].Name) == dns.CanonicalName(query.Question[0].Name) &&
-			answer.Question[0].Qtype == query.Question[0].Qtype && answer.Question[0].Qclass == dns.ClassINET && !answer.Truncated {
-			return answer, nil
-		}
-		lastErr = fmt.Errorf("invalid or unavailable upstream DNS answer: %v", err)
-	}
-	return nil, lastErr
 }
 
 func (e *Engine) authorizedAnswer(ctx context.Context, query, answer *dns.Msg, p *policy) (*dns.Msg, error) {

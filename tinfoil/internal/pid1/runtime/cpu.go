@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	cpuInfoPath  = "/proc/cpuinfo"
-	cpuFlagsName = "flags"
+	cpuInfoPath      = "/proc/cpuinfo"
+	cpuFlagsName     = "flags"
+	cpuProcessorName = "processor"
 )
 
 // The host chooses which CPU features the guest sees, and that choice is not
@@ -37,10 +38,21 @@ func RequireCPUFeatures(log LogFunc) error {
 
 func checkCPUFlags(info string, required []string) error {
 	processors := 0
+	// The kernel numbers processors in their "processor" field; the count of
+	// flags lines differs from it when a processor is offline.
+	processor := ""
 	for line := range strings.SplitSeq(info, "\n") {
 		name, value, found := strings.Cut(line, ":")
-		if !found || strings.TrimSpace(name) != cpuFlagsName {
+		key := strings.TrimSpace(name)
+		if found && key == cpuProcessorName {
+			processor = strings.TrimSpace(value)
 			continue
+		}
+		if !found || key != cpuFlagsName {
+			continue
+		}
+		if processor == "" {
+			processor = fmt.Sprint(processors)
 		}
 		processors++
 		reported := strings.Fields(value)
@@ -51,9 +63,10 @@ func checkCPUFlags(info string, required []string) error {
 			}
 		}
 		if len(missing) != 0 {
-			return fmt.Errorf("processor %d does not report required CPU features: %s",
-				processors-1, strings.Join(missing, " "))
+			return fmt.Errorf("processor %s does not report required CPU features: %s",
+				processor, strings.Join(missing, " "))
 		}
+		processor = ""
 	}
 	if processors == 0 {
 		return errors.New("no processor reports its CPU features")

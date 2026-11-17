@@ -320,6 +320,9 @@ func TestMissingCPUFeaturesStopStartupBeforeAnyService(t *testing.T) {
 	if !errors.Is(err, featureErr) {
 		t.Fatalf("runLifecycle error = %v, want %v", err, featureErr)
 	}
+	if len(harness.services.started) != 0 {
+		t.Fatalf("services started without the required CPU features: %v", harness.services.started)
+	}
 }
 
 func assertCommand(t *testing.T, got supervisor.Command, name, path string, args []string) {

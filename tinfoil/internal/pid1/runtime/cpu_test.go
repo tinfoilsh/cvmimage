@@ -77,10 +77,21 @@ func TestCPUFlagsMatchWholeNames(t *testing.T) {
 	}
 }
 
+func TestCPUFlagsErrorNamesTheKernelProcessor(t *testing.T) {
+	// Processor 1 is offline, so the second processor listed is processor 2.
+	info := strings.Replace(withoutFlag(t, realCPUInfo(t), 1, "smep"), "processor\t: 1", "processor\t: 2", 1)
+	err := checkCPUFlags(info, requiredCPUFlags)
+	if err == nil || !strings.HasPrefix(err.Error(), "processor 2 ") {
+		t.Fatalf("error = %v, want it to name processor 2", err)
+	}
+}
+
 func TestCPUFlagsMustBeReported(t *testing.T) {
+	all := strings.Join(requiredCPUFlags, " ")
 	for name, info := range map[string]string{
-		"empty":         "",
-		"no flags line": "processor\t: 0\nmodel name\t: unknown\n",
+		"empty":                 "",
+		"only lookalike fields": "processor\t: 0\nvmx flags\t: " + all + "\nbugs\t\t: " + all + "\n",
+		"no flags line":         "processor\t: 0\nmodel name\t: unknown\n",
 	} {
 		if err := checkCPUFlags(info, requiredCPUFlags); err == nil {
 			t.Fatalf("%s: accepted", name)

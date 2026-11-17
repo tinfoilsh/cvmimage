@@ -101,7 +101,7 @@ func TestDNSInstallsRotatingAnswersBeforeReply(t *testing.T) {
 			if reply.Rcode != dns.RcodeSuccess || len(reply.Answer) != 1 {
 				t.Fatalf("reply = %v", reply)
 			}
-			if len(*scripts) < 2 || !strings.Contains((*scripts)[len(*scripts)-1], "allow-alpha { "+address+" timeout 35s }") {
+			if len(*scripts) < 2 || !strings.Contains((*scripts)[len(*scripts)-1], "allow-alpha { "+address+" timeout 65s }") {
 				t.Fatalf("answer returned before its address was installed: %v", *scripts)
 			}
 		}}
@@ -160,7 +160,7 @@ func TestDNSCNAMEAndUnrelatedRecords(t *testing.T) {
 			t.Fatalf("alias outlives address: %v", answer)
 		}
 	}
-	if joined := strings.Join(*scripts, ""); strings.Contains(joined, "9.9.9.9") || !strings.Contains(joined, "8.8.8.8 timeout 35s") {
+	if joined := strings.Join(*scripts, ""); strings.Contains(joined, "9.9.9.9") || !strings.Contains(joined, "8.8.8.8 timeout 65s") {
 		t.Fatalf("scripts=%s", joined)
 	}
 }
@@ -485,5 +485,15 @@ func TestDNSAppliesReplacedPolicyOnTheNextQuery(t *testing.T) {
 	e.allocatedGeneration = func() (uint32, error) { return 9, nil }
 	if answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess || len(*scripts) != 4 || !strings.Contains((*scripts)[3], "policy-generation { 9 }") {
 		t.Fatalf("answer cached under a replaced policy was reused: %v scripts=%v", answer, *scripts)
+	}
+}
+
+func TestDNSAddressPermissionsOutlastShortAnswers(t *testing.T) {
+	for ttl, lease := range map[int]string{0: "65s", 30: "65s", 600: "605s"} {
+		e, scripts := testEngine(t, fmt.Sprintf("storage.example. %d IN A 8.8.8.8", ttl))
+		answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA)
+		if answer.Rcode != dns.RcodeSuccess || answer.Answer[0].Header().Ttl != uint32(ttl) || !strings.Contains((*scripts)[1], "8.8.8.8 timeout "+lease) {
+			t.Fatalf("ttl=%d answer=%v scripts=%v", ttl, answer, *scripts)
+		}
 	}
 }

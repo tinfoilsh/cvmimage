@@ -18,7 +18,8 @@ Docker keeps internal service-name resolution and forwards external queries to
 network's policy and installs allowed public IPv4 answers before replying.
 Allowed answers are cached per network and hostname until their TTL expires;
 cache hits return the remaining TTL without another lookup or firewall update.
-Address permissions expire with DNS TTLs plus a five-second delivery grace;
+Address permissions last for the DNS TTL, or one minute when it is shorter,
+plus a five-second delivery grace;
 previously authorized connections survive expiry. Connection marks are unique
 per network and policy installation, so replacing a restricted network's policy
 revokes the flows authorized under the old one.

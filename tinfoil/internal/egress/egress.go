@@ -36,6 +36,8 @@ const (
 	maxAnswerTTL    = uint32(3600)
 	maxCNAMEs       = 16
 	replyGrace      = 5 * time.Second
+	// Clients commonly reuse an address for longer than a short TTL allows.
+	minAddressLease = uint32(60)
 	upstreamName    = "one.one.one.one"
 )
 
@@ -587,7 +589,7 @@ func (e *Engine) install(ctx context.Context, p *policy, leases map[string]uint3
 	}
 	addresses := make([]string, 0, len(leases))
 	for address, ttl := range leases {
-		leases[address] = ttl + uint32(replyGrace/time.Second)
+		leases[address] = max(ttl, minAddressLease) + uint32(replyGrace/time.Second)
 		addresses = append(addresses, address)
 	}
 	slices.Sort(addresses)

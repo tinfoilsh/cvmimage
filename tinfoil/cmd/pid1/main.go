@@ -33,6 +33,7 @@ const (
 	containerdReadyLimit = 30 * time.Second
 	dockerReadyLimit     = 60 * time.Second
 	shimReadyLimit       = 30 * time.Second
+	egressReadyLimit     = 30 * time.Second
 	oneShotStopGrace     = 2 * time.Second
 	serviceTermGrace     = 10 * time.Second
 	serviceKillGrace     = 5 * time.Second
@@ -336,7 +337,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: egressName, Required: true, Restart: true,
 		Command: hardenedCommand(hardening.ServiceEgress, boot.EgressBinary),
-		Ready:   endpointReady("tcp", containernet.DNSReadyAddress, shimReadyLimit),
+		Ready:   endpointReady("tcp", containernet.DNSReadyAddress, egressReadyLimit),
 		PIDFile: boot.EgressPIDPath,
 	}); err != nil {
 		return err

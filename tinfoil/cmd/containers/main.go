@@ -232,20 +232,6 @@ func (m *manager) boot(override []byte) (result error) {
 		}
 		preserved[runtimeconfig.ReservedDebugContainerName] = true
 	}
-	frozenEgress, err := freezeFromPIDFile(boot.EgressPIDPath)
-	if err != nil {
-		return fmt.Errorf("freezing current egress policy: %w", err)
-	}
-	if frozenEgress != nil {
-		defer frozenEgress.close()
-	}
-	defer func() {
-		if frozenEgress != nil {
-			if err := restartEgress(context.Background(), frozenEgress); err != nil {
-				result = errors.Join(result, fmt.Errorf("restoring egress policy service: %w", err))
-			}
-		}
-	}()
 	if err := containers.RemoveManagedExcept(m.ctx, previous, preserved); err != nil {
 		return err
 	}
@@ -271,10 +257,6 @@ func (m *manager) boot(override []byte) (result error) {
 		return fmt.Errorf("preparing container networks: %w", err)
 	}
 	tracker.Record(boot.StageFirewall, boot.StatusOK, time.Since(start), "")
-	if err := restartEgress(m.ctx, frozenEgress); err != nil {
-		return fmt.Errorf("restarting egress policy: %w", err)
-	}
-	frozenEgress = nil
 	if err := containers.LaunchAndWaitHealthyExcept(m.ctx, tracker, config, external, secretValues, m.debug, preserved); err != nil {
 		return err
 	}

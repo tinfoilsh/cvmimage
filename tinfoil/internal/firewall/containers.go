@@ -33,6 +33,12 @@ func ApplyContainerNetworks(config *runtimeconfig.Config, debug bool, generation
 	return nil
 }
 
+// policyGeneration identifies one installation of the network policy: the
+// last per-network generation it allocates.
+func policyGeneration(config *runtimeconfig.Config, generation uint32) uint32 {
+	return generation + uint32(max(len(config.Networks), 1)) - 1
+}
+
 func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool, generation uint32) (string, error) {
 	if generation == 0 || uint64(generation)+uint64(len(config.Networks)) > uint64(^uint32(0))+1 {
 		return "", fmt.Errorf("invalid network policy generation")
@@ -48,6 +54,8 @@ func renderContainerNetworkScript(config *runtimeconfig.Config, debug bool, gene
 	sort.Strings(names)
 	var script strings.Builder
 	script.WriteString("flush chain inet tinfoil container_input\n")
+	fmt.Fprintf(&script, "add set inet tinfoil %[1]s { type mark; }\nflush set inet tinfoil %[1]s\nadd element inet tinfoil %[1]s { %[2]d }\n",
+		containernet.PolicyGenerationSet, policyGeneration(config, generation))
 	script.WriteString("flush chain inet tinfoil container_forward\n")
 	if debug && runtimeconfig.HasReservedDebugContainer(config) {
 		writeReservedDebugForwardRules(&script)

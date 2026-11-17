@@ -153,6 +153,10 @@ func TestEstablishedEgressRequiresCurrentNetworkPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The resolver reads the last allocated generation as the installed policy.
+	if !strings.Contains(first, "add element inet tinfoil policy-generation { 2 }") || !strings.Contains(replacement, "flush set inet tinfoil policy-generation\nadd element inet tinfoil policy-generation { 4 }") {
+		t.Fatalf("policy generation is not replaced:\n%s\n%s", first, replacement)
+	}
 	for _, fragment := range []string{
 		`iifname "alpha" meta nfproto ipv4 ct state established,related ct mark 1 accept`,
 		`oifname "alpha" ct state established,related ct mark 1 accept`,

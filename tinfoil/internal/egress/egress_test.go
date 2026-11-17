@@ -229,6 +229,10 @@ func TestDNSFollowsSeparateAliasAnswersAndStripsClientOptions(t *testing.T) {
 	}
 	q := new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)
 	q.SetEdns0(dns.DefaultMsgSize, true)
+	spoofed, _ := dns.NewRR("storage.example. 30 IN A 10.0.0.1")
+	q.Answer = []dns.RR{spoofed}
+	authority, _ := dns.NewRR("example. 30 IN NS ns.attacker.")
+	q.Ns = []dns.RR{authority}
 	w := &responseWriter{source: "10.42.0.2:12345"}
 	e.ServeDNS(w, q)
 	if calls != 2 || w.answer.Rcode != dns.RcodeSuccess || len(w.answer.Answer) != 2 {
@@ -280,7 +284,7 @@ func TestDNSOverTLSRejectsUntrustedResolver(t *testing.T) {
 	previous := upstreamAddresses
 	upstreamAddresses = []string{listener.Addr().String()}
 	t.Cleanup(func() { upstreamAddresses = previous })
-	if answer, err := exchangeTLS(context.Background(), new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)); err == nil {
-		t.Fatalf("accepted an unauthenticated DNS answer: %v", answer)
+	if answer, err := exchangeTLS(context.Background(), new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)); err == nil || !strings.Contains(err.Error(), "x509") {
+		t.Fatalf("untrusted resolver not rejected by certificate verification: answer=%v err=%v", answer, err)
 	}
 }

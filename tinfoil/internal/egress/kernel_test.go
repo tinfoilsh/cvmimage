@@ -103,7 +103,12 @@ func TestIsolatedKernelDNS(t *testing.T) {
 		}
 	}
 	e := New()
-	e.policies = []policy{{"alpha", netip.MustParsePrefix("10.42.0.0/24"), config.Networks["alpha"]}, {"beta", netip.MustParsePrefix("10.43.0.0/24"), config.Networks["beta"]}}
+	policies := func(generation uint32) []policy {
+		return []policy{{"alpha", netip.MustParsePrefix("10.42.0.0/24"), config.Networks["alpha"], generation}, {"beta", netip.MustParsePrefix("10.43.0.0/24"), config.Networks["beta"], generation}}
+	}
+	e.policies, e.generation = policies(2), 2
+	// The policy is replaced below, during the fourth lookup.
+	e.loadPolicies = func() ([]policy, error) { return policies(4), nil }
 	var queries atomic.Int32
 	var retained atomic.Bool
 	e.exchange = func(_ context.Context, q *dns.Msg) (*dns.Msg, error) {
@@ -170,13 +175,21 @@ func TestIsolatedKernelDNS(t *testing.T) {
 	if !retained.Load() {
 		t.Fatalf("rotating addresses not retained: %s", output)
 	}
+	if strings.Contains(string(output), "8.8.") {
+		t.Fatalf("a lookup authorized before the replacement installed a permission: %s", output)
+	}
+	installed := policies(4)[0]
 	// A restarted engine must not shorten an earlier answer's lifetime.
 	restarted := New()
-	if err := restarted.install(ctx, "alpha", map[string]uint32{"8.8.8.8": 30}); err != nil {
+	if err := restarted.install(ctx, &installed, map[string]uint32{"8.8.8.8": 30}); err != nil {
 		t.Fatal(err)
 	}
-	if err := New().install(ctx, "alpha", map[string]uint32{"8.8.8.8": 1}); err != nil {
+	if err := New().install(ctx, &installed, map[string]uint32{"8.8.8.8": 1}); err != nil {
 		t.Fatal(err)
+	}
+	replaced := policies(2)[0]
+	if err := New().install(ctx, &replaced, map[string]uint32{"8.8.4.5": 30}); err == nil {
+		t.Fatal("a replaced policy installed an address permission")
 	}
 	output, err = e.listSet(ctx, "allow-alpha")
 	if err != nil {

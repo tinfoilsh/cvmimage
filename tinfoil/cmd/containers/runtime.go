@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,7 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
-	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -99,40 +97,20 @@ func restartRuntimeServices(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func freezeFromPIDFile(path string) (*serviceInstance, error) {
+// signalFromPIDFile signals the service itself, leaving its children alone.
+func signalFromPIDFile(path string, signal syscall.Signal) error {
 	instance, err := openServiceInstance(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := signalProcessGroup(instance.pid, syscall.SIGSTOP); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			instance.close()
-			return nil, nil
-		}
-		instance.close()
-		return nil, fmt.Errorf("freezing pid %d process group: %w", instance.pid, err)
-	}
-	return instance, nil
-}
-
-func restartEgress(ctx context.Context, instance *serviceInstance) error {
-	if instance == nil {
 		return nil
 	}
-	if err := signalProcessGroup(instance.pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("killing frozen pid %d process group: %w", instance.pid, err)
+	if err != nil {
+		return err
 	}
-	return waitForReplacementPID(ctx, boot.EgressPIDPath, instance, func() bool {
-		connection, err := net.DialTimeout("tcp", containernet.DNSReadyAddress, restartPollInterval)
-		if err != nil {
-			return false
-		}
-		connection.Close()
-		return true
-	})
+	defer instance.close()
+	if err := syscall.Kill(instance.pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("signaling pid %d: %w", instance.pid, err)
+	}
+	return nil
 }
 
 func openServiceInstance(path string) (*serviceInstance, error) {
@@ -174,14 +152,14 @@ func restartFromPIDFile(ctx context.Context, path string) error {
 	if err := signalProcessGroup(instance.pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("signaling pid %d process group: %w", instance.pid, err)
 	}
-	return waitForReplacementPID(ctx, path, instance, func() bool { return true })
+	return waitForReplacementPID(ctx, path, instance)
 }
 
 func signalProcessGroup(pid int, signal syscall.Signal) error {
 	return syscall.Kill(-pid, signal)
 }
 
-func waitForReplacementPID(ctx context.Context, path string, previous *serviceInstance, ready func() bool) error {
+func waitForReplacementPID(ctx context.Context, path string, previous *serviceInstance) error {
 	deadline := time.NewTimer(restartWaitTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(restartPollInterval)
@@ -197,7 +175,7 @@ func waitForReplacementPID(ctx context.Context, path string, previous *serviceIn
 			if err != nil {
 				return err
 			}
-			if restarted && ready() {
+			if restarted {
 				return nil
 			}
 		}

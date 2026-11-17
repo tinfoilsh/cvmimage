@@ -43,12 +43,14 @@ func testEngine(t *testing.T, records ...string) (*Engine, *[]string) {
 	t.Helper()
 	e := New()
 	e.now = func() time.Time { return time.Unix(0, 0) }
-	e.policies = []policy{
-		{"alpha", netip.MustParsePrefix("10.42.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"storage.example"}}},
-		{"beta", netip.MustParsePrefix("10.43.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"other.example"}}},
-		{"closed", netip.MustParsePrefix("10.44.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "closed"}},
-		{"open", netip.MustParsePrefix("10.45.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "open"}},
+	policies := []policy{
+		{"alpha", netip.MustParsePrefix("10.42.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"storage.example"}}, 7},
+		{"beta", netip.MustParsePrefix("10.43.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"other.example"}}, 7},
+		{"closed", netip.MustParsePrefix("10.44.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "closed"}, 7},
+		{"open", netip.MustParsePrefix("10.45.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "open"}, 7},
 	}
+	e.policies, e.generation = policies, 7
+	e.loadPolicies = func() ([]policy, error) { return policies, nil }
 	e.exchange = func(_ context.Context, query *dns.Msg) (*dns.Msg, error) {
 		answer := new(dns.Msg).SetReply(query)
 		for _, record := range records {
@@ -304,7 +306,7 @@ func TestDNSOverTLSRejectsUntrustedResolver(t *testing.T) {
 }
 
 func TestDNSTreatsNetworksWithoutSettingsAsClosed(t *testing.T) {
-	policies, err := parsePolicies([]byte("networks:\n  lo:\n"))
+	policies, err := parsePolicies([]byte("networks:\n  lo:\n"), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,5 +447,29 @@ func TestDNSDatagramRateIsSeparatePerNetwork(t *testing.T) {
 	now = now.Add(time.Second)
 	if !e.admit(flooding) {
 		t.Fatal("network did not regain its rate")
+	}
+}
+
+func TestDNSReloadAppliesReplacedPolicy(t *testing.T) {
+	e, scripts := testEngine(t, "storage.example. 60 IN A 8.8.8.8")
+	if answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess {
+		t.Fatal(answer)
+	}
+	if script := (*scripts)[1]; !strings.HasPrefix(script, "delete element inet tinfoil policy-generation { 7 }\nadd element inet tinfoil policy-generation { 7 }\n") {
+		t.Fatalf("permission does not require its policy generation: %s", script)
+	}
+	e.loadPolicies = func() ([]policy, error) {
+		return []policy{{"alpha", netip.MustParsePrefix("10.42.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"other.example"}}, 8}}, nil
+	}
+	e.Reload()
+	if answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeNameError {
+		t.Fatalf("removed name still resolves: %v", answer)
+	}
+	e.loadPolicies = func() ([]policy, error) {
+		return []policy{{"alpha", netip.MustParsePrefix("10.42.0.0/24"), &runtimeconfig.NetworkSpec{Egress: "allowlist", Allow: []string{"storage.example"}}, 9}}, nil
+	}
+	e.Reload()
+	if answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess || len(*scripts) != 4 || !strings.Contains((*scripts)[3], "policy-generation { 9 }") {
+		t.Fatalf("answer cached under a replaced policy was reused: %v scripts=%v", answer, *scripts)
 	}
 }

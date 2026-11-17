@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"os"
@@ -144,6 +145,7 @@ func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 	}
 	p, err := e.policyFor(remote.Addr().Unmap())
 	if err != nil {
+		log.Printf("DNS policy unavailable: %v", err)
 		return
 	}
 	if p == nil {

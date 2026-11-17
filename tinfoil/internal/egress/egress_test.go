@@ -451,6 +451,21 @@ func TestDNSDatagramRateIsSeparatePerNetwork(t *testing.T) {
 	}
 }
 
+func TestDNSDatagramAdmissionUsesTheLoadedPolicy(t *testing.T) {
+	e, _ := testEngine(t)
+	e.allocatedGeneration = func() (uint32, error) {
+		t.Fatal("datagram admission read the allocated generation")
+		return 0, nil
+	}
+	source := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("10.45.0.2:12345"))
+	if !e.admit(source) {
+		t.Fatal("datagram within the network's rate was dropped")
+	}
+	if _, limited := e.datagrams.Load("open"); !limited {
+		t.Fatal("datagram was not counted against its network")
+	}
+}
+
 func TestDNSAppliesReplacedPolicyOnTheNextQuery(t *testing.T) {
 	e, scripts := testEngine(t, "storage.example. 60 IN A 8.8.8.8")
 	if answer := ask(e, "10.42.0.2:12345", "storage.example.", dns.TypeA); answer.Rcode != dns.RcodeSuccess {

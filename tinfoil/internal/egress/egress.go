@@ -74,6 +74,7 @@ type Engine struct {
 	allocatedGeneration func() (uint32, error)
 	now                 func() time.Time
 	mu                  sync.Mutex
+	firewall            sync.Mutex
 	policies            []policy
 	generation          uint32
 	cache               map[cacheKey]*cachedAnswer
@@ -196,7 +197,11 @@ func (r *sourceReader) ReadUDP(connection *net.UDPConn, timeout time.Duration) (
 func (e *Engine) admit(source net.Addr) bool {
 	network := ""
 	if remote, err := netip.ParseAddrPort(source.String()); err == nil {
-		if p, err := e.policyFor(remote.Addr().Unmap()); err == nil && p != nil {
+		// Only the policy already in memory is consulted before the limit.
+		e.mu.Lock()
+		p, err := e.match(remote.Addr().Unmap())
+		e.mu.Unlock()
+		if err == nil && p != nil {
 			network = p.name
 		}
 	}
@@ -369,15 +374,17 @@ func allowed(name string, domains []string) bool {
 }
 
 func (e *Engine) policyFor(source netip.Addr) (*policy, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	// A new generation is allocated before the firewall is replaced, so no
 	// query is answered from a policy older than the installed one.
 	generation, err := e.allocatedGeneration()
 	if err != nil {
 		return nil, err
 	}
-	if e.policies == nil || generation != e.generation {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// Generations only grow, so a query that read an older one never
+	// replaces a newer policy.
+	if e.policies == nil || generation > e.generation {
 		policies, err := e.loadPolicies(generation)
 		if err != nil {
 			return nil, err
@@ -386,6 +393,11 @@ func (e *Engine) policyFor(source netip.Addr) (*policy, error) {
 		// were resolved under.
 		e.policies, e.generation, e.cache = policies, generation, make(map[cacheKey]*cachedAnswer)
 	}
+	return e.match(source)
+}
+
+// match selects among the loaded policies; the caller holds e.mu.
+func (e *Engine) match(source netip.Addr) (*policy, error) {
 	var matched *policy
 	for i := range e.policies {
 		p := &e.policies[i]
@@ -547,8 +559,10 @@ func (e *Engine) install(ctx context.Context, p *policy, leases map[string]uint3
 	if len(leases) == 0 {
 		return nil
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// Firewall updates are serialized on their own, so policy lookups never
+	// wait for one.
+	e.firewall.Lock()
+	defer e.firewall.Unlock()
 	set := containernet.AllowSetPrefix + p.name
 	data, err := e.listSet(ctx, set)
 	if err != nil {

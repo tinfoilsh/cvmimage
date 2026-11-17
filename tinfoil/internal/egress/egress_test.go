@@ -292,3 +292,35 @@ func TestDNSOverTLSRejectsUntrustedResolver(t *testing.T) {
 		t.Fatalf("untrusted resolver not rejected by certificate verification: answer=%v err=%v", answer, err)
 	}
 }
+
+func TestDNSTreatsNetworksWithoutSettingsAsClosed(t *testing.T) {
+	policies, err := parsePolicies([]byte("networks:\n  lo:\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policies) == 0 {
+		t.Fatal("loopback network has no policy")
+	}
+	policies[0].prefix = netip.MustParsePrefix("10.50.0.0/24")
+	e, scripts := testEngine(t, "storage.example. 30 IN A 8.8.8.8")
+	e.policies = policies[:1]
+	exchanged := false
+	exchange := e.exchange
+	e.exchange = func(ctx context.Context, query *dns.Msg) (*dns.Msg, error) {
+		exchanged = true
+		return exchange(ctx, query)
+	}
+	answer := ask(e, "10.50.0.2:12345", "storage.example.", dns.TypeA)
+	if answer.Rcode != dns.RcodeNameError || exchanged || len(*scripts) != 0 {
+		t.Fatalf("answer=%v exchanged=%v scripts=%v", answer, exchanged, *scripts)
+	}
+}
+
+func TestDNSAnswersFailureWhenQueryHandlingPanics(t *testing.T) {
+	e, _ := testEngine(t)
+	e.exchange = func(context.Context, *dns.Msg) (*dns.Msg, error) { panic("unexpected upstream state") }
+	answer := ask(e, "10.45.0.2:12345", "other.example.", dns.TypeA)
+	if answer == nil || answer.Rcode != dns.RcodeServerFailure {
+		t.Fatalf("answer=%v", answer)
+	}
+}

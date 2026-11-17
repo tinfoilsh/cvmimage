@@ -3,7 +3,9 @@ package egress
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,7 +78,10 @@ func (u *upstream) exchangeWith(ctx context.Context, query *dns.Msg, address str
 		// A failed connection may still deliver this query's answer later, so
 		// it is never reused.
 		connection.Close()
-		if !reused || ctx.Err() != nil {
+		// Only a connection the resolver already closed is worth replacing; a
+		// timeout leaves the remaining time for the other address.
+		var timeout net.Error
+		if !reused || ctx.Err() != nil || errors.As(err, &timeout) && timeout.Timeout() {
 			return nil, err
 		}
 	}

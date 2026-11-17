@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -44,6 +46,13 @@ func (l *countingListener) closeConnections() {
 
 func trustedResolver(t *testing.T) (*countingListener, *tls.Config) {
 	t.Helper()
+	return trustedResolverWith(t, func(w dns.ResponseWriter, q *dns.Msg) {
+		_ = w.WriteMsg(new(dns.Msg).SetReply(q))
+	})
+}
+
+func trustedResolverWith(t *testing.T, handler dns.HandlerFunc) (*countingListener, *tls.Config) {
+	t.Helper()
 	certificateServer := httptest.NewTLSServer(nil)
 	serverConfig := certificateServer.TLS.Clone()
 	roots := x509.NewCertPool()
@@ -58,9 +67,7 @@ func trustedResolver(t *testing.T) (*countingListener, *tls.Config) {
 	server := &dns.Server{
 		Listener:          tls.NewListener(listener, serverConfig),
 		NotifyStartedFunc: func() { close(ready) },
-		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
-			_ = w.WriteMsg(new(dns.Msg).SetReply(q))
-		}),
+		Handler:           handler,
 	}
 	go server.ActivateAndServe()
 	<-ready
@@ -115,5 +122,25 @@ func TestUpstreamStartsWithTheAddressThatAnsweredLast(t *testing.T) {
 	}
 	if failing.accepted() != 1 {
 		t.Fatalf("failing address was tried %d times", failing.accepted())
+	}
+}
+
+func TestUpstreamTriesTheOtherAddressWhenAReusedConnectionStalls(t *testing.T) {
+	var answered atomic.Bool
+	stalling, _ := trustedResolverWith(t, func(w dns.ResponseWriter, q *dns.Msg) {
+		if answered.CompareAndSwap(false, true) {
+			_ = w.WriteMsg(new(dns.Msg).SetReply(q))
+		}
+	})
+	listener, config := trustedResolver(t)
+	resolver := newUpstream([]string{stalling.Addr().String(), listener.Addr().String()}, config)
+	resolver.client.Timeout = 100 * time.Millisecond
+	for range 2 {
+		if _, err := resolver.exchange(context.Background(), new(dns.Msg).SetQuestion("storage.example.", dns.TypeA)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stalling.accepted() != 1 || listener.accepted() != 1 {
+		t.Fatalf("stalled address was retried: connections=%d, other address=%d", stalling.accepted(), listener.accepted())
 	}
 }

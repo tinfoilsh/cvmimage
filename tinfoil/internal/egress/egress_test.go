@@ -434,6 +434,9 @@ func TestDNSDatagramRateIsSeparatePerNetwork(t *testing.T) {
 	if e.admit(flooding) {
 		t.Fatal("datagram beyond the network's rate was admitted")
 	}
+	if e.admit(net.UDPAddrFromAddrPort(netip.MustParseAddrPort("10.45.0.3:12345"))) {
+		t.Fatal("another address in the flooding network had its own rate")
+	}
 	for _, source := range []string{"10.42.0.2:12345", "10.46.0.2:12345"} {
 		if !e.admit(net.UDPAddrFromAddrPort(netip.MustParseAddrPort(source))) {
 			t.Fatalf("flood from another network dropped a datagram from %s", source)

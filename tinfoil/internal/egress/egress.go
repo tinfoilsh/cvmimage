@@ -115,6 +115,10 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 	reply := new(dns.Msg).SetRcode(request, dns.RcodeServerFailure)
 	defer func() {
+		if failure := recover(); failure != nil {
+			log.Printf("DNS query failed: %v", failure)
+			reply = new(dns.Msg).SetRcode(request, dns.RcodeServerFailure)
+		}
 		if _, udp := w.RemoteAddr().(*net.UDPAddr); udp {
 			size := dns.MinMsgSize
 			if opt := request.IsEdns0(); opt != nil {
@@ -261,12 +265,19 @@ func loadPolicies() ([]policy, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parsePolicies(data)
+}
+
+func parsePolicies(data []byte) ([]policy, error) {
 	var config runtimeconfig.Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
 	policies := make([]policy, 0, len(config.Networks))
 	for name, network := range config.Networks {
+		if network == nil {
+			network = &runtimeconfig.NetworkSpec{Egress: "closed"}
+		}
 		iface, err := net.InterfaceByName(name)
 		if err != nil {
 			return nil, err

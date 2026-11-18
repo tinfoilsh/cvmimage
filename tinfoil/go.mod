@@ -22,7 +22,7 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/common v0.70.1
 	github.com/stretchr/testify v1.11.1
-	github.com/tinfoilsh/encrypted-http-body-protocol v0.4.1
+	github.com/tinfoilsh/encrypted-http-body-protocol v0.6.0
 	github.com/tinfoilsh/modelwrap v0.2.1
 	github.com/tinfoilsh/tinfoil-config v0.1.23
 	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.7

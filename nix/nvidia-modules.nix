@@ -3,18 +3,22 @@
 let
   inherit (pkgs) lib;
   inherit (kernel) kernelPackages release;
-  version = "595.71.05";
+  version = "595.91.07";
   moduleNames = [
     "nvidia.ko"
     "nvidia-uvm.ko"
     "nvidia-modeset.ko"
   ];
 
-  _versionCheck =
-    assert kernelPackages.nvidiaPackages.production.version == version;
-    true;
   kernelSource = "${kernelPackages.kernel.dev}/lib/modules/${release}/source";
   nvidiaOpen = kernelPackages.nvidiaPackages.production.open.overrideAttrs (old: {
+    version = "${version}-${kernelPackages.kernel.version}";
+    src = pkgs.fetchFromGitHub {
+      owner = "NVIDIA";
+      repo = "open-gpu-kernel-modules";
+      tag = version;
+      hash = "sha256-OB8Epd+qn/WywxsPiFpxEOAzlJqb6I1SyRoV3a8l71k=";
+    };
     env = (old.env or { }) // {
       CONFIG_X86_KERNEL_IBT = "";
       KBUILD_BUILD_TIMESTAMP = "Tue Jan  1 00:00:00 UTC 1980";
@@ -29,7 +33,6 @@ let
   });
 
   modules =
-    assert _versionCheck;
     pkgs.runCommand "tinfoil-nvidia-open-${version}-${release}"
       {
         nativeBuildInputs = [

@@ -16,8 +16,8 @@ import (
 	sevabi "github.com/google/go-sev-guest/abi"
 	sevclient "github.com/google/go-sev-guest/client"
 	tdxclient "github.com/google/go-tdx-guest/client"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/legacy"
 

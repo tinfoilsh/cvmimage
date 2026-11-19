@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"

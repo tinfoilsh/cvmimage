@@ -14,7 +14,7 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"tinfoil/internal/attestationmaterial"
 	shimconfig "tinfoil/internal/config"

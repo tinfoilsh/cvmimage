@@ -11,7 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"tinfoil/internal/legacy"
 )

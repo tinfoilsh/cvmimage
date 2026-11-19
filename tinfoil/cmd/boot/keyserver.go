@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/attestation"
 	"tinfoil/internal/attestationmaterial"

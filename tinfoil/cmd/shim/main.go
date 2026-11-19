@@ -22,7 +22,7 @@ import (
 	"log"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/time/rate"
 	verifier "tinfoil/internal/legacy"
 

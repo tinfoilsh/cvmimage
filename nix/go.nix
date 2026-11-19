@@ -11,10 +11,10 @@ let
   # Pin the Go toolchain explicitly; bump this together with the src hash
   # whenever the toolchain needs an update.
   upstreamGo = pkgs.go_1_27.overrideAttrs (old: {
-    version = "1.27.3";
+    version = "1.27.4";
     src = pkgs.fetchurl {
-      url = "https://go.dev/dl/go1.27.3.src.tar.gz";
-      hash = "sha256-bndJA1zzYPBrJXXRYup535/ajvZxiJ5cN1+OUHd/Jrs=";
+      url = "https://go.dev/dl/go1.27.4.src.tar.gz";
+      hash = "sha256-c8+4VxrsDAEXdofbhxY9Rqog6XeWcncokaoXZU2aYJk=";
     };
     patches = builtins.filter (
       patch:
@@ -36,7 +36,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-k5Rw8wHO8vDIdW1dE6Yd3CDpcF7nWiXAZhy98MIgIqo=";
+    vendorHash = "sha256-TtujccG+CrErlgxe2Db8zKBhDXpUFwHIPm4bAMcYwmw=";
     ldflags = [
       "-s"
       "-w"

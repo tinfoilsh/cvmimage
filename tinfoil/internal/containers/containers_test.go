@@ -1,6 +1,7 @@
 package containers
 
 import (
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -230,6 +231,52 @@ func TestNetworkCreateOptionsStaticShimNet(t *testing.T) {
 	}
 	if got := opts.IPAM.Config[0].Gateway.String(); got != containernet.ShimNetGatewayIP {
 		t.Errorf("gateway: got %q, want %q", got, containernet.ShimNetGatewayIP)
+	}
+	if !opts.Internal {
+		t.Error("shim-net must be an internal network")
+	}
+	if networkCreateOptions("web").Internal {
+		t.Error("declared networks must stay routable for published ports and egress policy")
+	}
+}
+
+func TestBuildContainerCreateSpec_ResolverFollowsEgress(t *testing.T) {
+	cfg := &Config{
+		ShimCfg: &shimconfig.Config{UpstreamContainer: "model"},
+		Networks: map[string]*NetworkSpec{
+			"ipc":     {Egress: "closed"},
+			"control": {Egress: "allowlist"},
+			"web":     {Egress: "open"},
+		},
+	}
+	tests := []struct {
+		name      string
+		container string
+		networks  []string
+		isolated  bool
+	}{
+		{"shim upstream only", "model", nil, true},
+		{"closed network", "worker", []string{"ipc"}, true},
+		{"shim upstream on a closed network", "model", []string{"ipc"}, true},
+		{"allowlist network", "worker", []string{"control"}, false},
+		{"open network", "worker", []string{"web"}, false},
+		{"closed and open networks", "worker", []string{"ipc", "web"}, false},
+		{"no network", "worker", nil, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := Container{Name: test.container, Image: "example.invalid/app", Networks: test.networks}
+			_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+			if err != nil {
+				t.Fatalf("buildContainerCreateSpec: %v", err)
+			}
+			if got := slices.Equal(host.DNS, []netip.Addr{noEgressResolver}); got != test.isolated {
+				t.Fatalf("DNS = %v, isolated resolver = %t, want %t", host.DNS, got, test.isolated)
+			}
+			if !test.isolated && len(host.DNS) != 0 {
+				t.Fatalf("DNS = %v, want the engine default", host.DNS)
+			}
+		})
 	}
 }
 

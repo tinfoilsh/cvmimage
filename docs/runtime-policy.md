@@ -160,6 +160,11 @@ debug toolbox's 2222). The measurement says nothing about the published service'
 own integrity or confidentiality; keeping it free of runtime vulnerabilities
 is the deployer's job.
 
+A container resolves names outside the CVM only when one of its networks has
+`egress: allowlist` or `egress: open`. With only closed networks, including the
+implicit shim channel, it still resolves the containers that share its
+networks, and every other lookup fails immediately without leaving the CVM.
+
 Every container image must be an OCI reference containing an immutable digest,
 including in measured debug mode. The container manager pulls that exact
 reference and verifies Docker's inspected repository digests before creating

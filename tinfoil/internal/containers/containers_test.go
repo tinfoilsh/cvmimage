@@ -1,9 +1,12 @@
 package containers
 
 import (
+	"context"
+	"errors"
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -561,5 +564,64 @@ func TestNonAdminSSHServiceGetsOnlyDeclaredExposure(t *testing.T) {
 	private := host.PortBindings[dockernetwork.MustParsePort("8080/tcp")][0]
 	if direct.HostIP.IsValid() || direct.HostPort != "22" || private.HostIP.String() != containernet.PublishedHostIP {
 		t.Fatalf("wrong exposure: direct=%+v private=%+v", direct, private)
+	}
+}
+
+func TestPullImagesInOrder_PullsEachImageOnceAndOneAtATime(t *testing.T) {
+	const pullTime = 5 * time.Millisecond
+	var mu sync.Mutex
+	var pulled []string
+	running, mostRunning := 0, 0
+	images := []string{"model", "speech", "model", "broken", "speech", "model", "broken"}
+	pulls := pullImagesInOrder(context.Background(), images, func(_ context.Context, image string) error {
+		mu.Lock()
+		pulled = append(pulled, image)
+		running++
+		mostRunning = max(mostRunning, running)
+		mu.Unlock()
+		time.Sleep(pullTime)
+		mu.Lock()
+		running--
+		mu.Unlock()
+		if image == "broken" {
+			return errors.New("pull failed")
+		}
+		return nil
+	})
+
+	errs := make([]error, len(images))
+	var wg sync.WaitGroup
+	for i, image := range images {
+		wg.Go(func() { errs[i] = pulls.Wait(context.Background(), image) })
+	}
+	wg.Wait()
+
+	if want := []string{"model", "speech", "broken"}; !slices.Equal(pulled, want) {
+		t.Errorf("pulled %v, want each image once in listed order %v", pulled, want)
+	}
+	if mostRunning != 1 {
+		t.Errorf("%d pulls ran at once, want one at a time", mostRunning)
+	}
+	for i, image := range images {
+		if failed := errs[i] != nil; failed != (image == "broken") {
+			t.Errorf("container %d on %s: err = %v", i, image, errs[i])
+		}
+	}
+}
+
+func TestImagePullsWait_EndsWhenTheLaunchIsCancelled(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	pulls := pullImagesInOrder(context.Background(), []string{"model"}, func(context.Context, string) error {
+		<-release
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := pulls.Wait(ctx, "model"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Wait = %v, want context.Canceled", err)
+	}
+	if err := pulls.Wait(context.Background(), "other"); err == nil {
+		t.Error("Wait for an image that was never queued must fail")
 	}
 }

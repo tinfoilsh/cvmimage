@@ -193,6 +193,13 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 	// lifecycle: pull → start → wait-healthy.
 	var mu sync.Mutex
 	flush := func() { tracker.RecordSubstages(boot.StageContainers, substages) }
+	images := make([]string, len(launchContainers))
+	for i, c := range launchContainers {
+		images[i] = c.Image
+	}
+	pulls := pullImagesInOrder(ctx, images, func(ctx context.Context, image string) error {
+		return pullImage(ctx, cli, image)
+	})
 
 	errs := make([]error, len(launchContainers))
 	var wg sync.WaitGroup
@@ -200,7 +207,7 @@ func LaunchAndWaitHealthyExcept(ctx context.Context, tracker *boot.Tracker, conf
 		wg.Add(1)
 		go func(i int, c Container) {
 			defer wg.Done()
-			errs[i] = runContainer(ctx, cli, c, config, extConfig, secrets, &substages, &mu, flush, debug)
+			errs[i] = runContainer(ctx, cli, pulls, c, config, extConfig, secrets, &substages, &mu, flush, debug)
 		}(i, c)
 	}
 	wg.Wait()
@@ -261,6 +268,7 @@ func RemoveManagedExcept(ctx context.Context, config *Config, preserved map[stri
 func runContainer(
 	ctx context.Context,
 	cli *client.Client,
+	pulls *imagePulls,
 	c Container,
 	cfg *Config,
 	extConfig *shimconfig.ExternalConfig,
@@ -288,7 +296,7 @@ func runContainer(
 	// Pull
 	pullStart := time.Now()
 	log.Printf("Pulling image %s (%s)", c.Name, c.Image)
-	if err := pullImage(ctx, cli, c.Image); err != nil {
+	if err := pulls.Wait(ctx, c.Image); err != nil {
 		detail := fmt.Sprintf("pulling image: %v", err)
 		record("pull", boot.StatusFailed, time.Since(pullStart), detail)
 		finish(boot.StatusFailed, detail)
@@ -684,6 +692,57 @@ func registryAuth(imageName string) string {
 	}
 	encoded, _ := json.Marshal(auth)
 	return base64.URLEncoding.EncodeToString(encoded)
+}
+
+// imagePulls holds the pulls of the images a launch needs. Each distinct
+// image is pulled once, and one image at a time, in the order the containers
+// list them. Docker extracts a layer again for every concurrent pull that
+// needs it, so containers that start together on one image, or on images that
+// share layers, would each hold a copy of those layers on the RAM disk until
+// their pull ends.
+type imagePulls struct {
+	byImage map[string]*imagePull
+}
+
+type imagePull struct {
+	image string
+	done  chan struct{}
+	err   error
+}
+
+// pullImagesInOrder starts pulling images and returns at once.
+func pullImagesInOrder(ctx context.Context, images []string, pull func(ctx context.Context, image string) error) *imagePulls {
+	pulls := &imagePulls{byImage: map[string]*imagePull{}}
+	var order []*imagePull
+	for _, image := range images {
+		if _, queued := pulls.byImage[image]; queued {
+			continue
+		}
+		p := &imagePull{image: image, done: make(chan struct{})}
+		pulls.byImage[image] = p
+		order = append(order, p)
+	}
+	go func() {
+		for _, p := range order {
+			p.err = pull(ctx, p.image)
+			close(p.done)
+		}
+	}()
+	return pulls
+}
+
+// Wait returns the result of image's pull once it has ended.
+func (p *imagePulls) Wait(ctx context.Context, image string) error {
+	pull, queued := p.byImage[image]
+	if !queued {
+		return fmt.Errorf("image %s was not queued for pulling", image)
+	}
+	select {
+	case <-pull.done:
+		return pull.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // pullImage pulls an image using the Docker SDK with auth from the boot-written Docker config

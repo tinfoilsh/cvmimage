@@ -240,6 +240,27 @@ func TestNetworkCreateOptionsStaticShimNet(t *testing.T) {
 	}
 }
 
+func TestBuildContainerCreateSpec_BoundsContainerLogs(t *testing.T) {
+	cfg := &Config{ShimCfg: &shimconfig.Config{UpstreamContainer: "model"}}
+	for _, c := range []Container{
+		{Name: "model", Image: "example.invalid/app"},
+		{Name: "admin", Image: "example.invalid/admin", CVMAdmin: true},
+	} {
+		_, host, _, _, err := buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, false)
+		if err != nil {
+			t.Fatalf("%s: buildContainerCreateSpec: %v", c.Name, err)
+		}
+		if host.LogConfig.Type != "json-file" {
+			t.Errorf("%s: log driver = %q, want json-file", c.Name, host.LogConfig.Type)
+		}
+		for _, option := range []string{"max-size", "max-file"} {
+			if host.LogConfig.Config[option] == "" {
+				t.Errorf("%s: log option %s is not set; container output would be unbounded", c.Name, option)
+			}
+		}
+	}
+}
+
 func TestBuildContainerCreateSpec_ResolverFollowsEgress(t *testing.T) {
 	cfg := &Config{
 		ShimCfg: &shimconfig.Config{UpstreamContainer: "model"},

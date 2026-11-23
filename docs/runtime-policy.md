@@ -177,6 +177,8 @@ binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
 
+Docker keeps at most two 16 MiB log files per container. Container output is stored on the CVM's RAM disk together with images and the runtime's state, so it is bounded for every container the launcher creates.
+
 ## Locked storage volumes
 
 A declared storage volume without `key-secret` starts with a read-only

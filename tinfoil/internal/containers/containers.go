@@ -38,6 +38,15 @@ const (
 	openEgressGwPriority       = 100
 )
 
+// containerLogLimits bounds the output Docker keeps for each container. The
+// log files live on the CVM's RAM disk beside images and the runtime's own
+// state; without a bound, a workload that can be made to print enough fills
+// it, and then no container can be started, restarted or probed.
+var containerLogLimits = container.LogConfig{
+	Type:   "json-file",
+	Config: map[string]string{"max-size": "16m", "max-file": "2"},
+}
+
 // noEgressResolver is the resolver given to a container with no
 // egress-capable network. Docker's embedded resolver forwards to inherited
 // resolvers from the CVM's own namespace, where the container firewall never
@@ -508,6 +517,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		ReadonlyRootfs: c.ReadOnly == nil && !c.CVMAdmin || c.ReadOnly != nil && *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
+		LogConfig:      containerLogLimits,
 	}
 	if c.CVMAdmin {
 		containerConfig.User = "0:0"

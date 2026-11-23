@@ -38,6 +38,20 @@ const (
 	openEgressGwPriority       = 100
 )
 
+// containerLogsOff keeps no container output. Nothing in the CVM reads it
+// outside debug mode, and it can hold whatever a workload prints about the
+// requests it serves. Debug mode leaves Docker's default, which keeps all of
+// it.
+var containerLogsOff = container.LogConfig{Type: "none"}
+
+// noEgressResolver is the resolver given to a container with no
+// egress-capable network. Docker's embedded resolver forwards to inherited
+// resolvers from the CVM's own namespace, where the container firewall never
+// sees the queries. It queries an explicit resolver from the container's
+// namespace, and nothing answers on the container's loopback, so names
+// outside the container's networks fail at once.
+var noEgressResolver = netip.MustParseAddr("127.0.0.1")
+
 func setupContainerNetwork(ctx context.Context, cli *client.Client, cfg *Config, debug bool) error {
 	for name := range cfg.Networks {
 		if err := ensureNetwork(ctx, cli, name); err != nil {
@@ -95,6 +109,9 @@ func ensureShimNetwork(ctx context.Context, cli *client.Client, upstreamContaine
 		existing.IPAM.Config[0].Gateway.String() != containernet.ShimNetGatewayIP {
 		return fmt.Errorf("docker network %q must use subnet %s", containernet.ShimNetName, containernet.ShimNetSubnetCIDR)
 	}
+	if !existing.Internal {
+		return fmt.Errorf("docker network %q must be internal", containernet.ShimNetName)
+	}
 	if len(existing.Containers) > 1 {
 		return fmt.Errorf("docker network %q must have at most one attached container, found %d", containernet.ShimNetName, len(existing.Containers))
 	}
@@ -114,6 +131,7 @@ func networkCreateOptions(name string) client.NetworkCreateOptions {
 		},
 	}
 	if name == containernet.ShimNetName {
+		opts.Internal = true
 		opts.IPAM = &dockernetwork.IPAM{
 			Config: []dockernetwork.IPAMConfig{{
 				Subnet:  netip.MustParsePrefix(containernet.ShimNetSubnetCIDR),
@@ -396,6 +414,14 @@ func attachOrder(c Container, cfg *Config) (first string, rest []string) {
 	return first, rest
 }
 
+// hasEgressNetwork reports whether any of the container's declared networks
+// can route outside the CVM.
+func hasEgressNetwork(c Container, cfg *Config) bool {
+	return slices.ContainsFunc(c.Networks, func(name string) bool {
+		return cfg.Networks[name].Egress != "closed"
+	})
+}
+
 func createAndStartContainer(ctx context.Context, cli *client.Client, c Container, cfg *Config, extConfig *shimconfig.ExternalConfig, secrets secretstore.Store, debug bool) error {
 	containerConfig, hostConfig, networkingConfig, rest, err := buildContainerCreateSpec(c, cfg, extConfig, secrets, debug)
 	if err != nil {
@@ -489,6 +515,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
 	}
+	if !debug {
+		hostConfig.LogConfig = containerLogsOff
+	}
 	if c.CVMAdmin {
 		containerConfig.User = "0:0"
 		hostConfig.Privileged = true
@@ -512,6 +541,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		hostConfig.NetworkMode = "none"
 	} else {
 		hostConfig.NetworkMode = container.NetworkMode(first)
+		if !hasEgressNetwork(c, cfg) {
+			hostConfig.DNS = []netip.Addr{noEgressResolver}
+		}
 	}
 
 	// Restart policy
@@ -558,6 +590,7 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 	hostIP := netip.MustParseAddr(containernet.PublishedHostIP)
 	if !c.CVMAdmin && runtimeconfig.ReservedDebugRuntimeEnabled(c.Name, debug) {
 		hostConfig.NetworkMode = "bridge"
+		hostConfig.DNS = nil
 		// Unset: tinctl ssh dials the toolbox from outside the CVM.
 		hostIP = netip.Addr{}
 		c.Ports = []string{fmt.Sprintf("%d:%d", reservedDebugHostPort, reservedDebugHostPort)}

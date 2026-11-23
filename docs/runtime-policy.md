@@ -160,6 +160,11 @@ debug toolbox's 2222). The measurement says nothing about the published service'
 own integrity or confidentiality; keeping it free of runtime vulnerabilities
 is the deployer's job.
 
+A container resolves names outside the CVM only when one of its networks has
+`egress: allowlist` or `egress: open`. With only closed networks, including the
+implicit shim channel, it still resolves the containers that share its
+networks, and every other lookup fails immediately without leaving the CVM.
+
 Every container image must be an OCI reference containing an immutable digest,
 including in measured debug mode. The container manager pulls that exact
 reference and verifies Docker's inspected repository digests before creating
@@ -171,6 +176,8 @@ granted models outside the shared public ramdisk and the container manager
 binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
+
+Docker keeps no container output outside debug mode: containers use the `none` logging driver, so `docker logs` fails instead of printing, and nothing a workload prints is stored in the CVM. In debug mode Docker keeps all of it, without a size limit, on the CVM's RAM disk beside images and the runtime's state.
 
 ## Locked storage volumes
 

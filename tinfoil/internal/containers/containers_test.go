@@ -240,7 +240,7 @@ func TestNetworkCreateOptionsStaticShimNet(t *testing.T) {
 	}
 }
 
-func TestBuildContainerCreateSpec_BoundsContainerLogs(t *testing.T) {
+func TestBuildContainerCreateSpec_KeepsContainerLogsOnlyInDebugMode(t *testing.T) {
 	cfg := &Config{ShimCfg: &shimconfig.Config{UpstreamContainer: "model"}}
 	for _, c := range []Container{
 		{Name: "model", Image: "example.invalid/app"},
@@ -250,12 +250,20 @@ func TestBuildContainerCreateSpec_BoundsContainerLogs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: buildContainerCreateSpec: %v", c.Name, err)
 		}
+		if host.LogConfig.Type != "none" {
+			t.Errorf("%s: log driver = %q, want none outside debug mode", c.Name, host.LogConfig.Type)
+		}
+
+		_, host, _, _, err = buildContainerCreateSpec(c, cfg, &shimconfig.ExternalConfig{}, nil, true)
+		if err != nil {
+			t.Fatalf("%s: buildContainerCreateSpec in debug mode: %v", c.Name, err)
+		}
 		if host.LogConfig.Type != "json-file" {
-			t.Errorf("%s: log driver = %q, want json-file", c.Name, host.LogConfig.Type)
+			t.Errorf("%s: debug log driver = %q, want json-file", c.Name, host.LogConfig.Type)
 		}
 		for option, want := range map[string]string{"max-size": "16m", "max-file": "2"} {
 			if got := host.LogConfig.Config[option]; got != want {
-				t.Errorf("%s: log option %s = %q, want %q", c.Name, option, got, want)
+				t.Errorf("%s: debug log option %s = %q, want %q", c.Name, option, got, want)
 			}
 		}
 	}

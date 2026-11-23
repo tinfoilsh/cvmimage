@@ -253,9 +253,9 @@ func TestBuildContainerCreateSpec_BoundsContainerLogs(t *testing.T) {
 		if host.LogConfig.Type != "json-file" {
 			t.Errorf("%s: log driver = %q, want json-file", c.Name, host.LogConfig.Type)
 		}
-		for _, option := range []string{"max-size", "max-file"} {
-			if host.LogConfig.Config[option] == "" {
-				t.Errorf("%s: log option %s is not set; container output would be unbounded", c.Name, option)
+		for option, want := range map[string]string{"max-size": "16m", "max-file": "2"} {
+			if got := host.LogConfig.Config[option]; got != want {
+				t.Errorf("%s: log option %s = %q, want %q", c.Name, option, got, want)
 			}
 		}
 	}

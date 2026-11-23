@@ -258,13 +258,8 @@ func TestBuildContainerCreateSpec_KeepsContainerLogsOnlyInDebugMode(t *testing.T
 		if err != nil {
 			t.Fatalf("%s: buildContainerCreateSpec in debug mode: %v", c.Name, err)
 		}
-		if host.LogConfig.Type != "json-file" {
-			t.Errorf("%s: debug log driver = %q, want json-file", c.Name, host.LogConfig.Type)
-		}
-		for option, want := range map[string]string{"max-size": "16m", "max-file": "2"} {
-			if got := host.LogConfig.Config[option]; got != want {
-				t.Errorf("%s: debug log option %s = %q, want %q", c.Name, option, got, want)
-			}
+		if host.LogConfig.Type != "" || len(host.LogConfig.Config) != 0 {
+			t.Errorf("%s: debug log config = %+v, want Docker's default", c.Name, host.LogConfig)
 		}
 	}
 }

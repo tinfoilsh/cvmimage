@@ -40,25 +40,9 @@ const (
 
 // containerLogsOff keeps no container output. Nothing in the CVM reads it
 // outside debug mode, and it can hold whatever a workload prints about the
-// requests it serves.
+// requests it serves. Debug mode leaves Docker's default, which keeps all of
+// it.
 var containerLogsOff = container.LogConfig{Type: "none"}
-
-// debugContainerLogLimits bounds the output Docker keeps for each container
-// in debug mode. The log files live on the CVM's RAM disk beside images and
-// the runtime's own state; without a bound, a workload that can be made to
-// print enough fills it, and then no container can be started, restarted or
-// probed.
-var debugContainerLogLimits = container.LogConfig{
-	Type:   "json-file",
-	Config: map[string]string{"max-size": "16m", "max-file": "2"},
-}
-
-func containerLogConfig(debug bool) container.LogConfig {
-	if debug {
-		return debugContainerLogLimits
-	}
-	return containerLogsOff
-}
 
 // noEgressResolver is the resolver given to a container with no
 // egress-capable network. Docker's embedded resolver forwards to inherited
@@ -530,7 +514,9 @@ func buildContainerCreateSpec(c Container, cfg *Config, extConfig *shimconfig.Ex
 		ReadonlyRootfs: c.ReadOnly == nil && !c.CVMAdmin || c.ReadOnly != nil && *c.ReadOnly,
 		Tmpfs:          c.Tmpfs,
 		Binds:          []string{boot.PublicDir + ":/tinfoil:ro"},
-		LogConfig:      containerLogConfig(debug),
+	}
+	if !debug {
+		hostConfig.LogConfig = containerLogsOff
 	}
 	if c.CVMAdmin {
 		containerConfig.User = "0:0"

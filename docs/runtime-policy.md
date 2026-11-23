@@ -177,7 +177,7 @@ binds each model read-only at `/tinfoil/models/<name>` only in the named
 containers. Ungranted plaintext model packs retain the legacy shared layout
 for compatibility; adding a grant moves them to the isolated layout.
 
-Docker keeps no container output outside debug mode: containers use the `none` logging driver, so `docker logs` fails instead of printing, and nothing a workload prints is stored in the CVM. In debug mode Docker keeps at most two 16 MiB log files per container. They are stored on the CVM's RAM disk together with images and the runtime's state, so they are bounded for every container the launcher creates.
+Docker keeps no container output outside debug mode: containers use the `none` logging driver, so `docker logs` fails instead of printing, and nothing a workload prints is stored in the CVM. In debug mode Docker keeps all of it, without a size limit, on the CVM's RAM disk beside images and the runtime's state.
 
 ## Locked storage volumes
 

@@ -1,13 +1,39 @@
 package runtimeconfig
 
 import (
+	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"tinfoil/internal/configtest"
 )
 
+// asJSON writes a YAML test config as the JSON document with the same
+// members. It does not validate the config, so one that Decode must refuse
+// can be written too.
+func asJSON(t *testing.T, text string) []byte {
+	t.Helper()
+	var document any
+	if err := yaml.Unmarshal([]byte(text), &document); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := jsontext.Value(encoded)
+	if err := canonical.Canonicalize(); err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
+
 func TestDecodeRejectsUnknownHealthcheckField(t *testing.T) {
-	_, err := Decode([]byte(`
+	_, err := Decode(asJSON(t, versionLine+`
 shim: {}
 containers:
   - name: app
@@ -16,13 +42,15 @@ containers:
       test: [CMD, ok]
       retrise: 3
 `), false)
-	if err == nil || !strings.Contains(err.Error(), `unknown healthcheck field "retrise"`) {
+	if err == nil || !strings.Contains(err.Error(), `unknown object member name "retrise"`) {
 		t.Fatalf("Decode error = %v", err)
 	}
 }
 
+const versionLine = "cvm-version: " + configtest.CVMVersion
+
 const validConfig = `
-cvm-version: 0.11.0
+` + versionLine + `
 shim:
   upstream-port: 8080
 networks:
@@ -43,11 +71,9 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 	}{
 		{name: "valid", yaml: validConfig},
 		{name: "keyserver URL", yaml: validConfig + "keyserver-url: https://keys.example.com\n"},
-		{name: "obsolete vault URL", yaml: validConfig + "vault-url: https://keys.example.com\n", want: "field vault-url not found"},
-		{name: "unknown field", yaml: validConfig + "unknown: true\n", want: "field unknown not found"},
-		{name: "unknown container field", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    typo: true", 1), want: "unknown container field"},
-		{name: "duplicate container field", yaml: strings.Replace(validConfig, "networks: [app]", "image: duplicate\n    networks: [app]", 1), want: "duplicate container field"},
-		{name: "container merge key", yaml: "defaults: &defaults\n  image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" + strings.Replace(validConfig, "    image: example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "    <<: *defaults", 1), want: "merge keys are unsupported"},
+		{name: "obsolete vault URL", yaml: validConfig + "vault-url: https://keys.example.com\n", want: `unknown object member name "vault-url"`},
+		{name: "unknown field", yaml: validConfig + "unknown: true\n", want: `unknown object member name "unknown"`},
+		{name: "unknown container field", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    typo: true", 1), want: `unknown object member name "typo"`},
 		{name: "duplicate container", yaml: strings.Replace(validConfig, "containers:\n", "containers:\n  - name: app\n    image: example.com/duplicate@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", 1), want: "duplicates"},
 		{name: "mutable image", yaml: strings.Replace(validConfig, "example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "example.com/app:latest", 1), want: "immutable digest"},
 		{name: "debug mutable image", debug: true, yaml: strings.Replace(validConfig, "example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "example.com/app:latest", 1), want: "immutable digest"},
@@ -63,7 +89,7 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "implicit runtime alias", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    runtime: attacker.runc.v2", 1), want: "runtime"},
 		{name: "nvidia runtime without selection", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    runtime: nvidia", 1), want: "explicit gpus selection"},
 		{name: "gpu selection without runtime", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    gpus: all", 1), want: "declares no GPUs"},
-		{name: "valid top-level gpu count", yaml: strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: 0.11.0\ngpus: 2", 1) + "\n", want: ""},
+		{name: "valid top-level gpu count", yaml: strings.Replace(validConfig, versionLine, versionLine+"\ngpus: 2", 1) + "\n", want: ""},
 		{name: "unsupported capability", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    cap_add: [SETUID]", 1), want: "capability"},
 		{name: "clock capability", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    cap_add: [SYS_TIME]", 1), want: "capability"},
 		{name: "model key exposed to container", yaml: strings.Replace(validConfig, "networks: [app]", "networks: [app]\n    secrets: [MODEL_KEY]", 1) + "\nmodels:\n  - name: private\n    key-secret: MODEL_KEY\n", want: "exposes models[0].key-secret"},
@@ -75,7 +101,7 @@ func TestDecodeValidatesRuntimeConfig(t *testing.T) {
 		{name: "duplicate host port", yaml: strings.Replace(validConfig, "containers:\n", "containers:\n  - name: other\n    image: example.com/other@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n    networks: [app]\n    ports: ['2022:22']\n", 1) + "    ports: ['2022:2222']\n", want: `already published by "other"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Decode([]byte(test.yaml), test.debug)
+			_, err := Decode(asJSON(t, test.yaml), test.debug)
 			if test.want == "" && err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +133,7 @@ func TestDecodeValidatesModelAccess(t *testing.T) {
 		{name: "duplicate model", yaml: strings.Replace(strings.Replace(base, "containers:\n", "  - name: private-model\n    mwp: "+ref+"\ncontainers:\n", 1), "networks: [app]", "networks: [app]\n    models: [private-model]", 1), want: "duplicates"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Decode([]byte(test.yaml), false)
+			_, err := Decode(asJSON(t, test.yaml), false)
 			if test.want == "" && err != nil {
 				t.Fatal(err)
 			}
@@ -118,17 +144,17 @@ func TestDecodeValidatesModelAccess(t *testing.T) {
 	}
 
 	plaintext := strings.Replace(validConfig, "containers:\n", "models:\n  - name: public-model\n    mwp: "+ref+"\ncontainers:\n", 1)
-	if _, err := Decode([]byte(plaintext), false); err != nil {
+	if _, err := Decode(asJSON(t, plaintext), false); err != nil {
 		t.Fatalf("legacy plaintext model without grant: %v", err)
 	}
 	namelessPlaintext := strings.Replace(plaintext, "  - name: public-model\n    mwp:", "  - mwp:", 1)
-	if _, err := Decode([]byte(namelessPlaintext), false); err != nil {
+	if _, err := Decode(asJSON(t, namelessPlaintext), false); err != nil {
 		t.Fatalf("legacy nameless plaintext model: %v", err)
 	}
 }
 
 func TestDecodeValidatesGPUSelections(t *testing.T) {
-	base := strings.Replace(validConfig, "cvm-version: 0.11.0", "cvm-version: 0.11.0\ngpus: 2", 1)
+	base := strings.Replace(validConfig, versionLine, versionLine+"\ngpus: 2", 1)
 	for _, test := range []struct {
 		name      string
 		selection string
@@ -147,7 +173,7 @@ func TestDecodeValidatesGPUSelections(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			yaml := strings.Replace(base, "networks: [app]", "networks: [app]\n    runtime: nvidia\n    gpus: "+test.selection, 1)
-			_, err := Decode([]byte(yaml), false)
+			_, err := Decode(asJSON(t, yaml), false)
 			if test.want == "" && err != nil {
 				t.Fatal(err)
 			}
@@ -159,7 +185,7 @@ func TestDecodeValidatesGPUSelections(t *testing.T) {
 }
 
 func TestDecodeDefaultsNullNetworkBeforeValidation(t *testing.T) {
-	config, err := Decode([]byte(strings.Replace(validConfig, "app:\n    egress: closed", "app:", 1)), false)
+	config, err := Decode(configtest.JSON(t, strings.Replace(validConfig, "app:\n    egress: closed", "app:", 1)), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,9 +194,42 @@ func TestDecodeDefaultsNullNetworkBeforeValidation(t *testing.T) {
 	}
 }
 
-func TestDecodeRejectsMultipleDocuments(t *testing.T) {
-	_, err := Decode([]byte(validConfig+"\n---\n{}\n"), false)
-	if err == nil || !strings.Contains(err.Error(), "multiple YAML documents") {
+func TestDecodeRejectsRepeatedMember(t *testing.T) {
+	const name = `"name":"app"`
+	repeated := strings.Replace(string(asJSON(t, validConfig)), name, name+","+name, 1)
+	_, err := Decode([]byte(repeated), false)
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDecodeRejectsMultipleDocuments(t *testing.T) {
+	for _, trailing := range []string{"{}", "\n---\n{}\n"} {
+		if _, err := Decode(append(asJSON(t, validConfig), trailing...), false); err == nil {
+			t.Fatalf("config followed by %q accepted", trailing)
+		}
+	}
+}
+
+func TestDecodeTakesOnlyJSONConfigs(t *testing.T) {
+	earlier := strings.Replace(validConfig, configtest.CVMVersion, configtest.YAMLCVMVersion, 1)
+	unversioned := strings.Replace(validConfig, versionLine, "", 1)
+	for _, test := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "YAML", data: []byte(validConfig), want: "take a JSON config"},
+		{name: "YAML for an earlier runtime", data: []byte(earlier), want: "this runtime takes a JSON config"},
+		{name: "JSON for an earlier runtime", data: asJSON(t, earlier), want: "this runtime takes a JSON config"},
+		{name: "YAML without a version", data: []byte(unversioned), want: "this runtime takes a JSON config"},
+		{name: "JSON without a version", data: asJSON(t, unversioned), want: "this runtime takes a JSON config"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Decode(test.data, false)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
 	}
 }

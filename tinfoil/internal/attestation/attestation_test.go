@@ -62,7 +62,7 @@ func TestConfigAttachmentFollowsMeasuredDisclosurePolicy(t *testing.T) {
 				if include != "" {
 					config = []byte(`{"cvm-version":"` + configtest.CVMVersion + `","security":{"include-config-in-attestation":` + include + `}}`)
 				}
-				path := filepath.Join(t.TempDir(), "config.yml")
+				path := filepath.Join(t.TempDir(), "config.json")
 				require.NoError(t, os.WriteFile(path, config, 0600))
 				entries := []collateral.Entry{{ID: collateral.RuntimeID, Role: collateral.RoleReferenceValues, Format: collateral.RuntimeV1Format, Data: json.RawMessage(`{}`)}}
 				if !local {
@@ -98,7 +98,7 @@ func TestConfigAttachmentFollowsMeasuredDisclosurePolicy(t *testing.T) {
 
 func TestConfigAttachmentCarriesJSONConfigBytes(t *testing.T) {
 	entries := []collateral.Entry{{ID: collateral.RuntimeID, Role: collateral.RoleReferenceValues, Format: collateral.RuntimeV1Format, Data: json.RawMessage(`{}`)}}
-	path := filepath.Join(t.TempDir(), "config.yml")
+	path := filepath.Join(t.TempDir(), "config.json")
 
 	disclosed := configtest.JSON(t, configtest.Workload)
 	require.NoError(t, os.WriteFile(path, disclosed, 0600))

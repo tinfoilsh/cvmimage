@@ -194,7 +194,7 @@ func TestLoadDeclaredContainersReadsJSONConfig(t *testing.T) {
 
 func TestPublishContainerStatusWritesJSON(t *testing.T) {
 	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yml")
+	configPath := filepath.Join(dir, "config.json")
 	outputPath := filepath.Join(dir, "container-status.json")
 	if err := os.WriteFile(configPath, []byte(`{"containers":[{"image":"declared:latest","name":"model","restart":"always"}]}`), 0o644); err != nil {
 		t.Fatalf("writing config: %v", err)
@@ -230,7 +230,7 @@ func TestPublishContainerStatusWritesJSON(t *testing.T) {
 
 func TestPublishContainerStatusCountsManualRestart(t *testing.T) {
 	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yml")
+	configPath := filepath.Join(dir, "config.json")
 	outputPath := filepath.Join(dir, "container-status.json")
 	if err := os.WriteFile(configPath, []byte(`{"containers":[{"image":"model:latest","name":"model"}]}`), 0o644); err != nil {
 		t.Fatal(err)

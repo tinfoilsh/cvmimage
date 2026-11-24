@@ -197,7 +197,7 @@ func launchHashOf(config []byte) func() (string, error) {
 
 func TestLoadMeasuredConfigBootsJSON(t *testing.T) {
 	data := configtest.JSON(t, configtest.Workload)
-	installPath := filepath.Join(t.TempDir(), "config.yml")
+	installPath := filepath.Join(t.TempDir(), "config.json")
 	config, hash, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, launchHashOf(data), false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestLoadMeasuredConfigBootsJSON(t *testing.T) {
 func TestLoadMeasuredConfigNeedsLaunchHashUnlessNonCC(t *testing.T) {
 	data := configtest.JSON(t, configtest.Workload)
 	unreadable := func() (string, error) { return "", errors.New("no attestation device") }
-	installPath := filepath.Join(t.TempDir(), "config.yml")
+	installPath := filepath.Join(t.TempDir(), "config.json")
 	if _, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, unreadable, false, false); err == nil {
 		t.Fatal("config accepted without a launch hash")
 	}
@@ -248,7 +248,7 @@ func TestLoadMeasuredConfigHashesExactBytes(t *testing.T) {
 		"trailing newline": append(bytes.Clone(data), '\n'),
 	} {
 		t.Run(name, func(t *testing.T) {
-			installPath := filepath.Join(t.TempDir(), "config.yml")
+			installPath := filepath.Join(t.TempDir(), "config.json")
 			_, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, launchHashOf(launched), false, false)
 			if err == nil || !strings.Contains(err.Error(), "config hash mismatch") {
 				t.Fatalf("error = %v, want a config hash mismatch", err)
@@ -277,7 +277,7 @@ func TestLoadMeasuredConfigTakesOnlyJSON(t *testing.T) {
 		{name: "JSON with a trailing newline", data: append(configtest.JSON(t, configtest.Workload), '\n'), want: "not in canonical form"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			installPath := filepath.Join(t.TempDir(), "config.yml")
+			installPath := filepath.Join(t.TempDir(), "config.json")
 			_, _, err := loadMeasuredConfig(writeConfigDisk(t, test.data), installPath, launchHashOf(test.data), false, false)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)

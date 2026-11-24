@@ -133,6 +133,14 @@ let
         echo "CPU runtime includes GPU dependencies" >&2
         exit 1
       fi
+      # tinfoil-go links a YAML parser for configs of earlier versions; the
+      # runtime's own packages read JSON only.
+      for tags in "" tinfoil_gpu; do
+        if go list -deps -tags="$tags" -f '{{.ImportPath}} {{join .Imports " "}}' ./cmd/... | grep -i ' [^ ]*yaml' | grep -v '^github.com/tinfoilsh/tinfoil-go/'; then
+          echo "runtime imports a YAML parser" >&2
+          exit 1
+        fi
+      done
       runHook postCheck
     '';
     installPhase = "touch $out";

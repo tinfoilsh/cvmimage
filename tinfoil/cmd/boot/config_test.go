@@ -272,7 +272,7 @@ func TestLoadMeasuredConfigTakesOnlyJSON(t *testing.T) {
 		want string
 	}{
 		{name: "YAML", data: []byte(configtest.Workload), want: "take a JSON config"},
-		{name: "YAML for an earlier runtime", data: []byte(earlier), want: "this runtime takes a JSON config"},
+		{name: "YAML for an earlier runtime", data: []byte(earlier), want: "take a JSON config"},
 		{name: "JSON with extra whitespace", data: indented.Bytes(), want: "not in canonical form"},
 		{name: "JSON with a trailing newline", data: append(configtest.JSON(t, configtest.Workload), '\n'), want: "not in canonical form"},
 	} {

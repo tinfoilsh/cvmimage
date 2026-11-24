@@ -94,10 +94,23 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 }
 
 // Decode populates a Config from a yaml.Node (a parsed YAML subtree),
-// applies defaults, and validates. Used by boot, which has already parsed
-// the parent config and needs to type the `shim:` subsection.
+// applies defaults, and validates. The shim settings file it reads is one
+// this runtime derives from the measured config and writes itself.
 func Decode(n *yaml.Node) (*Config, error) {
-	return sharedconfig.DecodeShim(n)
+	if err := validateYAMLTree(n); err != nil {
+		return nil, fmt.Errorf("failed to decode config: %v", err)
+	}
+	var config Config
+	if err := defaults.Set(&config); err != nil {
+		return nil, fmt.Errorf("failed to set defaults: %v", err)
+	}
+	if err := n.Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode config: %v", err)
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return &config, nil
 }
 
 // Load reads and parses both config files from disk.

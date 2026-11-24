@@ -220,10 +220,10 @@ func TestDecodeTakesOnlyJSONConfigs(t *testing.T) {
 		want string
 	}{
 		{name: "YAML", data: []byte(validConfig), want: "take a JSON config"},
-		{name: "YAML for an earlier runtime", data: []byte(earlier), want: "this runtime takes a JSON config"},
-		{name: "JSON for an earlier runtime", data: asJSON(t, earlier), want: "this runtime takes a JSON config"},
-		{name: "YAML without a version", data: []byte(unversioned), want: "this runtime takes a JSON config"},
-		{name: "JSON without a version", data: asJSON(t, unversioned), want: "this runtime takes a JSON config"},
+		{name: "YAML for an earlier runtime", data: []byte(earlier), want: "take a JSON config"},
+		{name: "JSON for an earlier runtime", data: asJSON(t, earlier), want: "a JSON config pins cvm-version"},
+		{name: "YAML without a version", data: []byte(unversioned), want: "take a JSON config"},
+		{name: "JSON without a version", data: asJSON(t, unversioned), want: "a JSON config pins cvm-version"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := Decode(test.data, false)

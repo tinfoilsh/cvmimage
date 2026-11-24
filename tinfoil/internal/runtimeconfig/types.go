@@ -1,10 +1,6 @@
 package runtimeconfig
 
-import (
-	"fmt"
-
-	sharedconfig "github.com/tinfoilsh/tinfoil-config"
-)
+import sharedconfig "github.com/tinfoilsh/tinfoil-config"
 
 const (
 	ReservedDebugContainerName = sharedconfig.ReservedDebugContainerName
@@ -38,18 +34,11 @@ func options(debug bool) sharedconfig.Options {
 	return sharedconfig.Options{}
 }
 
-// Decode reads and validates a config. This runtime boots only JSON configs:
-// the shared library reads a config that pins an earlier cvm-version as YAML,
-// and that one is refused here.
+// Decode reads and validates a config. The shared library's root package
+// reads only JSON configs, which pin the first JSON cvm-version or a later
+// one, so YAML and earlier pins are refused.
 func Decode(data []byte, debug bool) (*Config, error) {
-	config, err := sharedconfig.Decode(data, options(debug))
-	if err != nil {
-		return nil, err
-	}
-	if !sharedconfig.RequiresJSON(config.CVMVersion) {
-		return nil, fmt.Errorf("parsing config: this runtime takes a JSON config that pins cvm-version %s or later (got %q)", sharedconfig.JSONConfigMinVersion, config.CVMVersion)
-	}
-	return config, nil
+	return sharedconfig.Decode(data, options(debug))
 }
 
 func Validate(config *Config, debug bool) error {

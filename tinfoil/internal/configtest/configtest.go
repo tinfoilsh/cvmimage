@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	sharedconfig "github.com/tinfoilsh/tinfoil-config"
+	"github.com/tinfoilsh/tinfoil-config/yamlconfig"
 )
 
 const (
@@ -56,7 +57,7 @@ containers:
 // boots.
 func JSON(t testing.TB, yaml string) []byte {
 	t.Helper()
-	data, err := sharedconfig.ToJSON([]byte(yaml), sharedconfig.Options{})
+	data, err := yamlconfig.ToJSON([]byte(yaml), sharedconfig.Options{})
 	if err != nil {
 		t.Fatalf("translating config to JSON: %v", err)
 	}

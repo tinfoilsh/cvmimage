@@ -249,9 +249,12 @@ func upgradeWhenReady(ctx context.Context, handler *atomic.Value, cert *atomic.P
 				jwksURL := controlPlaneURL.JoinPath(".well-known", "jwks.json").String()
 				jwtValidator := localjwt.NewValidator(jwksURL, config.ControlPlane, localjwt.AccessTokenAudience, localjwt.RequiredScope)
 				log.Println("Local JWT validation enabled (OAuth access tokens verified in-enclave)")
+				// An accepted opaque key is asked about again only after a
+				// short while, so steady traffic does not wait on the control
+				// plane for every request. /metrics is always asked.
 				validator = &metricsValidator{
 					online: onlineValidator,
-					chain:  key.NewChain(jwtValidator, onlineValidator),
+					chain:  key.NewChain(jwtValidator, key.NewCache(onlineValidator)),
 				}
 			} else {
 				log.Println("Warning: API key verification disabled (unauthenticated endpoint)")

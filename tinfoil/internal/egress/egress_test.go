@@ -5,11 +5,62 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+// The runtime writes the allowlist config with Encode and the egress daemon
+// reads it with loadConfig, so every allowlist has to survive the pair.
+func TestAllowlistConfigRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "egress.json")
+	for name, allowlists := range map[string]map[string][]string{
+		"no allowlist network": {},
+		"allowlist networks":   {"control": {"api.example", "auth.example"}, "data": {"cdn.example"}, "isolated": {}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := Encode(allowlists)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := loadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			read := map[string][]string{}
+			for network, allowed := range cfg.Networks {
+				read[network] = allowed.Allow
+			}
+			if !reflect.DeepEqual(read, allowlists) {
+				t.Fatalf("allowlists after the round trip = %v, want %v\nfile: %s", read, allowlists, data)
+			}
+			if configured := (&Engine{config: cfg}).Configured(); configured != (len(allowlists) > 0) {
+				t.Fatalf("Configured() = %v for %d networks", configured, len(allowlists))
+			}
+		})
+	}
+
+	for name, data := range map[string]string{
+		"YAML":           "networks:\n  control:\n    allow: [api.example]\n",
+		"unknown member": `{"networks":{"control":{"allow":["api.example"],"deny":["other.example"]}}}`,
+		"second object":  `{"networks":{}} {"networks":{"control":{"allow":["api.example"]}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadConfig(path); err == nil {
+				t.Fatalf("loadConfig accepted %s", name)
+			}
+		})
+	}
+}
 
 func TestRefreshFailsClosedBeforeNftOnResolutionError(t *testing.T) {
 	applied := false

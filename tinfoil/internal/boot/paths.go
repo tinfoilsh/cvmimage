@@ -26,7 +26,7 @@ const (
 	HPKEKeyPath           = PrivateDir + "/hpke_key.json"
 	CollateralRequestPath = PrivateDir + "/collateral-request.json"
 	ShimConfigPath        = PrivateDir + "/shim.yml"
-	EgressConfigPath      = PrivateDir + "/egress.yml"
+	EgressConfigPath      = PrivateDir + "/egress.json"
 	ExternalConfigPath    = PrivateDir + "/external-config.yml"
 	PrivateModelsDir      = PrivateDir + "/models"
 	RuntimeConfigPath     = PrivateDir + "/runtime-config.json"

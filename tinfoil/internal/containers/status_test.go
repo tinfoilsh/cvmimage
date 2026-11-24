@@ -168,7 +168,7 @@ func TestInspectDeclaredContainers_UnexpectedError(t *testing.T) {
 }
 
 func TestLoadDeclaredContainersReadsJSONConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime-config.yml")
+	path := filepath.Join(t.TempDir(), "runtime-config.json")
 	if err := os.WriteFile(path, configtest.JSON(t, configtest.Workload), 0o600); err != nil {
 		t.Fatal(err)
 	}

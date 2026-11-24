@@ -27,7 +27,7 @@ const tunnelTestDomain = "cvm.example"
 
 func writeRuntimeConfig(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "runtime-config.yml")
+	path := filepath.Join(t.TempDir(), "runtime-config.json")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

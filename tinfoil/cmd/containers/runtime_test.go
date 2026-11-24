@@ -51,7 +51,7 @@ func TestReplacementPIDAvailableUsesFileGeneration(t *testing.T) {
 }
 
 func TestLoadRuntimeConfigReadsJSONConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime-config.yml")
+	path := filepath.Join(t.TempDir(), "runtime-config.json")
 	if config, err := loadRuntimeConfig(path, false); err != nil || config != nil {
 		t.Fatalf("missing installed config = %#v, %v", config, err)
 	}

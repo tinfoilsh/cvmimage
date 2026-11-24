@@ -115,35 +115,66 @@ func TestValidateExternalNetwork(t *testing.T) {
 }
 
 func TestDecodeExternalConfigRequiresStrictNetwork(t *testing.T) {
-	valid := []byte(`
-network:
-  address: 100.64.0.42/20
-  gateway: 100.64.0.1
-secrets:
-  API_KEY: secret
-`)
-	if _, err := decodeExternalConfig(valid); err != nil {
+	const valid = `{"network":{"address":"100.64.0.42/20","gateway":"100.64.0.1"},"secrets":{"API_KEY":"secret"}}`
+	if _, err := decodeExternalConfig([]byte(valid)); err != nil {
 		t.Fatalf("valid external config rejected: %v", err)
 	}
 
-	unknown := strings.Replace(string(valid), "  gateway:", "  unexpected: true\n  gateway:", 1)
+	unknown := strings.Replace(valid, `"gateway":`, `"unexpected":true,"gateway":`, 1)
 	if _, err := decodeExternalConfig([]byte(unknown)); err == nil {
 		t.Fatal("decodeExternalConfig accepted an unknown network field")
 	}
-	obsolete := strings.Replace(string(valid), "  address:", "  version: 1\n  address:", 1)
+	obsolete := strings.Replace(valid, `"address":`, `"version":1,"address":`, 1)
 	if _, err := decodeExternalConfig([]byte(obsolete)); err == nil {
 		t.Fatal("decodeExternalConfig accepted the obsolete versioned schema")
 	}
 	for name, document := range map[string]string{
-		"missing": "secrets: {}\n",
-		"null":    "network: null\n",
-		"empty":   "network: {}\n",
+		"missing": `{"secrets":{}}`,
+		"null":    `{"network":null}`,
+		"empty":   `{"network":{}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := decodeExternalConfig([]byte(document)); err == nil {
 				t.Fatalf("decodeExternalConfig accepted %s network", name)
 			}
 		})
+	}
+}
+
+// The host attaches the external config as a raw disk that holds the JSON
+// document and nothing else; the device pads it with NUL bytes to a whole
+// sector. The document is the one tinfoild's writer is tested to produce.
+func TestExternalConfigDiskCarriesHostDocument(t *testing.T) {
+	const sectorBytes = 512
+	document, err := os.ReadFile(filepath.Join("..", "..", "internal", "config", "testdata", "external-config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := filepath.Join(t.TempDir(), "external-config-disk")
+	padding := make([]byte, sectorBytes-len(document)%sectorBytes)
+	if err := os.WriteFile(disk, append(bytes.Clone(document), padding...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := readDiskPayload(disk, maxDiskPayloadBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(payload, document) {
+		t.Fatalf("disk payload = %q, want the document", payload)
+	}
+	config, err := decodeExternalConfig(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Network.Address != "100.64.0.42/20" || config.Env["PORT"] != "8080" || config.ShutdownToken == "" {
+		t.Fatalf("external config from disk = %+v", config)
+	}
+
+	// A guest that reads JSON is never told the format and does not guess:
+	// the YAML that earlier images take is refused.
+	yamlDocument := "network:\n  address: 100.64.0.42/20\n  gateway: 100.64.0.1\nenv:\n  PORT: \"8080\"\n"
+	if _, err := decodeExternalConfig([]byte(yamlDocument)); err == nil {
+		t.Fatal("decodeExternalConfig accepted a YAML document")
 	}
 }
 

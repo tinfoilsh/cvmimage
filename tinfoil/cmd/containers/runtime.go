@@ -12,9 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"tinfoil/internal/boot"
+	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/egress"
 	"tinfoil/internal/runtimeconfig"
 )
@@ -52,11 +51,11 @@ func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
 	if err := atomicWrite(boot.RuntimeConfigPath, source, 0o600); err != nil {
 		return err
 	}
-	shimYAML, err := yaml.Marshal(config.ShimCfg)
+	shimSettings, err := shimconfig.Encode(config.ShimCfg)
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(boot.ShimConfigPath, shimYAML, 0o644); err != nil {
+	if err := atomicWrite(boot.ShimConfigPath, shimSettings, 0o644); err != nil {
 		return err
 	}
 	allowlists := map[string][]string{}

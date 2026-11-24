@@ -2,19 +2,20 @@ package config
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	"golang.org/x/sys/unix"
-	"gopkg.in/yaml.v3"
 )
 
 const (
 	maxConfigFileBytes    = 1 << 20
-	maxYAMLNodes          = 16384
-	maxYAMLDepth          = 64
+	maxJSONValues         = 16384
+	maxJSONDepth          = 64
 	maxExternalEntries    = 1024
 	maxExternalKeyBytes   = 256
 	maxExternalValueBytes = 64 << 10
@@ -69,264 +70,48 @@ func sameConfigFileVersion(initial, final *unix.Stat_t) bool {
 		initial.Ctim.Sec == final.Ctim.Sec && initial.Ctim.Nsec == final.Ctim.Nsec
 }
 
-func decodeYAMLDocument(data []byte) (*yaml.Node, error) {
+// decodeJSONObject reads data into target after holding it to the structure
+// limits. The decoder itself refuses a repeated member name, text that is not
+// UTF-8 and anything after the object.
+func decodeJSONObject(data []byte, target any, options ...json.Options) error {
+	if err := validateJSONStructure(data); err != nil {
+		return err
+	}
+	return json.Unmarshal(data, target, options...)
+}
+
+// validateJSONStructure requires one JSON object within the size, nesting
+// and value-count limits, before anything builds values from it. A member
+// name counts as a value.
+func validateJSONStructure(data []byte) error {
 	if len(data) > maxConfigFileBytes {
-		return nil, fmt.Errorf("input exceeds %d-byte limit", maxConfigFileBytes)
+		return fmt.Errorf("input exceeds %d-byte limit", maxConfigFileBytes)
 	}
-	if err := validateYAMLStructureBudget(data); err != nil {
-		return nil, err
-	}
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	var node yaml.Node
-	if err := decoder.Decode(&node); err != nil {
-		return nil, err
-	}
-	var trailing yaml.Node
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("multiple YAML documents")
+	decoder := jsontext.NewDecoder(bytes.NewReader(data))
+	values := 0
+	for {
+		token, err := decoder.ReadToken()
+		if err != nil {
+			return err
 		}
-		return nil, err
-	}
-	if err := validateYAMLTree(&node); err != nil {
-		return nil, err
-	}
-	return &node, nil
-}
-
-func validateYAMLStructureBudget(data []byte) error {
-	potentialNodes := 2
-	flowDepth := 0
-	var quote byte
-	escaped := false
-	blockHeaderIndent := -1
-	blockContentIndent := -1
-
-	for offset := 0; offset < len(data); {
-		line, nextOffset := nextYAMLLine(data, offset)
-		offset = nextOffset
-		indent := yamlLineIndent(line)
-		if blockHeaderIndent >= 0 {
-			if yamlLineBlank(line) {
-				continue
-			}
-			if blockContentIndent < 0 && indent > blockHeaderIndent {
-				blockContentIndent = indent
-				continue
-			}
-			if blockContentIndent >= 0 && indent >= blockContentIndent {
-				continue
-			}
-			blockHeaderIndent = -1
-			blockContentIndent = -1
+		kind := token.Kind()
+		if values == 0 && kind != '{' {
+			return fmt.Errorf("JSON document is not an object")
 		}
-
-		lineOnlySpace := true
-		for index := 0; index < len(line); index++ {
-			character := line[index]
-			if quote != 0 {
-				if quote == '"' && escaped {
-					escaped = false
-					continue
-				}
-				if quote == '"' && character == '\\' {
-					escaped = true
-					continue
-				}
-				if character == quote {
-					if quote == '\'' && index+1 < len(line) && line[index+1] == '\'' {
-						index++
-						continue
-					}
-					quote = 0
-				}
-				continue
+		if kind == '}' || kind == ']' {
+			if decoder.StackDepth() == 0 {
+				return nil
 			}
-
-			if character == '#' && (index == 0 || isYAMLSeparation(line[index-1])) {
-				break
-			}
-			switch character {
-			case ' ', '\t':
-				continue
-			case '\'', '"':
-				quote = character
-				lineOnlySpace = false
-			case '[', '{':
-				potentialNodes++
-				flowDepth++
-				lineOnlySpace = false
-			case ']', '}':
-				if flowDepth > 0 {
-					flowDepth--
-				}
-				lineOnlySpace = false
-			case ',':
-				if flowDepth > 0 {
-					potentialNodes++
-				}
-				lineOnlySpace = false
-			case ':':
-				if flowDepth > 0 || index+1 == len(line) || isYAMLSeparation(line[index+1]) {
-					potentialNodes += 2
-				}
-				lineOnlySpace = false
-			case '-':
-				if lineOnlySpace && (index+1 == len(line) || isYAMLSeparation(line[index+1])) {
-					potentialNodes++
-				}
-				lineOnlySpace = false
-			case '?':
-				if lineOnlySpace && (index+1 == len(line) || isYAMLSeparation(line[index+1])) {
-					potentialNodes += 2
-				}
-				lineOnlySpace = false
-			case '|', '>':
-				explicitIndent, ok := yamlBlockScalarHeader(line[index:])
-				if flowDepth == 0 && ok && yamlBlockScalarPosition(line, index, indent) {
-					blockHeaderIndent = indent
-					blockContentIndent = -1
-					if explicitIndent > 0 {
-						blockContentIndent = indent + explicitIndent
-					}
-					index = len(line)
-				}
-				lineOnlySpace = false
-			default:
-				lineOnlySpace = false
-			}
-			if potentialNodes > maxYAMLNodes {
-				return fmt.Errorf("YAML exceeds %d-node structural budget", maxYAMLNodes)
-			}
-		}
-		if quote == '"' && escaped {
-			escaped = false
-		}
-	}
-	return nil
-}
-
-func nextYAMLLine(data []byte, offset int) ([]byte, int) {
-	end := offset
-	for end < len(data) && data[end] != '\n' && data[end] != '\r' {
-		end++
-	}
-	next := end
-	if next < len(data) {
-		if data[next] == '\r' && next+1 < len(data) && data[next+1] == '\n' {
-			next += 2
-		} else {
-			next++
-		}
-	}
-	return data[offset:end], next
-}
-
-func yamlLineIndent(line []byte) int {
-	indent := 0
-	for indent < len(line) && line[indent] == ' ' {
-		indent++
-	}
-	return indent
-}
-
-func yamlLineBlank(line []byte) bool {
-	for _, character := range line {
-		if character != ' ' && character != '\t' {
-			return false
-		}
-	}
-	return true
-}
-
-func yamlBlockScalarHeader(header []byte) (int, bool) {
-	if len(header) == 0 || header[0] != '|' && header[0] != '>' {
-		return 0, false
-	}
-	explicitIndent := 0
-	seenChomp := false
-	for index := 1; index < len(header); index++ {
-		character := header[index]
-		switch {
-		case character == '+' || character == '-':
-			if seenChomp {
-				return 0, false
-			}
-			seenChomp = true
-		case character >= '1' && character <= '9':
-			if explicitIndent != 0 {
-				return 0, false
-			}
-			explicitIndent = int(character - '0')
-		case character == ' ' || character == '\t':
-			for index < len(header) && (header[index] == ' ' || header[index] == '\t') {
-				index++
-			}
-			return explicitIndent, index == len(header) || header[index] == '#'
-		default:
-			return 0, false
-		}
-	}
-	return explicitIndent, true
-}
-
-func yamlBlockScalarPosition(line []byte, index, indent int) bool {
-	if index == indent {
-		return true
-	}
-	if index == 0 || !isYAMLSeparation(line[index-1]) {
-		return false
-	}
-	for previous := index - 1; previous >= 0; previous-- {
-		if line[previous] == ' ' || line[previous] == '\t' {
 			continue
 		}
-		return line[previous] == ':' || line[previous] == '-' || line[previous] == '?'
-	}
-	return false
-}
-
-func isYAMLSeparation(character byte) bool {
-	return character == ' ' || character == '\t' || character == '\r' || character == '\n'
-}
-
-func validateYAMLTree(root *yaml.Node) error {
-	if root == nil {
-		return fmt.Errorf("missing YAML document")
-	}
-	type pendingNode struct {
-		node  *yaml.Node
-		depth int
-	}
-	stack := []pendingNode{{node: root}}
-	count := 0
-	valueBytes := 0
-	for len(stack) > 0 {
-		last := len(stack) - 1
-		pending := stack[last]
-		stack = stack[:last]
-		count++
-		if count > maxYAMLNodes {
-			return fmt.Errorf("YAML exceeds %d-node limit", maxYAMLNodes)
+		values++
+		if values > maxJSONValues {
+			return fmt.Errorf("JSON exceeds %d-value limit", maxJSONValues)
 		}
-		if pending.depth > maxYAMLDepth {
-			return fmt.Errorf("YAML exceeds depth limit %d", maxYAMLDepth)
-		}
-		if pending.node.Kind == yaml.AliasNode || pending.node.Alias != nil {
-			return fmt.Errorf("YAML aliases are not supported")
-		}
-		valueBytes += len(pending.node.Value) + len(pending.node.Tag) + len(pending.node.Anchor)
-		if valueBytes > maxConfigFileBytes {
-			return fmt.Errorf("YAML scalar data exceeds %d-byte limit", maxConfigFileBytes)
-		}
-		for index := len(pending.node.Content) - 1; index >= 0; index-- {
-			stack = append(stack, pendingNode{
-				node:  pending.node.Content[index],
-				depth: pending.depth + 1,
-			})
+		if decoder.StackDepth() > maxJSONDepth {
+			return fmt.Errorf("JSON exceeds depth limit %d", maxJSONDepth)
 		}
 	}
-	return nil
 }
 
 func (config *ExternalConfig) validateBounds() error {
@@ -390,7 +175,7 @@ func validEnvironmentKey(key string) bool {
 	return true
 }
 
-func validateOperatorMap(section string, values map[string]yaml.Node) error {
+func validateOperatorMap(section string, values map[string]jsontext.Value) error {
 	if len(values) > maxExternalEntries {
 		return fmt.Errorf("%s exceeds %d-entry limit", section, maxExternalEntries)
 	}

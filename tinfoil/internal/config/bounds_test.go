@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,99 +9,67 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	"gopkg.in/yaml.v3"
 )
 
-func TestDecodeExternalRejectsAliasesAndBounds(t *testing.T) {
-	tests := map[string][]byte{
-		"alias":     []byte("metadata: &metadata\n  cpu: amd\ncopy: *metadata\n"),
-		"oversized": []byte(strings.Repeat("x", maxConfigFileBytes+1)),
-		"deep":      []byte(strings.Repeat("- ", maxYAMLDepth+1) + "value\n"),
-	}
-	for name, data := range tests {
+// nested returns a JSON object whose one member holds arrays nested to depth,
+// counting the object itself.
+func nested(depth int) []byte {
+	return []byte(`{"value":` + strings.Repeat("[", depth-1) + strings.Repeat("]", depth-1) + "}")
+}
+
+// counted returns a JSON object of exactly values values: itself, one member
+// name, the array under it and the array's numbers.
+func counted(values int) []byte {
+	return []byte(`{"value":[` + strings.TrimSuffix(strings.Repeat("0,", values-3), ",") + "]}")
+}
+
+func TestJSONStructureLimits(t *testing.T) {
+	for name, test := range map[string]struct {
+		data     []byte
+		accepted bool
+	}{
+		"largest size":           {append([]byte(`{"value":"`), append(bytes.Repeat([]byte("x"), maxConfigFileBytes-len(`{"value":""}`)), `"}`...)...), true},
+		"oversized":              {append([]byte(`{"value":"`), append(bytes.Repeat([]byte("x"), maxConfigFileBytes-len(`{"value":""}`)+1), `"}`...)...), false},
+		"deepest nesting":        {nested(maxJSONDepth), true},
+		"too deep":               {nested(maxJSONDepth + 1), false},
+		"most values":            {counted(maxJSONValues), true},
+		"too many values":        {counted(maxJSONValues + 1), false},
+		"text full of structure": {[]byte(`{"value":"` + strings.Repeat("[{,:}]", maxJSONValues) + `"}`), true},
+		"not an object":          {[]byte(`["value"]`), false},
+		"unterminated":           {[]byte(`{"value":[`), false},
+		"not JSON":               {[]byte("value: [x]\n"), false},
+	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := DecodeExternal(data); err == nil {
+			err := validateJSONStructure(test.data)
+			if test.accepted && err != nil {
+				t.Fatalf("validateJSONStructure rejected %s: %v", name, err)
+			}
+			if !test.accepted && err == nil {
+				t.Fatalf("validateJSONStructure accepted %s", name)
+			}
+		})
+	}
+}
+
+// Both documents the package reads are held to the structure limits before
+// they are decoded.
+func TestDecodersEnforceStructureLimits(t *testing.T) {
+	tooDeep := `{"operator":` + string(nested(maxJSONDepth)) + "}"
+	tooMany := `{"operator":` + string(counted(maxJSONValues)) + "}"
+	oversized := `{"operator":"` + strings.Repeat("x", maxConfigFileBytes) + `"}`
+	for name, data := range map[string]string{"too deep": tooDeep, "too many values": tooMany, "oversized": oversized} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeExternal([]byte(data)); err == nil {
 				t.Fatalf("DecodeExternal accepted %s input", name)
 			}
-		})
-	}
-}
-
-func TestDecodeRejectsOversizedNodeTree(t *testing.T) {
-	root := yaml.Node{Kind: yaml.DocumentNode}
-	sequence := yaml.Node{Kind: yaml.SequenceNode}
-	root.Content = []*yaml.Node{&sequence}
-	for range maxYAMLNodes {
-		sequence.Content = append(sequence.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "x"})
-	}
-	if _, err := Decode(&root); err == nil {
-		t.Fatal("Decode accepted oversized YAML node tree")
-	}
-}
-
-func TestDecodeRejectsOversizedScalarData(t *testing.T) {
-	root := yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{
-		Kind:  yaml.ScalarNode,
-		Value: strings.Repeat("x", maxConfigFileBytes+1),
-	}}}
-	if _, err := Decode(&root); err == nil {
-		t.Fatal("Decode accepted oversized scalar data")
-	}
-}
-
-func TestYAMLStructureBudgetRejectsNodeBombBeforeDecode(t *testing.T) {
-	data := []byte(strings.Repeat("- x\n", maxYAMLNodes))
-	if err := validateYAMLStructureBudget(data); err == nil {
-		t.Fatal("validateYAMLStructureBudget accepted an oversized sequence")
-	}
-}
-
-func TestYAMLStructureBudgetCountsExplicitKeyNullValues(t *testing.T) {
-	data := []byte(strings.Repeat("? key\n", maxYAMLNodes/2))
-	if err := validateYAMLStructureBudget(data); err == nil {
-		t.Fatal("validateYAMLStructureBudget accepted oversized explicit-key mapping")
-	}
-}
-
-func TestYAMLStructureBudgetRejectsCRCommentBypass(t *testing.T) {
-	data := []byte("# comment\r" + strings.Repeat("- x\r", maxYAMLNodes))
-	if err := validateYAMLStructureBudget(data); err == nil {
-		t.Fatal("validateYAMLStructureBudget accepted a CR-only oversized sequence")
-	}
-}
-
-func TestYAMLStructureBudgetAllowsLargeQuotedScalar(t *testing.T) {
-	data := []byte("value: \"" + strings.Repeat("-?:,[]{}", 4096) + "\"\n")
-	if err := validateYAMLStructureBudget(data); err != nil {
-		t.Fatalf("validateYAMLStructureBudget rejected a scalar payload: %v", err)
-	}
-}
-
-func TestYAMLStructureBudgetAllowsLargeBlockScalars(t *testing.T) {
-	for _, indicator := range []string{"|", ">", "|2-", ">+2"} {
-		t.Run(indicator, func(t *testing.T) {
-			data := []byte("- " + indicator + "\n" + strings.Repeat("  - ?:,[]{}\n", 4096))
-			if err := validateYAMLStructureBudget(data); err != nil {
-				t.Fatalf("validateYAMLStructureBudget rejected block scalar: %v", err)
-			}
-			if _, err := decodeYAMLDocument(data); err != nil {
-				t.Fatalf("decodeYAMLDocument rejected block scalar: %v", err)
+			settings := `{"upstream-port":8080,` + data[1:]
+			if _, err := Decode([]byte(settings)); err == nil || strings.Contains(err.Error(), "unknown") {
+				t.Fatalf("Decode did not hold %s input to the structure limits: %v", name, err)
 			}
 		})
 	}
-}
-
-func TestYAMLStructureBudgetResumesAfterBlockScalar(t *testing.T) {
-	data := []byte("- |\n  text\n" + strings.Repeat("- x\n", maxYAMLNodes))
-	if err := validateYAMLStructureBudget(data); err == nil {
-		t.Fatal("validateYAMLStructureBudget ignored structure after a block scalar")
-	}
-}
-
-func TestYAMLStructureBudgetDoesNotTreatPlainPipeAsBlockScalar(t *testing.T) {
-	data := []byte("- plain |\n" + strings.Repeat("- x\n", maxYAMLNodes))
-	if err := validateYAMLStructureBudget(data); err == nil {
-		t.Fatal("validateYAMLStructureBudget treated a plain pipe as a block scalar")
+	if _, err := DecodeExternal([]byte(`{"operator":` + string(nested(maxJSONDepth-1)) + "}")); err != nil {
+		t.Fatalf("DecodeExternal rejected operator data within the limits: %v", err)
 	}
 }
 
@@ -141,11 +110,11 @@ func TestDecodeExternalRejectsUnsafeMapsAndValues(t *testing.T) {
 
 func TestLoadRejectsSymlinkAndOversizedFiles(t *testing.T) {
 	directory := t.TempDir()
-	valid := filepath.Join(directory, "valid.yaml")
-	if err := os.WriteFile(valid, []byte("upstream-port: 8080\n"), 0600); err != nil {
+	valid := filepath.Join(directory, "valid.json")
+	if err := os.WriteFile(valid, []byte(`{"upstream-port":8080}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	symlink := filepath.Join(directory, "symlink.yaml")
+	symlink := filepath.Join(directory, "symlink.json")
 	if err := os.Symlink(valid, symlink); err != nil {
 		t.Fatal(err)
 	}
@@ -156,18 +125,18 @@ func TestLoadRejectsSymlinkAndOversizedFiles(t *testing.T) {
 	if err := os.Mkdir(parent, 0700); err != nil {
 		t.Fatal(err)
 	}
-	parentFile := filepath.Join(parent, "config.yaml")
-	if err := os.WriteFile(parentFile, []byte("upstream-port: 8080\n"), 0600); err != nil {
+	parentFile := filepath.Join(parent, "config.json")
+	if err := os.WriteFile(parentFile, []byte(`{"upstream-port":8080}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	parentLink := filepath.Join(directory, "parent-link")
 	if err := os.Symlink(parent, parentLink); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readConfigFile(filepath.Join(parentLink, "config.yaml")); err == nil {
+	if _, err := readConfigFile(filepath.Join(parentLink, "config.json")); err == nil {
 		t.Fatal("readConfigFile accepted symlinked parent")
 	}
-	oversized := filepath.Join(directory, "oversized.yaml")
+	oversized := filepath.Join(directory, "oversized.json")
 	if err := os.WriteFile(oversized, []byte(strings.Repeat("x", maxConfigFileBytes+1)), 0600); err != nil {
 		t.Fatal(err)
 	}

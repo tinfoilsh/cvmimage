@@ -1,13 +1,13 @@
 package config
 
 import (
-	"bytes"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
-	"io"
+	"time"
 
 	"github.com/creasty/defaults"
 	sharedconfig "github.com/tinfoilsh/tinfoil-config"
-	"gopkg.in/yaml.v3"
 )
 
 type Config = sharedconfig.ShimConfig
@@ -17,39 +17,42 @@ const SecretMetricsAPIKey = "METRICS_API_KEY"
 const SourceLocal = "local"
 
 type Metadata struct {
-	ConfigSource string `yaml:"config_source,omitempty"`
+	ConfigSource string `json:"config_source"`
 
-	ID     string `yaml:"id"`
-	Domain string `yaml:"domain"`
-	Image  string `yaml:"image"`
-	CPU    string `yaml:"cpu"`
-	GPU    string `yaml:"gpu"`
-	Repo   string `yaml:"repo,omitempty"`
-	Tag    string `yaml:"tag,omitempty"`
-	Digest string `yaml:"digest,omitempty"`
+	ID     string `json:"id"`
+	Domain string `json:"domain"`
+	Image  string `json:"image"`
+	CPU    string `json:"cpu"`
+	GPU    string `json:"gpu"`
+	Repo   string `json:"repo"`
+	Tag    string `json:"tag"`
+	Digest string `json:"digest"`
 	// Extra preserves operator metadata that tinfoild merges into this
 	// unmeasured document. The network block rejects unknown fields.
-	Extra map[string]yaml.Node `yaml:",inline"`
+	Extra map[string]jsontext.Value `json:",embed"`
 }
 
 type ExternalNetworkConfig struct {
-	Address string `yaml:"address"`
-	Gateway string `yaml:"gateway"`
+	Address string `json:"address"`
+	Gateway string `json:"gateway"`
 }
 
+// ExternalConfig is the unmeasured document tinfoild writes for each launch.
+// Its JSON form is a contract with tinfoild's writer; the golden document in
+// testdata is the copy both sides test against.
 type ExternalConfig struct {
-	MetricsAPIKey string                 `yaml:"-"`
-	Env           map[string]string      `yaml:"env"`
-	Secrets       map[string]string      `yaml:"secrets"`
-	Metadata      Metadata               `yaml:"metadata"`
-	Network       *ExternalNetworkConfig `yaml:"network"`
+	MetricsAPIKey string                 `json:"-"`
+	Env           map[string]string      `json:"env"`
+	Secrets       map[string]string      `json:"secrets"`
+	Metadata      Metadata               `json:"metadata"`
+	Network       *ExternalNetworkConfig `json:"network"`
 	// ShutdownToken authorizes the host's shutdown request. tinfoild generates
 	// it per launch; an empty token disables the endpoint.
-	ShutdownToken string `yaml:"shutdown_token"`
+	ShutdownToken string `json:"shutdown_token"`
 
 	// tinfoild preserves operator-owned top-level external data. Keep accepting
-	// those unrelated keys while KnownFields rejects unknown network fields.
-	Extra map[string]yaml.Node `yaml:",inline"`
+	// those unrelated keys while the network block rejects unknown fields.
+	Extra map[string]jsontext.Value `json:",embed"`
 }
 
 func (e *ExternalConfig) GetSecret(key string) string {
@@ -66,20 +69,8 @@ func (e *ExternalConfig) GetSecret(key string) string {
 // DecodeExternal strictly decodes typed external-config sections. Unknown
 // operator-owned top-level keys remain opaque through ExternalConfig.Extra.
 func DecodeExternal(data []byte) (*ExternalConfig, error) {
-	if _, err := decodeYAMLDocument(data); err != nil {
-		return nil, fmt.Errorf("failed to decode external config: %v", err)
-	}
 	var config ExternalConfig
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&config); err != nil {
-		return nil, fmt.Errorf("failed to decode external config: %v", err)
-	}
-	var trailing yaml.Node
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return nil, fmt.Errorf("failed to decode external config: multiple YAML documents")
-		}
+	if err := decodeJSONObject(data, &config, json.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("failed to decode external config: %v", err)
 	}
 	if err := defaults.Set(&config); err != nil {
@@ -93,18 +84,37 @@ func DecodeExternal(data []byte) (*ExternalConfig, error) {
 	return &config, nil
 }
 
-// Decode populates a Config from a yaml.Node (a parsed YAML subtree),
-// applies defaults, and validates. The shim settings file it reads is one
-// this runtime derives from the measured config and writes itself.
-func Decode(n *yaml.Node) (*Config, error) {
-	if err := validateYAMLTree(n); err != nil {
-		return nil, fmt.Errorf("failed to decode config: %v", err)
-	}
+// durationText writes a duration as the text time.ParseDuration reads, since
+// JSON has no type for one.
+var durationText = json.JoinOptions(
+	json.WithMarshalers(json.MarshalToFunc(func(encoder *jsontext.Encoder, value time.Duration) error {
+		return encoder.WriteToken(jsontext.String(value.String()))
+	})),
+	json.WithUnmarshalers(json.UnmarshalFromFunc(func(decoder *jsontext.Decoder, value *time.Duration) error {
+		var text string
+		if err := json.UnmarshalDecode(decoder, &text); err != nil {
+			return err
+		}
+		duration, err := time.ParseDuration(text)
+		*value = duration
+		return err
+	})),
+)
+
+// Encode writes shim settings as the file that Decode reads.
+func Encode(config *Config) ([]byte, error) {
+	return json.Marshal(config, durationText)
+}
+
+// Decode reads shim settings, applies defaults, and validates. The settings
+// file is one this runtime derives from the measured config and writes itself
+// with Encode.
+func Decode(data []byte) (*Config, error) {
 	var config Config
 	if err := defaults.Set(&config); err != nil {
 		return nil, fmt.Errorf("failed to set defaults: %v", err)
 	}
-	if err := n.Decode(&config); err != nil {
+	if err := decodeJSONObject(data, &config, json.RejectUnknownMembers(true), durationText); err != nil {
 		return nil, fmt.Errorf("failed to decode config: %v", err)
 	}
 	if err := config.Validate(); err != nil {
@@ -119,11 +129,7 @@ func Load(configFile, externalConfigFile string) (*Config, *ExternalConfig, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read config file: %v", err)
 	}
-	node, err := decodeYAMLDocument(configBytes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal config: %v", err)
-	}
-	config, err := Decode(node)
+	config, err := Decode(configBytes)
 	if err != nil {
 		return nil, nil, err
 	}

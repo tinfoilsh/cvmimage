@@ -34,16 +34,9 @@ func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
 func testConfigCollateralRequest(t *testing.T, format string) {
 	t.Helper()
 	digest := strings.Repeat("a", 64)
-	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
-metadata:
-  profile: %s
-  repo: org/project
-  tag: v1
-  digest: %s
-network:
-  address: 100.64.0.42/20
-  gateway: 100.64.0.1
-`, wire.FormatV3, digest)))
+	external, err := decodeExternalConfig([]byte(fmt.Sprintf(
+		`{"metadata":{"profile":%q,"repo":"org/project","tag":"v1","digest":%q},"network":{"address":"100.64.0.42/20","gateway":"100.64.0.1"}}`,
+		wire.FormatV3, digest)))
 	if err != nil {
 		t.Fatal(err)
 	}

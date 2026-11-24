@@ -3,38 +3,57 @@ package key
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 )
 
 const (
 	// acceptedLifetime is how long an accepted request is allowed again
-	// without asking. A credential that is revoked, expires, or runs out of
-	// quota keeps working here for at most this long.
-	acceptedLifetime = time.Minute
+	// without waiting for an answer. Each use asks again in the background,
+	// so this only bounds how long a credential that is no longer checked
+	// successfully, because it is idle or the checks fail, stays accepted.
+	acceptedLifetime = 5 * time.Minute
 	// maxAccepted bounds the memory the cache holds.
 	maxAccepted = 10000
+	// maxRechecks bounds the background checks running at once. A use that
+	// finds them all busy is allowed without one.
+	maxRechecks = 64
 )
 
-// Cache remembers the requests a Validator accepted, so a credential in
-// steady use is checked once per acceptedLifetime instead of on every
-// request. Refusals and failures are never remembered.
-type Cache struct {
-	next Validator
-	now  func() time.Time
+type requestID [sha256.Size]byte
 
-	mu       sync.Mutex
-	accepted map[[sha256.Size]byte]time.Time
+type acceptance struct {
+	until      time.Time
+	rechecking bool
 }
 
-// NewCache returns a Validator that consults next only for requests it has
-// not accepted within acceptedLifetime.
+// Cache remembers the requests a Validator accepted, so a credential in
+// steady use never waits for the Validator. Every use of a remembered
+// request asks the Validator again in the background: a refusal forgets the
+// request, so the next use waits for and receives the refusal, and an
+// acceptance renews it. Requests that are not remembered are asked about
+// before they proceed, and refusals and failures are never remembered.
+type Cache struct {
+	next     Validator
+	now      func() time.Time
+	rechecks chan struct{}
+	pending  sync.WaitGroup
+
+	mu       sync.Mutex
+	accepted map[requestID]*acceptance
+}
+
+// NewCache returns a Validator that lets a request next accepted within
+// acceptedLifetime proceed while next is asked again.
 func NewCache(next Validator) *Cache {
 	return &Cache{
 		next:     next,
 		now:      time.Now,
-		accepted: make(map[[sha256.Size]byte]time.Time),
+		rechecks: make(chan struct{}, maxRechecks),
+		accepted: make(map[requestID]*acceptance),
 	}
 }
 
@@ -45,8 +64,8 @@ func (c *Cache) Validate(req Request) error {
 	}
 	// Every field is part of the identity, so an acceptance for one host or
 	// path never carries over to another.
-	id := sha256.Sum256(body)
-	if c.isAccepted(id) {
+	id := requestID(sha256.Sum256(body))
+	if c.useAccepted(id, req) {
 		return nil
 	}
 	if err := c.next.Validate(req); err != nil {
@@ -56,38 +75,74 @@ func (c *Cache) Validate(req Request) error {
 	return nil
 }
 
-func (c *Cache) isAccepted(id [sha256.Size]byte) bool {
+// useAccepted reports whether the request is remembered, and starts a
+// background check of it unless one is already running.
+func (c *Cache) useAccepted(id requestID, req Request) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	until, ok := c.accepted[id]
+	entry, ok := c.accepted[id]
 	if !ok {
 		return false
 	}
-	if c.now().Before(until) {
-		return true
+	if !c.now().Before(entry.until) {
+		delete(c.accepted, id)
+		return false
 	}
-	delete(c.accepted, id)
-	return false
+	if !entry.rechecking {
+		select {
+		case c.rechecks <- struct{}{}:
+			entry.rechecking = true
+			c.pending.Add(1)
+			go c.recheck(id, entry, req)
+		default:
+		}
+	}
+	return true
 }
 
-func (c *Cache) accept(id [sha256.Size]byte) {
+func (c *Cache) recheck(id requestID, entry *acceptance, req Request) {
+	defer c.pending.Done()
+	defer func() { <-c.rechecks }()
+	err := c.next.Validate(req)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry.rechecking = false
+	switch {
+	case err == nil:
+		entry.until = c.now().Add(acceptedLifetime)
+	case isRefusal(err):
+		delete(c.accepted, id)
+	}
+	// A check that could not be made says nothing about the credential, so
+	// the acceptance stands until its lifetime ends.
+}
+
+// isRefusal reports whether the error is the validator's verdict on the
+// credential, as opposed to a check that failed to complete.
+func isRefusal(err error) bool {
+	var refusal *ValidationError
+	return errors.As(err, &refusal) && refusal.StatusCode < http.StatusInternalServerError
+}
+
+func (c *Cache) accept(id requestID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
 	if len(c.accepted) >= maxAccepted {
-		for other, until := range c.accepted {
-			if !now.Before(until) {
+		for other, entry := range c.accepted {
+			if !now.Before(entry.until) {
 				delete(c.accepted, other)
 			}
 		}
 	}
 	if len(c.accepted) >= maxAccepted {
 		// Full of live entries: make room by forgetting any one of them,
-		// which only costs that request its next check.
+		// which only costs that request a wait on its next use.
 		for other := range c.accepted {
 			delete(c.accepted, other)
 			break
 		}
 	}
-	c.accepted[id] = now.Add(acceptedLifetime)
+	c.accepted[id] = &acceptance{until: now.Add(acceptedLifetime)}
 }

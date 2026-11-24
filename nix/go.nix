@@ -135,7 +135,8 @@ let
       fi
       # The runtime reads JSON only: no command may link a YAML parser.
       for tags in "" tinfoil_gpu; do
-        if go list -deps -tags="$tags" ./cmd/... | grep -i yaml; then
+        deps="$(go list -deps -tags="$tags" ./cmd/...)"
+        if grep -i yaml <<<"$deps"; then
           echo "runtime links a YAML parser" >&2
           exit 1
         fi

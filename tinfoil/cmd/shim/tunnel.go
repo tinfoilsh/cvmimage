@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -10,8 +11,6 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
@@ -23,13 +22,22 @@ const (
 	maxOpenTunnels    = 128
 )
 
+// publishingConfig is the part of the installed config that names tunnel
+// targets.
+type publishingConfig struct {
+	Containers []struct {
+		Name  string   `json:"name"`
+		Ports []string `json:"ports"`
+	} `json:"containers"`
+}
+
 func publishedPorts(path string) (map[string]bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var runtime runtimeconfig.Config
-	if err := yaml.Unmarshal(data, &runtime); err != nil {
+	var runtime publishingConfig
+	if err := json.Unmarshal(data, &runtime); err != nil {
 		return nil, err
 	}
 	targets := map[string]bool{}

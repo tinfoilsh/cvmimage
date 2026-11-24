@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
+
+	"tinfoil/internal/configtest"
 )
 
 func TestBuildRuntimeVersions(t *testing.T) {
@@ -56,9 +58,9 @@ func TestConfigAttachmentFollowsMeasuredDisclosurePolicy(t *testing.T) {
 	for _, include := range []string{"", "false", "true"} {
 		for _, local := range []bool{false, true} {
 			t.Run(fmt.Sprintf("include=%s/local=%t", include, local), func(t *testing.T) {
-				config := []byte("cvm-version: v0.15.3-rc.1@sha256:" + strings.Repeat("a", 64) + "\n")
+				config := []byte(`{"cvm-version":"` + configtest.CVMVersion + `"}`)
 				if include != "" {
-					config = append(config, []byte("security:\n  include-config-in-attestation: "+include+"\n")...)
+					config = []byte(`{"cvm-version":"` + configtest.CVMVersion + `","security":{"include-config-in-attestation":` + include + `}}`)
 				}
 				path := filepath.Join(t.TempDir(), "config.yml")
 				require.NoError(t, os.WriteFile(path, config, 0600))
@@ -92,6 +94,23 @@ func TestConfigAttachmentFollowsMeasuredDisclosurePolicy(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestConfigAttachmentCarriesJSONConfigBytes(t *testing.T) {
+	entries := []collateral.Entry{{ID: collateral.RuntimeID, Role: collateral.RoleReferenceValues, Format: collateral.RuntimeV1Format, Data: json.RawMessage(`{}`)}}
+	path := filepath.Join(t.TempDir(), "config.yml")
+
+	disclosed := configtest.JSON(t, configtest.Workload)
+	require.NoError(t, os.WriteFile(path, disclosed, 0600))
+	attached, err := withConfigAttachment(entries, path)
+	require.NoError(t, err)
+	set, err := collateral.Decode(attached[1:])
+	require.NoError(t, err)
+	require.Equal(t, disclosed, set.Config.Config)
+
+	require.NoError(t, os.WriteFile(path, []byte(configtest.Workload), 0600))
+	_, err = withConfigAttachment(entries, path)
+	require.Error(t, err, "YAML config accepted")
 }
 
 func TestConfigAttachmentPreservesPreflightAndLegacyCollateral(t *testing.T) {

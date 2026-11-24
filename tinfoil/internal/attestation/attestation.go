@@ -20,7 +20,6 @@ import (
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
-	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
 	"tinfoil/internal/kernelcmdline"
@@ -184,9 +183,9 @@ func withConfigAttachment(entries []collateral.Entry, path string) ([]collateral
 		return nil, err
 	}
 	var config struct {
-		Security sharedconfig.SecurityConfig `yaml:"security"`
+		Security sharedconfig.SecurityConfig `json:"security"`
 	}
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
 	if !config.Security.IncludeConfigInAttestation {

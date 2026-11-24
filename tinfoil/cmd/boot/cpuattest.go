@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
@@ -17,6 +18,9 @@ import (
 	shimconfig "tinfoil/internal/config"
 	tlsutil "tinfoil/internal/tls"
 )
+
+// runtimeDigestSeparator joins a runtime version and its manifest digest.
+const runtimeDigestSeparator = "@sha256:"
 
 func fetchCPUAttestation(domain string, shimCfg *shimconfig.Config) (json.RawMessage, error) {
 	if domain == "localhost" || shimCfg.DummyAttestation {
@@ -39,7 +43,20 @@ func (id *NodeIdentity) attestationBody() attestation.Identity {
 	}
 }
 
-func writeCollateralRequest(path string, document json.RawMessage, metadata shimconfig.Metadata, configPath string) (attestationmaterial.Request, error) {
+// runtimeFromVersion returns the runtime a config pins with its cvm-version.
+func runtimeFromVersion(cvmVersion string) (configendorsement.RuntimeReference, error) {
+	version, digest, pinned := strings.Cut(cvmVersion, runtimeDigestSeparator)
+	if !pinned {
+		return configendorsement.RuntimeReference{}, fmt.Errorf("cvm-version must pin a runtime manifest SHA-256 digest")
+	}
+	runtime := configendorsement.RuntimeReference{Repo: configendorsement.RuntimeRepo, Tag: "v" + strings.TrimPrefix(version, "v"), Digest: digest}
+	if err := runtime.Validate(); err != nil {
+		return configendorsement.RuntimeReference{}, err
+	}
+	return runtime, nil
+}
+
+func writeCollateralRequest(path string, document json.RawMessage, metadata shimconfig.Metadata, configPath, cvmVersion string) (attestationmaterial.Request, error) {
 	if len(document) == 0 {
 		return attestationmaterial.Request{}, nil
 	}
@@ -55,7 +72,7 @@ func writeCollateralRequest(path string, document json.RawMessage, metadata shim
 		if err != nil {
 			return attestationmaterial.Request{}, fmt.Errorf("reading local config: %w", err)
 		}
-		runtime, err := configendorsement.RuntimeFromConfig(config)
+		runtime, err := runtimeFromVersion(cvmVersion)
 		if err != nil {
 			return attestationmaterial.Request{}, err
 		}
@@ -63,7 +80,7 @@ func writeCollateralRequest(path string, document json.RawMessage, metadata shim
 		if policy.DigestOnlyAttestation() {
 			digest := sha256.Sum256(config)
 			request.Digest = hex.EncodeToString(digest[:])
-			request.Runtime = runtime.Tag + "@sha256:" + runtime.Digest
+			request.Runtime = runtime.Tag + runtimeDigestSeparator + runtime.Digest
 		} else {
 			request.Config = config
 		}

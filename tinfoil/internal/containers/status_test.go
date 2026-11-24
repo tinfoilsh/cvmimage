@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+
+	"tinfoil/internal/configtest"
 )
 
 type fakeContainerClient struct {
@@ -164,15 +167,36 @@ func TestInspectDeclaredContainers_UnexpectedError(t *testing.T) {
 	}
 }
 
+func TestLoadDeclaredContainersReadsJSONConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-config.yml")
+	if err := os.WriteFile(path, configtest.JSON(t, configtest.Workload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	declared, err := loadDeclaredContainers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []declaredContainer{
+		{Name: "app", Image: "example.com/app@sha256:" + strings.Repeat("a", 64), Restart: "always"},
+		{Name: "sidecar", Image: "example.com/sidecar@sha256:" + strings.Repeat("b", 64)},
+	}
+	if !slices.Equal(declared, want) {
+		t.Fatalf("declared containers = %#v, want %#v", declared, want)
+	}
+
+	if err := os.WriteFile(path, []byte(configtest.Workload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadDeclaredContainers(path); err == nil {
+		t.Fatal("YAML config accepted")
+	}
+}
+
 func TestPublishContainerStatusWritesJSON(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yml")
 	outputPath := filepath.Join(dir, "container-status.json")
-	if err := os.WriteFile(configPath, []byte(`containers:
-  - name: model
-    image: declared:latest
-    restart: always
-`), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"containers":[{"image":"declared:latest","name":"model","restart":"always"}]}`), 0o644); err != nil {
 		t.Fatalf("writing config: %v", err)
 	}
 
@@ -208,7 +232,7 @@ func TestPublishContainerStatusCountsManualRestart(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yml")
 	outputPath := filepath.Join(dir, "container-status.json")
-	if err := os.WriteFile(configPath, []byte("containers:\n  - name: model\n    image: model:latest\n"), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"containers":[{"image":"model:latest","name":"model"}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	client := fakeContainerClient{inspect: map[string]container.InspectResponse{

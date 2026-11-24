@@ -16,11 +16,13 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
+	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/attestationmaterial"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/configtest"
 )
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
@@ -76,7 +78,7 @@ network:
 	if err := os.WriteFile(configPath, []byte("# private audit bytes\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	request, err := writeCollateralRequest(path, empty, external.Metadata, configPath)
+	request, err := writeCollateralRequest(path, empty, external.Metadata, configPath, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,12 +137,13 @@ network:
 
 func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
 	const runtimeDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	for _, version := range []string{"0.15.3-rc.1", "0.15.3-rc.2", "0.15.3-rc.10", "0.15.3", "0.15.4-rc.1"} {
+	for _, version := range []string{"0.15.3-rc.1", "0.15.3-rc.2", "0.15.3-rc.10", "0.15.3", "0.15.4-rc.1", "0.15.5-rc.1", "0.16.0"} {
 		for _, visibility := range []string{"", "true", "false"} {
 			t.Run(version+"/"+visibility, func(t *testing.T) {
-				config := []byte("cvm-version: " + version + "@sha256:" + runtimeDigest + "\n")
+				cvmVersion := version + "@sha256:" + runtimeDigest
+				config := []byte(`{"cvm-version":"` + cvmVersion + `"}`)
 				if visibility != "" {
-					config = append(config, []byte("security:\n  include-config-in-attestation: "+visibility+"\n")...)
+					config = []byte(`{"cvm-version":"` + cvmVersion + `","security":{"include-config-in-attestation":` + visibility + `}}`)
 				}
 				configPath := filepath.Join(t.TempDir(), "config.yaml")
 				if err := os.WriteFile(configPath, config, 0600); err != nil {
@@ -148,7 +151,7 @@ func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
 				}
 				path := filepath.Join(t.TempDir(), "request.json")
 				metadata := shimconfig.Metadata{ConfigSource: shimconfig.SourceLocal, Repo: "org/project", Tag: "revision", Digest: "untrusted"}
-				request, err := writeCollateralRequest(path, json.RawMessage(`{}`), metadata, configPath)
+				request, err := writeCollateralRequest(path, json.RawMessage(`{}`), metadata, configPath, cvmVersion)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -165,9 +168,31 @@ func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
 	}
 }
 
+func TestRuntimeFromVersionMatchesYAMLConfigReader(t *testing.T) {
+	for _, cvmVersion := range []string{
+		"0.15.4@sha256:" + configtest.RuntimeDigest,
+		"v0.15.4-rc.1+gpu@sha256:" + configtest.RuntimeDigest,
+		"0.15.4",
+		"0.15@sha256:" + configtest.RuntimeDigest,
+		"0.15.4@sha256:" + strings.ToUpper(configtest.RuntimeDigest),
+		"0.15.4@sha256:" + configtest.RuntimeDigest[1:],
+	} {
+		want, wantErr := configendorsement.RuntimeFromConfig([]byte("cvm-version: " + cvmVersion + "\n"))
+		got, err := runtimeFromVersion(cvmVersion)
+		if got != want || (err == nil) != (wantErr == nil) {
+			t.Fatalf("runtimeFromVersion(%q) = %#v, %v; the YAML config reader gave %#v, %v", cvmVersion, got, err, want, wantErr)
+		}
+	}
+	got, err := runtimeFromVersion(configtest.CVMVersion)
+	want := configendorsement.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.5-rc.1", Digest: configtest.RuntimeDigest}
+	if err != nil || got != want {
+		t.Fatalf("runtimeFromVersion(%q) = %#v, %v; want %#v", configtest.CVMVersion, got, err, want)
+	}
+}
+
 func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
 	const runtimeVersion = "0.15.1-rc.1@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	config := []byte("# Exact bytes\r\ncvm-version: " + runtimeVersion + "\r\n")
+	config := []byte("{\r\n\"cvm-version\": \"" + runtimeVersion + "\"\r\n}\r\n")
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, config, 0600); err != nil {
 		t.Fatal(err)
@@ -180,7 +205,7 @@ func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "collateral-request.json")
 	metadata := shimconfig.Metadata{ConfigSource: shimconfig.SourceLocal, Repo: "private/project", Tag: "private-revision", Digest: "private-digest"}
-	request, err := writeCollateralRequest(path, empty, metadata, configPath)
+	request, err := writeCollateralRequest(path, empty, metadata, configPath, runtimeVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +224,7 @@ func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
 	if err := os.Remove(configPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writeCollateralRequest(path, empty, metadata, configPath); err == nil {
+	if _, err := writeCollateralRequest(path, empty, metadata, configPath, runtimeVersion); err == nil {
 		t.Fatal("missing local config accepted")
 	}
 }
@@ -216,7 +241,7 @@ func TestDummyAttestationSkipsHardwareAndCollateral(t *testing.T) {
 			t.Fatalf("dummy attestation = %s, %v", doc, err)
 		}
 		path := filepath.Join(t.TempDir(), "request.json")
-		_, err = writeCollateralRequest(path, doc, shimconfig.Metadata{}, "")
+		_, err = writeCollateralRequest(path, doc, shimconfig.Metadata{}, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}

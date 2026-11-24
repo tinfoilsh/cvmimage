@@ -160,7 +160,7 @@ func TestPrefetchKeyserverCollateral(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := t.TempDir() + "/collateral-request.json"
-	collateralRequest, err := writeCollateralRequest(path, empty, external.Metadata, "")
+	collateralRequest, err := writeCollateralRequest(path, empty, external.Metadata, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

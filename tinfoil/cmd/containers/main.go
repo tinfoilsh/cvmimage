@@ -221,7 +221,7 @@ func (m *manager) boot(override []byte) (result error) {
 			}
 		}
 	}
-	previous, err := loadRuntimeConfig()
+	previous, err := loadRuntimeConfig(boot.RuntimeConfigPath, m.debug)
 	if err != nil {
 		return fmt.Errorf("reading installed config: %w", err)
 	}

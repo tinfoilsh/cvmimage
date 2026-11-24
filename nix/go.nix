@@ -36,7 +36,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-qCV0X7dQRkCIll09tR6uzLrg4IDGR0IkxBlHRoGOlHY=";
+    vendorHash = "sha256-+/vtRgmoxNZdObZn3k6LXsF+NDk/KpRe0qEKxbyDv0U=";
     ldflags = [
       "-s"
       "-w"
@@ -133,11 +133,10 @@ let
         echo "CPU runtime includes GPU dependencies" >&2
         exit 1
       fi
-      # tinfoil-go links a YAML parser for configs of earlier versions; the
-      # runtime's own packages read JSON only.
+      # The runtime reads JSON only: no command may link a YAML parser.
       for tags in "" tinfoil_gpu; do
-        if go list -deps -tags="$tags" -f '{{.ImportPath}} {{join .Imports " "}}' ./cmd/... | grep -i ' [^ ]*yaml' | grep -v '^github.com/tinfoilsh/tinfoil-go/'; then
-          echo "runtime imports a YAML parser" >&2
+        if go list -deps -tags="$tags" ./cmd/... | grep -i yaml; then
+          echo "runtime links a YAML parser" >&2
           exit 1
         fi
       done

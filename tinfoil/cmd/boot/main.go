@@ -139,7 +139,7 @@ func run(ctx context.Context, invocation invocation) error {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 		return err
 	}
-	collateralRequest, err := writeCollateralRequest(boot.CollateralRequestPath, cpuAtt, externalConfig.Metadata, boot.ConfigPath, config.CVMVersion)
+	collateralRequest, err := writeCollateralRequest(boot.CollateralRequestPath, cpuAtt, externalConfig.Metadata, boot.ConfigPath, config.CVMVersion, config.Security.IncludeConfigInAttestation)
 	if err != nil {
 		tracker.Record("cpu-attestation", boot.StatusFailed, time.Since(start), err.Error())
 		return err

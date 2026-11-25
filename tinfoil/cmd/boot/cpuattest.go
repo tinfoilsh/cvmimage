@@ -42,7 +42,7 @@ func (id *NodeIdentity) attestationBody() attestation.Identity {
 	}
 }
 
-func writeCollateralRequest(path string, document json.RawMessage, metadata shimconfig.Metadata, configPath, cvmVersion string) (attestationmaterial.Request, error) {
+func writeCollateralRequest(path string, document json.RawMessage, metadata shimconfig.Metadata, configPath, cvmVersion string, configInAttestation bool) (attestationmaterial.Request, error) {
 	if len(document) == 0 {
 		return attestationmaterial.Request{}, nil
 	}
@@ -62,8 +62,10 @@ func writeCollateralRequest(path string, document json.RawMessage, metadata shim
 		if err != nil {
 			return attestationmaterial.Request{}, err
 		}
+		// A config that the attestation carries is sent whole, so that the
+		// response can hold the builds it requires for its containers.
 		policy := Config{CVMVersion: runtime.Tag}
-		if policy.DigestOnlyAttestation() {
+		if policy.DigestOnlyAttestation() && !configInAttestation {
 			digest := sha256.Sum256(config)
 			request.Digest = hex.EncodeToString(digest[:])
 			request.Runtime = runtime.Tag + runtimeDigestSeparator + runtime.Digest

@@ -69,7 +69,7 @@ func testConfigCollateralRequest(t *testing.T, format string) {
 	if err := os.WriteFile(configPath, []byte("# private audit bytes\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	request, err := writeCollateralRequest(path, empty, external.Metadata, configPath, "")
+	request, err := writeCollateralRequest(path, empty, external.Metadata, configPath, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func testConfigCollateralRequest(t *testing.T, format string) {
 	}
 }
 
-func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
+func TestLocalCollateralSendsOnlyAttestedConfigAtRuntimeCutoff(t *testing.T) {
 	const runtimeDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for _, version := range []string{"0.15.3-rc.1", "0.15.3-rc.2", "0.15.3-rc.10", "0.15.3", "0.15.4-rc.1", "0.15.5-rc.1", "0.16.0"} {
 		for _, visibility := range []string{"", "true", "false"} {
@@ -142,9 +142,16 @@ func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
 				}
 				path := filepath.Join(t.TempDir(), "request.json")
 				metadata := shimconfig.Metadata{ConfigSource: shimconfig.SourceLocal, Repo: "org/project", Tag: "revision", Digest: "untrusted"}
-				request, err := writeCollateralRequest(path, json.RawMessage(`{}`), metadata, configPath, cvmVersion)
+				request, err := writeCollateralRequest(path, json.RawMessage(`{}`), metadata, configPath, cvmVersion, visibility == "true")
 				if err != nil {
 					t.Fatal(err)
+				}
+				if visibility == "true" {
+					expected := attestationmaterial.Request{Version: attestationmaterial.RequestVersionDocument, Profile: wire.FormatV3, Document: json.RawMessage(`{}`), Config: config}
+					if !reflect.DeepEqual(request, expected) {
+						t.Fatalf("request = %#v, want %#v", request, expected)
+					}
+					return
 				}
 				digest := sha256.Sum256(config)
 				if len(request.Config) != 0 || request.Repo != "" || request.Tag != "" || request.Digest != hex.EncodeToString(digest[:]) || request.Runtime != "v"+version+"@sha256:"+runtimeDigest {
@@ -174,7 +181,7 @@ func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "collateral-request.json")
 	metadata := shimconfig.Metadata{ConfigSource: shimconfig.SourceLocal, Repo: "private/project", Tag: "private-revision", Digest: "private-digest"}
-	request, err := writeCollateralRequest(path, empty, metadata, configPath, runtimeVersion)
+	request, err := writeCollateralRequest(path, empty, metadata, configPath, runtimeVersion, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +200,7 @@ func TestLocalCollateralRequestIncludesExactConfig(t *testing.T) {
 	if err := os.Remove(configPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writeCollateralRequest(path, empty, metadata, configPath, runtimeVersion); err == nil {
+	if _, err := writeCollateralRequest(path, empty, metadata, configPath, runtimeVersion, false); err == nil {
 		t.Fatal("missing local config accepted")
 	}
 }
@@ -210,7 +217,7 @@ func TestDummyAttestationSkipsHardwareAndCollateral(t *testing.T) {
 			t.Fatalf("dummy attestation = %s, %v", doc, err)
 		}
 		path := filepath.Join(t.TempDir(), "request.json")
-		_, err = writeCollateralRequest(path, doc, shimconfig.Metadata{}, "", "")
+		_, err = writeCollateralRequest(path, doc, shimconfig.Metadata{}, "", "", false)
 		if err != nil {
 			t.Fatal(err)
 		}

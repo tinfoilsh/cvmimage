@@ -41,7 +41,8 @@ containers:
         repository: example/app
         repository_id: 123456789
         workflow: release.yml
-        ref: refs/tags/v*
+        ref: refs/tags/v1.2.3
+        commit: 4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d
     restart: always
     cpus: 1.5
     env:

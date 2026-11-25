@@ -124,8 +124,8 @@ github.com/tinfoilsh/encrypted-http-body-protocol v0.6.0 h1:ZuCt56AHK1bF8oJStkeF
 github.com/tinfoilsh/encrypted-http-body-protocol v0.6.0/go.mod h1:zF6e0gesDXC8AkrVWs7BxiRZV2xF5jgqH2rljdaGOk8=
 github.com/tinfoilsh/modelwrap v0.2.1 h1:2Up98rhP+BtEtQowjHm+DpZtZiWORa3p0XWVzgXKbq0=
 github.com/tinfoilsh/modelwrap v0.2.1/go.mod h1:y3ov37f4WkQVA0jwJ/Rg7yQtKZuZloaQC+U7GgSoa8w=
-github.com/tinfoilsh/tinfoil-config v0.2.0 h1:X7i+CRZxqSjJVL3paPbOwUKlYVmmc3EN9VVtnc6TkOE=
-github.com/tinfoilsh/tinfoil-config v0.2.0/go.mod h1:eS6S8oGMRPPA8r+smJBPx2gAJWJS8YAFOdD0qAZHM5I=
+github.com/tinfoilsh/tinfoil-config v0.3.0 h1:6iHnh1GmKGtRzALOxsZg9Srg+wSqZ1zLZo4852r2EN4=
+github.com/tinfoilsh/tinfoil-config v0.3.0/go.mod h1:eS6S8oGMRPPA8r+smJBPx2gAJWJS8YAFOdD0qAZHM5I=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.12.0.20261124235459-def78701f306 h1:npKT36/HcNIjHysJmi/vYQIvebx8EApQnkXLqLp3gyU=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.12.0.20261124235459-def78701f306/go.mod h1:LjiEhQ1cuCrTJhMBwuVKkQbZv8P77mCGdPCKCQSMzyQ=
 github.com/transparency-dev/formats v0.1.1 h1:4bVHJc+KdBgpA1OJD1yjI+g0i5Z1graCppTMH8lWKJI=

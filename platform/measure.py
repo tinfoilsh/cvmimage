@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 PLATFORMS = json.loads((ROOT / "platform.json").read_text())
 TOOLCHAIN = json.loads((ROOT / "toolchain.lock.json").read_text())
+RESERVED_ROOT_PORT_COUNTS = {"single": 1, "quad": 4}
 
 
 def sha256(path):
@@ -93,9 +94,12 @@ def qemu_shape(memory, platform):
 
     fw_cfg = []
     profile = platform["profile"]
-    if profile == "single":
-        devices.append("pcie-root-port,id=pci.1,bus=pcie.0,slot=1,pref64-reserve=512G")
-        devices.append("pci-testdev,bus=pci.1,addr=0x0")
+    if profile in RESERVED_ROOT_PORT_COUNTS:
+        for port in range(1, RESERVED_ROOT_PORT_COUNTS[profile] + 1):
+            devices.append(
+                f"pcie-root-port,id=pci.{port},bus=pcie.0,slot={port},pref64-reserve=512G"
+            )
+            devices.append(f"pci-testdev,bus=pci.{port},addr=0x0")
         fw_cfg.append("name=opt/ovmf/X-PciMmio64Mb,string=262144")
     elif profile in ("blackwell", "hopper"):
         root_ports = 8 if profile == "blackwell" else 12

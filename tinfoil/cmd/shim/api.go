@@ -35,6 +35,12 @@ const (
 	attestationV3Path       = attestationPath + "/v3"
 )
 
+// corsPreflightMaxAgeSeconds is how long a browser may reuse a preflight's
+// answer. Without it a browser asks again after five seconds, so nearly every
+// cross-origin request costs a second round trip. Chromium honors at most two
+// hours. The origin is still checked on every request itself.
+const corsPreflightMaxAgeSeconds = 2 * 60 * 60
+
 type collateralSource interface {
 	Current(context.Context) (wire.Response, error)
 }
@@ -110,52 +116,24 @@ func extractBearerToken(header string) string {
 	return strings.TrimSpace(header[len(scheme):])
 }
 
-// writeValidationFailure maps a credential validation failure onto the
-// client-facing error for its status. A 403 is a valid credential that lacks
-// permission, which is distinct from a 401's bad or unknown credential.
+// writeValidationFailure returns the refusal the validator wrote. Its status
+// passes through unchanged so relays that cannot decrypt an EHBP error body
+// can still tell exhausted credit (402) from rate limiting (429).
 func writeValidationFailure(w http.ResponseWriter, err error) {
-	var validationErr *key.ValidationError
-	if !errors.As(err, &validationErr) {
+	var refusal *key.ValidationError
+	if !errors.As(err, &refusal) || refusal.StatusCode < http.StatusBadRequest || refusal.StatusCode > maxHTTPErrorStatus {
 		writeAPIError(w, errServer)
 		return
 	}
-	if validationErr.StatusCode < http.StatusBadRequest || validationErr.StatusCode > maxHTTPErrorStatus {
-		writeAPIError(w, errServer)
-		return
+	if refusal.RetryAfter != "" {
+		w.Header().Set("Retry-After", refusal.RetryAfter)
 	}
-
-	// Preserve 402 for exhausted credit so relays can distinguish it from
-	// rate limiting without decrypting the error body.
-	apiErr := errServer
-	switch validationErr.StatusCode {
-	case http.StatusUnauthorized:
-		apiErr = errInvalidAPIKey
-	case http.StatusForbidden:
-		apiErr = errInsufficientPermissions
-	case http.StatusPaymentRequired:
-		apiErr = errQuotaExceeded
-	case http.StatusTooManyRequests:
-		apiErr = errRateLimited
-		if validationErr.QuotaExceeded {
-			apiErr = errQuotaExceeded
-			apiErr.message = errMsgKeyQuotaExceeded
-		}
-	default:
-		apiErr.message = http.StatusText(validationErr.StatusCode)
-		if apiErr.message == "" {
-			apiErr.message = errMsgValidationFailed
-		}
-		if validationErr.StatusCode < http.StatusInternalServerError {
-			apiErr.errType = errTypeInvalidRequest
-		} else if validationErr.StatusCode == http.StatusServiceUnavailable {
-			apiErr.errType = errTypeServiceUnavailable
-		}
-	}
-	apiErr.status = validationErr.StatusCode
-	if validationErr.RetryAfter != "" {
-		w.Header().Set("Retry-After", validationErr.RetryAfter)
-	}
-	writeAPIError(w, apiErr)
+	writeAPIError(w, apiError{
+		status:  refusal.StatusCode,
+		errType: refusal.Type,
+		code:    refusal.Code,
+		message: refusal.Message,
+	})
 }
 
 func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
@@ -184,6 +162,7 @@ func corsMiddleware(config *config.Config, next http.Handler) http.Handler {
 
 			if r.Method == http.MethodOptions {
 				// CORS preflight
+				w.Header().Set("Access-Control-Max-Age", strconv.Itoa(corsPreflightMaxAgeSeconds))
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}

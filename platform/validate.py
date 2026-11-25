@@ -64,7 +64,8 @@ PLATFORM_FIELDS = {
 PLATFORM_OPTIONAL_FIELDS = {
     "acpi_memory", "cpu", "pci_hole64_end", "pci_hole64_start",
 }
-PLATFORM_PROFILES = {"none", "single", "hopper", "blackwell"}
+PLATFORM_PROFILES = {"none", "single", "quad", "hopper", "blackwell"}
+PROFILE_GPU_COUNTS = {"quad": 4}
 QEMU_SOURCE = "qemu:10.1.0"
 
 errors: list[str] = []
@@ -218,6 +219,8 @@ def validate_platform(slug: str, config, shape) -> None:
         "disks": config.get("disks"),
         "memory_mb": int(memory.group(1)) if memory else None,
     }
+    if config.get("profile") == "quad":
+        expected["gpus"] = PROFILE_GPU_COUNTS["quad"]
     for field, value in expected.items():
         if shape.get(field) != value:
             err(f"platform {slug}: shape.json {field}={shape.get(field)!r} "

@@ -1,4 +1,37 @@
 {
+  "32cpu_768gb_4gpu_4disk": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 4,
+    "memory": "786432M",
+    "pci_hole64_end": "0x50000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x10000000000",
+    "profile": "quad",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "b200_32cpu_512gb_4gpu_4disk": {
+    "acpi_memory": "65536M",
+    "cpus": 32,
+    "disks": 4,
+    "memory": "524288M",
+    "pci_hole64_end": "0x4c000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0xc000000000",
+    "profile": "quad",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "b200_56cpu_768gb_4gpu_4disk": {
+    "acpi_memory": "65536M",
+    "cpus": 56,
+    "disks": 4,
+    "memory": "786432M",
+    "pci_hole64_end": "0x50000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x10000000000",
+    "profile": "quad",
+    "qemu_source": "qemu:10.1.0"
+  },
   "extra_large_1d_b200_new": {
     "acpi_memory": "65536M",
     "cpus": 32,
@@ -117,10 +150,43 @@
     "profile": "single",
     "qemu_source": "qemu:10.1.0"
   },
+  "medium_3d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 6,
+    "memory": "131072M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
   "medium_4d_new": {
     "acpi_memory": "65536M",
     "cpus": 16,
     "disks": 7,
+    "memory": "131072M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_5d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 8,
+    "memory": "131072M",
+    "pci_hole64_end": "0x44000000000",
+    "pci_hole64_size": "4096G",
+    "pci_hole64_start": "0x4000000000",
+    "profile": "single",
+    "qemu_source": "qemu:10.1.0"
+  },
+  "medium_6d_new": {
+    "acpi_memory": "65536M",
+    "cpus": 16,
+    "disks": 9,
     "memory": "131072M",
     "pci_hole64_end": "0x44000000000",
     "pci_hole64_size": "4096G",

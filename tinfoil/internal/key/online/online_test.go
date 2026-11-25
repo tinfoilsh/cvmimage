@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -77,31 +78,36 @@ func TestValidationErrorHidesInternalDetails(t *testing.T) {
 		if assert.True(t, ok) {
 			assert.Equal(t, http.StatusUnauthorized, validationErr.StatusCode)
 			assert.NotContains(t, validationErr.Error(), "internal validator details")
+			assert.Equal(t, "Unauthorized", validationErr.Message)
 		}
 	}
 }
 
-func TestValidationQuotaClassification(t *testing.T) {
-	const quotaBody = `{"error":{"code":"insufficient_quota"}}`
+func TestValidationRelaysOpenAIErrors(t *testing.T) {
+	const message = "API access is paused because the account is out of credits."
+	const refusal = `{"error":{"type":"insufficient_quota","code":"insufficient_quota","message":"` + message + `"}}`
+	relayed := key.ValidationError{StatusCode: http.StatusPaymentRequired, Type: "insufficient_quota", Code: "insufficient_quota", Message: message}
+	statusOnly := key.ValidationError{StatusCode: http.StatusPaymentRequired, Type: key.ErrTypeInsufficientQuota, Message: "Payment Required"}
 	for _, tc := range []struct {
-		name  string
-		body  string
-		quota bool
+		name string
+		body string
+		want key.ValidationError
 	}{
-		{"code", quotaBody, true},
-		{"type", `{"error":{"type":"insufficient_quota"}}`, true},
-		{"rate limit", `{"error":{"code":"rate_limit_exceeded"}}`, false},
-		{"unknown code", `{"error":{"code":"private-detail"}}`, false},
-		{"plain text", "insufficient_quota", false},
-		{"wrong shape", `{"code":"insufficient_quota"}`, false},
-		{"malformed", `{"error":`, false},
-		{"trailing JSON", quotaBody + `{}`, false},
-		{"at limit", quotaBody + strings.Repeat(" ", maxValidationErrorBodyBytes-len(quotaBody)), true},
-		{"over limit", quotaBody + strings.Repeat(" ", maxValidationErrorBodyBytes), false},
+		{"openai error", refusal, relayed},
+		{"without code", `{"error":{"type":"insufficient_quota","message":"` + message + `"}}`, key.ValidationError{StatusCode: http.StatusPaymentRequired, Type: "insufficient_quota", Message: message}},
+		{"at body limit", refusal + strings.Repeat(" ", maxValidationErrorBodyBytes-len(refusal)), relayed},
+		{"over body limit", refusal + strings.Repeat(" ", maxValidationErrorBodyBytes), statusOnly},
+		{"message over limit", `{"error":{"type":"insufficient_quota","message":"` + strings.Repeat("x", maxRefusalMessageBytes+1) + `"}}`, statusOnly},
+		{"without message", `{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}`, statusOnly},
+		{"without type", `{"error":{"code":"insufficient_quota","message":"` + message + `"}}`, statusOnly},
+		{"plain text", "private control-plane detail", statusOnly},
+		{"error string", `{"error":"private control-plane detail"}`, statusOnly},
+		{"malformed", `{"error":`, statusOnly},
+		{"trailing JSON", refusal + `{}`, statusOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusTooManyRequests)
+				w.WriteHeader(http.StatusPaymentRequired)
 				io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
@@ -110,9 +116,35 @@ func TestValidationQuotaClassification(t *testing.T) {
 			if err := v.Validate(key.Request{APIKey: "test-key"}); !errors.As(err, &validationErr) {
 				t.Fatalf("expected validation error, got %v", err)
 			}
-			if validationErr.StatusCode != http.StatusTooManyRequests || validationErr.QuotaExceeded != tc.quota {
-				t.Fatalf("validation error = %+v, want quota=%t", validationErr, tc.quota)
+			assert.Equal(t, tc.want, *validationErr)
+		})
+	}
+}
+
+func TestValidationTypesUnreadableRefusalsByStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		errType string
+		message string
+	}{
+		{http.StatusUnauthorized, key.ErrTypeInvalidRequest, "Unauthorized"},
+		{http.StatusTooManyRequests, key.ErrTypeRateLimit, "Too Many Requests"},
+		{http.StatusServiceUnavailable, key.ErrTypeServiceUnavailable, "Service Unavailable"},
+		{http.StatusBadGateway, key.ErrTypeServer, "Bad Gateway"},
+		{520, key.ErrTypeServer, unknownStatusMessage},
+	} {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				io.WriteString(w, "<html>proxy error page</html>")
+			}))
+			defer server.Close()
+			v := &Validator{server: server.URL, client: server.Client()}
+			var validationErr *key.ValidationError
+			if err := v.Validate(key.Request{APIKey: "test-key"}); !errors.As(err, &validationErr) {
+				t.Fatalf("expected validation error, got %v", err)
 			}
+			assert.Equal(t, key.ValidationError{StatusCode: tc.status, Type: tc.errType, Message: tc.message}, *validationErr)
 		})
 	}
 }

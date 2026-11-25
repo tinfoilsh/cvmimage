@@ -443,35 +443,33 @@ func TestWriteAPIErrorEmitsFourFieldEnvelope(t *testing.T) {
 	}
 }
 
-// TestValidationFailureDistinguishesForbiddenFromUnauthorized pins that a
-// credential the validator accepted but refused for lack of permission is
-// not reported as an incorrect key, which would send the user off to
-// regenerate a key that was fine.
-func TestValidationFailureDistinguishesForbiddenFromUnauthorized(t *testing.T) {
-	cases := []struct {
-		name       string
-		status     int
-		wantStatus int
-		wantCode   string
-		wantType   string
-	}{
-		{"unauthorized is invalid key", http.StatusUnauthorized, http.StatusUnauthorized, errCodeInvalidAPIKey, errTypeInvalidRequest},
-		{"forbidden is insufficient permissions", http.StatusForbidden, http.StatusForbidden, errCodeInsufficientPermissions, errTypeInvalidRequest},
-		{"payment required stays 402", http.StatusPaymentRequired, http.StatusPaymentRequired, errCodeInsufficientQuota, errTypeInsufficientQuota},
-		{"too many requests is rate limit", http.StatusTooManyRequests, http.StatusTooManyRequests, errCodeRateLimitExceeded, errTypeRateLimit},
+// TestValidationFailureWritesTheRefusal pins that the client receives the
+// error the validator wrote, so it learns why its credential was refused,
+// and that a status outside the error range never reaches the client.
+func TestValidationFailureWritesTheRefusal(t *testing.T) {
+	refusal := &key.ValidationError{
+		StatusCode: http.StatusPaymentRequired,
+		RetryAfter: "30",
+		Type:       "insufficient_quota",
+		Code:       "insufficient_quota",
+		Message:    "API access is paused because the account is out of credits.",
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			writeValidationFailure(rec, &key.ValidationError{StatusCode: tc.status})
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
-			}
-			body := decodeErrorEnvelope(t, rec)
-			if body.Code == nil || *body.Code != tc.wantCode || body.Type != tc.wantType {
-				t.Fatalf("code/type = %v/%s, want %s/%s", body.Code, body.Type, tc.wantCode, tc.wantType)
-			}
-		})
+	rec := httptest.NewRecorder()
+	writeValidationFailure(rec, refusal)
+	body := decodeErrorEnvelope(t, rec)
+	if rec.Code != refusal.StatusCode || rec.Header().Get("Retry-After") != refusal.RetryAfter {
+		t.Fatalf("status/retry = %d/%q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if body.Type != refusal.Type || body.Code == nil || *body.Code != refusal.Code || body.Message != refusal.Message {
+		t.Fatalf("unexpected error body: %+v", body)
+	}
+
+	for _, status := range []int{http.StatusOK, http.StatusFound, 600} {
+		rec := httptest.NewRecorder()
+		writeValidationFailure(rec, &key.ValidationError{StatusCode: status, Type: "insufficient_quota", Message: "relayed"})
+		if rec.Code != http.StatusInternalServerError || decodeErrorEnvelope(t, rec).Message != errMsgServerError {
+			t.Fatalf("status %d reached the client as %d: %s", status, rec.Code, rec.Body.String())
+		}
 	}
 }
 
@@ -480,7 +478,7 @@ func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
 		name string
 		err  apiError
 	}{
-		{"payment", apiError{status: http.StatusPaymentRequired, errType: errTypeInsufficientQuota, code: errCodeInsufficientQuota, message: errMsgQuotaExceeded}},
+		{"payment", apiError{status: http.StatusPaymentRequired, errType: "insufficient_quota", code: "insufficient_quota", message: "API access is paused because the account is out of credits."}},
 		{"rate limit", apiError{status: http.StatusTooManyRequests, errType: errTypeRateLimit, code: errCodeRateLimitExceeded, message: errMsgRateLimited}},
 	} {
 		for _, encrypted := range []bool{false, true} {
@@ -489,7 +487,7 @@ func TestValidationFailurePreservesStatusThroughEHBP(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status}}
+				validator := &fakeValidator{err: &key.ValidationError{StatusCode: tc.err.status, Type: tc.err.errType, Code: tc.err.code, Message: tc.err.message}}
 				handler := NewShimServer(validator, nil, tinfoilattestation.Identity{}, 0, id, nil, nil, &config.Config{}, &config.ExternalConfig{}, "", nil)
 				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
 				req.Header.Set("Authorization", "Bearer test-key")
@@ -574,6 +572,41 @@ func TestLocalRateLimitSendsRetryAfter(t *testing.T) {
 	}
 	if second.Header().Get("Retry-After") == "" {
 		t.Fatal("rate limited response must carry Retry-After")
+	}
+}
+
+// TestPreflightAnswerIsReusable pins that a browser may keep an allowed
+// origin's preflight answer, and that a refused origin's is never cacheable.
+func TestPreflightAnswerIsReusable(t *testing.T) {
+	const allowed = "https://app.example"
+	id, err := identity.NewIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{UpstreamPort: 9999, OriginDomains: []string{allowed}}
+	handler := NewShimServer(nil, nil, tinfoilattestation.Identity{}, 0, id, nil, nil, cfg, &config.ExternalConfig{}, "127.0.0.1:9999", nil)
+
+	cases := []struct {
+		origin string
+		status int
+		maxAge string
+	}{
+		{allowed, http.StatusNoContent, fmt.Sprint(corsPreflightMaxAgeSeconds)},
+		{"https://other.example", http.StatusForbidden, ""},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodOptions, "/v1/chat/completions", nil)
+		req.Header.Set("Origin", tc.origin)
+		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != tc.status {
+			t.Errorf("%s: status = %d, want %d", tc.origin, rec.Code, tc.status)
+		}
+		if got := rec.Header().Get("Access-Control-Max-Age"); got != tc.maxAge {
+			t.Errorf("%s: Access-Control-Max-Age = %q, want %q", tc.origin, got, tc.maxAge)
+		}
 	}
 }
 

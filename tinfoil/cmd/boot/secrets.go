@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	shimconfig "tinfoil/internal/config"
 	"tinfoil/internal/secretstore"
@@ -58,7 +59,12 @@ func prepareSecretHandoff(
 	}
 
 	if missing := secretstore.MissingReferences(config, externalConfig); len(missing) != 0 {
-		return "", fmt.Errorf("%d declared secret(s) remain unresolved", len(missing))
+		// Secret names are declared in the customer's config, not values, so
+		// naming them in the error leaks nothing.
+		return "", fmt.Errorf(
+			"%d declared secret(s) remain unresolved: %s",
+			len(missing), strings.Join(missing, ", "),
+		)
 	}
 	workloadSecrets, err := secretstore.WorkloadStore(config, externalConfig)
 	if err != nil {

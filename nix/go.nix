@@ -11,10 +11,10 @@ let
   # Pin the Go toolchain explicitly; bump this together with the src hash
   # whenever the toolchain needs an update.
   upstreamGo = pkgs.go_1_27.overrideAttrs (old: {
-    version = "1.27.3";
+    version = "1.27.4";
     src = pkgs.fetchurl {
-      url = "https://go.dev/dl/go1.27.3.src.tar.gz";
-      hash = "sha256-bndJA1zzYPBrJXXRYup535/ajvZxiJ5cN1+OUHd/Jrs=";
+      url = "https://go.dev/dl/go1.27.4.src.tar.gz";
+      hash = "sha256-c8+4VxrsDAEXdofbhxY9Rqog6XeWcncokaoXZU2aYJk=";
     };
     patches = builtins.filter (
       patch:
@@ -36,7 +36,7 @@ let
   common = {
     version = "0";
     src = pkgs.lib.cleanSource ../tinfoil;
-    vendorHash = "sha256-oG8nu6Z8yZ56qrFcTcsTbuqx5XDqY1rmbQzMuy4D6XY=";
+    vendorHash = "sha256-qQHbE60kkE5EDPqNAT5MPEbqEJP53cvFbgYTNZZlLXs=";
     ldflags = [
       "-s"
       "-w"
@@ -133,6 +133,14 @@ let
         echo "CPU runtime includes GPU dependencies" >&2
         exit 1
       fi
+      # The runtime reads JSON only: no command may link a YAML parser.
+      for tags in "" tinfoil_gpu; do
+        deps="$(go list -deps -tags="$tags" ./cmd/...)"
+        if grep -i yaml <<<"$deps"; then
+          echo "runtime links a YAML parser" >&2
+          exit 1
+        fi
+      done
       runHook postCheck
     '';
     installPhase = "touch $out";

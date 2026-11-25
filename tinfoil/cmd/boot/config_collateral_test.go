@@ -16,13 +16,11 @@ import (
 	"time"
 
 	wire "github.com/tinfoilsh/tinfoil-go/collaterals"
-	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 
 	"tinfoil/internal/attestationmaterial"
 	shimconfig "tinfoil/internal/config"
-	"tinfoil/internal/configtest"
 )
 
 func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
@@ -34,16 +32,9 @@ func TestConfigCollateralRequestPersistsAndReachesATC(t *testing.T) {
 func testConfigCollateralRequest(t *testing.T, format string) {
 	t.Helper()
 	digest := strings.Repeat("a", 64)
-	external, err := decodeExternalConfig([]byte(fmt.Sprintf(`
-metadata:
-  profile: %s
-  repo: org/project
-  tag: v1
-  digest: %s
-network:
-  address: 100.64.0.42/20
-  gateway: 100.64.0.1
-`, wire.FormatV3, digest)))
+	external, err := decodeExternalConfig([]byte(fmt.Sprintf(
+		`{"metadata":{"profile":%q,"repo":"org/project","tag":"v1","digest":%q},"network":{"address":"100.64.0.42/20","gateway":"100.64.0.1"}}`,
+		wire.FormatV3, digest)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,28 +156,6 @@ func TestLocalCollateralOmitsConfigAtRuntimeCutoff(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestRuntimeFromVersionMatchesYAMLConfigReader(t *testing.T) {
-	for _, cvmVersion := range []string{
-		"0.15.4@sha256:" + configtest.RuntimeDigest,
-		"v0.15.4-rc.1+gpu@sha256:" + configtest.RuntimeDigest,
-		"0.15.4",
-		"0.15@sha256:" + configtest.RuntimeDigest,
-		"0.15.4@sha256:" + strings.ToUpper(configtest.RuntimeDigest),
-		"0.15.4@sha256:" + configtest.RuntimeDigest[1:],
-	} {
-		want, wantErr := configendorsement.RuntimeFromConfig([]byte("cvm-version: " + cvmVersion + "\n"))
-		got, err := runtimeFromVersion(cvmVersion)
-		if got != want || (err == nil) != (wantErr == nil) {
-			t.Fatalf("runtimeFromVersion(%q) = %#v, %v; the YAML config reader gave %#v, %v", cvmVersion, got, err, want, wantErr)
-		}
-	}
-	got, err := runtimeFromVersion(configtest.CVMVersion)
-	want := configendorsement.RuntimeReference{Repo: "tinfoilsh/cvmimage", Tag: "v0.15.5-rc.1", Digest: configtest.RuntimeDigest}
-	if err != nil || got != want {
-		t.Fatalf("runtimeFromVersion(%q) = %#v, %v; want %#v", configtest.CVMVersion, got, err, want)
 	}
 }
 

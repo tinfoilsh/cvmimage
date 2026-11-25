@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"net"
 	"net/netip"
@@ -13,18 +14,26 @@ import (
 	"tinfoil/internal/boot"
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/firewall"
-
-	"gopkg.in/yaml.v3"
 )
 
 const refreshInterval = 60 * time.Second
 
 type config struct {
-	Networks map[string]network `yaml:"networks"`
+	Networks map[string]network `json:"networks"`
 }
 
 type network struct {
-	Allow []string `yaml:"allow"`
+	Allow []string `json:"allow"`
+}
+
+// Encode writes the allowlist config that Load reads: the domains each
+// allowlist network may reach.
+func Encode(allowlists map[string][]string) ([]byte, error) {
+	cfg := config{Networks: make(map[string]network, len(allowlists))}
+	for name, allow := range allowlists {
+		cfg.Networks[name] = network{Allow: allow}
+	}
+	return json.Marshal(cfg, json.Deterministic(true))
 }
 
 type nftClient struct {
@@ -121,7 +130,7 @@ func loadConfig(path string) (*config, error) {
 		return nil, fmt.Errorf("reading egress config: %w", err)
 	}
 	var cfg config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg, json.RejectUnknownMembers(true)); err != nil {
 		return nil, fmt.Errorf("parsing egress config: %w", err)
 	}
 	return &cfg, nil

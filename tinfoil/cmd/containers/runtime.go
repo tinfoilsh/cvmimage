@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"tinfoil/internal/boot"
+	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/egress"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -51,26 +51,20 @@ func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
 	if err := atomicWrite(boot.RuntimeConfigPath, source, 0o600); err != nil {
 		return err
 	}
-	shimYAML, err := yaml.Marshal(config.ShimCfg)
+	shimSettings, err := shimconfig.Encode(config.ShimCfg)
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(boot.ShimConfigPath, shimYAML, 0o644); err != nil {
+	if err := atomicWrite(boot.ShimConfigPath, shimSettings, 0o644); err != nil {
 		return err
 	}
-	type egressEntry struct {
-		Allow []string `yaml:"allow"`
-	}
-	type egressConfig struct {
-		Networks map[string]egressEntry `yaml:"networks"`
-	}
-	egress := egressConfig{Networks: map[string]egressEntry{}}
+	allowlists := map[string][]string{}
 	for name, network := range config.Networks {
 		if network != nil && network.Egress == "allowlist" {
-			egress.Networks[name] = egressEntry{Allow: network.Allow}
+			allowlists[name] = network.Allow
 		}
 	}
-	data, err := yaml.Marshal(egress)
+	data, err := egress.Encode(allowlists)
 	if err != nil {
 		return err
 	}

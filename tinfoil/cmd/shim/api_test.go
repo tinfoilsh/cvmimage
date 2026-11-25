@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/document/collateral"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
+	"github.com/tinfoilsh/tinfoil-go/verify/document/collateral"
 	"golang.org/x/time/rate"
 
 	tinfoilattestation "tinfoil/internal/attestation"

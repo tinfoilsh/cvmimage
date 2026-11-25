@@ -8,7 +8,7 @@ import (
 	"log"
 	"os"
 
-	envelope "github.com/tinfoilsh/tinfoil-go/document"
+	envelope "github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	verifier "tinfoil/internal/legacy"
 

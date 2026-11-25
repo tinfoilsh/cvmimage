@@ -16,6 +16,11 @@ The digest is the SHA-256 of the release's `tinfoil-inference-v<version>-manifes
 [Release notes](https://github.com/tinfoilsh/cvmimage/releases) include the complete
 config line; stable releases also update this example automatically.
 
+Each release also publishes a debug launch file per platform, listed under
+`igvm.debug` in the manifest. It boots the same image with `tinfoil-debug=on`
+on the measured command line, so its launch measurement differs from the
+release's and a debug guest never verifies as the released runtime.
+
 ## Building
 
 On an x86_64 Linux host without Nix, first install the pinned Nix release:

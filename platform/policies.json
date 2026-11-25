@@ -128,6 +128,51 @@
       "minimum_current_mitigation_vector": 0
     }
   },
+  "amd-turin-prod-tsme": {
+    "platform": "sev-snp",
+    "sev_snp": {
+      "minimum_build": 0,
+      "minimum_api_version": "1.58",
+      "minimum_abi_version": "0.0",
+      "minimum_guest_svn": 0,
+      "minimum_tcb": {
+        "fmc_spl": 1,
+        "bl_spl": 1,
+        "tee_spl": 1,
+        "snp_spl": 4,
+        "ucode_spl": 82
+      },
+      "minimum_launch_tcb": {
+        "fmc_spl": 1,
+        "bl_spl": 1,
+        "tee_spl": 1,
+        "snp_spl": 4,
+        "ucode_spl": 82
+      },
+      "guest_policy": {
+        "debug": false,
+        "smt": true,
+        "migrate_ma": false,
+        "single_socket": false
+      },
+      "platform_info": {
+        "smt_enabled": false,
+        "tsme_enabled": true,
+        "ecc_enabled": true,
+        "rapl_disabled": false,
+        "ciphertext_hiding_dram": false,
+        "alias_check_complete": true,
+        "iommu_write_safe": true
+      },
+      "permit_provisional_firmware": false,
+      "vmpl": 0,
+      "host_data": "0000000000000000000000000000000000000000000000000000000000000000",
+      "image_id": "00000000000000000000000000000000",
+      "family_id": "00000000000000000000000000000000",
+      "minimum_launch_mitigation_vector": 0,
+      "minimum_current_mitigation_vector": 0
+    }
+  },
   "tdx-h200-prod": {
     "platform": "tdx",
     "tdx": {
@@ -149,7 +194,10 @@
         "medium_1d_4cpu_new",
         "medium_1d_cpu_new",
         "medium_2d_new",
+        "medium_3d_new",
         "medium_4d_new",
+        "medium_5d_new",
+        "medium_6d_new",
         "large_1d_new",
         "extra_large_1d_new",
         "extra_large_2d_new"
@@ -177,7 +225,10 @@
         "medium_1d_4cpu_new",
         "medium_1d_cpu_new",
         "medium_2d_new",
+        "medium_3d_new",
         "medium_4d_new",
+        "medium_5d_new",
+        "medium_6d_new",
         "large_1d_new",
         "extra_large_1d_new",
         "extra_large_2d_new"
@@ -205,7 +256,10 @@
         "medium_1d_4cpu_new",
         "medium_1d_cpu_new",
         "medium_2d_new",
+        "medium_3d_new",
         "medium_4d_new",
+        "medium_5d_new",
+        "medium_6d_new",
         "extra_large_1d_b200_new",
         "extra_large_2d_b200_new"
       ]
@@ -221,6 +275,8 @@
       "xfam": "e702060000000000",
       "minimum_tcb_evaluation_data_number": 19,
       "platform_measurements": [
+        "b200_32cpu_512gb_4gpu_4disk",
+        "b200_56cpu_768gb_4gpu_4disk",
         "tiny_0d_new",
         "small_0d_new",
         "small_0d_32gb_new",
@@ -232,7 +288,10 @@
         "medium_1d_4cpu_new",
         "medium_1d_cpu_new",
         "medium_2d_new",
+        "medium_3d_new",
         "medium_4d_new",
+        "medium_5d_new",
+        "medium_6d_new",
         "extra_large_1d_b200_new",
         "extra_large_2d_b200_new"
       ]
@@ -248,6 +307,7 @@
       "xfam": "e702060000000000",
       "minimum_tcb_evaluation_data_number": 19,
       "platform_measurements": [
+        "b200_56cpu_768gb_4gpu_4disk",
         "tiny_0d_new",
         "small_0d_new",
         "small_0d_32gb_new",
@@ -256,6 +316,8 @@
         "small_0d_8gb_4cpu_5disk_new",
         "medium_0d_new",
         "medium_1d_cpu_new",
+        "medium_2d_new",
+        "32cpu_768gb_4gpu_4disk",
         "extra_large_1d_b300_new",
         "extra_large_2d_b300_new"
       ]

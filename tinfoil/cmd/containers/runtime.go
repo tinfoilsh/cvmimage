@@ -62,23 +62,29 @@ func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {
 	if err := atomicWrite(boot.ShimConfigPath, shimYAML, 0o644); err != nil {
 		return err
 	}
-	type egressEntry struct {
-		Allow []string `yaml:"allow"`
-	}
-	type egressConfig struct {
-		Networks map[string]egressEntry `yaml:"networks"`
-	}
-	egress := egressConfig{Networks: map[string]egressEntry{}}
-	for name, network := range config.Networks {
-		if network != nil && network.Egress == "allowlist" {
-			egress.Networks[name] = egressEntry{Allow: network.Allow}
+	return nil
+}
+
+func nextNetworkGeneration(path string, networks uint32) (uint32, error) {
+	data, err := os.ReadFile(path)
+	var previous uint64
+	if err == nil {
+		previous, err = strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+		if err != nil || previous == 0 {
+			return 0, fmt.Errorf("invalid network policy generation %q", data)
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, err
 	}
-	data, err := yaml.Marshal(egress)
-	if err != nil {
-		return err
+	last := previous + uint64(max(networks, 1))
+	if last > uint64(^uint32(0)) {
+		return 0, errors.New("network policy generation exhausted")
 	}
-	return atomicWrite(boot.EgressConfigPath, data, 0o600)
+	next := uint32(previous + 1)
+	if err := atomicWrite(path, []byte(fmt.Sprintf("%d\n", last)), 0o600); err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 func restartRuntimeServices(ctx context.Context) error {
@@ -89,35 +95,6 @@ func restartRuntimeServices(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func freezeFromPIDFile(path string) (*serviceInstance, error) {
-	instance, err := openServiceInstance(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := signalProcessGroup(instance.pid, syscall.SIGSTOP); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			instance.close()
-			return nil, nil
-		}
-		instance.close()
-		return nil, fmt.Errorf("freezing pid %d process group: %w", instance.pid, err)
-	}
-	return instance, nil
-}
-
-func restartFrozenFromPIDFile(ctx context.Context, path string, instance *serviceInstance) error {
-	if instance == nil {
-		return nil
-	}
-	if err := signalProcessGroup(instance.pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("killing frozen pid %d process group: %w", instance.pid, err)
-	}
-	return waitForReplacementPID(ctx, path, instance)
 }
 
 func openServiceInstance(path string) (*serviceInstance, error) {

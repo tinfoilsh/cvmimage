@@ -22,4 +22,13 @@ const (
 	// AllowSetPrefix is the nftables-set name prefix for an `egress:
 	// allowlist` network's resolved IPs: allow-<network-name>.
 	AllowSetPrefix = "allow-"
+
+	DNSAddress          = "169.254.0.53"
+	DNSContainerAddress = DNSAddress + ":53"
+	DNSReadyAddress     = "127.0.0.1:53"
+	MaxDNSAddresses     = 4096
+
+	// PolicyGenerationSet holds the generation of the installed network
+	// policy; address permissions decided under another one are rejected.
+	PolicyGenerationSet = "policy-generation"
 )

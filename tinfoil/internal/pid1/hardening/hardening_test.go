@@ -27,7 +27,7 @@ func TestServicePoliciesAreExact(t *testing.T) {
 		},
 		ServiceEgress: {
 			noNewPrivileges:      true,
-			boundCapabilities:    []int{unix.CAP_NET_ADMIN},
+			boundCapabilities:    []int{unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE},
 			restrictFilesystems:  true,
 			deniedSyscalls:       restrictedServiceSyscalls,
 			restrictNamespaceOps: true,
@@ -106,11 +106,11 @@ func TestApplyServiceAppliesFilesystemsCapabilitiesAndSeccompInOrder(t *testing.
 		t.Fatalf("applyService: %v", err)
 	}
 
-	wantDropped := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13}
+	wantDropped := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13}
 	if !reflect.DeepEqual(kernel.dropped, wantDropped) {
 		t.Fatalf("dropped capabilities = %v, want %v", kernel.dropped, wantDropped)
 	}
-	wantData, err := packCapabilities([]int{unix.CAP_NET_ADMIN})
+	wantData, err := packCapabilities([]int{unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE})
 	if err != nil {
 		t.Fatal(err)
 	}

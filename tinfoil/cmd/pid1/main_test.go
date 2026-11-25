@@ -537,12 +537,13 @@ func TestLifecycleOrdersLoopbackThenNVIDIABeforeContainerd(t *testing.T) {
 	bootstrap := slices.Index(events, "nvidia-bootstrap")
 	lock := slices.Index(events, "module-lock")
 	nftables := slices.Index(events, "nftables")
+	dns := slices.Index(events, egressName)
 	containerd := slices.Index(events, containerdName)
 	docker := slices.Index(events, dockerName)
 	containers := slices.Index(events, containersName)
 	shim := slices.Index(events, shimName)
 	boot := slices.Index(events, string(hardening.ServiceBoot))
-	if filesystems < 0 || console != filesystems+1 || loopback != console+1 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || containerd <= nftables || docker <= containerd || shim <= docker || boot <= shim || containers <= boot {
+	if filesystems < 0 || console != filesystems+1 || loopback != console+1 || bootstrap != loopback+1 || lock != bootstrap+1 || nftables != lock+1 || dns <= nftables || containerd <= dns || docker <= containerd || shim <= docker || boot <= shim || containers <= boot {
 		t.Fatalf("startup events = %v", events)
 	}
 }
@@ -653,11 +654,14 @@ func TestStartupFailureDrainsStartedServices(t *testing.T) {
 		result <- runLifecycle(context.Background(), harness.deps, harness.readiness)
 	}()
 
-	if got := receiveTest(t, harness.services.startedCh); got != containerdName {
+	if got := receiveTest(t, harness.services.startedCh); got != egressName {
 		t.Fatalf("first service = %s", got)
 	}
-	if got := receiveTest(t, harness.services.startedCh); got != dockerName {
+	if got := receiveTest(t, harness.services.startedCh); got != containerdName {
 		t.Fatalf("second service = %s", got)
+	}
+	if got := receiveTest(t, harness.services.startedCh); got != dockerName {
+		t.Fatalf("third service = %s", got)
 	}
 	groups := receiveTest(t, harness.services.drained)
 	if fmt.Sprint(groups) != fmt.Sprint(shutdownGroups()) {
@@ -721,7 +725,7 @@ func TestBootFailureReportsAfterCleanupUntilShutdown(t *testing.T) {
 	default:
 	}
 	if slices.ContainsFunc(harness.services.started, func(service supervisor.Service) bool {
-		return service.Name == containersName || service.Name == egressName
+		return service.Name == containersName
 	}) {
 		t.Fatal("workloads started after model failure")
 	}

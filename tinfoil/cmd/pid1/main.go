@@ -168,7 +168,7 @@ func run(parent context.Context) (result error) {
 // workloads are gone, so only the host polls this shim over TLS.
 func reportFailure(ctx context.Context, manager *supervisor.Manager, failure error) error {
 	initLogf("boot failed: %v; retaining boot status after cleanup", failure)
-	if err := boot.CompleteFailure(); err != nil {
+	if err := boot.CompleteFailure(failure.Error()); err != nil {
 		return fmt.Errorf("sealing boot failure: %w", err)
 	}
 	return serveBootFailure(ctx, supervisor.New(ctx, manager, supervisor.Config{}), nil, serviceTermGrace, serviceKillGrace)

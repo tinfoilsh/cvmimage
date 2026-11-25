@@ -14,7 +14,6 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
-	"gopkg.in/yaml.v3"
 
 	"tinfoil/internal/boot"
 )
@@ -24,13 +23,13 @@ const (
 )
 
 type declaredContainer struct {
-	Name    string `yaml:"name"`
-	Image   string `yaml:"image"`
-	Restart string `yaml:"restart"`
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	Restart string `json:"restart"`
 }
 
 type declaredConfig struct {
-	Containers []declaredContainer `yaml:"containers"`
+	Containers []declaredContainer `json:"containers"`
 }
 
 type containerStatusClient interface {
@@ -203,7 +202,7 @@ func loadDeclaredContainers(path string) ([]declaredContainer, error) {
 		return nil, err
 	}
 	var cfg declaredConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 	return cfg.Containers, nil

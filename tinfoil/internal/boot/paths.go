@@ -6,7 +6,7 @@ const (
 	PrivateDir = RamdiskDir + "/private"
 
 	// Public — mounted read-only into containers as /tinfoil.
-	ConfigPath          = PublicDir + "/config.yml"
+	ConfigPath          = PublicDir + "/config.json"
 	AttestationMount    = PublicDir + "/attestation.sock"
 	ContainerStatusPath = PublicDir + "/container-status.json"
 	PublicModelsDir     = PublicDir + "/models"
@@ -29,7 +29,7 @@ const (
 	EgressConfigPath      = PrivateDir + "/egress.yml"
 	ExternalConfigPath    = PrivateDir + "/external-config.yml"
 	PrivateModelsDir      = PrivateDir + "/models"
-	RuntimeConfigPath     = PrivateDir + "/runtime-config.yml"
+	RuntimeConfigPath     = PrivateDir + "/runtime-config.json"
 	RuntimeBootedPath     = PrivateDir + "/runtime-booted"
 	DockerConfigDir       = PrivateDir + "/docker-config"
 	DockerConfigPath      = DockerConfigDir + "/config.json"

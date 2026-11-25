@@ -19,6 +19,7 @@ import (
 
 	tinfoilattestation "tinfoil/internal/attestation"
 	"tinfoil/internal/config"
+	"tinfoil/internal/configtest"
 	"tinfoil/internal/key"
 )
 
@@ -26,7 +27,7 @@ const tunnelTestDomain = "cvm.example"
 
 func writeRuntimeConfig(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "runtime-config.yml")
+	path := filepath.Join(t.TempDir(), "runtime-config.json")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -34,15 +35,28 @@ func writeRuntimeConfig(t *testing.T, body string) string {
 }
 
 func TestPublishedPorts(t *testing.T) {
-	targets, err := publishedPorts(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['2300:25565', '2301:8080']\n  - name: quiet\n"))
+	targets, err := publishedPorts(writeRuntimeConfig(t, `{"containers":[{"name":"sandbox","ports":["2300:25565","2301:8080"]},{"name":"quiet"}]}`))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if len(targets) != 2 || !targets["2300"] || !targets["2301"] {
 		t.Fatalf("targets = %v", targets)
 	}
-	if _, err := publishedPorts(writeRuntimeConfig(t, "containers:\n  - name: sandbox\n    ports: ['25565']\n")); err == nil {
+	if _, err := publishedPorts(writeRuntimeConfig(t, `{"containers":[{"name":"sandbox","ports":["25565"]}]}`)); err == nil {
 		t.Fatal("expected an error for a port without a mapping")
+	}
+}
+
+func TestPublishedPortsReadsJSONConfig(t *testing.T) {
+	targets, err := publishedPorts(writeRuntimeConfig(t, string(configtest.JSON(t, configtest.Workload))))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(targets) != 2 || !targets["2300"] || !targets["2301"] {
+		t.Fatalf("targets = %v", targets)
+	}
+	if _, err := publishedPorts(writeRuntimeConfig(t, configtest.Workload)); err == nil {
+		t.Fatal("YAML config accepted")
 	}
 }
 
@@ -70,7 +84,7 @@ func echoListener(t *testing.T) int {
 
 func tunnelServer(t *testing.T, port int, validator key.Validator) *httptest.Server {
 	t.Helper()
-	targets, err := publishedPorts(writeRuntimeConfig(t, fmt.Sprintf("containers:\n  - name: echo\n    ports: ['%d:9']\n", port)))
+	targets, err := publishedPorts(writeRuntimeConfig(t, fmt.Sprintf(`{"containers":[{"name":"echo","ports":["%d:9"]}]}`, port)))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

@@ -15,6 +15,7 @@ import (
 
 	"tinfoil/internal/boot"
 	shimconfig "tinfoil/internal/config"
+	"tinfoil/internal/configtest"
 	"tinfoil/internal/containernet"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
@@ -52,8 +53,8 @@ func TestAttestedKeyMountsAreExclusiveReadOnly(t *testing.T) {
 }
 
 func TestAttestationSocketRequiresExplicitGrant(t *testing.T) {
-	config, err := runtimeconfig.Decode([]byte(`
-cvm-version: 0.14.11
+	config, err := runtimeconfig.Decode(configtest.JSON(t, `
+cvm-version: `+configtest.CVMVersion+`
 shim:
   upstream-container: granted
   upstream-port: 8000

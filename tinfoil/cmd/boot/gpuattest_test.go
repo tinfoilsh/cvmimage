@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"tinfoil/internal/attestation"
+	"tinfoil/internal/configtest"
 	"tinfoil/internal/runtimeconfig"
 )
 
@@ -85,7 +86,7 @@ func TestGPUSecurityRejectsCountMismatch(t *testing.T) {
 
 func TestMeasuredGPUSecurityPolicy(t *testing.T) {
 	const configYAML = `
-cvm-version: 0.14.12
+cvm-version: ` + configtest.CVMVersion + `
 cpus: 8
 memory: 16384
 gpus: 8
@@ -106,7 +107,7 @@ containers:
 		{name: "true", fields: "security:\n  allow-unencrypted-nvlink: true\n", allowed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			config, err := runtimeconfig.Decode([]byte(configYAML+test.fields), false)
+			config, err := runtimeconfig.Decode(configtest.JSON(t, configYAML+test.fields), false)
 			if err != nil {
 				t.Fatal(err)
 			}

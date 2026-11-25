@@ -94,16 +94,31 @@ func loadConfig(debug bool) (*Config, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("finding config disk: %w", err)
 	}
+	config, actualHash, err := loadMeasuredConfig(configDiskPath, boot.ConfigPath, measuredConfigHash, cmdline.NonCC, debug)
+	if err != nil {
+		return nil, "", err
+	}
 
-	configData, err := readDiskPayload(configDiskPath, maxDiskPayloadBytes)
+	if err := loadExternalConfig(); err != nil {
+		return nil, "", err
+	}
+
+	return config, actualHash, nil
+}
+
+// loadMeasuredConfig reads the config from its disk, checks the bytes against
+// the hash the host committed to at launch unless nonCC, writes them to
+// installPath and decodes them.
+func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string, error), nonCC, debug bool) (*Config, string, error) {
+	configData, err := readDiskPayload(diskPath, maxDiskPayloadBytes)
 	if err != nil {
 		return nil, "", fmt.Errorf("reading config disk: %w", err)
 	}
 
 	actualHash := sha256Hash(configData)
-	if !cmdline.NonCC {
+	if !nonCC {
 		// Verify hash against the value the host committed to at launch
-		expectedHash, err := measuredConfigHash()
+		expectedHash, err := launchHash()
 		if err != nil {
 			return nil, "", err
 		}
@@ -119,7 +134,7 @@ func loadConfig(debug bool) (*Config, string, error) {
 	}
 
 	// Write config to ramdisk
-	if err := os.WriteFile(boot.ConfigPath, configData, 0644); err != nil {
+	if err := os.WriteFile(installPath, configData, 0644); err != nil {
 		return nil, "", fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
@@ -127,7 +142,7 @@ func loadConfig(debug bool) (*Config, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if cmdline.NonCC {
+	if nonCC {
 		config.ShimCfg.DummyAttestation = true
 	}
 
@@ -135,10 +150,6 @@ func loadConfig(debug bool) (*Config, string, error) {
 		return nil, "", err
 	}
 	if err := validateModelCount(len(config.Models)); err != nil {
-		return nil, "", err
-	}
-
-	if err := loadExternalConfig(); err != nil {
 		return nil, "", err
 	}
 

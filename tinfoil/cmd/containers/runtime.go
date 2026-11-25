@@ -36,19 +36,15 @@ func (instance *serviceInstance) close() {
 	}
 }
 
-func loadRuntimeConfig() (*runtimeconfig.Config, error) {
-	data, err := os.ReadFile(boot.RuntimeConfigPath)
+func loadRuntimeConfig(path string, debug bool) (*runtimeconfig.Config, error) {
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var config runtimeconfig.Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, err
-	}
-	return &config, nil
+	return runtimeconfig.Decode(data, debug)
 }
 
 func writeRuntimeArtifacts(config *runtimeconfig.Config, source []byte) error {

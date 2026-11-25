@@ -34,6 +34,9 @@ func options(debug bool) sharedconfig.Options {
 	return sharedconfig.Options{}
 }
 
+// Decode reads and validates a config. The shared library's root package
+// reads only JSON configs, which pin the first JSON cvm-version or a later
+// one, so YAML and earlier pins are refused.
 func Decode(data []byte, debug bool) (*Config, error) {
 	return sharedconfig.Decode(data, options(debug))
 }

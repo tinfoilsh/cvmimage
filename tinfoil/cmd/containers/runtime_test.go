@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"tinfoil/internal/configtest"
+	"tinfoil/internal/runtimeconfig"
 )
 
 func TestParseInvocation(t *testing.T) {
@@ -44,5 +47,28 @@ func TestReplacementPIDAvailableUsesFileGeneration(t *testing.T) {
 	}
 	if available, err := replacementPIDAvailable(path, previous); err != nil || !available {
 		t.Fatalf("replacement pid: available=%v error=%v", available, err)
+	}
+}
+
+func TestLoadRuntimeConfigReadsJSONConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-config.json")
+	if config, err := loadRuntimeConfig(path, false); err != nil || config != nil {
+		t.Fatalf("missing installed config = %#v, %v", config, err)
+	}
+	if err := os.WriteFile(path, configtest.JSON(t, configtest.Workload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadRuntimeConfig(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Containers) != 2 || config.Containers[0].Name != "app" || config.Containers[1].Name != "sidecar" || runtimeconfig.HasReservedDebugContainer(config) {
+		t.Fatalf("installed containers = %#v", config.Containers)
+	}
+	if err := os.WriteFile(path, []byte(configtest.Workload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadRuntimeConfig(path, false); err == nil {
+		t.Fatal("YAML config accepted")
 	}
 }

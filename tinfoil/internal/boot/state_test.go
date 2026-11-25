@@ -170,7 +170,7 @@ func TestCompleteFailureSealsPendingStagesAndSubstages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := completeFailure(path); err != nil {
+	if err := completeFailure(path, "containers exited"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := loadState(path)
@@ -201,20 +201,28 @@ func TestCompleteFailureSealsPendingStagesAndSubstages(t *testing.T) {
 	}
 }
 
-func TestCompleteFailureRequiresRecordedFailure(t *testing.T) {
-	for _, status := range []string{StatusPending, StatusOK} {
-		path := filepath.Join(t.TempDir(), "boot-state.json")
-		payload := []byte(`{"stages":[{"name":"certificate","status":"` + status + `"}]}`)
-		if err := os.WriteFile(path, payload, 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err := completeFailure(path); err == nil {
-			t.Fatal("sealed boot without a recorded failure")
-		}
-		got, err := os.ReadFile(path)
-		if err != nil || string(got) != string(payload) {
-			t.Fatalf("state changed: %s, %v", got, err)
-		}
+func TestCompleteFailureRecordsFailureOutsideStages(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "boot-state.json")
+	payload := []byte(`{"stages":[{"name":"certificate","status":"ok"},{"name":"containers","status":"pending"}]}`)
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	const detail = "storage volumes: no device"
+	if err := completeFailure(path, detail); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsSealed() || !got.IsComplete() || len(got.Stages) != 3 {
+		t.Fatalf("failure not sealed: %+v", got)
+	}
+	if got.Stages[0].Status != StatusOK || got.Stages[1].Status != StatusSkipped {
+		t.Fatalf("recorded stages not preserved or skipped: %+v", got.Stages)
+	}
+	if failed := got.Stages[2]; failed.Name != StageInit || failed.Status != StatusFailed || failed.Detail != detail {
+		t.Fatalf("failure not recorded: %+v", failed)
 	}
 }
 

@@ -53,6 +53,8 @@ const (
 	StageFirewall         = "firewall"
 	StageContainers       = "containers"
 	StageShim             = "shim"
+	// StageInit holds a failure of PID 1 itself, outside the stages above.
+	StageInit = "init"
 )
 
 // InitialStages is the ordered list of stages known at boot time.
@@ -188,20 +190,21 @@ func loadState(path string) (*State, error) {
 	return &state, nil
 }
 
-// CompleteFailure seals a recorded boot failure after every state writer has
-// stopped. The status-only shim then serves the state read-only, and every
+// CompleteFailure seals a boot failure after every state writer has stopped.
+// A failure that no stage recorded is PID 1's own and is recorded as
+// StageInit. The status-only shim then serves the state read-only, and every
 // other writer refuses sealed states.
-func CompleteFailure() error {
-	return completeFailure(StatePath)
+func CompleteFailure(detail string) error {
+	return completeFailure(StatePath, detail)
 }
 
-func completeFailure(path string) error {
+func completeFailure(path, detail string) error {
 	state, err := loadState(path)
 	if err != nil {
 		return err
 	}
 	if !state.HasFailed() {
-		return fmt.Errorf("no failed boot stage recorded")
+		state.Stages = append(state.Stages, Stage{Name: StageInit, Status: StatusFailed, Detail: detail})
 	}
 	skipPending(state.Stages)
 	if state.CompletedAt.IsZero() {

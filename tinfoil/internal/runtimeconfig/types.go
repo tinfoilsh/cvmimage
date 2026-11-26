@@ -54,14 +54,16 @@ func DecodeMeasured(data []byte, cmdlineDebug bool) (*Config, bool, error) {
 	debug := cmdlineDebug
 	if !debug {
 		if config, err := Decode(data, true); err == nil {
-			debug = holdsDebugToolbox(config)
+			debug = HoldsDebugToolbox(config)
 		}
 	}
 	config, err := Decode(data, debug)
 	return config, debug, err
 }
 
-func holdsDebugToolbox(config *Config) bool {
+// HoldsDebugToolbox reports whether config holds the debug toolbox with one
+// of its socket mounts.
+func HoldsDebugToolbox(config *Config) bool {
 	for _, container := range config.Containers {
 		if container.Name != ReservedDebugContainerName {
 			continue

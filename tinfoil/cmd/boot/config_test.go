@@ -285,8 +285,9 @@ func TestLoadMeasuredConfigAcceptsTheMeasuredDebugToolbox(t *testing.T) {
 	if err != nil || !runtimeconfig.HoldsDebugToolbox(config) {
 		t.Fatalf("config = %#v, err = %v; want the measured toolbox accepted", config, err)
 	}
-	if _, _, err := loadMeasuredConfig(writeConfigDisk(t, withToolbox), installPath, launchHashOf(workload), false, false); err == nil {
-		t.Fatal("a toolbox the launch did not measure was accepted")
+	_, _, err = loadMeasuredConfig(writeConfigDisk(t, withToolbox), installPath, launchHashOf(workload), false, false)
+	if err == nil || !strings.Contains(err.Error(), "config hash mismatch") {
+		t.Fatalf("err = %v; want a toolbox the launch did not measure refused by its hash", err)
 	}
 }
 

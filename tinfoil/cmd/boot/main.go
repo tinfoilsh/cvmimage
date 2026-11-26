@@ -75,7 +75,7 @@ func run(ctx context.Context, invocation invocation) error {
 	// 1. Config
 	start := time.Now()
 	log.Println("Loading configuration")
-	config, configHash, err := loadConfig(invocation.debug)
+	config, configHash, debug, err := loadConfig(invocation.debug)
 	if err != nil {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
 		return err
@@ -161,7 +161,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, configHash, invocation.debug,
+	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, configHash, debug,
 		func(ctx context.Context, names []string) (map[string]string, error) {
 			return fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest, names)
 		})

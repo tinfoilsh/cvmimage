@@ -380,12 +380,13 @@ func shimService(attestationSocket *os.File, statusOnly bool) supervisor.Service
 // the boot one-shot, which is what makes it readable here: volume workers start
 // immediately after it and well before the containers binary, which reads the
 // same file for the same reason.
-func readMeasuredConfig(debug bool) (*runtimeconfig.Config, error) {
+func readMeasuredConfig(cmdlineDebug bool) (*runtimeconfig.Config, error) {
 	verified, err := os.ReadFile(boot.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	return runtimeconfig.Decode(verified, debug)
+	config, _, err := runtimeconfig.DecodeMeasured(verified, cmdlineDebug)
+	return config, err
 }
 
 func startVolumeWorkers(ctx context.Context, deps lifecycleDeps, config *runtimeconfig.Config) error {

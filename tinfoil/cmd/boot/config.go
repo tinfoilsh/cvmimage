@@ -84,35 +84,38 @@ func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 	return netip.AddrFrom4(broadcast)
 }
 
-// loadConfig verifies the launch hash unless the kernel explicitly opts out of CC.
-func loadConfig(debug bool) (*Config, string, error) {
+// loadConfig verifies the launch hash unless the kernel explicitly opts out of
+// CC. It also reports whether the guest runs its debug policy, which the
+// measured command line or the verified config can turn on.
+func loadConfig(cmdlineDebug bool) (*Config, string, bool, error) {
 	cmdline, err := kernelcmdline.Read()
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	configDiskPath, err := device.ConfigDisk()
 	if err != nil {
-		return nil, "", fmt.Errorf("finding config disk: %w", err)
+		return nil, "", false, fmt.Errorf("finding config disk: %w", err)
 	}
-	config, actualHash, err := loadMeasuredConfig(configDiskPath, boot.ConfigPath, measuredConfigHash, cmdline.NonCC, debug)
+	config, actualHash, debug, err := loadMeasuredConfig(configDiskPath, boot.ConfigPath, measuredConfigHash, cmdline.NonCC, cmdlineDebug)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 
 	if err := loadExternalConfig(); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 
-	return config, actualHash, nil
+	return config, actualHash, debug, nil
 }
 
 // loadMeasuredConfig reads the config from its disk, checks the bytes against
 // the hash the host committed to at launch unless nonCC, writes them to
-// installPath and decodes them.
-func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string, error), nonCC, debug bool) (*Config, string, error) {
+// installPath and decodes them. The debug policy is decided from those
+// verified bytes, never before the check.
+func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string, error), nonCC, cmdlineDebug bool) (*Config, string, bool, error) {
 	configData, err := readDiskPayload(diskPath, maxDiskPayloadBytes)
 	if err != nil {
-		return nil, "", fmt.Errorf("reading config disk: %w", err)
+		return nil, "", false, fmt.Errorf("reading config disk: %w", err)
 	}
 
 	actualHash := sha256Hash(configData)
@@ -120,13 +123,13 @@ func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string,
 		// Verify hash against the value the host committed to at launch
 		expectedHash, err := launchHash()
 		if err != nil {
-			return nil, "", err
+			return nil, "", false, err
 		}
 		if !hexHashPattern.MatchString(expectedHash) {
-			return nil, "", fmt.Errorf("invalid launch config hash: %s", expectedHash)
+			return nil, "", false, fmt.Errorf("invalid launch config hash: %s", expectedHash)
 		}
 		if expectedHash != actualHash { // Public values: no constant time comparison
-			return nil, "", fmt.Errorf("config hash mismatch: expected %s, got %s", expectedHash, actualHash)
+			return nil, "", false, fmt.Errorf("config hash mismatch: expected %s, got %s", expectedHash, actualHash)
 		}
 		log.Printf("Config hash verified: %s", actualHash)
 	} else {
@@ -135,25 +138,28 @@ func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string,
 
 	// Write config to ramdisk
 	if err := os.WriteFile(installPath, configData, 0644); err != nil {
-		return nil, "", fmt.Errorf("writing config to ramdisk: %w", err)
+		return nil, "", false, fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
-	config, err := runtimeconfig.Decode(configData, debug)
+	config, debug, err := runtimeconfig.DecodeMeasured(configData, cmdlineDebug)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
+	}
+	if debug && !cmdlineDebug {
+		log.Println("Debug policy enabled by the debug toolbox in the measured config")
 	}
 	if nonCC {
 		config.ShimCfg.DummyAttestation = true
 	}
 
 	if err := validateGPUCount(config.GPUs); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	if err := validateModelCount(len(config.Models)); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 
-	return config, actualHash, nil
+	return config, actualHash, debug, nil
 }
 
 func loadExternalConfig() error {

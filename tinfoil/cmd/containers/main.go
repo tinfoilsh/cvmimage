@@ -82,7 +82,7 @@ func run(ctx context.Context, invocation invocation) error {
 	if err != nil {
 		return fmt.Errorf("reading verified config: %w", err)
 	}
-	config, err := runtimeconfig.Decode(verifiedConfig, invocation.debug)
+	config, debug, err := runtimeconfig.DecodeMeasured(verifiedConfig, invocation.debug)
 	if err != nil {
 		return err
 	}
@@ -105,13 +105,13 @@ func run(ctx context.Context, invocation invocation) error {
 	defer cancel()
 	manager := &manager{
 		ctx:            runtimeCtx,
-		debug:          invocation.debug,
+		debug:          debug,
 		verifiedConfig: verifiedConfig,
 		secrets:        secrets,
 	}
 
 	var listener net.Listener
-	if invocation.debug {
+	if debug {
 		var err error
 		listener, err = listenDebugSocket()
 		if err != nil {
@@ -138,7 +138,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	statusDone := make(chan error, 1)
 	go func() { statusDone <- containers.RunStatusPublisher(runtimeCtx) }()
-	if !invocation.debug {
+	if !debug {
 		return <-statusDone
 	}
 

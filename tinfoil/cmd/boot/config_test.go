@@ -231,7 +231,7 @@ func launchHashOf(config []byte) func() (string, error) {
 func TestLoadMeasuredConfigBootsJSON(t *testing.T) {
 	data := configtest.JSON(t, configtest.Workload)
 	installPath := filepath.Join(t.TempDir(), "config.json")
-	config, hash, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, launchHashOf(data), false, false)
+	config, hash, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, launchHashOf(data), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,11 +281,11 @@ func TestLoadMeasuredConfigAcceptsTheMeasuredDebugToolbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	installPath := filepath.Join(t.TempDir(), "config.json")
-	config, _, err := loadMeasuredConfig(writeConfigDisk(t, withToolbox), installPath, launchHashOf(withToolbox), false, false)
+	config, _, err := loadMeasuredConfig(writeConfigDisk(t, withToolbox), installPath, launchHashOf(withToolbox), false)
 	if err != nil || !runtimeconfig.HoldsDebugToolbox(config) {
 		t.Fatalf("config = %#v, err = %v; want the measured toolbox accepted", config, err)
 	}
-	_, _, err = loadMeasuredConfig(writeConfigDisk(t, withToolbox), installPath, launchHashOf(workload), false, false)
+	_, _, err = loadMeasuredConfig(writeConfigDisk(t, withToolbox), installPath, launchHashOf(workload), false)
 	if err == nil || !strings.Contains(err.Error(), "config hash mismatch") {
 		t.Fatalf("err = %v; want a toolbox the launch did not measure refused by its hash", err)
 	}
@@ -295,10 +295,10 @@ func TestLoadMeasuredConfigNeedsLaunchHashUnlessNonCC(t *testing.T) {
 	data := configtest.JSON(t, configtest.Workload)
 	unreadable := func() (string, error) { return "", errors.New("no attestation device") }
 	installPath := filepath.Join(t.TempDir(), "config.json")
-	if _, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, unreadable, false, false); err == nil {
+	if _, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, unreadable, false); err == nil {
 		t.Fatal("config accepted without a launch hash")
 	}
-	config, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, unreadable, true, false)
+	config, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, unreadable, true)
 	if err != nil || !config.ShimCfg.DummyAttestation {
 		t.Fatalf("non-CC config = %#v, %v; want dummy attestation", config, err)
 	}
@@ -312,7 +312,7 @@ func TestLoadMeasuredConfigHashesExactBytes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			installPath := filepath.Join(t.TempDir(), "config.json")
-			_, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, launchHashOf(launched), false, false)
+			_, _, err := loadMeasuredConfig(writeConfigDisk(t, data), installPath, launchHashOf(launched), false)
 			if err == nil || !strings.Contains(err.Error(), "config hash mismatch") {
 				t.Fatalf("error = %v, want a config hash mismatch", err)
 			}
@@ -341,7 +341,7 @@ func TestLoadMeasuredConfigTakesOnlyJSON(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			installPath := filepath.Join(t.TempDir(), "config.json")
-			_, _, err := loadMeasuredConfig(writeConfigDisk(t, test.data), installPath, launchHashOf(test.data), false, false)
+			_, _, err := loadMeasuredConfig(writeConfigDisk(t, test.data), installPath, launchHashOf(test.data), false)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}

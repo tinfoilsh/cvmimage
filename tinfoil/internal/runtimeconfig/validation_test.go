@@ -248,14 +248,12 @@ func TestDecodeMeasuredTakesDebugFromTheMeasuredConfig(t *testing.T) {
 		return validConfig + entry
 	}
 	for _, test := range []struct {
-		name         string
-		config       string
-		cmdlineDebug bool
-		wantDebug    bool
-		wantErr      string
+		name      string
+		config    string
+		wantDebug bool
+		wantErr   string
 	}{
 		{name: "workload", config: validConfig},
-		{name: "workload on a debug command line", config: validConfig, cmdlineDebug: true, wantDebug: true},
 		{name: "toolbox with the Docker socket", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind), wantDebug: true},
 		{name: "toolbox with the launcher socket", config: toolbox(ReservedDebugContainerName, DebugManagerSocketBind), wantDebug: true},
 		{name: "toolbox with both sockets", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind, DebugManagerSocketBind), wantDebug: true},
@@ -264,7 +262,7 @@ func TestDecodeMeasuredTakesDebugFromTheMeasuredConfig(t *testing.T) {
 		{name: "another host mount on the toolbox", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind, "/etc:/host-etc"), wantErr: "named volume source"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			config, debug, err := DecodeMeasured(asJSON(t, test.config), test.cmdlineDebug)
+			config, debug, err := DecodeMeasured(asJSON(t, test.config))
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("err = %v, want %q", err, test.wantErr)

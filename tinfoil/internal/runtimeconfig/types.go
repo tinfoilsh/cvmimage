@@ -47,15 +47,12 @@ func Decode(data []byte, debug bool) (*Config, error) {
 	return sharedconfig.Decode(data, options(debug))
 }
 
-// DecodeMeasured decodes the measured config and reports whether the guest
-// runs its debug policy: the command line asks for it, or the config holds
-// the debug toolbox with one of its socket mounts.
-func DecodeMeasured(data []byte, cmdlineDebug bool) (*Config, bool, error) {
-	debug := cmdlineDebug
-	if !debug {
-		if config, err := Decode(data, true); err == nil {
-			debug = HoldsDebugToolbox(config)
-		}
+// DecodeMeasured decodes the measured config and reports whether it holds the
+// debug toolbox, which is what puts the guest in debug mode.
+func DecodeMeasured(data []byte) (*Config, bool, error) {
+	debug := false
+	if config, err := Decode(data, true); err == nil {
+		debug = HoldsDebugToolbox(config)
 	}
 	config, err := Decode(data, debug)
 	return config, debug, err

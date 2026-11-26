@@ -10,12 +10,15 @@ import (
 )
 
 func TestParseInvocation(t *testing.T) {
-	invocation, err := parseInvocation([]string{"tinfoil-containers", "--debug=true", "--secrets-fd=3"})
-	if err != nil || !invocation.debug || invocation.secretsFD != 3 {
+	invocation, err := parseInvocation([]string{"tinfoil-containers", "--secrets-fd=3"})
+	if err != nil || invocation.secretsFD != 3 {
 		t.Fatalf("parseInvocation() = %#v, %v", invocation, err)
 	}
 	if _, err := parseInvocation([]string{"tinfoil-containers", "unexpected"}); err == nil {
 		t.Fatal("unexpected positional argument accepted")
+	}
+	if _, err := parseInvocation([]string{"tinfoil-containers", "--debug=true", "--secrets-fd=3"}); err == nil {
+		t.Fatal("the removed debug switch was accepted")
 	}
 }
 

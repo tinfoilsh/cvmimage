@@ -19,7 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"tinfoil/internal/boot"
-	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
@@ -120,14 +119,9 @@ type lifecycleDeps struct {
 	measuredConfig   func() (*runtimeconfig.Config, error)
 	term             time.Duration
 	kill             time.Duration
-	cmdline          kernelcmdline.Values
 }
 
 func run(parent context.Context) (result error) {
-	cmdline, err := kernelcmdline.Read()
-	if err != nil {
-		return err
-	}
 	readiness := newReadiness(requiredServiceNames(), setReady)
 	manager := supervisor.NewManager(initLogf)
 	services := supervisor.New(parent, manager, supervisor.Config{Observe: readiness.Update})
@@ -139,11 +133,9 @@ func run(parent context.Context) (result error) {
 		oneShot: func(ctx context.Context, command supervisor.Command) error {
 			return runOneShot(ctx, manager, command, oneShotStopGrace)
 		},
-		nvidia:       func(ctx context.Context) error { return initializeGPU(ctx, manager, services) },
-		debugFailure: parkDebugFailure,
-		measuredConfig: func() (*runtimeconfig.Config, error) {
-			return readMeasuredConfig(cmdline.Debug)
-		},
+		nvidia:           func(ctx context.Context) error { return initializeGPU(ctx, manager, services) },
+		debugFailure:     parkDebugFailure,
+		measuredConfig:   readMeasuredConfig,
 		lockModules:      hardening.LockKernelModules,
 		setupFS:          pidruntime.SetupFilesystems,
 		cpuFeatures:      pidruntime.RequireCPUFeatures,
@@ -155,7 +147,6 @@ func run(parent context.Context) (result error) {
 		exists:           pathExists,
 		term:             serviceTermGrace,
 		kill:             serviceKillGrace,
-		cmdline:          cmdline,
 	}
 	deps.reportFailure = func(ctx context.Context, failure error) error {
 		return reportFailure(ctx, manager, failure)
@@ -304,10 +295,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := deps.services.Start(bootCtx, shimService(localAttestationSocket, false)); err != nil {
 		return err
 	}
-	bootCommand := hardenedCommand(
-		hardening.ServiceBoot, boot.BootBinary,
-		fmt.Sprintf("--debug=%t", deps.cmdline.Debug),
-	)
+	bootCommand := hardenedCommand(hardening.ServiceBoot, boot.BootBinary)
 	bootCommand = withSecretHandoff(bootCommand, secretHandoff)
 	if err := deps.oneShot(bootCtx, bootCommand); err != nil {
 		return err
@@ -322,8 +310,7 @@ func runLifecycle(parent context.Context, deps lifecycleDeps, readiness *readine
 	if err := ownSealRegister(config); err != nil {
 		return fmt.Errorf("seal register: %w", err)
 	}
-	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary,
-		fmt.Sprintf("--debug=%t", deps.cmdline.Debug))
+	containersCommand := hardenedCommand(hardening.ServiceContainers, boot.ContainersBinary)
 	containersCommand = withSecretHandoff(containersCommand, secretHandoff)
 	if err := deps.services.Start(bootCtx, supervisor.Service{
 		Name: containersName, Required: true, Restart: true,
@@ -380,12 +367,13 @@ func shimService(attestationSocket *os.File, statusOnly bool) supervisor.Service
 // the boot one-shot, which is what makes it readable here: volume workers start
 // immediately after it and well before the containers binary, which reads the
 // same file for the same reason.
-func readMeasuredConfig(debug bool) (*runtimeconfig.Config, error) {
+func readMeasuredConfig() (*runtimeconfig.Config, error) {
 	verified, err := os.ReadFile(boot.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	return runtimeconfig.Decode(verified, debug)
+	config, _, err := runtimeconfig.DecodeMeasured(verified)
+	return config, err
 }
 
 func startVolumeWorkers(ctx context.Context, deps lifecycleDeps, config *runtimeconfig.Config) error {

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"tinfoil/internal/boot"
-	"tinfoil/internal/kernelcmdline"
 	"tinfoil/internal/pid1/hardening"
 	pidruntime "tinfoil/internal/pid1/runtime"
 	"tinfoil/internal/pid1/supervisor"
@@ -118,7 +117,6 @@ func newLifecycleHarness() *lifecycleHarness {
 
 func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	harness := newLifecycleHarness()
-	harness.deps.cmdline = kernelcmdline.Values{Debug: true}
 	var bootCommand supervisor.Command
 	harness.deps.oneShot = func(_ context.Context, command supervisor.Command) error {
 		if command.Name == string(hardening.ServiceBoot) {
@@ -135,9 +133,6 @@ func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	cancel()
 	if err := receiveTest(t, result); err != nil {
 		t.Fatal(err)
-	}
-	if got := fmt.Sprint(bootCommand.Args); !strings.Contains(got, "--debug=true") {
-		t.Fatalf("boot args = %s", got)
 	}
 	if len(bootCommand.ExtraFiles) != 1 {
 		t.Fatalf("boot extra files = %d, want 1", len(bootCommand.ExtraFiles))
@@ -161,9 +156,6 @@ func TestLifecycleCommandsCarryCapturedKernelPolicy(t *testing.T) {
 	}
 	if !slices.Contains(shimCommand.Args, "--attestation-fd=3") {
 		t.Fatalf("shim args = %v", shimCommand.Args)
-	}
-	if got := fmt.Sprint(containersCommand.Args); !strings.Contains(got, "--debug=true") {
-		t.Fatalf("containers args = %s", got)
 	}
 	if len(containersCommand.ExtraFiles) != 1 || containersCommand.ExtraFiles[0] != bootCommand.ExtraFiles[0] {
 		t.Fatal("boot and containers did not receive the same secret handoff")

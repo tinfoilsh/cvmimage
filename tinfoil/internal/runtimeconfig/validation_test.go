@@ -233,3 +233,51 @@ func TestDecodeTakesOnlyJSONConfigs(t *testing.T) {
 		})
 	}
 }
+
+const toolboxImage = "ghcr.io/tinfoilsh/tinfoil-debug-toolbox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestDecodeMeasuredTakesDebugFromTheMeasuredConfig(t *testing.T) {
+	toolbox := func(name string, volumes ...string) string {
+		entry := "  - name: " + name + "\n    image: " + toolboxImage + "\n"
+		if len(volumes) > 0 {
+			entry += "    volumes:\n"
+			for _, volume := range volumes {
+				entry += "      - \"" + volume + "\"\n"
+			}
+		}
+		return validConfig + entry
+	}
+	for _, test := range []struct {
+		name      string
+		config    string
+		wantDebug bool
+		wantErr   string
+	}{
+		{name: "workload", config: validConfig},
+		{name: "toolbox with the Docker socket", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind), wantDebug: true},
+		{name: "toolbox with the launcher socket", config: toolbox(ReservedDebugContainerName, DebugManagerSocketBind), wantDebug: true},
+		{name: "toolbox with both sockets", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind, DebugManagerSocketBind), wantDebug: true},
+		{name: "reserved name without a debug mount", config: toolbox(ReservedDebugContainerName)},
+		{name: "debug mount under another name", config: toolbox("helper", DebugDockerSocketBind), wantErr: "named volume source"},
+		{name: "another host mount on the toolbox", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind, "/etc:/host-etc"), wantErr: "named volume source"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, debug, err := DecodeMeasured(asJSON(t, test.config))
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if debug != test.wantDebug {
+				t.Fatalf("debug = %v, want %v", debug, test.wantDebug)
+			}
+			if config == nil || len(config.Containers) == 0 {
+				t.Fatalf("config = %#v", config)
+			}
+		})
+	}
+}

@@ -13,6 +13,7 @@ import (
 
 	"tinfoil/internal/attestedkeys"
 	"tinfoil/internal/boot"
+	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/volume"
 )
 
@@ -41,7 +42,6 @@ func main() {
 }
 
 type invocation struct {
-	debug     bool
 	secretsFD int
 }
 
@@ -52,7 +52,6 @@ func parseInvocation(args []string) (invocation, error) {
 	var parsed invocation
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.BoolVar(&parsed.debug, "debug", false, "enable the measured debug policy")
 	flags.IntVar(&parsed.secretsFD, "secrets-fd", -1, "sealed container-secret handoff descriptor")
 	if err := flags.Parse(args[1:]); err != nil {
 		return invocation{}, err
@@ -75,7 +74,7 @@ func run(ctx context.Context, invocation invocation) error {
 	// 1. Config
 	start := time.Now()
 	log.Println("Loading configuration")
-	config, configHash, err := loadConfig(invocation.debug)
+	config, configHash, err := loadConfig()
 	if err != nil {
 		tracker.Record("config", boot.StatusFailed, time.Since(start), err.Error())
 		return err
@@ -161,7 +160,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	// 7. Resolve declared secrets and hand workload values to the container manager.
 	start = time.Now()
-	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, configHash, invocation.debug,
+	secretDetail, err := prepareSecretHandoff(ctx, config, externalConfig, secretHandoff, configHash, runtimeconfig.HoldsDebugToolbox(config),
 		func(ctx context.Context, names []string) (map[string]string, error) {
 			return fetchKeyserverSecrets(ctx, config, externalConfig, nodeID, collateralRequest, names)
 		})

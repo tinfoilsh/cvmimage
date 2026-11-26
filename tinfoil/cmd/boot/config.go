@@ -85,7 +85,7 @@ func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 }
 
 // loadConfig verifies the launch hash unless the kernel explicitly opts out of CC.
-func loadConfig(debug bool) (*Config, string, error) {
+func loadConfig() (*Config, string, error) {
 	cmdline, err := kernelcmdline.Read()
 	if err != nil {
 		return nil, "", err
@@ -94,7 +94,7 @@ func loadConfig(debug bool) (*Config, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("finding config disk: %w", err)
 	}
-	config, actualHash, err := loadMeasuredConfig(configDiskPath, boot.ConfigPath, measuredConfigHash, cmdline.NonCC, debug)
+	config, actualHash, err := loadMeasuredConfig(configDiskPath, boot.ConfigPath, measuredConfigHash, cmdline.NonCC)
 	if err != nil {
 		return nil, "", err
 	}
@@ -109,7 +109,7 @@ func loadConfig(debug bool) (*Config, string, error) {
 // loadMeasuredConfig reads the config from its disk, checks the bytes against
 // the hash the host committed to at launch unless nonCC, writes them to
 // installPath and decodes them.
-func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string, error), nonCC, debug bool) (*Config, string, error) {
+func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string, error), nonCC bool) (*Config, string, error) {
 	configData, err := readDiskPayload(diskPath, maxDiskPayloadBytes)
 	if err != nil {
 		return nil, "", fmt.Errorf("reading config disk: %w", err)
@@ -138,7 +138,7 @@ func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string,
 		return nil, "", fmt.Errorf("writing config to ramdisk: %w", err)
 	}
 
-	config, err := runtimeconfig.Decode(configData, debug)
+	config, _, err := runtimeconfig.DecodeMeasured(configData)
 	if err != nil {
 		return nil, "", err
 	}

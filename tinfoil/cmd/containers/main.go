@@ -35,7 +35,6 @@ type manager struct {
 }
 
 type invocation struct {
-	debug     bool
 	secretsFD int
 }
 
@@ -63,7 +62,6 @@ func parseInvocation(args []string) (invocation, error) {
 	var parsed invocation
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.BoolVar(&parsed.debug, "debug", false, "enable the debug boot API")
 	flags.IntVar(&parsed.secretsFD, "secrets-fd", -1, "sealed container-secret handoff descriptor")
 	if err := flags.Parse(args[1:]); err != nil {
 		return invocation{}, err
@@ -82,7 +80,7 @@ func run(ctx context.Context, invocation invocation) error {
 	if err != nil {
 		return fmt.Errorf("reading verified config: %w", err)
 	}
-	config, err := runtimeconfig.Decode(verifiedConfig, invocation.debug)
+	config, debug, err := runtimeconfig.DecodeMeasured(verifiedConfig)
 	if err != nil {
 		return err
 	}
@@ -105,13 +103,13 @@ func run(ctx context.Context, invocation invocation) error {
 	defer cancel()
 	manager := &manager{
 		ctx:            runtimeCtx,
-		debug:          invocation.debug,
+		debug:          debug,
 		verifiedConfig: verifiedConfig,
 		secrets:        secrets,
 	}
 
 	var listener net.Listener
-	if invocation.debug {
+	if debug {
 		var err error
 		listener, err = listenDebugSocket()
 		if err != nil {
@@ -138,7 +136,7 @@ func run(ctx context.Context, invocation invocation) error {
 
 	statusDone := make(chan error, 1)
 	go func() { statusDone <- containers.RunStatusPublisher(runtimeCtx) }()
-	if !invocation.debug {
+	if !debug {
 		return <-statusDone
 	}
 

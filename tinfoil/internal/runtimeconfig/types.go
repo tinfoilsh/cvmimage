@@ -20,6 +20,12 @@ type AttestedKey = sharedconfig.AttestedKey
 
 const AttestedKeysContainerDir = sharedconfig.AttestedKeysContainerDir
 
+// The host sockets only the debug toolbox may mount.
+const (
+	DebugDockerSocketBind  = "/run/docker.sock:/var/run/docker.sock"
+	DebugManagerSocketBind = "/run/tinfoil/containers.sock:/run/tinfoil/containers.sock"
+)
+
 func AdminSSH(config *Config, debug bool) (*sharedconfig.AdminSSHMapping, error) {
 	if debug {
 		return nil, nil
@@ -39,6 +45,33 @@ func options(debug bool) sharedconfig.Options {
 // one, so YAML and earlier pins are refused.
 func Decode(data []byte, debug bool) (*Config, error) {
 	return sharedconfig.Decode(data, options(debug))
+}
+
+// DecodeMeasured decodes the measured config and reports whether it holds the
+// debug toolbox, which is what puts the guest in debug mode.
+func DecodeMeasured(data []byte) (*Config, bool, error) {
+	debug := false
+	if config, err := Decode(data, true); err == nil {
+		debug = HoldsDebugToolbox(config)
+	}
+	config, err := Decode(data, debug)
+	return config, debug, err
+}
+
+// HoldsDebugToolbox reports whether config holds the debug toolbox with one
+// of its socket mounts.
+func HoldsDebugToolbox(config *Config) bool {
+	for _, container := range config.Containers {
+		if container.Name != ReservedDebugContainerName {
+			continue
+		}
+		for _, volume := range container.Volumes {
+			if volume == DebugDockerSocketBind || volume == DebugManagerSocketBind {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func Validate(config *Config, debug bool) error {

@@ -143,34 +143,6 @@ The hosting service must use a `tinfoil-config` version that accepts `cvm_admin`
 older CVM images reject the field. Approve the new measured config before releasing
 keys to it, and bind SSH authorization to an owner-controlled source.
 
-## Debug mode
-
-Debug mode gives whoever holds the SSH key the host supplied control of the
-whole CVM. The guest then:
-
-- runs the debug toolbox, which may mount the Docker socket and the container
-  manager's socket;
-- serves the container manager's API on that socket, which can boot a config
-  other than the measured one;
-- takes secrets from the host;
-- keeps container output.
-
-The guest runs this policy only when what the launch measured asks for it:
-
-- the measured config holds the debug toolbox, that is the container named
-  `tinfoil-debug-toolbox` with one of those two socket mounts; or
-- the measured command line carries `tinfoil-debug=on`, which only a locally
-  built launch file does. Released launch files never do.
-
-A config submitted as a workload cannot name those mounts, so the toolbox is
-only ever in a config the host changed for a debug launch. That config has its
-own digest, which the launch measures, so a debug guest never presents the
-digest of the config it was derived from, and a client that pins a published
-config rejects it. The container name alone grants nothing.
-
-The debug image, with its console and debug init, is a different thing. It is
-for debugging the image itself, is only built locally and is never released.
-
 ## Ordinary workloads
 
 Container egress permits TCP to the reserved virtual-peer range `10.254.0.0/24`

@@ -20,8 +20,7 @@ type AttestedKey = sharedconfig.AttestedKey
 
 const AttestedKeysContainerDir = sharedconfig.AttestedKeysContainerDir
 
-// The host sockets that only the debug toolbox may mount. No config accepted
-// as a workload can name them.
+// The host sockets only the debug toolbox may mount.
 const (
 	DebugDockerSocketBind  = "/run/docker.sock:/var/run/docker.sock"
 	DebugManagerSocketBind = "/run/tinfoil/containers.sock:/run/tinfoil/containers.sock"
@@ -48,15 +47,9 @@ func Decode(data []byte, debug bool) (*Config, error) {
 	return sharedconfig.Decode(data, options(debug))
 }
 
-// DecodeMeasured reads the config the launch measured and reports whether the
-// guest runs its debug policy.
-//
-// The policy is on when the measured command line asks for it, which only a
-// locally built launch file does, or when the config holds the host's debug
-// toolbox: the reserved container with one of the debug socket mounts. A
-// config accepted as a workload cannot hold those mounts, so the toolbox is
-// only ever in a config the host changed for a debug launch, and that config's
-// digest, which the launch measures, is no published config's.
+// DecodeMeasured decodes the measured config and reports whether the guest
+// runs its debug policy: the command line asks for it, or the config holds
+// the debug toolbox with one of its socket mounts.
 func DecodeMeasured(data []byte, cmdlineDebug bool) (*Config, bool, error) {
 	debug := cmdlineDebug
 	if !debug {

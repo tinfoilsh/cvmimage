@@ -236,8 +236,6 @@ func TestDecodeTakesOnlyJSONConfigs(t *testing.T) {
 
 const toolboxImage = "ghcr.io/tinfoilsh/tinfoil-debug-toolbox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// The debug policy follows what the launch measured: its command line, or a
-// config that holds the host's debug toolbox with a debug socket mount.
 func TestDecodeMeasuredTakesDebugFromTheMeasuredConfig(t *testing.T) {
 	toolbox := func(name string, volumes ...string) string {
 		entry := "  - name: " + name + "\n    image: " + toolboxImage + "\n"
@@ -261,8 +259,6 @@ func TestDecodeMeasuredTakesDebugFromTheMeasuredConfig(t *testing.T) {
 		{name: "toolbox with the Docker socket", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind), wantDebug: true},
 		{name: "toolbox with the launcher socket", config: toolbox(ReservedDebugContainerName, DebugManagerSocketBind), wantDebug: true},
 		{name: "toolbox with both sockets", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind, DebugManagerSocketBind), wantDebug: true},
-		// The name alone grants nothing: a workload may use it, as an
-		// ordinary container without the debug mounts.
 		{name: "reserved name without a debug mount", config: toolbox(ReservedDebugContainerName)},
 		{name: "debug mount under another name", config: toolbox("helper", DebugDockerSocketBind), wantErr: "named volume source"},
 		{name: "another host mount on the toolbox", config: toolbox(ReservedDebugContainerName, DebugDockerSocketBind, "/etc:/host-etc"), wantErr: "named volume source"},

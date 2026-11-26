@@ -84,9 +84,7 @@ func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 	return netip.AddrFrom4(broadcast)
 }
 
-// loadConfig verifies the launch hash unless the kernel explicitly opts out of
-// CC. It also reports whether the guest runs its debug policy, which the
-// measured command line or the verified config can turn on.
+// loadConfig verifies the launch hash unless the kernel explicitly opts out of CC.
 func loadConfig(cmdlineDebug bool) (*Config, string, bool, error) {
 	cmdline, err := kernelcmdline.Read()
 	if err != nil {
@@ -110,8 +108,7 @@ func loadConfig(cmdlineDebug bool) (*Config, string, bool, error) {
 
 // loadMeasuredConfig reads the config from its disk, checks the bytes against
 // the hash the host committed to at launch unless nonCC, writes them to
-// installPath and decodes them. The debug policy is decided from those
-// verified bytes, never before the check.
+// installPath and decodes them.
 func loadMeasuredConfig(diskPath, installPath string, launchHash func() (string, error), nonCC, cmdlineDebug bool) (*Config, string, bool, error) {
 	configData, err := readDiskPayload(diskPath, maxDiskPayloadBytes)
 	if err != nil {

@@ -264,8 +264,6 @@ func TestLoadMeasuredConfigBootsJSON(t *testing.T) {
 	}
 }
 
-// The debug toolbox turns the debug policy on only in the config the launch
-// measured: the bytes are checked against the launch hash first.
 func TestLoadMeasuredConfigTakesDebugFromTheVerifiedConfig(t *testing.T) {
 	workload := configtest.JSON(t, configtest.Workload)
 	var document map[string]any
@@ -292,8 +290,6 @@ func TestLoadMeasuredConfigTakesDebugFromTheVerifiedConfig(t *testing.T) {
 	if err != nil || !debug {
 		t.Fatalf("debug = %v, err = %v; want the measured toolbox to turn the debug policy on", debug, err)
 	}
-	// The same bytes under a launch that measured the workload are refused
-	// before they decide anything.
 	_, _, debug, err = loadMeasuredConfig(writeConfigDisk(t, withToolbox), installPath, launchHashOf(workload), false, false)
 	if err == nil || !strings.Contains(err.Error(), "config hash mismatch") || debug {
 		t.Fatalf("debug = %v, err = %v; want a hash mismatch", debug, err)

@@ -17,6 +17,9 @@ func TestParseInvocation(t *testing.T) {
 	if _, err := parseInvocation([]string{"tinfoil-containers", "unexpected"}); err == nil {
 		t.Fatal("unexpected positional argument accepted")
 	}
+	if _, err := parseInvocation([]string{"tinfoil-containers", "--debug=true", "--secrets-fd=3"}); err == nil {
+		t.Fatal("the removed debug switch was accepted")
+	}
 }
 
 func TestReplacementPIDAvailableUsesFileGeneration(t *testing.T) {

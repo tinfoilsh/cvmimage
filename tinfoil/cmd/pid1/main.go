@@ -26,6 +26,7 @@ import (
 	"tinfoil/internal/pid1/supervisor"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/volume"
 )
 
 const (
@@ -83,6 +84,9 @@ func runPID1() {
 	parent, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	err := run(parent)
+	if closeErr := volume.Shutdown(); closeErr != nil {
+		err = errors.Join(err, fmt.Errorf("closing storage volumes: %w", closeErr))
+	}
 	if err == nil {
 		initLogf("shutdown complete; powering off")
 		if powerErr := unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF); powerErr != nil {

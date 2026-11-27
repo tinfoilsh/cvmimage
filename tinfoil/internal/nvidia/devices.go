@@ -34,6 +34,8 @@ const (
 	maxNVSwitches          = 64
 	maxVPDSize             = 64 << 10
 
+	uvmGPUDirectoryPrefix = "GPU-"
+
 	maxDeviceMajor = (1 << 12) - 1
 	maxDeviceMinor = (1 << 20) - 1
 )
@@ -68,6 +70,7 @@ type devicePaths struct {
 	nvswitches   string
 	nvswitchMode string
 	nvlinkMode   string
+	uvmGPUs      string
 	procDevices  string
 	dev          string
 }
@@ -79,6 +82,7 @@ var systemDevicePaths = devicePaths{
 	nvswitches:   "/proc/driver/nvidia-nvswitch/devices",
 	nvswitchMode: "/proc/driver/nvidia-nvswitch/permissions",
 	nvlinkMode:   "/proc/driver/nvidia-nvlink/permissions",
+	uvmGPUs:      "/proc/driver/nvidia-uvm/gpus",
 	procDevices:  "/proc/devices",
 	dev:          "/dev",
 }
@@ -127,6 +131,28 @@ func GPUDeviceIDs() ([]uint64, error) {
 // NVSwitch PCI functions and vendor-independent SW_MNG VPD markers.
 func DetectFabricMode() (FabricMode, error) {
 	return detectFabricMode(systemDevicePaths)
+}
+
+// RequireUVMRegisteredGPUs fails unless nvidia-uvm holds exactly expected GPUs.
+func RequireUVMRegisteredGPUs(expected int) error {
+	return requireUVMRegisteredGPUs(systemDevicePaths, expected)
+}
+
+func requireUVMRegisteredGPUs(paths devicePaths, expected int) error {
+	entries, err := os.ReadDir(paths.uvmGPUs)
+	if err != nil {
+		return fmt.Errorf("read GPUs registered with UVM: %w", err)
+	}
+	registered := 0
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), uvmGPUDirectoryPrefix) {
+			registered++
+		}
+	}
+	if registered != expected {
+		return fmt.Errorf("UVM holds %d GPUs, want %d", registered, expected)
+	}
+	return nil
 }
 
 func hasNVSwitch(paths devicePaths) (bool, error) {

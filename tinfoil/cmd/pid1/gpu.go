@@ -23,6 +23,7 @@ type nvidiaBootstrapControl interface {
 	WaitForCoreDeviceNodes(context.Context, int) error
 	PreparePersistencedRuntime() error
 	WaitForPersistenced(context.Context) error
+	RequireUVMRegisteredGPUs(int) error
 	LoadUVMKernelModules() error
 	WaitForUVMDeviceNodes(context.Context, int) error
 	LoadModesetKernelModules() error
@@ -61,6 +62,9 @@ func (s *systemNVIDIA) PreparePersistencedRuntime() error {
 }
 func (s *systemNVIDIA) WaitForPersistenced(ctx context.Context) error {
 	return s.services.WaitForPersistenced(ctx)
+}
+func (*systemNVIDIA) RequireUVMRegisteredGPUs(expected int) error {
+	return nvidia.RequireUVMRegisteredGPUs(expected)
 }
 func (*systemNVIDIA) LoadUVMKernelModules() error { return nvidia.LoadUVMKernelModules() }
 func (*systemNVIDIA) WaitForUVMDeviceNodes(ctx context.Context, expectedGPUs int) error {
@@ -144,6 +148,32 @@ func runNVIDIABootstrapSteps(
 	if err := control.WaitForCoreDeviceNodes(ctx, gpuCount); err != nil {
 		return fmt.Errorf("set up NVIDIA core device nodes: %w", err)
 	}
+	fabricMode, err := control.DetectFabricMode()
+	if err != nil {
+		var nvl5 *nvidia.ErrNVL5RequiresNVLSM
+		if errors.As(err, &nvl5) {
+			return nvl5
+		}
+		return fmt.Errorf("detect NVIDIA fabric mode: %w", err)
+	}
+	loadUVM := func() error {
+		if err := control.LoadUVMKernelModules(); err != nil {
+			return fmt.Errorf("load NVIDIA UVM kernel modules: %w", err)
+		}
+		if err := control.WaitForUVMDeviceNodes(ctx, gpuCount); err != nil {
+			return fmt.Errorf("set up NVIDIA UVM device nodes: %w", err)
+		}
+		return nil
+	}
+	// nvidia-persistenced keeps the GPUs registered with UVM only when UVM is
+	// loaded before it starts. A switched fabric is not ready until Fabric
+	// Manager runs, so there the first workload registers them.
+	persistencedRegistersGPUs := fabricMode == nvidia.FabricModeNone
+	if persistencedRegistersGPUs {
+		if err := loadUVM(); err != nil {
+			return err
+		}
+	}
 	if err := control.PreparePersistencedRuntime(); err != nil {
 		return fmt.Errorf("prepare nvidia-persistenced runtime: %w", err)
 	}
@@ -158,25 +188,18 @@ func runNVIDIABootstrapSteps(
 	}); err != nil {
 		return fmt.Errorf("start nvidia-persistenced: %w", err)
 	}
-	if err := control.LoadUVMKernelModules(); err != nil {
-		return fmt.Errorf("load NVIDIA UVM kernel modules: %w", err)
-	}
-	if err := control.WaitForUVMDeviceNodes(ctx, gpuCount); err != nil {
-		return fmt.Errorf("set up NVIDIA UVM device nodes: %w", err)
+	if persistencedRegistersGPUs {
+		if err := control.RequireUVMRegisteredGPUs(gpuCount); err != nil {
+			return fmt.Errorf("register NVIDIA GPUs with UVM: %w", err)
+		}
+	} else if err := loadUVM(); err != nil {
+		return err
 	}
 	if err := control.LoadModesetKernelModules(); err != nil {
 		return fmt.Errorf("load NVIDIA modeset kernel modules: %w", err)
 	}
 	if err := control.WaitForUVMDeviceNodes(ctx, gpuCount); err != nil {
 		return fmt.Errorf("set up NVIDIA modeset device nodes: %w", err)
-	}
-	fabricMode, err := control.DetectFabricMode()
-	if err != nil {
-		var nvl5 *nvidia.ErrNVL5RequiresNVLSM
-		if errors.As(err, &nvl5) {
-			return nvl5
-		}
-		return fmt.Errorf("detect NVIDIA fabric mode: %w", err)
 	}
 	switch fabricMode {
 	case nvidia.FabricModeNone:

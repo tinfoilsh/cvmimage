@@ -15,6 +15,9 @@ let
     true;
   kernelSource = "${kernelPackages.kernel.dev}/lib/modules/${release}/source";
   nvidiaOpen = kernelPackages.nvidiaPackages.production.open.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [
+      ./patches/nvidia-open-failed-allocation-keeps-pages-private.patch
+    ];
     env = (old.env or { }) // {
       CONFIG_X86_KERNEL_IBT = "";
       KBUILD_BUILD_TIMESTAMP = "Tue Jan  1 00:00:00 UTC 1980";

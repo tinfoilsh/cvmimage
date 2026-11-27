@@ -1,0 +1,28 @@
+When a page allocation fails part-way, the driver frees the pages it already
+has through the path that undoes what a finished allocation did to them:
+sharing them and changing their caching. Neither has happened at that point,
+and that path also walks the entries that were never allocated.
+
+Free those pages as they are.
+
+--- a/kernel-open/nvidia/nv-vm.c
++++ b/kernel-open/nvidia/nv-vm.c
+@@ -1038,7 +1038,17 @@
+ failed:
+     nv_printf(NV_DBG_MEMINFO,
+         "NVRM: VM: %s: failed to allocate memory\n", __FUNCTION__);
+-    nv_free_system_pages(at);
++    {
++        // No page was marked unencrypted or uncached yet, so the free path must not undo either.
++        NvBool unencrypted = at->flags.unencrypted;
++        unsigned int cache_type = at->cache_type;
++
++        at->flags.unencrypted = NV_FALSE;
++        at->cache_type = NV_MEMORY_CACHED;
++        nv_free_system_pages(at);
++        at->flags.unencrypted = unencrypted;
++        at->cache_type = cache_type;
++    }
+     return NV_ERR_NO_MEMORY;
+ }
+ 

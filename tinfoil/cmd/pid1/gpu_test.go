@@ -62,6 +62,9 @@ func (f *fakeNVIDIA) PreparePersistencedRuntime() error { return f.call("prepare
 func (f *fakeNVIDIA) WaitForPersistenced(context.Context) error {
 	return f.call("wait-persistenced")
 }
+func (f *fakeNVIDIA) RequireUVMRegisteredGPUs(expected int) error {
+	return f.call(fmt.Sprintf("uvm-registered-%d", expected))
+}
 func (f *fakeNVIDIA) LoadUVMKernelModules() error { return f.call("load-uvm") }
 func (f *fakeNVIDIA) WaitForUVMDeviceNodes(_ context.Context, expectedGPUs int) error {
 	return f.call(fmt.Sprintf("setup-uvm-devices-%d", expectedGPUs))
@@ -130,9 +133,9 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 	}
 	wantOrder := []string{
 		"gpu-count", "hold-pci", "runtime-pm", "load-core", "setup-core-devices-8",
-		"prepare-persistenced", "exec:nvidia-persistenced", "wait-persistenced",
+		"detect-fabric", "prepare-persistenced", "exec:nvidia-persistenced", "wait-persistenced",
 		"load-uvm", "setup-uvm-devices-8", "load-modeset", "setup-uvm-devices-8",
-		"detect-fabric", "prepare-fabric", "exec:nvidia-fabricmanager", "wait-fabric", "wait-nvml-8",
+		"prepare-fabric", "exec:nvidia-fabricmanager", "wait-fabric", "wait-nvml-8",
 		"create-cdi", "exec:nvidia-ctk-cdi", "publish-cdi",
 		fmt.Sprintf("status:%d:8", nvidia.BootstrapStateReady),
 	}
@@ -160,6 +163,31 @@ func TestNVIDIABootstrapExactOrderAndCommandContracts(t *testing.T) {
 	}
 	if _, ok := env["FM_PID_FILE"]; ok {
 		t.Fatalf("Fabric Manager inherited FM_PID_FILE: %#v", env)
+	}
+}
+
+func TestNVIDIABootstrapRegistersGPUsWithUVMWithoutSwitchedFabric(t *testing.T) {
+	control := newFakeNVIDIA(t, 8)
+	startService := func(ctx context.Context, service supervisor.Service) error {
+		control.calls = append(control.calls, "exec:"+service.Command.Name)
+		return startTestService(ctx, service)
+	}
+	err := runNVIDIABootstrap(context.Background(), control,
+		func(context.Context, supervisor.Command) error { return nil },
+		startService,
+		func(nvidia.BootstrapStatus) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{
+		"gpu-count", "hold-pci", "runtime-pm", "load-core", "setup-core-devices-8",
+		"detect-fabric", "load-uvm", "setup-uvm-devices-8",
+		"prepare-persistenced", "exec:nvidia-persistenced", "wait-persistenced", "uvm-registered-8",
+		"load-modeset", "setup-uvm-devices-8", "wait-nvml-8", "create-cdi", "publish-cdi",
+	}
+	if !slices.Equal(control.calls, wantOrder) {
+		t.Fatalf("calls = %v, want %v", control.calls, wantOrder)
 	}
 }
 
@@ -239,7 +267,7 @@ func TestNVIDIABootstrapFailuresPersistAndContinue(t *testing.T) {
 	failure := errors.New("boom")
 	for _, failedCall := range []string{
 		"gpu-count", "hold-pci", "runtime-pm", "load-core", "setup-core-devices-8",
-		"prepare-persistenced", "wait-persistenced", "load-uvm", "setup-uvm-devices-8",
+		"prepare-persistenced", "wait-persistenced", "uvm-registered-8", "load-uvm", "setup-uvm-devices-8",
 		"load-modeset", "detect-fabric", "prepare-fabric", "wait-fabric", "wait-nvml-8",
 		"create-cdi", "publish-cdi",
 	} {

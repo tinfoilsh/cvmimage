@@ -26,6 +26,7 @@ import (
 	"tinfoil/internal/pid1/supervisor"
 	"tinfoil/internal/runtimeconfig"
 	"tinfoil/internal/secretstore"
+	"tinfoil/internal/volume"
 )
 
 const (
@@ -83,6 +84,12 @@ func runPID1() {
 	parent, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	err := run(parent)
+	// Every service has been drained, so nothing writes to the volumes now.
+	// Flush and detach them before powering off or parking: reboot(2) does not
+	// sync, and a write torn at power-off breaks an unjournaled integrity volume.
+	if quiesceErr := volume.Quiesce(); quiesceErr != nil {
+		initLogf("quiescing volumes: %v", quiesceErr)
+	}
 	if err == nil {
 		initLogf("shutdown complete; powering off")
 		if powerErr := unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF); powerErr != nil {

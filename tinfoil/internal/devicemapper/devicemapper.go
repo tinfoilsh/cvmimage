@@ -46,7 +46,7 @@ const (
 	authenticatedTagBytes    = 32
 	authenticatedIVBytes     = 16
 	integrityTagBytes        = authenticatedTagBytes + authenticatedIVBytes
-	integrityMode            = "D" // unjournaled: a write torn by a crash reads back as EIO
+	integrityMode            = "J" // commit ciphertext and its authentication tag together
 	integrityTarget          = "integrity"
 	integrityMagic           = "integrt\x00"
 	integrityDataSectorsAt   = 16

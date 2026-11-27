@@ -25,6 +25,7 @@ func testDevicePaths(t *testing.T) devicePaths {
 		nvswitches:   filepath.Join(root, "nvswitches"),
 		nvswitchMode: filepath.Join(root, "nvswitch-permissions"),
 		nvlinkMode:   filepath.Join(root, "nvlink-permissions"),
+		uvmGPUs:      filepath.Join(root, "uvm-gpus"),
 		procDevices:  filepath.Join(root, "devices"),
 		dev:          filepath.Join(root, "dev"),
 	}
@@ -54,6 +55,29 @@ func addPCIFixture(t *testing.T, paths devicePaths, name, vendor, class string, 
 	writeTestFile(t, filepath.Join(base, "enable"), "0\n")
 	if powerControl {
 		writeTestFile(t, filepath.Join(base, "power", "control"), "on\n")
+	}
+}
+
+func TestRequireUVMRegisteredGPUsCountsHeldGPUs(t *testing.T) {
+	paths := testDevicePaths(t)
+	if err := requireUVMRegisteredGPUs(paths, 1); err == nil {
+		t.Fatal("accepted a missing UVM GPU directory")
+	}
+	for _, name := range []string{"GPU-a", "GPU-b"} {
+		if err := os.MkdirAll(filepath.Join(paths.uvmGPUs, name, "0"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, link := range []string{"0", "GI-a"} {
+		if err := os.Symlink(filepath.Join("GPU-a", "0"), filepath.Join(paths.uvmGPUs, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := requireUVMRegisteredGPUs(paths, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireUVMRegisteredGPUs(paths, 3); err == nil {
+		t.Fatal("accepted fewer registered GPUs than expected")
 	}
 }
 
